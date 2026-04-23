@@ -36,3 +36,4 @@ logs/
 *.log
 *.sqlite3
 *.db
+*.egg-info/
