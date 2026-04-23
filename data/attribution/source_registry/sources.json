@@ -1,0 +1,57 @@
+[
+  {
+    "source_id": "fareez_osce_2022",
+    "source_name": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
+    "source_url": "https://doi.org/10.6084/m9.figshare.c.5545842.v1",
+    "license": "CC BY 4.0",
+    "data_type": "dialogue",
+    "allowed_usage": ["training_reference", "evaluation_reference", "demo_reference"],
+    "transformation": "download original zip, then extract and convert into structured OSCE case assets",
+    "attribution_required": true,
+    "risk_note": "原始数据偏呼吸系统问诊，不足以直接覆盖完整病例闭环。"
+  },
+  {
+    "source_id": "meditod_2024",
+    "source_name": "MediTOD",
+    "source_url": "https://github.com/dair-iitd/MediTOD",
+    "license": "See repository license and dataset notes",
+    "data_type": "dialogue_annotations",
+    "allowed_usage": ["intent_reference", "evaluation_reference"],
+    "transformation": "clone public repository; use public dialogue files directly for intent schema study",
+    "attribution_required": true,
+    "risk_note": "canonicalized 数据需要 UMLS 许可与申请，不自动拉取。"
+  },
+  {
+    "source_id": "medcase_reasoning_2025",
+    "source_name": "MedCaseReasoning",
+    "source_url": "https://huggingface.co/datasets/zou-lab/MedCaseReasoning",
+    "license": "See dataset card",
+    "data_type": "reasoning",
+    "allowed_usage": ["reasoning_reference", "evaluation_reference"],
+    "transformation": "download public parquet files for reasoning point extraction",
+    "attribution_required": true,
+    "risk_note": "病例报告复杂度较高，不能直接作为新手病例。"
+  },
+  {
+    "source_id": "case_report_collective_2025",
+    "source_name": "CaseReportCollective",
+    "source_url": "https://huggingface.co/datasets/cxyzhang/CaseReportCollective_V1.0",
+    "license": "CC-BY-4.0",
+    "data_type": "structured_case_reports",
+    "allowed_usage": ["expansion_reference"],
+    "transformation": "download public parquet file for later structured filtering",
+    "attribution_required": true,
+    "risk_note": "仅作为二期扩展数据源，MVP 不直接入库。"
+  },
+  {
+    "source_id": "easymed_repo",
+    "source_name": "EasyMED",
+    "source_url": "https://github.com/FreedomIntelligence/EasyMED",
+    "license": "See repository license",
+    "data_type": "framework_reference",
+    "allowed_usage": ["architecture_reference", "evaluation_reference"],
+    "transformation": "clone repository for module design reference",
+    "attribution_required": true,
+    "risk_note": "仅借鉴患者模拟、意图识别、评测设计，不直接照搬产品形态。"
+  }
+]
