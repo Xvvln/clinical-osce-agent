@@ -1,0 +1,176 @@
+{
+  "case_id": "pneumonia_001",
+  "case_title": "发热咳嗽伴胸痛教学病例",
+  "course_module": "发热",
+  "difficulty": "初级",
+  "patient_profile": {
+    "name_placeholder": "×××",
+    "age_value": 45,
+    "age_unit": "岁",
+    "gender": "男",
+    "occupation": "司机",
+    "marital_status": "已婚",
+    "address_city": "北京",
+    "social_background": "长期在市区工作，近期无明确粉尘接触史。",
+    "hospital_department": "呼吸内科",
+    "idea": "担心只是普通感冒。",
+    "concern": "怕拖久了变严重。",
+    "expectation": "希望尽快查明原因并缓解症状。"
+  },
+  "chief_complaint": "发热、咳嗽 3 天，右侧胸痛 1 天。",
+  "history": {
+    "present_illness_summary": "3 天前出现发热、咳嗽，近 1 天咳嗽时右侧胸痛加重，伴咳黄痰。",
+    "hidden_facts": [
+      {
+        "fact_id": "pneumonia_001.hf_01",
+        "topic": "现病史",
+        "slot": "onset",
+        "canonical_answer": "3 天前开始发热咳嗽，昨天开始右侧胸口疼。",
+        "variants": ["三天前开始不舒服", "昨天胸口疼得更明显"],
+        "trigger_intents": ["ask_onset"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_onset"]
+      },
+      {
+        "fact_id": "pneumonia_001.hf_02",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "咳黄痰，痰量不多，没有咯血。",
+        "variants": ["有黄痰，但是不算很多", "没咳血"],
+        "trigger_intents": ["ask_sputum"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_sputum"]
+      },
+      {
+        "fact_id": "pneumonia_001.hf_03",
+        "topic": "现病史",
+        "slot": "character",
+        "canonical_answer": "右侧胸痛在深呼吸和咳嗽时更明显。",
+        "variants": ["一咳嗽就更疼", "深呼吸也会疼"],
+        "trigger_intents": ["ask_chest_pain_character"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_chest_pain"]
+      },
+      {
+        "fact_id": "pneumonia_001.hf_04",
+        "topic": "既往史",
+        "slot": null,
+        "canonical_answer": "既往体健，无慢性肺病史。",
+        "variants": ["以前身体还可以", "没有慢性肺病"],
+        "trigger_intents": ["ask_past_medical_history"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_past_history"]
+      }
+    ],
+    "past_medical_history": "既往体健，无慢性肺病史。",
+    "surgery_injury_history": "无重大手术外伤史。",
+    "transfusion_history": "无。",
+    "infection_history": "否认结核等传染病史。",
+    "allergy_history": "无药物过敏史。",
+    "personal_history": "偶尔吸烟，近年已明显减少。",
+    "menstrual_history": null,
+    "reproductive_history": null,
+    "family_history": "家族中无类似呼吸系统疾病史。"
+  },
+  "physical_exam": {
+    "must_items": [
+      {
+        "exam_code": "vital.temperature",
+        "exam_name_cn": "体温",
+        "result": "体温 38.7℃。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_temperature"]
+      },
+      {
+        "exam_code": "resp.auscultation.crackle",
+        "exam_name_cn": "肺部听诊",
+        "result": "右下肺可闻及湿啰音。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_crackle"]
+      }
+    ],
+    "optional_items": []
+  },
+  "auxiliary_tests": {
+    "must_items": [
+      {
+        "test_code": "lab.cbc",
+        "test_name_cn": "血常规",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "result": "白细胞和中性粒细胞比例升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_cbc"]
+      },
+      {
+        "test_code": "img.chest_xray",
+        "test_name_cn": "胸部 X 线",
+        "category": "影像",
+        "invasiveness": "无创",
+        "cost_hint": "基础",
+        "result": "右下肺片状浸润影。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_chest_xray"]
+      }
+    ],
+    "optional_items": [],
+    "forbidden_items": []
+  },
+  "diagnosis": {
+    "main_diagnosis": "社区获得性肺炎",
+    "main_diagnosis_synonyms": ["肺炎", "Community-acquired pneumonia"],
+    "icd10_hint": "J18",
+    "differential_diagnoses": [
+      {
+        "disease_name": "急性支气管炎",
+        "icd10_hint": "J20",
+        "expected_action": "排除",
+        "key_distinction": "一般影像学不出现明确肺实变或浸润影。"
+      },
+      {
+        "disease_name": "肺栓塞",
+        "icd10_hint": "I26",
+        "expected_action": "排除",
+        "key_distinction": "常有突发呼吸困难、危险因素及不典型感染指标。"
+      }
+    ],
+    "reasoning_points": [
+      {
+        "point_id": "pneumonia_001.rp_01",
+        "statement": "发热、咳嗽、黄痰和呼吸相关胸痛提示下呼吸道感染。",
+        "kind": "支持",
+        "required_evidence": ["pneumonia_001.hf_01", "pneumonia_001.hf_02", "pneumonia_001.hf_03"],
+        "weight": 8
+      },
+      {
+        "point_id": "pneumonia_001.rp_02",
+        "statement": "体温升高及右下肺湿啰音支持肺部感染体征。",
+        "kind": "支持",
+        "required_evidence": ["vital.temperature", "resp.auscultation.crackle"],
+        "weight": 8
+      },
+      {
+        "point_id": "pneumonia_001.rp_03",
+        "statement": "血常规炎症指标升高且胸片见右下肺浸润影，支持社区获得性肺炎。",
+        "kind": "支持",
+        "required_evidence": ["lab.cbc", "img.chest_xray"],
+        "weight": 9
+      }
+    ],
+    "suggested_next_steps": "建议结合呼吸内科评估进一步判断严重程度并完善后续处理。"
+  },
+  "rubric_ref": {
+    "rubric_id": "pneumonia_001_rubric",
+    "version": "v1"
+  },
+  "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "source_attribution": {
+    "source_id": "fareez_osce_2022",
+    "transformation": "基于公开对话病例结构改写并补充查体、检查与评分字段。",
+    "attribution_note": "公开资料改写，仅用于教学模拟。",
+    "modified": true
+  },
+  "schema_version": "1.1",
+  "tags": ["发热", "呼吸系统", "肺炎"]
+}

@@ -1,0 +1,140 @@
+rubric_id: pneumonia_001_rubric
+case_id: pneumonia_001
+version: v1
+total_score: 100
+schema_version: "1.1"
+dimensions:
+  - dimension_id: history_taking
+    weight: 25
+    scoring_mode: rule
+    items:
+      - item_id: ht_onset
+        description: 追问起病时间与病程
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: onset
+            any_of_keywords: [什么时候开始, 几天了, 起病]
+        evidence_expected: [pneumonia_001.hf_01]
+      - item_id: ht_sputum
+        description: 追问痰液性质
+        max_score: 9
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [咳痰, 黄痰, 痰什么样]
+        evidence_expected: [pneumonia_001.hf_02]
+      - item_id: ht_chest_pain
+        description: 追问胸痛与呼吸关系
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: character
+            any_of_keywords: [胸痛, 咳嗽时疼, 呼吸时疼]
+        evidence_expected: [pneumonia_001.hf_03]
+  - dimension_id: physical_exam
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: pe_temperature
+        description: 检查体温
+        max_score: 7
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: vital.temperature
+            must: true
+        evidence_expected: [vital.temperature]
+      - item_id: pe_crackle
+        description: 检查肺部湿啰音
+        max_score: 8
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: resp.auscultation.crackle
+            must: true
+        evidence_expected: [resp.auscultation.crackle]
+  - dimension_id: auxiliary_test
+    weight: 20
+    scoring_mode: rule
+    items:
+      - item_id: at_cbc
+        description: 申请血常规
+        max_score: 8
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.cbc
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.cbc]
+      - item_id: at_chest_xray
+        description: 申请胸部 X 线
+        max_score: 12
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: img.chest_xray
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [img.chest_xray]
+  - dimension_id: main_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dx_pneumonia
+        description: 主诊断命中社区获得性肺炎
+        max_score: 15
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 社区获得性肺炎
+            synonyms: [肺炎, Community-acquired pneumonia]
+            icd10_hint: J18
+        evidence_expected: []
+  - dimension_id: differential_diagnosis
+    weight: 10
+    scoring_mode: rule
+    items:
+      - item_id: dd_bronchitis
+        description: 提出急性支气管炎作为鉴别
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 急性支气管炎
+            synonyms: [支气管炎, Acute bronchitis]
+            icd10_hint: J20
+        evidence_expected: [pneumonia_001.rp_01]
+      - item_id: dd_pulmonary_embolism
+        description: 提出肺栓塞作为鉴别
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 肺栓塞
+            synonyms: [Pulmonary embolism]
+            icd10_hint: I26
+        evidence_expected: [pneumonia_001.rp_03]
+  - dimension_id: reasoning
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: reasoning_core
+        description: 推理链覆盖感染症状、体征和影像证据
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: pneumonia_reasoning_v1
+            max_score: 15
+        evidence_expected:
+          - pneumonia_001.rp_01
+          - pneumonia_001.rp_02
+          - pneumonia_001.rp_03

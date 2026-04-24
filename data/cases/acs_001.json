@@ -1,0 +1,176 @@
+{
+  "case_id": "acs_001",
+  "case_title": "胸痛伴出汗教学病例",
+  "course_module": "胸痛",
+  "difficulty": "中级",
+  "patient_profile": {
+    "name_placeholder": "×××",
+    "age_value": 58,
+    "age_unit": "岁",
+    "gender": "男",
+    "occupation": "个体经营者",
+    "marital_status": "已婚",
+    "address_city": "北京",
+    "social_background": "工作压力较大，长期吸烟。",
+    "hospital_department": "心内科",
+    "idea": "担心是不是心脏出了问题。",
+    "concern": "怕突然加重有危险。",
+    "expectation": "希望尽快查明胸痛原因。"
+  },
+  "chief_complaint": "胸骨后压榨性胸痛 2 小时，伴大汗。",
+  "history": {
+    "present_illness_summary": "2 小时前活动后出现胸骨后压榨性胸痛，向左肩放射，休息后仍不缓解，伴大汗和恶心。",
+    "hidden_facts": [
+      {
+        "fact_id": "acs_001.hf_01",
+        "topic": "现病史",
+        "slot": "onset",
+        "canonical_answer": "今天上午活动后开始胸口痛，到现在 2 个小时了。",
+        "variants": ["两个小时前开始的", "一活动后就开始疼了"],
+        "trigger_intents": ["ask_onset"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_onset"]
+      },
+      {
+        "fact_id": "acs_001.hf_02",
+        "topic": "现病史",
+        "slot": "character",
+        "canonical_answer": "胸口像被压着一样闷痛，不是针扎样疼。",
+        "variants": ["就是压榨样的闷痛", "感觉胸口很闷很重"],
+        "trigger_intents": ["ask_pain_character"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_character"]
+      },
+      {
+        "fact_id": "acs_001.hf_03",
+        "topic": "现病史",
+        "slot": "radiation",
+        "canonical_answer": "疼痛会往左肩和左上臂放射。",
+        "variants": ["左肩也跟着难受", "左胳膊也有点放射痛"],
+        "trigger_intents": ["ask_radiation"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_radiation"]
+      },
+      {
+        "fact_id": "acs_001.hf_04",
+        "topic": "既往史",
+        "slot": null,
+        "canonical_answer": "有高血压病史 5 年，吸烟 30 年。",
+        "variants": ["血压高好多年了", "抽烟很多年了"],
+        "trigger_intents": ["ask_past_medical_history"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_risk_factor"]
+      }
+    ],
+    "past_medical_history": "高血压病史 5 年，否认冠心病明确诊断史。",
+    "surgery_injury_history": "无重大手术史。",
+    "transfusion_history": "无。",
+    "infection_history": "无特殊。",
+    "allergy_history": "无药物过敏史。",
+    "personal_history": "吸烟约 30 年，每日 1 包。",
+    "menstrual_history": null,
+    "reproductive_history": null,
+    "family_history": "父亲有冠心病史。"
+  },
+  "physical_exam": {
+    "must_items": [
+      {
+        "exam_code": "vital.blood_pressure",
+        "exam_name_cn": "血压",
+        "result": "血压 168/96 mmHg。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_blood_pressure"]
+      },
+      {
+        "exam_code": "vital.heart_rate",
+        "exam_name_cn": "心率",
+        "result": "心率 104 次/分。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_heart_rate"]
+      }
+    ],
+    "optional_items": []
+  },
+  "auxiliary_tests": {
+    "must_items": [
+      {
+        "test_code": "ecg.st_segment",
+        "test_name_cn": "心电图",
+        "category": "心电",
+        "invasiveness": "无创",
+        "cost_hint": "基础",
+        "result": "Ⅱ、Ⅲ、aVF 导联 ST 段抬高。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_ecg"]
+      },
+      {
+        "test_code": "lab.troponin",
+        "test_name_cn": "肌钙蛋白",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "中等",
+        "result": "肌钙蛋白升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_troponin"]
+      }
+    ],
+    "optional_items": [],
+    "forbidden_items": []
+  },
+  "diagnosis": {
+    "main_diagnosis": "急性冠脉综合征",
+    "main_diagnosis_synonyms": ["ACS", "急性心肌梗死", "acute coronary syndrome"],
+    "icd10_hint": "I24",
+    "differential_diagnoses": [
+      {
+        "disease_name": "主动脉夹层",
+        "icd10_hint": "I71.0",
+        "expected_action": "排除",
+        "key_distinction": "常为突发撕裂样疼痛并可伴血压差异。"
+      },
+      {
+        "disease_name": "胃食管反流病",
+        "icd10_hint": "K21",
+        "expected_action": "排除",
+        "key_distinction": "多与进食、体位相关，通常缺乏心电图和肌钙蛋白异常。"
+      }
+    ],
+    "reasoning_points": [
+      {
+        "point_id": "acs_001.rp_01",
+        "statement": "活动后胸骨后压榨性胸痛并向左肩放射，伴大汗，符合典型心肌缺血表现。",
+        "kind": "支持",
+        "required_evidence": ["acs_001.hf_01", "acs_001.hf_02", "acs_001.hf_03"],
+        "weight": 8
+      },
+      {
+        "point_id": "acs_001.rp_02",
+        "statement": "高血压、长期吸烟和心率增快提示动脉粥样硬化及急性应激背景。",
+        "kind": "支持",
+        "required_evidence": ["acs_001.hf_04", "vital.blood_pressure", "vital.heart_rate"],
+        "weight": 8
+      },
+      {
+        "point_id": "acs_001.rp_03",
+        "statement": "心电图 ST 段抬高且肌钙蛋白升高，强烈支持急性冠脉综合征。",
+        "kind": "支持",
+        "required_evidence": ["ecg.st_segment", "lab.troponin"],
+        "weight": 9
+      }
+    ],
+    "suggested_next_steps": "建议立即结合心内科评估完善急诊处置流程，教学模拟不涉及具体抢救用药。"
+  },
+  "rubric_ref": {
+    "rubric_id": "acs_001_rubric",
+    "version": "v1"
+  },
+  "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "source_attribution": {
+    "source_id": "medcase_reasoning_2025",
+    "transformation": "基于公开推理病例改写并补充问诊、查体、检查与评分字段。",
+    "attribution_note": "公开资料改写，仅用于教学模拟。",
+    "modified": true
+  },
+  "schema_version": "1.1",
+  "tags": ["胸痛", "心血管", "急症"]
+}

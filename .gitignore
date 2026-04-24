@@ -37,3 +37,6 @@ logs/
 *.sqlite3
 *.db
 *.egg-info/
+
+# Git worktrees
+.worktrees/

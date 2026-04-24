@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "MatchRule": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "intent_keyword",
+            "exam_code",
+            "test_code",
+            "diagnosis_concept",
+            "reasoning_coverage",
+            "llm_rubric"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "spec": {
+          "additionalProperties": true,
+          "title": "Spec",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "spec"
+      ],
+      "title": "MatchRule",
+      "type": "object"
+    },
+    "RubricDimension": {
+      "properties": {
+        "dimension_id": {
+          "enum": [
+            "history_taking",
+            "physical_exam",
+            "auxiliary_test",
+            "main_diagnosis",
+            "differential_diagnosis",
+            "reasoning"
+          ],
+          "title": "Dimension Id",
+          "type": "string"
+        },
+        "weight": {
+          "minimum": 1,
+          "title": "Weight",
+          "type": "integer"
+        },
+        "scoring_mode": {
+          "enum": [
+            "rule",
+            "llm",
+            "hybrid"
+          ],
+          "title": "Scoring Mode",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RubricItem"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dimension_id",
+        "weight",
+        "scoring_mode",
+        "items"
+      ],
+      "title": "RubricDimension",
+      "type": "object"
+    },
+    "RubricItem": {
+      "properties": {
+        "item_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "max_score": {
+          "maximum": 25,
+          "minimum": 1,
+          "title": "Max Score",
+          "type": "integer"
+        },
+        "match_rule": {
+          "$ref": "#/$defs/MatchRule"
+        },
+        "evidence_expected": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Expected",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item_id",
+        "description",
+        "max_score",
+        "match_rule"
+      ],
+      "title": "RubricItem",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "rubric_id": {
+      "pattern": "^[a-z0-9_]+_\\d{3}_rubric(_[a-z]+)?$",
+      "title": "Rubric Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "version": {
+      "default": "v1",
+      "title": "Version",
+      "type": "string"
+    },
+    "total_score": {
+      "default": 100,
+      "title": "Total Score",
+      "type": "integer"
+    },
+    "dimensions": {
+      "items": {
+        "$ref": "#/$defs/RubricDimension"
+      },
+      "minItems": 1,
+      "title": "Dimensions",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rubric_id",
+    "case_id",
+    "dimensions"
+  ],
+  "title": "Rubric",
+  "type": "object"
+}

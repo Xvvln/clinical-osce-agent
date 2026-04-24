@@ -1,0 +1,213 @@
+{
+  "case_id": "hyperthyroid_001",
+  "case_title": "心慌、手抖与消瘦教学病例",
+  "course_module": "心悸",
+  "difficulty": "中级",
+  "patient_profile": {
+    "name_placeholder": "×××",
+    "age_value": 36,
+    "age_unit": "岁",
+    "gender": "女",
+    "occupation": "公司文员",
+    "marital_status": "已婚",
+    "address_city": "北京",
+    "social_background": "从事文员工作，无毒物及放射线接触史。",
+    "hospital_department": "内分泌科",
+    "idea": "患者初担心消瘦为肿瘤所致。",
+    "concern": "担心病情严重，特别是消瘦是否为肿瘤征兆。",
+    "expectation": "希望医生尽快安排检查，明确诊断。"
+  },
+  "chief_complaint": "心慌、手抖 2 个月，消瘦 1 个月。",
+  "history": {
+    "present_illness_summary": "2 个月前开始心慌、手抖，近 1 个月症状加重并出现怕热、多汗、体重下降。",
+    "hidden_facts": [
+      {
+        "fact_id": "hyperthyroid_001.hf_01",
+        "topic": "现病史",
+        "slot": "onset",
+        "canonical_answer": "2 个月前开始心慌、手抖，1 个月前症状明显加重。",
+        "variants": ["两个月前开始的", "最近一个月更明显了"],
+        "trigger_intents": ["ask_onset"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_onset"]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_02",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "伴怕热、多汗、易饥、多食但体重下降。",
+        "variants": ["特别怕热，老出汗，吃得多还瘦了"],
+        "trigger_intents": ["ask_heat_intolerance"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_hypermetabolic"]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_03",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "大便次数增多，每日 3-4 次稀便，无腹痛。",
+        "variants": ["最近大便次数多了", "一天要去三四次厕所"],
+        "trigger_intents": ["ask_bowel_change"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_bowel_change"]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_04",
+        "topic": "月经史",
+        "slot": null,
+        "canonical_answer": "近 2 个月月经量较前减少。",
+        "variants": ["最近月经量少了些"],
+        "trigger_intents": ["ask_menstrual_history"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_menstrual"]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_05",
+        "topic": "家族史",
+        "slot": null,
+        "canonical_answer": "母亲患甲状腺功能减退症，长期服药控制。",
+        "variants": ["妈妈有甲状腺方面的病"],
+        "trigger_intents": ["ask_family_history"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_family_history"]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_06",
+        "topic": "过敏史",
+        "slot": null,
+        "canonical_answer": "对鸡蛋过敏，否认药物过敏史。",
+        "variants": ["鸡蛋会过敏，药物不过敏"],
+        "trigger_intents": ["ask_allergy"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_allergy"]
+      }
+    ],
+    "past_medical_history": "否认肝炎、结核、肾脏病、心脏病史。",
+    "surgery_injury_history": "否认外伤、手术史。",
+    "transfusion_history": "无。",
+    "infection_history": "否认肝炎、结核等传染病史。",
+    "allergy_history": "对鸡蛋过敏，否认药物过敏史。",
+    "personal_history": "长期居住北京，无吸烟饮酒嗜好，近期无大量海产品进食史。",
+    "menstrual_history": "平素月经规律，近 2 个月月经量较前减少。",
+    "reproductive_history": "已婚，育有 1 子。",
+    "family_history": "母亲患甲状腺功能减退症。"
+  },
+  "physical_exam": {
+    "must_items": [
+      {
+        "exam_code": "vital.heart_rate",
+        "exam_name_cn": "心率",
+        "result": "心率 110 次/分。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_heart_rate"]
+      },
+      {
+        "exam_code": "thy.inspect.goiter",
+        "exam_name_cn": "甲状腺视诊",
+        "result": "甲状腺弥漫性 I 度肿大。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_goiter"]
+      },
+      {
+        "exam_code": "neuro.hand_tremor",
+        "exam_name_cn": "手颤检查",
+        "result": "双手细颤阳性。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_tremor"]
+      }
+    ],
+    "optional_items": []
+  },
+  "auxiliary_tests": {
+    "must_items": [
+      {
+        "test_code": "lab.tsh",
+        "test_name_cn": "促甲状腺激素",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "result": "TSH < 0.01 mIU/L。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_tsh"]
+      },
+      {
+        "test_code": "lab.ft4",
+        "test_name_cn": "游离甲状腺素",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "result": "FT4 明显升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_ft4"]
+      },
+      {
+        "test_code": "img.thyroid_us",
+        "test_name_cn": "甲状腺超声",
+        "category": "影像",
+        "invasiveness": "无创",
+        "cost_hint": "基础",
+        "result": "甲状腺弥漫性增大，血流丰富。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_thyroid_us"]
+      }
+    ],
+    "optional_items": [],
+    "forbidden_items": ["img.brain_mri"]
+  },
+  "diagnosis": {
+    "main_diagnosis": "甲状腺功能亢进症",
+    "main_diagnosis_synonyms": ["甲亢", "Graves 病", "Graves disease"],
+    "icd10_hint": "E05",
+    "differential_diagnoses": [
+      {
+        "disease_name": "焦虑障碍",
+        "icd10_hint": "F41",
+        "expected_action": "排除",
+        "key_distinction": "通常缺乏甲状腺激素异常和甲状腺肿大。"
+      },
+      {
+        "disease_name": "嗜铬细胞瘤",
+        "icd10_hint": "D35.0",
+        "expected_action": "排除",
+        "key_distinction": "常为阵发性高血压发作，甲状腺功能不一定异常。"
+      }
+    ],
+    "reasoning_points": [
+      {
+        "point_id": "hyperthyroid_001.rp_01",
+        "statement": "心慌、手抖、怕热、多汗、易饥而消瘦符合高代谢表现。",
+        "kind": "支持",
+        "required_evidence": ["hyperthyroid_001.hf_01", "hyperthyroid_001.hf_02", "hyperthyroid_001.hf_03"],
+        "weight": 8
+      },
+      {
+        "point_id": "hyperthyroid_001.rp_02",
+        "statement": "心动过速、甲状腺肿大和手颤支持甲状腺激素作用增强。",
+        "kind": "支持",
+        "required_evidence": ["vital.heart_rate", "thy.inspect.goiter", "neuro.hand_tremor"],
+        "weight": 8
+      },
+      {
+        "point_id": "hyperthyroid_001.rp_03",
+        "statement": "TSH 明显抑制、FT4 升高且超声提示弥漫性改变，支持甲亢诊断。",
+        "kind": "支持",
+        "required_evidence": ["lab.tsh", "lab.ft4", "img.thyroid_us"],
+        "weight": 9
+      }
+    ],
+    "suggested_next_steps": "建议结合内分泌专科评估进一步完善病因学检查，教学模拟不涉及具体药物剂量。"
+  },
+  "rubric_ref": {
+    "rubric_id": "hyperthyroid_001_rubric",
+    "version": "v1"
+  },
+  "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "source_attribution": {
+    "source_id": "easymed_repo",
+    "transformation": "基于 EasyMED SPBench 公开病例字段改写并补充查体、检查与评分字段。",
+    "attribution_note": "参考公开教学病例结构改写，仅用于教学模拟。",
+    "modified": true
+  },
+  "schema_version": "1.1",
+  "tags": ["心悸", "内分泌", "甲亢"]
+}

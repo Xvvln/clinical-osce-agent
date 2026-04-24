@@ -1,0 +1,179 @@
+rubric_id: hyperthyroid_001_rubric
+case_id: hyperthyroid_001
+version: v1
+total_score: 100
+schema_version: "1.1"
+dimensions:
+  - dimension_id: history_taking
+    weight: 25
+    scoring_mode: rule
+    items:
+      - item_id: ht_onset
+        description: 追问起病与加重时间
+        max_score: 5
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: onset
+            any_of_keywords: [什么时候开始, 起病, 多久了]
+        evidence_expected: [hyperthyroid_001.hf_01]
+      - item_id: ht_hypermetabolic
+        description: 追问怕热多汗与多食消瘦
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [怕热, 多汗, 体重下降, 多食]
+        evidence_expected: [hyperthyroid_001.hf_02]
+      - item_id: ht_bowel_change
+        description: 追问排便改变
+        max_score: 4
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [大便, 腹泻, 稀便]
+        evidence_expected: [hyperthyroid_001.hf_03]
+      - item_id: ht_menstrual
+        description: 追问月经变化
+        max_score: 4
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 月经史
+            slot: null
+            any_of_keywords: [月经, 经量]
+        evidence_expected: [hyperthyroid_001.hf_04]
+      - item_id: ht_family_history
+        description: 追问甲状腺相关家族史
+        max_score: 4
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 家族史
+            slot: null
+            any_of_keywords: [家族史, 家里有人, 甲状腺]
+        evidence_expected: [hyperthyroid_001.hf_05]
+  - dimension_id: physical_exam
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: pe_heart_rate
+        description: 检查心率
+        max_score: 5
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: vital.heart_rate
+            must: true
+        evidence_expected: [vital.heart_rate]
+      - item_id: pe_goiter
+        description: 检查甲状腺肿大
+        max_score: 5
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: thy.inspect.goiter
+            must: true
+        evidence_expected: [thy.inspect.goiter]
+      - item_id: pe_tremor
+        description: 检查手颤
+        max_score: 5
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: neuro.hand_tremor
+            must: true
+        evidence_expected: [neuro.hand_tremor]
+  - dimension_id: auxiliary_test
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: at_tsh
+        description: 申请 TSH 检查
+        max_score: 5
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.tsh
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.tsh]
+      - item_id: at_ft4
+        description: 申请 FT4 检查
+        max_score: 5
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.ft4
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.ft4]
+      - item_id: at_thyroid_us
+        description: 申请甲状腺超声
+        max_score: 5
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: img.thyroid_us
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [img.thyroid_us]
+  - dimension_id: main_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dx_hyperthyroid
+        description: 主诊断命中甲状腺功能亢进症
+        max_score: 15
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 甲状腺功能亢进症
+            synonyms: [甲亢, Graves 病, Graves disease]
+            icd10_hint: E05
+        evidence_expected: []
+  - dimension_id: differential_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dd_anxiety
+        description: 提出焦虑障碍并说明排除依据
+        max_score: 8
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 焦虑障碍
+            synonyms: [焦虑, anxiety]
+            icd10_hint: F41
+        evidence_expected: [hyperthyroid_001.rp_02]
+      - item_id: dd_pheochromocytoma
+        description: 提出嗜铬细胞瘤并说明排除依据
+        max_score: 7
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 嗜铬细胞瘤
+            synonyms: [pheochromocytoma]
+            icd10_hint: D35.0
+        evidence_expected: [hyperthyroid_001.rp_03]
+  - dimension_id: reasoning
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: reasoning_core
+        description: 推理链覆盖甲亢核心症状、体征和检查证据
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: hyperthyroid_reasoning_v1
+            max_score: 15
+        evidence_expected:
+          - hyperthyroid_001.rp_01
+          - hyperthyroid_001.rp_02
+          - hyperthyroid_001.rp_03

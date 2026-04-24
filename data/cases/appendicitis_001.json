@@ -1,0 +1,166 @@
+{
+  "case_id": "appendicitis_001",
+  "case_title": "右下腹痛教学病例",
+  "course_module": "腹痛",
+  "difficulty": "初级",
+  "patient_profile": {
+    "name_placeholder": "×××",
+    "age_value": 22,
+    "age_unit": "岁",
+    "gender": "男",
+    "occupation": "学生",
+    "marital_status": "未婚",
+    "address_city": "北京",
+    "social_background": "无烟酒嗜好",
+    "hospital_department": "急诊外科",
+    "idea": "担心是不是吃坏了肚子",
+    "concern": "怕要做手术",
+    "expectation": "希望尽快明确原因并缓解疼痛"
+  },
+  "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+  "history": {
+    "present_illness_summary": "24 小时前出现上腹隐痛，后转移至右下腹，伴恶心和低热。",
+    "hidden_facts": [
+      {
+        "fact_id": "appendicitis_001.hf_01",
+        "topic": "现病史",
+        "slot": "onset",
+        "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+        "variants": ["昨天开始的", "差不多一天前开始"],
+        "trigger_intents": ["ask_onset"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_onset"]
+      },
+      {
+        "fact_id": "appendicitis_001.hf_02",
+        "topic": "现病史",
+        "slot": "location",
+        "canonical_answer": "疼痛后来转移并固定到右下腹。",
+        "variants": ["后来跑到右下腹了"],
+        "trigger_intents": ["ask_location"],
+        "blocking_rule": "never_auto_reveal",
+        "linked_rubric_items": ["ht_location"]
+      },
+      {
+        "fact_id": "appendicitis_001.hf_03",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "伴有恶心，没有明显腹泻。",
+        "variants": ["有点恶心", "没有拉肚子"],
+        "trigger_intents": ["ask_associated_symptom"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_associated_symptom"]
+      },
+      {
+        "fact_id": "appendicitis_001.hf_04",
+        "topic": "既往史",
+        "slot": null,
+        "canonical_answer": "既往体健，无腹部手术史。",
+        "variants": ["以前身体还可以"],
+        "trigger_intents": ["ask_past_medical_history"],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": ["ht_past_history"]
+      }
+    ],
+    "past_medical_history": "既往体健。",
+    "surgery_injury_history": "无腹部手术史。",
+    "transfusion_history": "无。",
+    "infection_history": "无特殊。",
+    "allergy_history": "无药物过敏史。",
+    "personal_history": "否认烟酒嗜好。",
+    "menstrual_history": null,
+    "reproductive_history": null,
+    "family_history": "家族中无类似病史。"
+  },
+  "physical_exam": {
+    "must_items": [
+      {
+        "exam_code": "abd.palpation.tenderness",
+        "exam_name_cn": "右下腹压痛",
+        "result": "右下腹局限性压痛阳性。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_tenderness"]
+      },
+      {
+        "exam_code": "abd.palpation.rebound",
+        "exam_name_cn": "反跳痛",
+        "result": "右下腹反跳痛阳性。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["pe_rebound"]
+      }
+    ],
+    "optional_items": []
+  },
+  "auxiliary_tests": {
+    "must_items": [
+      {
+        "test_code": "lab.cbc",
+        "test_name_cn": "血常规",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "result": "白细胞升高，中性粒细胞比例升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": ["at_cbc"]
+      }
+    ],
+    "optional_items": [],
+    "forbidden_items": ["img.abd_ct"]
+  },
+  "diagnosis": {
+    "main_diagnosis": "急性阑尾炎",
+    "main_diagnosis_synonyms": ["阑尾炎", "Acute appendicitis"],
+    "icd10_hint": "K35",
+    "differential_diagnoses": [
+      {
+        "disease_name": "急性胃肠炎",
+        "icd10_hint": "A09",
+        "expected_action": "排除",
+        "key_distinction": "通常腹泻更明显，转移性右下腹痛不典型。"
+      },
+      {
+        "disease_name": "输尿管结石",
+        "icd10_hint": "N20",
+        "expected_action": "排除",
+        "key_distinction": "常有绞痛及血尿，腹膜刺激征不典型。"
+      }
+    ],
+    "reasoning_points": [
+      {
+        "point_id": "appendicitis_001.rp_01",
+        "statement": "转移并固定的右下腹痛支持急性阑尾炎。",
+        "kind": "支持",
+        "required_evidence": ["appendicitis_001.hf_02"],
+        "weight": 8
+      },
+      {
+        "point_id": "appendicitis_001.rp_02",
+        "statement": "右下腹压痛和反跳痛提示局部腹膜刺激征。",
+        "kind": "支持",
+        "required_evidence": ["abd.palpation.tenderness", "abd.palpation.rebound"],
+        "weight": 8
+      },
+      {
+        "point_id": "appendicitis_001.rp_03",
+        "statement": "白细胞升高支持急性炎症过程。",
+        "kind": "支持",
+        "required_evidence": ["lab.cbc"],
+        "weight": 7
+      }
+    ],
+    "suggested_next_steps": "建议进一步外科评估并结合病情决定后续处理。"
+  },
+  "rubric_ref": {
+    "rubric_id": "appendicitis_001_rubric",
+    "version": "v1"
+  },
+  "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "source_attribution": {
+    "source_id": "fareez_osce_2022",
+    "transformation": "基于公开资料改写并补充教学字段。",
+    "attribution_note": "公开资料改写，仅用于教学模拟。",
+    "modified": true
+  },
+  "schema_version": "1.1",
+  "tags": ["腹痛", "急腹症"]
+}

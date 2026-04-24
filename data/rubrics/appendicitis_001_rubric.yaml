@@ -1,0 +1,100 @@
+rubric_id: appendicitis_001_rubric
+case_id: appendicitis_001
+version: v1
+total_score: 100
+schema_version: "1.1"
+dimensions:
+  - dimension_id: history_taking
+    weight: 25
+    scoring_mode: rule
+    items:
+      - item_id: ht_onset
+        description: 追问起病时间
+        max_score: 10
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: onset
+            any_of_keywords: [什么时候, 起病, 开始]
+        evidence_expected: [appendicitis_001.hf_01]
+      - item_id: ht_location
+        description: 追问疼痛部位与转移
+        max_score: 15
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: location
+            any_of_keywords: [哪里疼, 部位, 转移]
+        evidence_expected: [appendicitis_001.hf_02]
+  - dimension_id: physical_exam
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: pe_rebound
+        description: 请求右下腹反跳痛检查
+        max_score: 15
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: abd.palpation.rebound
+            must: true
+        evidence_expected: [abd.palpation.rebound]
+  - dimension_id: auxiliary_test
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: at_cbc
+        description: 请求血常规
+        max_score: 15
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.cbc
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.cbc]
+  - dimension_id: main_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dx_appendicitis
+        description: 主诊断命中急性阑尾炎
+        max_score: 15
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 急性阑尾炎
+            synonyms: [阑尾炎, Acute appendicitis]
+            icd10_hint: K35
+        evidence_expected: []
+  - dimension_id: differential_diagnosis
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: dd_reasonable
+        description: 鉴别诊断覆盖常见右下腹痛病因且表述合理
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: differential_quality_v1
+            max_score: 15
+        evidence_expected: [appendicitis_001.rp_01]
+  - dimension_id: reasoning
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: reasoning_core
+        description: 推理链覆盖关键证据并能自圆其说
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: reasoning_quality_v1
+            max_score: 15
+        evidence_expected:
+          - appendicitis_001.rp_01
+          - appendicitis_001.rp_02
+          - appendicitis_001.rp_03

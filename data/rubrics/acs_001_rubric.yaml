@@ -1,0 +1,140 @@
+rubric_id: acs_001_rubric
+case_id: acs_001
+version: v1
+total_score: 100
+schema_version: "1.1"
+dimensions:
+  - dimension_id: history_taking
+    weight: 25
+    scoring_mode: rule
+    items:
+      - item_id: ht_onset
+        description: 追问胸痛起病时间与诱因
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: onset
+            any_of_keywords: [什么时候开始, 多久了, 活动后]
+        evidence_expected: [acs_001.hf_01]
+      - item_id: ht_character
+        description: 追问胸痛性质
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: character
+            any_of_keywords: [怎么疼, 压榨样, 闷痛]
+        evidence_expected: [acs_001.hf_02]
+      - item_id: ht_radiation
+        description: 追问疼痛放射部位
+        max_score: 9
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: radiation
+            any_of_keywords: [放射, 左肩, 左上臂]
+        evidence_expected: [acs_001.hf_03]
+  - dimension_id: physical_exam
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: pe_blood_pressure
+        description: 检查血压
+        max_score: 7
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: vital.blood_pressure
+            must: true
+        evidence_expected: [vital.blood_pressure]
+      - item_id: pe_heart_rate
+        description: 检查心率
+        max_score: 8
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: vital.heart_rate
+            must: true
+        evidence_expected: [vital.heart_rate]
+  - dimension_id: auxiliary_test
+    weight: 20
+    scoring_mode: rule
+    items:
+      - item_id: at_ecg
+        description: 申请心电图
+        max_score: 10
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: ecg.st_segment
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [ecg.st_segment]
+      - item_id: at_troponin
+        description: 申请肌钙蛋白
+        max_score: 10
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.troponin
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.troponin]
+  - dimension_id: main_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dx_acs
+        description: 主诊断命中急性冠脉综合征
+        max_score: 15
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 急性冠脉综合征
+            synonyms: [ACS, 急性心肌梗死, acute coronary syndrome]
+            icd10_hint: I24
+        evidence_expected: []
+  - dimension_id: differential_diagnosis
+    weight: 10
+    scoring_mode: rule
+    items:
+      - item_id: dd_aortic_dissection
+        description: 提出主动脉夹层作为鉴别
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 主动脉夹层
+            synonyms: [aortic dissection]
+            icd10_hint: I71.0
+        evidence_expected: [acs_001.rp_01]
+      - item_id: dd_gerd
+        description: 提出胃食管反流病作为鉴别
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 胃食管反流病
+            synonyms: [GERD, gastroesophageal reflux disease]
+            icd10_hint: K21
+        evidence_expected: [acs_001.rp_03]
+  - dimension_id: reasoning
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: reasoning_core
+        description: 推理链覆盖典型胸痛表现、危险因素和心电图证据
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: acs_reasoning_v1
+            max_score: 15
+        evidence_expected:
+          - acs_001.rp_01
+          - acs_001.rp_02
+          - acs_001.rp_03

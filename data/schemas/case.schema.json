@@ -1,0 +1,781 @@
+{
+  "$defs": {
+    "AuxiliaryTestBundle": {
+      "properties": {
+        "must_items": {
+          "items": {
+            "$ref": "#/$defs/AuxiliaryTestItem"
+          },
+          "title": "Must Items",
+          "type": "array"
+        },
+        "optional_items": {
+          "items": {
+            "$ref": "#/$defs/AuxiliaryTestItem"
+          },
+          "title": "Optional Items",
+          "type": "array"
+        },
+        "forbidden_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Items",
+          "type": "array"
+        }
+      },
+      "title": "AuxiliaryTestBundle",
+      "type": "object"
+    },
+    "AuxiliaryTestItem": {
+      "properties": {
+        "test_code": {
+          "pattern": "^(lab|img|ecg|endo|path|other)\\.[a-z][a-z0-9_]*$",
+          "title": "Test Code",
+          "type": "string"
+        },
+        "test_name_cn": {
+          "title": "Test Name Cn",
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "实验室",
+            "影像",
+            "心电",
+            "内镜",
+            "病理",
+            "其他"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "invasiveness": {
+          "enum": [
+            "无创",
+            "微创",
+            "有创"
+          ],
+          "title": "Invasiveness",
+          "type": "string"
+        },
+        "cost_hint": {
+          "enum": [
+            "基础",
+            "中等",
+            "昂贵"
+          ],
+          "title": "Cost Hint",
+          "type": "string"
+        },
+        "result": {
+          "title": "Result",
+          "type": "string"
+        },
+        "is_abnormal": {
+          "title": "Is Abnormal",
+          "type": "boolean"
+        },
+        "linked_rubric_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Linked Rubric Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "test_code",
+        "test_name_cn",
+        "category",
+        "invasiveness",
+        "cost_hint",
+        "result",
+        "is_abnormal"
+      ],
+      "title": "AuxiliaryTestItem",
+      "type": "object"
+    },
+    "DiagnosisSpec": {
+      "properties": {
+        "main_diagnosis": {
+          "title": "Main Diagnosis",
+          "type": "string"
+        },
+        "main_diagnosis_synonyms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Main Diagnosis Synonyms",
+          "type": "array"
+        },
+        "icd10_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icd10 Hint"
+        },
+        "differential_diagnoses": {
+          "items": {
+            "$ref": "#/$defs/DifferentialDiagnosis"
+          },
+          "minItems": 2,
+          "title": "Differential Diagnoses",
+          "type": "array"
+        },
+        "reasoning_points": {
+          "items": {
+            "$ref": "#/$defs/ReasoningPoint"
+          },
+          "minItems": 1,
+          "title": "Reasoning Points",
+          "type": "array"
+        },
+        "suggested_next_steps": {
+          "title": "Suggested Next Steps",
+          "type": "string"
+        }
+      },
+      "required": [
+        "main_diagnosis",
+        "differential_diagnoses",
+        "reasoning_points",
+        "suggested_next_steps"
+      ],
+      "title": "DiagnosisSpec",
+      "type": "object"
+    },
+    "DifferentialDiagnosis": {
+      "properties": {
+        "disease_name": {
+          "title": "Disease Name",
+          "type": "string"
+        },
+        "icd10_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icd10 Hint"
+        },
+        "expected_action": {
+          "enum": [
+            "支持",
+            "排除"
+          ],
+          "title": "Expected Action",
+          "type": "string"
+        },
+        "key_distinction": {
+          "title": "Key Distinction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "disease_name",
+        "expected_action",
+        "key_distinction"
+      ],
+      "title": "DifferentialDiagnosis",
+      "type": "object"
+    },
+    "HiddenFact": {
+      "properties": {
+        "fact_id": {
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "topic": {
+          "enum": [
+            "现病史",
+            "既往史",
+            "家族史",
+            "月经史",
+            "生殖史",
+            "个人史",
+            "用药史",
+            "过敏史",
+            "社会史",
+            "系统回顾",
+            "ICE"
+          ],
+          "title": "Topic",
+          "type": "string"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "enum": [
+                "onset",
+                "duration",
+                "location",
+                "character",
+                "radiation",
+                "severity",
+                "aggravating",
+                "relieving",
+                "progression",
+                "associated_symptom",
+                "frequency",
+                "timing",
+                "context",
+                "negation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        },
+        "canonical_answer": {
+          "title": "Canonical Answer",
+          "type": "string"
+        },
+        "variants": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Variants",
+          "type": "array"
+        },
+        "trigger_intents": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Trigger Intents",
+          "type": "array"
+        },
+        "blocking_rule": {
+          "default": "reveal_on_direct_question",
+          "enum": [
+            "reveal_on_direct_question",
+            "reveal_after_stage",
+            "never_auto_reveal"
+          ],
+          "title": "Blocking Rule",
+          "type": "string"
+        },
+        "linked_rubric_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Linked Rubric Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fact_id",
+        "topic",
+        "canonical_answer"
+      ],
+      "title": "HiddenFact",
+      "type": "object"
+    },
+    "HistoryTaking": {
+      "properties": {
+        "present_illness_summary": {
+          "title": "Present Illness Summary",
+          "type": "string"
+        },
+        "hidden_facts": {
+          "items": {
+            "$ref": "#/$defs/HiddenFact"
+          },
+          "minItems": 1,
+          "title": "Hidden Facts",
+          "type": "array"
+        },
+        "past_medical_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Past Medical History"
+        },
+        "surgery_injury_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Surgery Injury History"
+        },
+        "transfusion_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transfusion History"
+        },
+        "infection_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Infection History"
+        },
+        "allergy_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allergy History"
+        },
+        "personal_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Personal History"
+        },
+        "menstrual_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Menstrual History"
+        },
+        "reproductive_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reproductive History"
+        },
+        "family_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Family History"
+        }
+      },
+      "required": [
+        "present_illness_summary",
+        "hidden_facts"
+      ],
+      "title": "HistoryTaking",
+      "type": "object"
+    },
+    "PatientProfile": {
+      "properties": {
+        "name_placeholder": {
+          "default": "×××",
+          "title": "Name Placeholder",
+          "type": "string"
+        },
+        "age_value": {
+          "maximum": 120,
+          "minimum": 0,
+          "title": "Age Value",
+          "type": "integer"
+        },
+        "age_unit": {
+          "enum": [
+            "岁",
+            "月",
+            "周"
+          ],
+          "title": "Age Unit",
+          "type": "string"
+        },
+        "gender": {
+          "enum": [
+            "男",
+            "女"
+          ],
+          "title": "Gender",
+          "type": "string"
+        },
+        "occupation": {
+          "title": "Occupation",
+          "type": "string"
+        },
+        "marital_status": {
+          "default": "未知",
+          "enum": [
+            "未婚",
+            "已婚",
+            "离异",
+            "丧偶",
+            "未知"
+          ],
+          "title": "Marital Status",
+          "type": "string"
+        },
+        "address_city": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address City"
+        },
+        "social_background": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Social Background"
+        },
+        "hospital_department": {
+          "title": "Hospital Department",
+          "type": "string"
+        },
+        "idea": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idea"
+        },
+        "concern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Concern"
+        },
+        "expectation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expectation"
+        }
+      },
+      "required": [
+        "age_value",
+        "age_unit",
+        "gender",
+        "occupation",
+        "hospital_department"
+      ],
+      "title": "PatientProfile",
+      "type": "object"
+    },
+    "PhysicalExamBundle": {
+      "properties": {
+        "must_items": {
+          "items": {
+            "$ref": "#/$defs/PhysicalExamItem"
+          },
+          "title": "Must Items",
+          "type": "array"
+        },
+        "optional_items": {
+          "items": {
+            "$ref": "#/$defs/PhysicalExamItem"
+          },
+          "title": "Optional Items",
+          "type": "array"
+        }
+      },
+      "title": "PhysicalExamBundle",
+      "type": "object"
+    },
+    "PhysicalExamItem": {
+      "properties": {
+        "exam_code": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "title": "Exam Code",
+          "type": "string"
+        },
+        "exam_name_cn": {
+          "title": "Exam Name Cn",
+          "type": "string"
+        },
+        "result": {
+          "title": "Result",
+          "type": "string"
+        },
+        "is_abnormal": {
+          "title": "Is Abnormal",
+          "type": "boolean"
+        },
+        "linked_rubric_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Linked Rubric Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "exam_code",
+        "exam_name_cn",
+        "result",
+        "is_abnormal"
+      ],
+      "title": "PhysicalExamItem",
+      "type": "object"
+    },
+    "ReasoningPoint": {
+      "properties": {
+        "point_id": {
+          "title": "Point Id",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "支持",
+            "排除",
+            "鉴别"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "required_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Evidence",
+          "type": "array"
+        },
+        "weight": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Weight",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id",
+        "statement",
+        "kind",
+        "weight"
+      ],
+      "title": "ReasoningPoint",
+      "type": "object"
+    },
+    "RubricRef": {
+      "properties": {
+        "rubric_id": {
+          "title": "Rubric Id",
+          "type": "string"
+        },
+        "version": {
+          "default": "v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rubric_id"
+      ],
+      "title": "RubricRef",
+      "type": "object"
+    },
+    "SourceAttribution": {
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "transformation": {
+          "title": "Transformation",
+          "type": "string"
+        },
+        "attribution_note": {
+          "title": "Attribution Note",
+          "type": "string"
+        },
+        "modified": {
+          "default": true,
+          "title": "Modified",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "transformation",
+        "attribution_note"
+      ],
+      "title": "SourceAttribution",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "case_id": {
+      "pattern": "^[a-z0-9_]+_\\d{3}$",
+      "title": "Case Id",
+      "type": "string"
+    },
+    "case_title": {
+      "title": "Case Title",
+      "type": "string"
+    },
+    "course_module": {
+      "enum": [
+        "腹痛",
+        "胸痛",
+        "发热",
+        "头痛",
+        "咳嗽",
+        "呼吸困难",
+        "心悸",
+        "消瘦",
+        "黄疸",
+        "水肿"
+      ],
+      "title": "Course Module",
+      "type": "string"
+    },
+    "difficulty": {
+      "enum": [
+        "初级",
+        "中级",
+        "高级"
+      ],
+      "title": "Difficulty",
+      "type": "string"
+    },
+    "patient_profile": {
+      "$ref": "#/$defs/PatientProfile"
+    },
+    "chief_complaint": {
+      "title": "Chief Complaint",
+      "type": "string"
+    },
+    "history": {
+      "$ref": "#/$defs/HistoryTaking"
+    },
+    "physical_exam": {
+      "$ref": "#/$defs/PhysicalExamBundle"
+    },
+    "auxiliary_tests": {
+      "$ref": "#/$defs/AuxiliaryTestBundle"
+    },
+    "diagnosis": {
+      "$ref": "#/$defs/DiagnosisSpec"
+    },
+    "rubric_ref": {
+      "$ref": "#/$defs/RubricRef"
+    },
+    "safety_notes": {
+      "minLength": 1,
+      "title": "Safety Notes",
+      "type": "string"
+    },
+    "source_attribution": {
+      "$ref": "#/$defs/SourceAttribution"
+    },
+    "schema_version": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "case_id",
+    "case_title",
+    "course_module",
+    "difficulty",
+    "patient_profile",
+    "chief_complaint",
+    "history",
+    "physical_exam",
+    "auxiliary_tests",
+    "diagnosis",
+    "rubric_ref",
+    "safety_notes",
+    "source_attribution"
+  ],
+  "title": "Case",
+  "type": "object"
+}

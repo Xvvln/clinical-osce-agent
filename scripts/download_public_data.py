@@ -29,6 +29,14 @@ DOWNLOADS = {
         "url": "https://huggingface.co/datasets/zou-lab/MedCaseReasoning/resolve/main/data/test-00000-of-00001.parquet?download=true",
         "headers": DEFAULT_HEADERS,
     },
+    RAW_DIR / "medcase_reasoning" / "medcasereasoning_core.csv": {
+        "url": "https://huggingface.co/datasets/zou-lab/MedCaseReasoning/resolve/main/medcasereasoning_core.csv?download=true",
+        "headers": DEFAULT_HEADERS,
+    },
+    RAW_DIR / "medcase_reasoning" / "medcasereasoning_core.pqt": {
+        "url": "https://huggingface.co/datasets/zou-lab/MedCaseReasoning/resolve/main/medcasereasoning_core.pqt?download=true",
+        "headers": DEFAULT_HEADERS,
+    },
     RAW_DIR / "case_report_collective" / "train-00000-of-00001.parquet": {
         "url": "https://huggingface.co/datasets/cxyzhang/CaseReportCollective_V1.0/resolve/main/data/train-00000-of-00001.parquet?download=true",
         "headers": DEFAULT_HEADERS,

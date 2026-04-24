@@ -1,0 +1,139 @@
+rubric_id: heart_failure_001_rubric
+case_id: heart_failure_001
+version: v1
+total_score: 100
+schema_version: "1.1"
+dimensions:
+  - dimension_id: history_taking
+    weight: 25
+    scoring_mode: rule
+    items:
+      - item_id: ht_progression
+        description: 追问气短进展情况
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: progression
+            any_of_keywords: [加重, 越来越喘, 这几天]
+        evidence_expected: [heart_failure_001.hf_01]
+      - item_id: ht_orthopnea
+        description: 追问平卧困难与夜间憋醒
+        max_score: 9
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [不能平躺, 夜间憋醒, 垫高枕头]
+        evidence_expected: [heart_failure_001.hf_02]
+      - item_id: ht_edema
+        description: 追问下肢水肿
+        max_score: 8
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [水肿, 腿肿, 脚肿]
+        evidence_expected: [heart_failure_001.hf_03]
+  - dimension_id: physical_exam
+    weight: 20
+    scoring_mode: rule
+    items:
+      - item_id: pe_resp_rate
+        description: 检查呼吸频率
+        max_score: 6
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: resp.rate
+            must: true
+        evidence_expected: [resp.rate]
+      - item_id: pe_rales
+        description: 检查肺部湿啰音
+        max_score: 7
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: lung.auscultation.rales
+            must: true
+        evidence_expected: [lung.auscultation.rales]
+      - item_id: pe_edema
+        description: 检查下肢凹陷性水肿
+        max_score: 7
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: ext.pitting_edema
+            must: true
+        evidence_expected: [ext.pitting_edema]
+  - dimension_id: auxiliary_test
+    weight: 20
+    scoring_mode: rule
+    items:
+      - item_id: at_bnp
+        description: 申请 BNP 检查
+        max_score: 10
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.bnp
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.bnp]
+      - item_id: at_echo
+        description: 申请超声心动图
+        max_score: 10
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: img.echo
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [img.echo]
+  - dimension_id: main_diagnosis
+    weight: 15
+    scoring_mode: rule
+    items:
+      - item_id: dx_heart_failure
+        description: 主诊断命中慢性心力衰竭急性加重
+        max_score: 15
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 慢性心力衰竭急性加重
+            synonyms: [心力衰竭, 心衰, acute decompensated heart failure]
+            icd10_hint: I50
+        evidence_expected: []
+  - dimension_id: differential_diagnosis
+    weight: 5
+    scoring_mode: rule
+    items:
+      - item_id: dd_copd
+        description: 提出慢阻肺急性加重作为鉴别
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 慢性阻塞性肺疾病急性加重
+            synonyms: [慢阻肺, COPD exacerbation]
+            icd10_hint: J44.1
+        evidence_expected: [heart_failure_001.rp_02]
+  - dimension_id: reasoning
+    weight: 15
+    scoring_mode: llm
+    items:
+      - item_id: reasoning_core
+        description: 推理链覆盖呼吸困难进展、淤血体征和 BNP/超声证据
+        max_score: 15
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: heart_failure_reasoning_v1
+            max_score: 15
+        evidence_expected:
+          - heart_failure_001.rp_01
+          - heart_failure_001.rp_02
+          - heart_failure_001.rp_03
