@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
+from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
 from app.services.source_retriever import retrieve_feedback_sources
 from app.validators.case_validator import validate_case
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
+PatientResponder = Callable[[PatientResponderRequest], str]
 
 
 class OsceGraphState(TypedDict, total=False):
@@ -23,8 +27,10 @@ class OsceGraphState(TypedDict, total=False):
     session_id: str
     student_message: str
     current_intent: str
-    reply: str 
+    reply: str
     report_requested: bool
+    hint_requested: bool
+    hint: str
     exam_code: str
     exam_name_cn: str
     exam_result: str
@@ -53,7 +59,7 @@ def load_case_node(state: OsceGraphState) -> dict[str, str]:
     case = _load_case(state["case_id"])
     return {
         "case_id": case.case_id,
-        "stage": "case_intro",
+        "stage": state.get("stage") or "case_intro",
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
     }
@@ -61,30 +67,60 @@ def load_case_node(state: OsceGraphState) -> dict[str, str]:
 
 def input_router_node(state: OsceGraphState) -> dict[str, str]:
     normalized = state.get("student_message", "").lower()
-    if any(keyword in normalized for keyword in ["什么时候", "何时", "多久", "开始"]):
-        return {"current_intent": "ask_onset"}
-    if any(keyword in normalized for keyword in ["哪里", "位置", "部位"]):
-        return {"current_intent": "ask_location"}
-    if any(keyword in normalized for keyword in ["恶心", "吐", "腹泻", "伴随"]):
-        return {"current_intent": "ask_associated_symptom"}
-    if any(keyword in normalized for keyword in ["既往", "以前", "手术史"]):
-        return {"current_intent": "ask_past_medical_history"}
+    intent_keywords = [
+        ("ask_migration", ["转移", "换地方", "跑到"]),
+        ("ask_character", ["性质", "什么样", "胀痛", "绞痛", "刺痛"]),
+        ("ask_severity", ["几分", "多疼", "疼痛程度", "严重", "vas"]),
+        ("ask_fever", ["发热", "发烧", "体温", "低热"]),
+        ("ask_urinary", ["尿频", "尿急", "尿痛", "血尿", "小便"]),
+        ("ask_stool", ["腹泻", "大便", "拉肚子"]),
+        ("ask_associated_nausea", ["恶心", "呕吐", "想吐", "吐"]),
+        ("ask_allergy", ["过敏"]),
+        ("ask_diet", ["饮食", "吃了什么"]),
+        ("ask_travel", ["旅行", "出远门"]),
+        ("ask_personal", ["个人史", "抽烟", "吸烟", "喝酒", "饮酒"]),
+        ("ask_family", ["家族", "家里人", "父母"]),
+        ("ask_concern", ["担心", "害怕", "顾虑"]),
+        ("ask_expectation", ["期望", "希望", "想要"]),
+        ("ask_idea", ["想法", "觉得", "认为"]),
+        ("ask_onset", ["什么时候", "何时", "多久", "开始"]),
+        ("ask_location", ["哪里", "位置", "部位"]),
+        ("ask_past_medical_history", ["既往", "以前", "手术史"]),
+    ]
+    for intent, keywords in intent_keywords:
+        if any(keyword in normalized for keyword in keywords):
+            return {"current_intent": intent}
     return {"current_intent": "unknown_history_intent"}
 
 
-def patient_response_node(state: OsceGraphState) -> dict[str, Any]:
+def patient_response_node(state: OsceGraphState, patient_responder: PatientResponder) -> dict[str, Any]:
     case = _load_case(state["case_id"])
     intent = state.get("current_intent", "")
     revealed_facts = list(state.get("revealed_facts", []))
-    reply = "这个问题我不太确定，或者病例中没有提供相关信息。"
+    canonical_answer = "这个问题我不太确定，或者病例中没有提供相关信息。"
+    revealed_fact_id: str | None = None
     for hidden_fact in case.history.hidden_facts:
         if intent in hidden_fact.trigger_intents:
+            revealed_fact_id = hidden_fact.fact_id
             if hidden_fact.fact_id not in revealed_facts:
                 revealed_facts.append(hidden_fact.fact_id)
-            reply = hidden_fact.canonical_answer
+            canonical_answer = hidden_fact.canonical_answer
             break
 
     student_message = state.get("student_message", "")
+    reply = patient_responder(
+        PatientResponderRequest(
+            case_id=case.case_id,
+            case_title=case.case_title,
+            chief_complaint=case.chief_complaint,
+            student_message=student_message,
+            current_intent=intent,
+            canonical_answer=canonical_answer,
+            revealed_fact_id=revealed_fact_id,
+            forbidden_terms=[case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms],
+            prior_messages=state.get("messages", []),
+        )
+    )
     messages = [*state.get("messages", [])]
     if student_message:
         messages.extend(
@@ -162,6 +198,15 @@ def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
     }
 
 
+def socratic_hint_node(state: OsceGraphState) -> dict[str, Any]:
+    hint = _build_socratic_hint(state)
+    return {
+        "stage": state.get("stage", "case_intro"),
+        "hint": hint,
+        "messages": [*state.get("messages", []), {"role": "coach", "content": hint}],
+    }
+
+
 def evaluation_node(
     state: OsceGraphState,
     llm_scorer: LlmRubricScorer | None = None,
@@ -207,7 +252,9 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         for item_id in report.get("missed_items", [])
         if item_id in rubric_scores
     ]
+    knowledge_recommendations = recommend_knowledge_items(report)
     source_references = retrieve_feedback_sources(report, state.get("revealed_facts", []))
+    llm_reasoning_feedback = _build_llm_reasoning_feedback(rubric_scores)
 
     feedback_report = {
         **report,
@@ -215,6 +262,8 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "strengths": strengths,
         "reasoning_errors": reasoning_errors,
         "next_recommendations": next_recommendations,
+        "knowledge_recommendations": knowledge_recommendations,
+        "llm_reasoning_feedback": llm_reasoning_feedback,
         "source_references": source_references,
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
         "created_at": "2026-04-24T00:00:00Z",
@@ -222,9 +271,41 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
     return {"stage": "feedback", "retrieved_sources": source_references, "feedback_report": feedback_report}
 
 
+def _build_llm_reasoning_feedback(rubric_scores: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "rubric_item_id": item_id,
+            "description": item_score["description"],
+            "score": item_score["score"],
+            "max_score": item_score["max_score"],
+            "covered_evidence": item_score["covered_evidence"],
+            "missing_evidence": item_score["missing_evidence"],
+            "rationale": item_score["rationale"],
+        }
+        for item_id, item_score in rubric_scores.items()
+        if "rationale" in item_score
+    ]
+
+
+def _build_socratic_hint(state: OsceGraphState) -> str:
+    if state.get("final_submission") is not None:
+        return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
+    if not state.get("asked_questions", []):
+        return "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
+    if not state.get("requested_exams", []):
+        return "先围绕疼痛的部位、性质、程度、伴随症状和既往史继续追问，不要急于下诊断。"
+    if not state.get("requested_tests", []):
+        return "你已经获得部分病史和查体信息，可以思考哪些基础检查能验证当前假设。"
+    if not state.get("student_hypotheses", []):
+        return "先记录一个诊断假设，再用已获得证据检查它是否被支持或需要排除。"
+    return "整理已获得的病史、查体和检查证据，再提交主要诊断和推理依据。"
+
+
 def _route_after_load_case(state: OsceGraphState) -> str:
     if state.get("student_message"):
         return "input_router_node"
+    if state.get("hint_requested"):
+        return "socratic_hint_node"
     if state.get("exam_code"):
         return "physical_exam_node"
     if state.get("test_code"):
@@ -242,14 +323,19 @@ def _load_case(case_id: str) -> Any:
     return validate_case(case_payload)
 
 
-def build_osce_graph(llm_scorer: LlmRubricScorer | None = None) -> Any:
+def build_osce_graph(
+    llm_scorer: LlmRubricScorer | None = None,
+    patient_responder: PatientResponder | None = None,
+) -> Any:
+    active_patient_responder = patient_responder or create_default_gemini_patient_responder()
     builder = StateGraph(OsceGraphState)
     builder.add_node(load_case_node)
     builder.add_node(input_router_node)
-    builder.add_node(patient_response_node)
+    builder.add_node("patient_response_node", lambda state: patient_response_node(state, active_patient_responder))
     builder.add_node(physical_exam_node)
     builder.add_node(auxiliary_test_node)
     builder.add_node(diagnosis_submit_node)
+    builder.add_node(socratic_hint_node)
     builder.add_node("evaluation_node", lambda state: evaluation_node(state, llm_scorer=llm_scorer))
     builder.add_node(feedback_node)
     builder.add_edge(START, "load_case_node")
@@ -261,6 +347,7 @@ def build_osce_graph(llm_scorer: LlmRubricScorer | None = None) -> Any:
             "physical_exam_node": "physical_exam_node",
             "auxiliary_test_node": "auxiliary_test_node",
             "diagnosis_submit_node": "diagnosis_submit_node",
+            "socratic_hint_node": "socratic_hint_node",
             "evaluation_node": "evaluation_node",
             END: END,
         },
@@ -270,6 +357,7 @@ def build_osce_graph(llm_scorer: LlmRubricScorer | None = None) -> Any:
     builder.add_edge("physical_exam_node", END)
     builder.add_edge("auxiliary_test_node", END)
     builder.add_edge("diagnosis_submit_node", END)
+    builder.add_edge("socratic_hint_node", END)
     builder.add_edge("evaluation_node", "feedback_node")
     builder.add_edge("feedback_node", END)
     return builder.compile()

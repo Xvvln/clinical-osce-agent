@@ -28,6 +28,11 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Local assistant and private correspondence
+.claude/
+CLAUDE.md
+*.eml
+
 # Local references and raw datasets
 references/
 data/raw/

@@ -32,6 +32,10 @@ class SubmitDiagnosisRequest(BaseModel):
     reasoning: str
 
 
+class HypothesisRequest(BaseModel):
+    hypothesis: str
+
+
 @app.get("/")
 def read_root() -> dict[str, str]:
     return {
@@ -43,6 +47,19 @@ def read_root() -> dict[str, str]:
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/cases")
+def list_cases() -> dict[str, object]:
+    return {"cases": osce_session_service.list_cases()}
+
+
+@app.get("/api/cases/{case_id}/raw")
+def get_case_raw(case_id: str) -> dict[str, object]:
+    case_payload = osce_session_service.get_case_raw(case_id)
+    if case_payload is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return {"case": case_payload}
 
 
 @app.post("/api/sessions")
@@ -80,6 +97,22 @@ def request_physical_exam(session_id: str, request: PhysicalExamRequest) -> dict
 @app.post("/api/sessions/{session_id}/auxiliary-test")
 def request_auxiliary_test(session_id: str, request: AuxiliaryTestRequest) -> dict[str, object]:
     session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/hypotheses")
+def record_hypothesis(session_id: str, request: HypothesisRequest) -> dict[str, object]:
+    session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/hint")
+def request_hint(session_id: str) -> dict[str, object]:
+    session = osce_session_service.request_hint(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session

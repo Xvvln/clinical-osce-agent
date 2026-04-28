@@ -10,31 +10,128 @@ dimensions:
     items:
       - item_id: ht_onset
         description: 追问起病时间
-        max_score: 10
+        max_score: 3
         match_rule:
           kind: intent_keyword
           spec:
             topic: 现病史
             slot: onset
-            any_of_keywords: [什么时候, 起病, 开始]
+            any_of_keywords: [什么时候, 何时, 起病, 开始]
         evidence_expected: [appendicitis_001.hf_01]
-      - item_id: ht_location
-        description: 追问疼痛部位与转移
-        max_score: 15
+      - item_id: ht_migration
+        description: 追问疼痛部位及转移特征
+        max_score: 6
         match_rule:
           kind: intent_keyword
           spec:
             topic: 现病史
             slot: location
-            any_of_keywords: [哪里疼, 部位, 转移]
+            any_of_keywords: [哪里疼, 部位, 转移, 位置变了]
         evidence_expected: [appendicitis_001.hf_02]
+      - item_id: ht_character
+        description: 追问疼痛性质
+        max_score: 3
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: character
+            any_of_keywords: [怎么样的疼, 性质, 胀痛, 绞痛]
+        evidence_expected: [appendicitis_001.hf_03]
+      - item_id: ht_severity
+        description: 追问疼痛程度
+        max_score: 2
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: severity
+            any_of_keywords: [多疼, 程度, 几分]
+        evidence_expected: [appendicitis_001.hf_04]
+      - item_id: ht_associated_gi
+        description: 追问恶心呕吐腹泻
+        max_score: 3
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [恶心, 呕吐, 腹泻, 大便]
+        evidence_expected: [appendicitis_001.hf_05]
+      - item_id: ht_associated_fever
+        description: 追问发热
+        max_score: 2
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 现病史
+            slot: associated_symptom
+            any_of_keywords: [发热, 体温, 发烧]
+        evidence_expected: [appendicitis_001.hf_05]
+      - item_id: ht_past_medical
+        description: 追问既往病史
+        max_score: 2
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 既往史
+            slot: null
+            any_of_keywords: [以前有什么病, 慢性病, 既往]
+        evidence_expected: [appendicitis_001.hf_06]
+      - item_id: ht_allergy
+        description: 追问过敏史
+        max_score: 1
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: 过敏史
+            slot: null
+            any_of_keywords: [过敏, 药物不良反应]
+        evidence_expected: [appendicitis_001.hf_07]
+      - item_id: ht_ice
+        description: 询问患者想法担忧与期望（ICE）
+        max_score: 3
+        match_rule:
+          kind: intent_keyword
+          spec:
+            topic: ICE
+            slot: null
+            any_of_keywords: [担心, 担忧, 顾虑, 期望, 希望]
+        evidence_expected: [appendicitis_001.hf_10]
   - dimension_id: physical_exam
     weight: 15
     scoring_mode: rule
     items:
+      - item_id: pe_vital_temp
+        description: 测量体温
+        max_score: 2
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: vital.temperature
+            must: true
+        evidence_expected: [vital.temperature]
+      - item_id: pe_abd_inspection
+        description: 腹部视诊
+        max_score: 3
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: abd.inspection
+            must: true
+        evidence_expected: [abd.inspection]
+      - item_id: pe_tenderness
+        description: 检查腹部压痛
+        max_score: 5
+        match_rule:
+          kind: exam_code
+          spec:
+            exam_code: abd.palpation.tenderness
+            must: true
+        evidence_expected: [abd.palpation.tenderness]
       - item_id: pe_rebound
-        description: 请求右下腹反跳痛检查
-        max_score: 15
+        description: 检查反跳痛
+        max_score: 5
         match_rule:
           kind: exam_code
           spec:
@@ -45,9 +142,9 @@ dimensions:
     weight: 15
     scoring_mode: rule
     items:
-      - item_id: at_cbc
-        description: 请求血常规
-        max_score: 15
+      - item_id: ax_cbc
+        description: 申请血常规
+        max_score: 5
         match_rule:
           kind: test_code
           spec:
@@ -55,46 +152,114 @@ dimensions:
             must: true
             deduct_if_forbidden: 0
         evidence_expected: [lab.cbc]
+      - item_id: ax_crp
+        description: 申请 CRP
+        max_score: 3
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.crp
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [lab.crp]
+      - item_id: ax_us
+        description: 申请腹部超声
+        max_score: 5
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: img.abd_us
+            must: true
+            deduct_if_forbidden: 0
+        evidence_expected: [img.abd_us]
+      - item_id: ax_ua
+        description: 合理申请尿常规排除输尿管结石
+        max_score: 2
+        match_rule:
+          kind: test_code
+          spec:
+            test_code: lab.urinalysis
+            must: false
+            deduct_if_forbidden: 5
+        evidence_expected: [lab.urinalysis]
   - dimension_id: main_diagnosis
     weight: 15
     scoring_mode: rule
     items:
-      - item_id: dx_appendicitis
-        description: 主诊断命中急性阑尾炎
+      - item_id: dx_main
+        description: 主要诊断命中急性阑尾炎
         max_score: 15
         match_rule:
           kind: diagnosis_concept
           spec:
             target: 急性阑尾炎
-            synonyms: [阑尾炎, Acute appendicitis]
+            synonyms: [阑尾炎, Acute appendicitis, acute appendicitis]
             icd10_hint: K35
         evidence_expected: []
   - dimension_id: differential_diagnosis
     weight: 15
-    scoring_mode: llm
+    scoring_mode: rule
     items:
-      - item_id: dd_reasonable
-        description: 鉴别诊断覆盖常见右下腹痛病因且表述合理
-        max_score: 15
+      - item_id: dxd_urolith
+        description: 提出输尿管结石并说明排除依据
+        max_score: 5
         match_rule:
-          kind: llm_rubric
+          kind: diagnosis_concept
           spec:
-            prompt_id: differential_quality_v1
-            max_score: 15
-        evidence_expected: [appendicitis_001.rp_01]
+            target: 右侧输尿管结石
+            synonyms: [输尿管结石, 泌尿系结石]
+            icd10_hint: N20.1
+        evidence_expected: [appendicitis_001.rp_05]
+      - item_id: dxd_crohn
+        description: 提出克罗恩病并说明排除依据
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 克罗恩病回盲部受累
+            synonyms: [克罗恩, Crohn]
+            icd10_hint: K50
+        evidence_expected: []
+      - item_id: dxd_ectopic
+        description: 考虑异位妊娠并正确排除
+        max_score: 5
+        match_rule:
+          kind: diagnosis_concept
+          spec:
+            target: 异位妊娠破裂
+            synonyms: [异位妊娠, 宫外孕]
+            icd10_hint: O00
+        evidence_expected: []
   - dimension_id: reasoning
     weight: 15
     scoring_mode: llm
     items:
-      - item_id: reasoning_core
-        description: 推理链覆盖关键证据并能自圆其说
-        max_score: 15
+      - item_id: rs_support
+        description: 推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）
+        max_score: 10
         match_rule:
-          kind: llm_rubric
+          kind: reasoning_coverage
           spec:
-            prompt_id: reasoning_quality_v1
-            max_score: 15
+            required_evidence:
+              - appendicitis_001.hf_02
+              - abd.palpation.tenderness
+              - abd.palpation.rebound
+              - lab.cbc
+              - img.abd_us
+            min_coverage_ratio: 0.6
         evidence_expected:
           - appendicitis_001.rp_01
           - appendicitis_001.rp_02
           - appendicitis_001.rp_03
+          - appendicitis_001.rp_04
+      - item_id: rs_exclude
+        description: 推理表达覆盖关键排除依据
+        max_score: 5
+        match_rule:
+          kind: llm_rubric
+          spec:
+            prompt_id: reasoning_exclude_v1
+            max_score: 5
+        evidence_expected:
+          - appendicitis_001.rp_05
+          - appendicitis_001.rp_06

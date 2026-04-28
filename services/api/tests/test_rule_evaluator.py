@@ -23,21 +23,22 @@ def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
 
     assert report["session_id"] == "session_demo"
     assert report["case_id"] == "appendicitis_001"
-    assert report["total_score"] == 55
+    assert report["total_score"] == 32
     assert report["dimension_scores"] == {
-        "history_taking": 10,
-        "physical_exam": 15,
-        "auxiliary_test": 15,
+        "history_taking": 3,
+        "physical_exam": 5,
+        "auxiliary_test": 5,
         "main_diagnosis": 15,
         "differential_diagnosis": 0,
-        "reasoning": 0,
+        "reasoning": 4,
     }
-    assert report["rubric_scores"]["ht_onset"]["score"] == 10
-    assert report["rubric_scores"]["ht_location"]["score"] == 0
-    assert report["rubric_scores"]["pe_rebound"]["score"] == 15
-    assert report["rubric_scores"]["at_cbc"]["score"] == 15
-    assert report["rubric_scores"]["dx_appendicitis"]["score"] == 15
-    assert "ht_location" in report["missed_items"]
+    assert report["rubric_scores"]["ht_onset"]["score"] == 3
+    assert report["rubric_scores"]["ht_migration"]["score"] == 0
+    assert report["rubric_scores"]["pe_rebound"]["score"] == 5
+    assert report["rubric_scores"]["ax_cbc"]["score"] == 5
+    assert report["rubric_scores"]["dx_main"]["score"] == 15
+    assert report["rubric_scores"]["rs_support"]["score"] == 4
+    assert "ht_migration" in report["missed_items"]
     assert report["feedback_summary"] == "已完成规则评分，LLM 评分维度将在后续阶段补充。"
 
 
@@ -150,30 +151,23 @@ def test_evaluate_session_rules_records_llm_rubric_trace() -> None:
     )
 
     def fake_scorer(request: LlmRubricRequest) -> LlmRubricResponse:
-        if request.rubric_item_id == "reasoning_core":
-            return LlmRubricResponse(
-                score=9,
-                covered_evidence=["appendicitis_001.hf_02", "abd.palpation.rebound"],
-                missing_evidence=["lab.cbc"],
-                rationale="覆盖腹痛迁移与反跳痛，缺少血常规证据。",
-            )
         return LlmRubricResponse(
-            score=12,
-            covered_evidence=["appendicitis_001.rp_01"],
-            missing_evidence=[],
-            rationale="鉴别诊断表述基本合理。",
+            score=5,
+            covered_evidence=["appendicitis_001.rp_05"],
+            missing_evidence=["appendicitis_001.rp_06"],
+            rationale="覆盖尿常规排除依据，缺少性别相关排除依据。",
         )
 
     report = evaluate_session_rules(session, llm_scorer=fake_scorer)
 
-    assert report["rubric_scores"]["reasoning_core"] == {
-        "score": 9,
-        "max_score": 15,
+    assert report["rubric_scores"]["rs_exclude"] == {
+        "score": 5,
+        "max_score": 5,
         "dimension_id": "reasoning",
-        "description": "推理链覆盖关键证据并能自圆其说",
-        "covered_evidence": ["appendicitis_001.hf_02", "abd.palpation.rebound"],
-        "missing_evidence": ["lab.cbc"],
-        "rationale": "覆盖腹痛迁移与反跳痛，缺少血常规证据。",
+        "description": "推理表达覆盖关键排除依据",
+        "covered_evidence": ["appendicitis_001.rp_05"],
+        "missing_evidence": ["appendicitis_001.rp_06"],
+        "rationale": "覆盖尿常规排除依据，缺少性别相关排除依据。",
     }
 
 
@@ -255,19 +249,28 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
 
     assert report["dimension_traces"]["history_taking"][0] == {
         "rubric_item_id": "ht_onset",
-        "awarded_score": 10,
-        "max_score": 10,
+        "awarded_score": 3,
+        "max_score": 3,
         "match_kind": "intent_keyword",
         "matched_evidence": ["什么时候开始疼的？"],
         "llm_rationale": None,
         "fallback_reason": None,
     }
     assert report["dimension_traces"]["reasoning"][0] == {
-        "rubric_item_id": "reasoning_core",
-        "awarded_score": 9,
-        "max_score": 15,
+        "rubric_item_id": "rs_support",
+        "awarded_score": 4,
+        "max_score": 10,
+        "match_kind": "reasoning_coverage",
+        "matched_evidence": ["abd.palpation.rebound", "lab.cbc"],
+        "llm_rationale": None,
+        "fallback_reason": None,
+    }
+    assert report["dimension_traces"]["reasoning"][1] == {
+        "rubric_item_id": "rs_exclude",
+        "awarded_score": 5,
+        "max_score": 5,
         "match_kind": "llm_rubric",
-        "matched_evidence": ["appendicitis_001.rp_01", "appendicitis_001.rp_02"],
+        "matched_evidence": ["appendicitis_001.rp_05", "appendicitis_001.rp_06"],
         "llm_rationale": "覆盖部分关键证据，仍缺少完整论证。",
         "fallback_reason": None,
     }
