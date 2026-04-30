@@ -111,7 +111,7 @@ export default function SourcesPage() {
           </div>
         </header>
 
-        <section className="rounded-2xl border border-brand/20 bg-[#2F6868]/5 p-5 shadow-xs">
+        <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm font-semibold text-brand">来源登记口径</p>

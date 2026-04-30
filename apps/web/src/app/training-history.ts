@@ -1,3 +1,21 @@
+export type TrainingHistoryMessage = Readonly<{
+  id: string;
+  speaker: "student" | "patient" | "coach";
+  label: string;
+  text: string;
+}>;
+
+export type TrainingHistoryProcedureResult = Readonly<{
+  id: string;
+  label: string;
+  result: string;
+}>;
+
+export type TrainingHistoryConversation = Readonly<{
+  messages: readonly TrainingHistoryMessage[];
+  procedureResults: readonly TrainingHistoryProcedureResult[];
+}>;
+
 export type TrainingHistoryRecord = Readonly<{
   sessionId: string;
   caseId: string;
@@ -6,18 +24,44 @@ export type TrainingHistoryRecord = Readonly<{
   status: string;
   savedAt: string;
   reportUrl: string;
+  conversation: TrainingHistoryConversation;
 }>;
 
 export const TRAINING_HISTORY_STORAGE_KEY = "clinical-osce-agent:training-history";
 
 const MAX_TRAINING_HISTORY_RECORDS = 20;
 
+function isTrainingHistoryMessage(value: unknown): value is TrainingHistoryMessage {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Record<keyof TrainingHistoryMessage, unknown>>;
+  return (
+    typeof candidate.id === "string" &&
+    (candidate.speaker === "student" || candidate.speaker === "patient" || candidate.speaker === "coach") &&
+    typeof candidate.label === "string" &&
+    typeof candidate.text === "string"
+  );
+}
+
+function isTrainingHistoryProcedureResult(value: unknown): value is TrainingHistoryProcedureResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Record<keyof TrainingHistoryProcedureResult, unknown>>;
+  return typeof candidate.id === "string" && typeof candidate.label === "string" && typeof candidate.result === "string";
+}
+
 function isTrainingHistoryRecord(value: unknown): value is TrainingHistoryRecord {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const candidate = value as Partial<Record<keyof TrainingHistoryRecord, unknown>>;
+  const candidate = value as Partial<Record<keyof TrainingHistoryRecord, unknown>> & {
+    conversation?: Partial<Record<keyof TrainingHistoryConversation, unknown>>;
+  };
   return (
     typeof candidate.sessionId === "string" &&
     typeof candidate.caseId === "string" &&
@@ -25,7 +69,13 @@ function isTrainingHistoryRecord(value: unknown): value is TrainingHistoryRecord
     typeof candidate.totalScore === "number" &&
     typeof candidate.status === "string" &&
     typeof candidate.savedAt === "string" &&
-    typeof candidate.reportUrl === "string"
+    typeof candidate.reportUrl === "string" &&
+    !!candidate.conversation &&
+    typeof candidate.conversation === "object" &&
+    Array.isArray(candidate.conversation.messages) &&
+    candidate.conversation.messages.every(isTrainingHistoryMessage) &&
+    Array.isArray(candidate.conversation.procedureResults) &&
+    candidate.conversation.procedureResults.every(isTrainingHistoryProcedureResult)
   );
 }
 

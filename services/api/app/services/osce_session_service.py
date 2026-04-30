@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from app.graph.osce_graph import build_osce_graph
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
+from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.report_store import ReportStore, report_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_skill_store import TrainingSkillStore, training_skill_store
@@ -46,6 +47,7 @@ class OsceSessionService:
         report_store: ReportStore = report_store,
         training_event_store: TrainingEventStore = training_event_store,
         training_skill_store: TrainingSkillStore = training_skill_store,
+        session_store: OsceSessionStore = osce_session_store,
         graph: Any | None = None,
         patient_responder: Any | None = None,
     ) -> None:
@@ -57,6 +59,7 @@ class OsceSessionService:
         self.report_store = report_store
         self.training_event_store = training_event_store
         self.training_skill_store = training_skill_store
+        self.session_store = session_store
 
     def list_cases(self) -> list[dict[str, Any]]:
         return [_serialize_case_summary(load_case_node(case_path.stem)) for case_path in sorted(CASES_DIR.glob("*.json"))]
@@ -80,7 +83,7 @@ class OsceSessionService:
             stage=graph_state["stage"],
             evolution_candidates=_enabled_skill_prompts(enabled_skills),
         )
-        self._sessions[session.session_id] = session
+        self._save_session(session)
         self._append_event(session, "session_created", {"stage": session.stage})
         for skill in enabled_skills:
             self._append_event(
@@ -95,20 +98,42 @@ class OsceSessionService:
         return _serialize_session(session, case)
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         return _serialize_session(session, load_case_node(session.case_id))
 
     def handle_message(self, session_id: str, message: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, message))
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
         payload["current_intent"] = graph_state["current_intent"]
+        if graph_state["current_intent"] == "safety_boundary":
+            self._append_event(
+                session,
+                "safety_boundary_triggered",
+                {
+                    "message": message,
+                    "safety_flag": graph_state["safety_flags"][-1],
+                    "reply": graph_state["reply"],
+                },
+            )
+            return payload
+        if graph_state["current_intent"] == "answer_request_redirect":
+            self._append_event(
+                session,
+                "answer_request_redirected",
+                {
+                    "message": message,
+                    "reply": graph_state["reply"],
+                },
+            )
+            return payload
         self._append_event(
             session,
             "history_message",
@@ -117,11 +142,12 @@ class OsceSessionService:
         return payload
 
     def request_physical_exam(self, session_id: str, exam_code: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload.update(
             {
@@ -138,11 +164,12 @@ class OsceSessionService:
         return payload
 
     def request_auxiliary_test(self, session_id: str, test_code: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload.update(
             {
@@ -159,26 +186,28 @@ class OsceSessionService:
         return payload
 
     def record_hypothesis(self, session_id: str, hypothesis: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         session.student_hypotheses.append(hypothesis)
+        self._save_session(session)
         self._append_event(session, "hypothesis_recorded", {"hypothesis": hypothesis})
         return _serialize_session(session, load_case_node(session.case_id))
 
     def request_hint(self, session_id: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, hint_requested=True))
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["hint"] = graph_state["hint"]
         self._append_event(session, "hint_requested", {"hint": graph_state["hint"]})
         return payload
 
     def submit_diagnosis(self, session_id: str, diagnosis: str, reasoning: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(
@@ -189,11 +218,12 @@ class OsceSessionService:
             )
         )
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         self._append_event(session, "diagnosis_submitted", {"diagnosis": diagnosis, "reasoning": reasoning})
         return _serialize_session(session, load_case_node(session.case_id))
 
     def get_report(self, session_id: str) -> dict[str, Any] | None:
-        session = self._sessions.get(session_id)
+        session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
         if stored_report is not None:
             return stored_report
@@ -201,6 +231,7 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, report_requested=True))
         _apply_graph_state(session, graph_state)
+        self._save_session(session)
         if session.feedback_report is not None:
             self.report_store.save_report(session.feedback_report)
             self._append_event(
@@ -214,6 +245,25 @@ class OsceSessionService:
                 },
             )
         return session.feedback_report
+
+    def delete_session(self, session_id: str) -> bool:
+        self._sessions.pop(session_id, None)
+        return self.session_store.delete_session(session_id)
+
+    def _get_session(self, session_id: str) -> OsceSession | None:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            return session
+        session_payload = self.session_store.get_session_payload(session_id)
+        if session_payload is None:
+            return None
+        session = OsceSession(**session_payload)
+        self._sessions[session.session_id] = session
+        return session
+
+    def _save_session(self, session: OsceSession) -> None:
+        self._sessions[session.session_id] = session
+        self.session_store.save_session(session)
 
     def _append_event(self, session: OsceSession, event_type: str, payload: dict[str, Any]) -> None:
         self.training_event_store.append_event(
@@ -310,6 +360,7 @@ def _graph_state_from_session(
         "report_requested": report_requested,
         "hint_requested": hint_requested,
         "hint": "",
+        "training_progress_next_focus": _serialize_training_progress(session, case)["next_focus"],
         "exam_code": exam_code,
         "exam_name_cn": "",
         "exam_result": "",
@@ -384,6 +435,31 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
         "difficulty": case.difficulty,
         "chief_complaint": case.chief_complaint,
         "enabled": True,
+        "patient_profile": _serialize_student_visible_patient_profile(case),
+        "opening_task_card": _serialize_opening_task_card(case),
+        "physical_exam_options": [
+            _serialize_physical_exam_quick_option(exam)
+            for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+        ],
+        "auxiliary_test_options": [
+            _serialize_auxiliary_test_quick_option(test)
+            for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+        ],
+    }
+
+
+def _serialize_physical_exam_quick_option(exam: PhysicalExamItem) -> dict[str, str]:
+    return {
+        "exam_code": exam.exam_code,
+        "exam_name_cn": exam.exam_name_cn,
+    }
+
+
+def _serialize_auxiliary_test_quick_option(test: AuxiliaryTestItem) -> dict[str, str]:
+    return {
+        "test_code": test.test_code,
+        "test_name_cn": test.test_name_cn,
+        "category": test.category,
     }
 
 
@@ -413,6 +489,212 @@ def _serialize_diagnosis_draft(case: Case) -> dict[str, str]:
     }
 
 
+def _serialize_student_visible_patient_profile(case: Case) -> dict[str, str]:
+    patient_profile = case.patient_profile
+    return {
+        "age": f"{patient_profile.age_value}{patient_profile.age_unit}",
+        "gender": patient_profile.gender,
+        "occupation": patient_profile.occupation,
+        "hospital_department": patient_profile.hospital_department,
+    }
+
+
+def _serialize_opening_task_card(case: Case) -> dict[str, Any]:
+    patient_profile = case.patient_profile
+    gender_label = "男性" if patient_profile.gender == "男" else "女性" if patient_profile.gender == "女" else patient_profile.gender
+    return {
+        "role": f"你是{patient_profile.hospital_department}接诊医生。",
+        "scenario": f"一名{patient_profile.age_value}{patient_profile.age_unit}{gender_label}{patient_profile.occupation}因{case.chief_complaint}来诊。",
+        "tasks": [
+            "进行有重点的病史采集",
+            "判断需要哪些查体",
+            "选择必要辅助检查",
+            "提出诊断假设和鉴别诊断",
+            "最终提交诊断与推理依据",
+        ],
+    }
+
+
+def _serialize_inquiry_guidance() -> dict[str, Any]:
+    return {
+        "priority": "先完成现病史的 OPQRST 和伴随症状，再进入既往史、用药过敏史和 ICE。",
+        "suggested_questions": [
+            "什么时候开始疼的？",
+            "最开始和现在分别疼在哪里？",
+            "疼痛是什么性质，程度如何？",
+            "有没有恶心、呕吐、发热或腹泻？",
+            "排尿、排便有没有异常？",
+        ],
+        "categories": ["起病时间", "部位变化", "疼痛性质", "疼痛程度", "伴随症状", "排尿排便", "既往史", "用药过敏史", "ICE"],
+    }
+
+
+def _serialize_training_progress(session: OsceSession, case: Case) -> dict[str, Any]:
+    fact_ids = [
+        (fact.fact_id, _student_safe_evidence_id(case, fact.fact_id))
+        for fact in case.history.hidden_facts
+    ]
+    covered_fact_ids = [safe_id for fact_id, safe_id in fact_ids if fact_id in session.revealed_facts]
+    pending_fact_ids = [safe_id for fact_id, safe_id in fact_ids if fact_id not in session.revealed_facts]
+
+    exam_codes = _physical_exam_codes(case.physical_exam.must_items, case.physical_exam.optional_items)
+    must_exam_codes = _physical_exam_codes(case.physical_exam.must_items)
+    requested_exam_codes = [exam_code for exam_code in exam_codes if exam_code in session.requested_exams]
+    must_pending_exam_codes = [exam_code for exam_code in must_exam_codes if exam_code not in session.requested_exams]
+
+    test_codes = _auxiliary_test_codes(case.auxiliary_tests.must_items, case.auxiliary_tests.optional_items)
+    must_test_codes = _auxiliary_test_codes(case.auxiliary_tests.must_items)
+    requested_test_codes = [test_code for test_code in test_codes if test_code in session.requested_tests]
+    must_pending_test_codes = [test_code for test_code in must_test_codes if test_code not in session.requested_tests]
+
+    reasoning_evidence = _reasoning_evidence(case)
+    collected_reasoning_evidence = [
+        evidence for evidence in reasoning_evidence if _session_has_evidence(session, evidence)
+    ]
+    collected_evidence = [_student_safe_evidence_id(case, evidence) for evidence in collected_reasoning_evidence]
+
+    return {
+        "history": {
+            "total": len(fact_ids),
+            "covered": len(covered_fact_ids),
+            "covered_fact_ids": covered_fact_ids,
+            "pending_fact_ids": pending_fact_ids,
+        },
+        "physical_exam": {
+            "total": len(exam_codes),
+            "requested": len(requested_exam_codes),
+            "requested_codes": requested_exam_codes,
+            "pending_codes": [exam_code for exam_code in exam_codes if exam_code not in session.requested_exams],
+            "must_total": len(must_exam_codes),
+            "must_requested": len(must_exam_codes) - len(must_pending_exam_codes),
+            "must_pending_codes": must_pending_exam_codes,
+        },
+        "auxiliary_test": {
+            "total": len(test_codes),
+            "requested": len(requested_test_codes),
+            "requested_codes": requested_test_codes,
+            "pending_codes": [test_code for test_code in test_codes if test_code not in session.requested_tests],
+            "must_total": len(must_test_codes),
+            "must_requested": len(must_test_codes) - len(must_pending_test_codes),
+            "must_pending_codes": must_pending_test_codes,
+        },
+        "reasoning": {
+            "total_evidence": len(reasoning_evidence),
+            "collected_evidence_count": len(collected_evidence),
+            "collected_evidence": collected_evidence,
+            "pending_evidence": [
+                _student_safe_evidence_id(case, evidence)
+                for evidence in reasoning_evidence
+                if evidence not in collected_reasoning_evidence
+            ],
+            "ready_for_hypothesis": bool(covered_fact_ids and requested_exam_codes and requested_test_codes),
+        },
+        "coverage_map": _serialize_coverage_map(session, case, reasoning_evidence),
+        "next_focus": _training_progress_next_focus(
+            session,
+            covered_fact_ids,
+            requested_exam_codes,
+            requested_test_codes,
+        ),
+    }
+
+
+def _serialize_coverage_map(session: OsceSession, case: Case, reasoning_evidence: list[str]) -> dict[str, list[dict[str, str]]]:
+    return {
+        "history": [
+            _coverage_map_item(
+                _student_safe_evidence_id(case, fact.fact_id),
+                fact.canonical_answer,
+                fact.fact_id in session.revealed_facts,
+            )
+            for fact in case.history.hidden_facts
+        ],
+        "physical_exam": [
+            _coverage_map_item(exam.exam_code, f"{exam.exam_name_cn}：{exam.result}", exam.exam_code in session.requested_exams)
+            for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+        ],
+        "auxiliary_test": [
+            _coverage_map_item(test.test_code, f"{test.test_name_cn}：{test.result}", test.test_code in session.requested_tests)
+            for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+        ],
+        "reasoning": [
+            _coverage_map_item(
+                _student_safe_evidence_id(case, evidence),
+                _coverage_map_label_by_evidence(case, evidence),
+                _session_has_evidence(session, evidence),
+            )
+            for evidence in reasoning_evidence
+        ],
+    }
+
+
+def _coverage_map_item(item_id: str, label: str, is_covered: bool) -> dict[str, str]:
+    return {"id": item_id, "label": label, "status": "covered" if is_covered else "pending"}
+
+
+def _coverage_map_label_by_evidence(case: Case, evidence: str) -> str:
+    labels = {
+        **{fact.fact_id: fact.canonical_answer for fact in case.history.hidden_facts},
+        **{
+            exam.exam_code: f"{exam.exam_name_cn}：{exam.result}"
+            for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+        },
+        **{
+            test.test_code: f"{test.test_name_cn}：{test.result}"
+            for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+        },
+    }
+    return labels.get(evidence, _student_safe_evidence_id(case, evidence))
+
+
+def _physical_exam_codes(*exam_groups: list[PhysicalExamItem]) -> list[str]:
+    return [exam.exam_code for exam_group in exam_groups for exam in exam_group]
+
+
+def _auxiliary_test_codes(*test_groups: list[AuxiliaryTestItem]) -> list[str]:
+    return [test.test_code for test_group in test_groups for test in test_group]
+
+
+def _reasoning_evidence(case: Case) -> list[str]:
+    evidence_items: list[str] = []
+    for reasoning_point in case.diagnosis.reasoning_points:
+        for evidence in reasoning_point.required_evidence:
+            if evidence not in evidence_items:
+                evidence_items.append(evidence)
+    return evidence_items
+
+
+def _student_safe_evidence_id(case: Case, evidence: str) -> str:
+    return evidence.removeprefix(f"{case.case_id}.")
+
+
+def _session_has_evidence(session: OsceSession, evidence: str) -> bool:
+    return (
+        evidence in session.revealed_facts
+        or evidence in session.requested_exams
+        or evidence in session.requested_tests
+    )
+
+
+def _training_progress_next_focus(
+    session: OsceSession,
+    covered_fact_ids: list[str],
+    requested_exam_codes: list[str],
+    requested_test_codes: list[str],
+) -> str:
+    if session.final_submission is not None:
+        return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
+    if not covered_fact_ids:
+        return "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
+    if not requested_exam_codes:
+        return "已获得部分病史，下一步选择关键查体来验证当前线索。"
+    if not requested_test_codes:
+        return "你已经获得部分病史和查体信息，可以申请能验证当前假设的辅助检查。"
+    if not session.student_hypotheses:
+        return "已有病史、查体和辅助检查证据，先记录一个诊断假设，再继续补齐关键证据。"
+    return "继续补齐未覆盖的关键病史、查体和辅助检查，再提交最终诊断。"
+
+
 def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
 
@@ -425,6 +707,9 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "stage": session.stage,
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
+        "patient_profile": _serialize_student_visible_patient_profile(case),
+        "opening_task_card": _serialize_opening_task_card(case),
+        "inquiry_guidance": _serialize_inquiry_guidance(),
         "diagnosis_draft": _serialize_diagnosis_draft(case),
         "physical_exam_options": [
             _serialize_physical_exam_option(exam)
@@ -434,6 +719,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
             _serialize_auxiliary_test_option(test)
             for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
         ],
+        "training_progress": _serialize_training_progress(session, case),
         "messages": session.messages,
         "asked_questions": session.asked_questions,
         "intent_history": session.intent_history,

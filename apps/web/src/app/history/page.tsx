@@ -2,12 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import {
-  clearTrainingHistoryRecords,
-  deleteTrainingHistoryRecord,
-  readTrainingHistoryRecords,
-} from "../training-history";
-import type { TrainingHistoryRecord } from "../training-history";
+
+type PersistedSessionSummary = Readonly<{
+  session_id: string;
+  case_id: string;
+  stage: string;
+  created_at: string;
+  updated_at: string;
+}>;
+
+type PersistedSessionListResponse = Readonly<{
+  sessions: readonly PersistedSessionSummary[];
+}>;
 
 function formatSavedAt(savedAt: string): string {
   const date = new Date(savedAt);
@@ -21,20 +27,73 @@ function formatSavedAt(savedAt: string): string {
   }).format(date);
 }
 
+async function getCurrentUserSessions(): Promise<readonly PersistedSessionSummary[]> {
+  const response = await fetch("/api/me/sessions", {
+    credentials: "same-origin",
+    method: "GET",
+  });
+
+  if (response.status === 401) {
+    return [];
+  }
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `请求失败：${response.status}`);
+  }
+
+  const payload = (await response.json()) as PersistedSessionListResponse;
+  return payload.sessions;
+}
+
+async function deleteCurrentUserSession(sessionId: string): Promise<void> {
+  const response = await fetch(`/api/me/sessions/${sessionId}`, {
+    credentials: "same-origin",
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `请求失败：${response.status}`);
+  }
+}
+
 export default function HistoryPage() {
-  const [records, setRecords] = useState<readonly TrainingHistoryRecord[]>([]);
+  const [backendSessions, setBackendSessions] = useState<readonly PersistedSessionSummary[]>([]);
+  const [backendStatusText, setBackendStatusText] = useState("正在读取后端持久记录...");
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
   useEffect(() => {
-    setRecords(readTrainingHistoryRecords());
+    async function loadBackendSessions() {
+      try {
+        setBackendSessions(await getCurrentUserSessions());
+        setBackendStatusText("已从后端数据库读取当前账号的训练记录。");
+      } catch (error) {
+        setBackendStatusText(error instanceof Error ? error.message : "读取后端持久记录失败。");
+      }
+    }
+
+    loadBackendSessions();
   }, []);
 
-  function handleDeleteRecord(sessionId: string) {
-    setRecords(deleteTrainingHistoryRecord(sessionId));
+  async function handleDeleteBackendSession(sessionId: string) {
+    if (deletingSessionId) {
+      return;
+    }
+
+    setDeletingSessionId(sessionId);
+    try {
+      await deleteCurrentUserSession(sessionId);
+      setBackendSessions((currentSessions) => currentSessions.filter((session) => session.session_id !== sessionId));
+      setBackendStatusText("已删除后端训练记录。");
+    } catch (error) {
+      setBackendStatusText(error instanceof Error ? error.message : "删除后端训练记录失败。");
+    } finally {
+      setDeletingSessionId(null);
+    }
   }
 
-  function handleClearRecords() {
-    setRecords(clearTrainingHistoryRecords());
-  }
+  const workbenchHref = backendSessions[0] ? `/?session_id=${backendSessions[0].session_id}` : "/";
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
@@ -47,79 +106,76 @@ export default function HistoryPage() {
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">训练记录</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                本页展示保存在当前浏览器 localStorage 中的 OSCE 训练记录，用于本机演示和复盘，不代表后端持久化。
+                本页只展示当前登录账号保存在后端数据库中的训练 session，作为正式训练记录的唯一来源。
               </p>
             </div>
             <Link
               className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-              href="/"
+              href={workbenchHref}
             >
               返回工作台
             </Link>
           </div>
         </header>
 
-        <section className="rounded-2xl border border-brand/20 bg-[#2F6868]/5 p-5 shadow-xs">
+        <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm font-semibold text-brand">本机历史</p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">已保存 {records.length} 条训练记录。</h2>
+              <p className="text-sm font-semibold text-brand">后端持久记录</p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">已同步 {backendSessions.length} 个训练 session。</h2>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {records.length > 0 ? (
-                <button
-                  className="rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
-                  onClick={handleClearRecords}
-                  type="button"
-                >
-                  清空记录
-                </button>
-              ) : null}
-              <span className="w-fit rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
-                localStorage
-              </span>
-            </div>
+            <span className="w-fit rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+              SQLite
+            </span>
           </div>
-          <p className="mt-4 max-w-3xl text-sm leading-6 text-muted-foreground">
-            当前记录只保存在这台设备和这个浏览器中。后端数据库持久化、跨设备同步和历史训练检索仍属于后续阶段。
-          </p>
+          <p className="mt-4 max-w-3xl text-sm leading-6 text-muted-foreground">{backendStatusText}</p>
         </section>
 
-        {records.length > 0 ? (
+        {backendSessions.length > 0 ? (
           <section className="grid gap-3">
-            {records.map((record) => (
-              <article className="rounded-2xl border border-border bg-background p-5 shadow-xs" key={record.sessionId}>
+            {backendSessions.map((session) => (
+              <article className="rounded-2xl border border-border bg-background p-5 shadow-xs" key={session.session_id}>
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <p className="font-mono text-[11px] text-muted-foreground">{record.sessionId}</p>
-                    <h2 className="mt-2 text-base font-semibold tracking-tight">{record.caseTitle}</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">病例：{record.caseId}</p>
+                    <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
+                    <h2 className="mt-2 text-base font-semibold tracking-tight">病例：{session.case_id}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">当前阶段：{session.stage}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-full border border-brand/20 bg-[#2F6868]/10 px-3 py-1 font-medium text-brand">
-                      {record.totalScore} / 100
-                    </span>
-                    <span className="rounded-full border border-border bg-muted px-3 py-1 font-medium text-muted-foreground">
-                      {record.status}
-                    </span>
-                  </div>
+                  <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+                    后端持久化
+                  </span>
                 </div>
                 <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs leading-5 text-muted-foreground">保存时间：{formatSavedAt(record.savedAt)}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    更新时间：{formatSavedAt(session.updated_at)} · 创建时间：{formatSavedAt(session.created_at)}
+                  </p>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
-                      onClick={() => handleDeleteRecord(record.sessionId)}
-                      type="button"
-                    >
-                      删除记录
-                    </button>
                     <Link
-                      className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-[#2F6868]/90"
-                      href={record.reportUrl}
+                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
+                      href={`/api/me/sessions/${session.session_id}`}
+                    >
+                      查看状态
+                    </Link>
+                    <Link
+                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
+                      href={`/?session_id=${session.session_id}`}
+                    >
+                      继续训练
+                    </Link>
+                    <Link
+                      className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover"
+                      href={`/report?session_id=${session.session_id}`}
                     >
                       打开报告
                     </Link>
+                    <button
+                      className="w-fit rounded-md border border-destructive/30 bg-background px-3 py-2 text-xs font-medium text-destructive shadow-xs transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={deletingSessionId !== null}
+                      onClick={() => handleDeleteBackendSession(session.session_id)}
+                      type="button"
+                    >
+                      {deletingSessionId === session.session_id ? "删除中" : "删除记录"}
+                    </button>
                   </div>
                 </div>
               </article>
@@ -127,12 +183,12 @@ export default function HistoryPage() {
           </section>
         ) : (
           <section className="rounded-2xl border border-dashed border-border bg-background p-8 text-center shadow-xs">
-            <h2 className="text-base font-semibold">暂无训练记录</h2>
+            <h2 className="text-base font-semibold">暂无后端训练记录</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              在工作台完成一次诊断提交并生成评分报告后，点击“保存训练记录”即可在这里看到本机历史。
+              登录后开始训练会自动创建数据库 session；完成问诊、查体、检查或报告后，可回到这里继续训练或打开报告。
             </p>
             <Link
-              className="mt-5 inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-[#2F6868]/90"
+              className="mt-5 inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover"
               href="/"
             >
               开始训练

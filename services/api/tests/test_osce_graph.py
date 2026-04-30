@@ -82,6 +82,51 @@ def test_osce_graph_routes_history_question_and_returns_patient_reply() -> None:
     ]
 
 
+def test_osce_graph_redirects_unknown_history_question_without_patient_fabrication() -> None:
+    def failing_patient_responder(request: object) -> str:
+        raise AssertionError("unknown questions should not call patient responder")
+
+    graph = build_osce_graph(patient_responder=failing_patient_responder)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "你最近做过基因检测吗？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["stage"] == "history_taking"
+    assert result["current_intent"] == "unknown_history_intent"
+    assert result["reply"] == "病例脚本没有提供这方面信息。请回到本次腹痛训练目标，优先追问起病时间、部位变化、疼痛性质、疼痛程度和伴随症状。"
+    assert result["messages"] == [
+        {"role": "student", "content": "你最近做过基因检测吗？"},
+        {"role": "coach", "content": result["reply"]},
+    ]
+    assert result["asked_questions"] == []
+    assert result["intent_history"] == ["unknown_history_intent"]
+    assert result["revealed_facts"] == []
+    assert "急性阑尾炎" not in result["reply"]
+
+
 def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
     captured_requests: list[object] = []
 

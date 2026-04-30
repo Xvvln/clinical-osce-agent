@@ -1,23 +1,27 @@
 @import "tailwindcss";
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.87 0 0);
-  --radius: 0.625rem;
-  --brand: #2f6868;
+  --background: #FAF9F5;
+  --foreground: #141413;
+  --card: #FFFFFF;
+  --card-foreground: #141413;
+  --primary: #AE5630;
+  --primary-foreground: #FAF9F5;
+  --secondary: #F5F4ED;
+  --secondary-foreground: #30302E;
+  --muted: #F5F4ED;
+  --muted-foreground: #6B6A68;
+  --accent: #F0EEE6;
+  --accent-foreground: #141413;
+  --border: #E8E6DA;
+  --input: #E8E6DA;
+  --ring: #C2C0B6;
+  --radius: 0.75rem;
+  --brand: #AE5630;
+  --brand-hover: #C4633A;
+  --font-ui: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
 }
 
 @theme inline {
@@ -36,6 +40,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -49,16 +55,29 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-ui);
   }
 }
 
 @layer utilities {
+  .font-ui {
+    font-family: var(--font-ui);
+  }
+
+  .font-serif {
+    font-family: var(--font-serif);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
   .shadow-inner-right {
-    box-shadow: inset -9px 0 6px -1px rgb(0 0 0 / 0.02);
+    box-shadow: inset -9px 0 6px -1px rgb(73 49 34 / 0.04);
   }
 
   .shadow-inner-left {
-    box-shadow: inset 9px 0 6px -1px rgb(0 0 0 / 0.02);
+    box-shadow: inset 9px 0 6px -1px rgb(73 49 34 / 0.04);
   }
 
   .bg-brand {

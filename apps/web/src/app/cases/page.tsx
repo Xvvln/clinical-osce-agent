@@ -4,6 +4,30 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
+type StudentVisiblePatientProfile = Readonly<{
+  age: string;
+  gender: string;
+  occupation: string;
+  hospital_department: string;
+}>;
+
+type OpeningTaskCard = Readonly<{
+  role: string;
+  scenario: string;
+  tasks: readonly string[];
+}>;
+
+type PhysicalExamQuickOption = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+}>;
+
+type AuxiliaryTestQuickOption = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+  category: string;
+}>;
+
 type CaseSummary = Readonly<{
   case_id: string;
   case_title: string;
@@ -11,6 +35,10 @@ type CaseSummary = Readonly<{
   difficulty: string;
   chief_complaint: string;
   enabled: boolean;
+  patient_profile: StudentVisiblePatientProfile;
+  opening_task_card: OpeningTaskCard;
+  physical_exam_options: readonly PhysicalExamQuickOption[];
+  auxiliary_test_options: readonly AuxiliaryTestQuickOption[];
 }>;
 
 type PatientProfile = Readonly<{
@@ -326,7 +354,7 @@ export default function CasesPage() {
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">病例选择</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                从结构化教学病例中选择一个 OSCE 训练场景。病例进入训练后会创建新的本地 session，并加载对应问诊、查体、辅助检查和诊断草稿。
+                从结构化教学病例中选择一个 OSCE 训练场景。进入工作台后会先展示病例准备态和开局任务卡，首次训练动作才创建后端 session。
               </p>
             </div>
             <Link
@@ -338,7 +366,7 @@ export default function CasesPage() {
           </div>
         </header>
 
-        <section className="rounded-2xl border border-brand/20 bg-[#2F6868]/5 p-5 shadow-xs">
+        <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm font-semibold text-brand">训练病例库</p>
@@ -378,7 +406,7 @@ export default function CasesPage() {
                       主诉：{caseSummary.chief_complaint}
                     </p>
                   </div>
-                  <span className="w-fit rounded-full border border-brand/20 bg-[#2F6868]/10 px-3 py-1 text-xs font-medium text-brand">
+                  <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
                     {caseSummary.enabled ? "可训练" : "待接入"}
                   </span>
                 </div>
@@ -395,10 +423,10 @@ export default function CasesPage() {
                 <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
                   {caseSummary.enabled ? (
                     <Link
-                      className="inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-[#2F6868]/90"
+                      className="inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover"
                       href={`/?case_id=${encodeURIComponent(caseSummary.case_id)}`}
                     >
-                      开始该病例训练
+                      选择并进入工作台
                     </Link>
                   ) : (
                     <button

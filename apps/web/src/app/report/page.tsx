@@ -31,6 +31,38 @@ type SourceReferenceGroup = Readonly<{
   references: readonly string[];
 }>;
 
+type BackendMessage = Readonly<{
+  role: "student" | "patient" | "coach" | string;
+  content: string;
+}>;
+
+type BackendPhysicalExamOption = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+  result: string;
+}>;
+
+type BackendAuxiliaryTestOption = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+  result: string;
+}>;
+
+type BackendSession = Readonly<{
+  session_id: string;
+  messages: readonly BackendMessage[];
+  requested_exams: readonly string[];
+  requested_tests: readonly string[];
+  physical_exam_options: readonly BackendPhysicalExamOption[];
+  auxiliary_test_options: readonly BackendAuxiliaryTestOption[];
+}>;
+
+type BackendProcedureResult = Readonly<{
+  id: string;
+  label: string;
+  result: string;
+}>;
+
 const scoreDimensionLabels: Readonly<Record<string, string>> = {
   history_taking: "问诊",
   physical_exam: "查体",
@@ -48,6 +80,11 @@ const scoreDimensionMaxScores: Readonly<Record<string, number>> = {
   differential_diagnosis: 15,
   reasoning: 15,
 };
+
+const REPORT_BRAND_COLOR = "var(--brand)";
+const REPORT_BRAND_SCORE_TRACK_COLOR = "color-mix(in srgb, var(--brand) 12%, transparent)";
+const REPORT_BRAND_GRID_OPACITY = 0.16;
+const REPORT_BRAND_FILL_OPACITY = 0.22;
 
 function getScorePercent(score: number, maxScore: number): number {
   if (maxScore <= 0) {
@@ -182,8 +219,47 @@ function groupSourceReferences(references: readonly string[]): readonly SourceRe
     }));
 }
 
+function getBackendMessageLabel(message: BackendMessage): string {
+  if (message.role === "student") {
+    return "学生";
+  }
+
+  if (message.role === "coach") {
+    return message.content.includes("本系统仅用于 OSCE 教学模拟训练") ? "安全边界" : "过程提示";
+  }
+
+  return "标准化病人";
+}
+
+function buildBackendProcedureResults(session: BackendSession | null): readonly BackendProcedureResult[] {
+  if (!session) {
+    return [];
+  }
+
+  const examResults = session.requested_exams.map((examCode) => {
+    const exam = session.physical_exam_options.find((option) => option.exam_code === examCode);
+    return {
+      id: `exam:${examCode}`,
+      label: `查体：${exam?.exam_name_cn ?? examCode}`,
+      result: exam?.result ?? "后端 session 未保存该查体结果。",
+    };
+  });
+
+  const testResults = session.requested_tests.map((testCode) => {
+    const test = session.auxiliary_test_options.find((option) => option.test_code === testCode);
+    return {
+      id: `test:${testCode}`,
+      label: `检查：${test?.test_name_cn ?? testCode}`,
+      result: test?.result ?? "后端 session 未保存该辅助检查结果。",
+    };
+  });
+
+  return [...examResults, ...testResults];
+}
+
 async function requestJson<TResponse>(path: string): Promise<TResponse> {
   const response = await fetch(path, {
+    credentials: "same-origin",
     method: "GET",
     headers: {
       "Content-Type": "application/json",
@@ -200,6 +276,7 @@ async function requestJson<TResponse>(path: string): Promise<TResponse> {
 export default function ReportPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [report, setReport] = useState<FeedbackReport | null>(null);
+  const [backendSession, setBackendSession] = useState<BackendSession | null>(null);
   const [statusText, setStatusText] = useState("正在读取评分报告...");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [shareStatusText, setShareStatusText] = useState<string | null>(null);
@@ -227,13 +304,17 @@ export default function ReportPage() {
 
     async function loadReport() {
       try {
-        const nextReport = await requestJson<FeedbackReportPayload>(`/api/sessions/${nextSessionId}/report`);
+        const [nextReport, nextSession] = await Promise.all([
+          requestJson<FeedbackReportPayload>(`/api/me/sessions/${nextSessionId}/report`),
+          requestJson<BackendSession>(`/api/me/sessions/${nextSessionId}`),
+        ]);
         if (!isMounted) {
           return;
         }
 
         setReport(normalizeFeedbackReport(nextReport));
-        setStatusText("已读取评分报告。");
+        setBackendSession(nextSession);
+        setStatusText("已读取评分报告和后端训练快照。");
         setErrorText(null);
       } catch (error) {
         if (!isMounted) {
@@ -278,8 +359,10 @@ export default function ReportPage() {
     () => groupSourceReferences(report?.source_references ?? []),
     [report?.source_references],
   );
+  const backendProcedureResults = useMemo(() => buildBackendProcedureResults(backendSession), [backendSession]);
   const totalPercent = report ? getScorePercent(report.total_score, 100) : 0;
-  const scoreBackground = `conic-gradient(#2F6868 ${totalPercent * 3.6}deg, rgba(47, 104, 104, 0.12) 0deg)`;
+  const scoreBackground = `conic-gradient(${REPORT_BRAND_COLOR} ${totalPercent * 3.6}deg, ${REPORT_BRAND_SCORE_TRACK_COLOR} 0deg)`;
+  const workbenchHref = sessionId ? `/?session_id=${sessionId}` : "/";
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
@@ -298,7 +381,7 @@ export default function ReportPage() {
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
-                  className="rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-[#2F6868]/90"
+                  className="rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover"
                   onClick={handleCopyReportLink}
                   type="button"
                 >
@@ -306,7 +389,7 @@ export default function ReportPage() {
                 </button>
                 <Link
                   className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-                  href="/"
+                  href={workbenchHref}
                 >
                   返回工作台
                 </Link>
@@ -318,7 +401,7 @@ export default function ReportPage() {
 
         <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
           <aside className="space-y-4">
-            <div className="rounded-2xl border border-brand/20 bg-[#2F6868]/5 p-5 shadow-xs">
+            <div className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold">OSCE 训练总分</p>
                 <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
@@ -377,7 +460,7 @@ export default function ReportPage() {
                   <h2 className="text-sm font-semibold">维度图表</h2>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">用雷达雏形和进度条同时展示各 rubric 维度表现。</p>
                 </div>
-                <span className="rounded-full border border-brand/20 bg-[#2F6868]/10 px-3 py-1 text-xs font-medium text-brand">
+                <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
                   {report ? "已生成" : "待读取"}
                 </span>
               </div>
@@ -392,7 +475,8 @@ export default function ReportPage() {
                             fill="none"
                             key={level}
                             points={getRadarPolygonPoints(dimensions, level)}
-                            stroke="rgba(47, 104, 104, 0.16)"
+                            stroke={REPORT_BRAND_COLOR}
+                            strokeOpacity={REPORT_BRAND_GRID_OPACITY}
                             strokeWidth="0.6"
                           />
                         ))}
@@ -402,7 +486,8 @@ export default function ReportPage() {
                           return (
                             <g key={item.key}>
                               <line
-                                stroke="rgba(47, 104, 104, 0.16)"
+                                stroke={REPORT_BRAND_COLOR}
+                                strokeOpacity={REPORT_BRAND_GRID_OPACITY}
                                 strokeWidth="0.5"
                                 x1="50"
                                 x2={outerPoint.x}
@@ -422,15 +507,16 @@ export default function ReportPage() {
                           );
                         })}
                         <polygon
-                          fill="rgba(47, 104, 104, 0.22)"
+                          fill={REPORT_BRAND_COLOR}
+                          fillOpacity={REPORT_BRAND_FILL_OPACITY}
                           points={dimensions.map((item, index) => formatRadarPoint(getRadarPoint(index, dimensions.length, item.percent))).join(" ")}
-                          stroke="#2F6868"
+                          stroke={REPORT_BRAND_COLOR}
                           strokeLinejoin="round"
                           strokeWidth="1.2"
                         />
                         {dimensions.map((item, index) => {
                           const point = getRadarPoint(index, dimensions.length, item.percent);
-                          return <circle cx={point.x} cy={point.y} fill="#2F6868" key={item.key} r="1.4" />;
+                          return <circle cx={point.x} cy={point.y} fill={REPORT_BRAND_COLOR} key={item.key} r="1.4" />;
                         })}
                       </svg>
                     </div>
@@ -459,6 +545,59 @@ export default function ReportPage() {
                 </p>
               )}
             </div>
+
+            <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">原始对话记录</h2>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    从后端训练 session 读取医患对话、教练提示和已返回的查体/检查结果。
+                  </p>
+                </div>
+                <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+                  {backendSession ? `${backendSession.messages.length} 条` : "待读取"}
+                </span>
+              </div>
+              <div className="mt-4 space-y-4">
+                {backendSession?.messages.length ? (
+                  <div className="space-y-3">
+                    {backendSession?.messages.map((message, index) => (
+                      <article
+                        className={[
+                          "rounded-xl border px-3 py-2 text-sm leading-6",
+                          message.role === "student"
+                            ? "border-brand/20 bg-brand/10 text-brand"
+                            : "border-border bg-muted/50 text-muted-foreground",
+                        ].join(" ")}
+                        key={`${message.role}-${index}-${message.content}`}
+                      >
+                        <p className="text-xs font-medium text-foreground">{getBackendMessageLabel(message)}</p>
+                        <p className="mt-1 whitespace-pre-wrap">{message.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
+                    后端 session 暂无原始对话记录。
+                  </p>
+                )}
+                <div className="rounded-xl border border-dashed border-border bg-muted/30 p-3">
+                  <h3 className="text-xs font-semibold text-foreground">查体与检查结果</h3>
+                  {backendProcedureResults.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {backendProcedureResults.map((result) => (
+                        <article className="rounded-lg bg-background px-3 py-2 text-xs leading-5 text-muted-foreground" key={result.id}>
+                          <p className="font-medium text-foreground">{result.label}</p>
+                          <p className="mt-1 whitespace-pre-wrap">{result.result}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">后端 session 暂无查体或辅助检查结果。</p>
+                  )}
+                </div>
+              </div>
+            </section>
 
             {report ? (
               <div className="grid gap-4 xl:grid-cols-2">
@@ -530,7 +669,7 @@ function KnowledgeRecommendations({ items }: Readonly<{ items: readonly Knowledg
             根据本轮漏项检索 rubric、知识点和病例库，推荐复习重点与下一轮训练方向。
           </p>
         </div>
-        <span className="rounded-full border border-brand/20 bg-[#2F6868]/10 px-3 py-1 text-xs font-medium text-brand">
+        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
           {items.length} 项
         </span>
       </div>
@@ -560,7 +699,7 @@ function KnowledgeRecommendations({ items }: Readonly<{ items: readonly Knowledg
 
 function LlmReasoningFeedback({ items }: Readonly<{ items: readonly LlmReasoningFeedbackItem[] }>) {
   return (
-    <section className="rounded-2xl border border-brand/20 bg-[#2F6868]/5 p-5 shadow-xs xl:col-span-2">
+    <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs xl:col-span-2">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">AI 临床推理评价</h2>

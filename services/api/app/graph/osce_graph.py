@@ -17,6 +17,10 @@ from app.validators.case_validator import validate_case
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 PatientResponder = Callable[[PatientResponderRequest], str]
+SAFETY_BOUNDARY_FLAG = "real_medical_advice_request"
+SAFETY_GUARDRAIL_REPLY = "本系统仅用于 OSCE 教学模拟训练，不能提供真实诊断、具体用药或急救处置建议；如有真实健康问题，请咨询合格医疗专业人员或及时就医。"
+ANSWER_REQUEST_REDIRECT_REPLY = "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
+UNKNOWN_HISTORY_REDIRECT_REPLY = "病例脚本没有提供这方面信息。请回到本次腹痛训练目标，优先追问起病时间、部位变化、疼痛性质、疼痛程度和伴随症状。"
 
 
 class OsceGraphState(TypedDict, total=False):
@@ -31,6 +35,7 @@ class OsceGraphState(TypedDict, total=False):
     report_requested: bool
     hint_requested: bool
     hint: str
+    training_progress_next_focus: str
     exam_code: str
     exam_name_cn: str
     exam_result: str
@@ -91,6 +96,27 @@ def input_router_node(state: OsceGraphState) -> dict[str, str]:
         if any(keyword in normalized for keyword in keywords):
             return {"current_intent": intent}
     return {"current_intent": "unknown_history_intent"}
+
+
+def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
+    student_message = state.get("student_message", "")
+    messages = [*state.get("messages", [])]
+    if student_message:
+        messages.extend(
+            [
+                {"role": "student", "content": student_message},
+                {"role": "coach", "content": UNKNOWN_HISTORY_REDIRECT_REPLY},
+            ]
+        )
+    return {
+        "stage": "history_taking",
+        "current_intent": "unknown_history_intent",
+        "reply": UNKNOWN_HISTORY_REDIRECT_REPLY,
+        "messages": messages,
+        "asked_questions": list(state.get("asked_questions", [])),
+        "intent_history": [*state.get("intent_history", []), "unknown_history_intent"],
+        "revealed_facts": list(state.get("revealed_facts", [])),
+    }
 
 
 def patient_response_node(state: OsceGraphState, patient_responder: PatientResponder) -> dict[str, Any]:
@@ -207,6 +233,48 @@ def socratic_hint_node(state: OsceGraphState) -> dict[str, Any]:
     }
 
 
+
+def answer_request_redirect_node(state: OsceGraphState) -> dict[str, Any]:
+    student_message = state.get("student_message", "")
+    messages = [*state.get("messages", [])]
+    if student_message:
+        messages.extend(
+            [
+                {"role": "student", "content": student_message},
+                {"role": "coach", "content": ANSWER_REQUEST_REDIRECT_REPLY},
+            ]
+        )
+    return {
+        "stage": state.get("stage") or "case_intro",
+        "current_intent": "answer_request_redirect",
+        "reply": ANSWER_REQUEST_REDIRECT_REPLY,
+        "messages": messages,
+    }
+
+
+
+def safety_guardrail_node(state: OsceGraphState) -> dict[str, Any]:
+    student_message = state.get("student_message", "")
+    messages = [*state.get("messages", [])]
+    if student_message:
+        messages.extend(
+            [
+                {"role": "student", "content": student_message},
+                {"role": "coach", "content": SAFETY_GUARDRAIL_REPLY},
+            ]
+        )
+    safety_flags = list(state.get("safety_flags", []))
+    if SAFETY_BOUNDARY_FLAG not in safety_flags:
+        safety_flags.append(SAFETY_BOUNDARY_FLAG)
+    return {
+        "stage": state.get("stage") or "case_intro",
+        "current_intent": "safety_boundary",
+        "reply": SAFETY_GUARDRAIL_REPLY,
+        "messages": messages,
+        "safety_flags": safety_flags,
+    }
+
+
 def evaluation_node(
     state: OsceGraphState,
     llm_scorer: LlmRubricScorer | None = None,
@@ -290,6 +358,12 @@ def _build_llm_reasoning_feedback(rubric_scores: dict[str, Any]) -> list[dict[st
 def _build_socratic_hint(state: OsceGraphState) -> str:
     if state.get("final_submission") is not None:
         return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
+    skill_hint = _build_enabled_skill_hint(state.get("evolution_candidates", []))
+    if skill_hint:
+        return skill_hint
+    training_progress_hint = state.get("training_progress_next_focus", "")
+    if training_progress_hint:
+        return training_progress_hint
     if not state.get("asked_questions", []):
         return "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
     if not state.get("requested_exams", []):
@@ -301,8 +375,75 @@ def _build_socratic_hint(state: OsceGraphState) -> str:
     return "整理已获得的病史、查体和检查证据，再提交主要诊断和推理依据。"
 
 
+def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
+    for candidate in evolution_candidates:
+        normalized_candidate = candidate.strip()
+        if not normalized_candidate:
+            continue
+        if "：" not in normalized_candidate:
+            return f"本轮训练重点：{normalized_candidate}"
+        title, strategy = normalized_candidate.split("：", 1)
+        normalized_strategy = strategy.replace("在学生提交诊断前，提示其", "提交诊断前，请")
+        normalized_strategy = normalized_strategy.replace("学生", "你")
+        return f"本轮训练重点是{title}。{normalized_strategy}"
+    return ""
+
+
+def _is_safety_boundary_message(message: str) -> bool:
+    normalized = message.lower()
+    safety_keywords = [
+        "用药剂量",
+        "治疗方案",
+        "手术方案",
+        "急救",
+        "处置建议",
+        "吃什么药",
+        "开什么药",
+        "该吃药",
+        "怎么治疗",
+        "如何治疗",
+        "真实健康",
+        "现实中",
+        "现实里",
+    ]
+    return any(keyword in normalized for keyword in safety_keywords)
+
+
+
+def _is_direct_answer_request(message: str, case_id: str) -> bool:
+    normalized = message.lower()
+    direct_answer_keywords = [
+        "直接告诉我",
+        "告诉我答案",
+        "标准答案",
+        "正确答案",
+        "最终答案",
+        "答案是什么",
+        "是什么病",
+        "什么诊断",
+    ]
+    if any(keyword in normalized for keyword in direct_answer_keywords):
+        return True
+    case = _load_case(case_id)
+    diagnosis_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
+    diagnosis_mentioned = any(term.lower() in normalized for term in diagnosis_terms if term)
+    diagnosis_question_markers = ["是不是", "是否", "是吗", "对吗", "诊断"]
+    return diagnosis_mentioned and any(marker in normalized for marker in diagnosis_question_markers)
+
+
+def _route_after_input_router(state: OsceGraphState) -> str:
+    if state.get("current_intent") == "unknown_history_intent":
+        return "unknown_history_redirect_node"
+    return "patient_response_node"
+
+
 def _route_after_load_case(state: OsceGraphState) -> str:
-    if state.get("student_message"):
+    student_message = state.get("student_message", "")
+    if student_message:
+        if _is_safety_boundary_message(student_message):
+            return "safety_guardrail_node"
+        if _is_direct_answer_request(student_message, state["case_id"]):
+            return "answer_request_redirect_node"
         return "input_router_node"
     if state.get("hint_requested"):
         return "socratic_hint_node"
@@ -331,11 +472,14 @@ def build_osce_graph(
     builder = StateGraph(OsceGraphState)
     builder.add_node(load_case_node)
     builder.add_node(input_router_node)
+    builder.add_node(unknown_history_redirect_node)
     builder.add_node("patient_response_node", lambda state: patient_response_node(state, active_patient_responder))
     builder.add_node(physical_exam_node)
     builder.add_node(auxiliary_test_node)
     builder.add_node(diagnosis_submit_node)
     builder.add_node(socratic_hint_node)
+    builder.add_node(answer_request_redirect_node)
+    builder.add_node(safety_guardrail_node)
     builder.add_node("evaluation_node", lambda state: evaluation_node(state, llm_scorer=llm_scorer))
     builder.add_node(feedback_node)
     builder.add_edge(START, "load_case_node")
@@ -348,16 +492,28 @@ def build_osce_graph(
             "auxiliary_test_node": "auxiliary_test_node",
             "diagnosis_submit_node": "diagnosis_submit_node",
             "socratic_hint_node": "socratic_hint_node",
+            "answer_request_redirect_node": "answer_request_redirect_node",
+            "safety_guardrail_node": "safety_guardrail_node",
             "evaluation_node": "evaluation_node",
             END: END,
         },
     )
-    builder.add_edge("input_router_node", "patient_response_node")
+    builder.add_conditional_edges(
+        "input_router_node",
+        _route_after_input_router,
+        {
+            "unknown_history_redirect_node": "unknown_history_redirect_node",
+            "patient_response_node": "patient_response_node",
+        },
+    )
+    builder.add_edge("unknown_history_redirect_node", END)
     builder.add_edge("patient_response_node", END)
     builder.add_edge("physical_exam_node", END)
     builder.add_edge("auxiliary_test_node", END)
     builder.add_edge("diagnosis_submit_node", END)
     builder.add_edge("socratic_hint_node", END)
+    builder.add_edge("answer_request_redirect_node", END)
+    builder.add_edge("safety_guardrail_node", END)
     builder.add_edge("evaluation_node", "feedback_node")
     builder.add_edge("feedback_node", END)
     return builder.compile()

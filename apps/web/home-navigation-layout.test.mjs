@@ -1,8 +1,19 @@
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
+const authClientUrl = new URL("./src/app/auth-client.ts", import.meta.url);
+const profilePageUrl = new URL("./src/app/profile/page.tsx", import.meta.url);
 const pageSource = readFileSync(new URL("./src/app/page.tsx", import.meta.url), "utf8");
+const reportSource = readFileSync(new URL("./src/app/report/page.tsx", import.meta.url), "utf8");
+const profileSource = existsSync(profilePageUrl) ? readFileSync(profilePageUrl, "utf8") : "";
+const historySource = readFileSync(new URL("./src/app/history/page.tsx", import.meta.url), "utf8");
+const casesSource = readFileSync(new URL("./src/app/cases/page.tsx", import.meta.url), "utf8");
+const safetySource = readFileSync(new URL("./src/app/safety/page.tsx", import.meta.url), "utf8");
+const sourcesSource = readFileSync(new URL("./src/app/sources/page.tsx", import.meta.url), "utf8");
+const globalsSource = readFileSync(new URL("./src/app/globals.css", import.meta.url), "utf8");
+const layoutSource = readFileSync(new URL("./src/app/layout.tsx", import.meta.url), "utf8");
+const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl, "utf8") : "";
 
 function getHeaderSource() {
   const headerMatch = pageSource.match(/<header[\s\S]*?<\/header>/);
@@ -22,13 +33,233 @@ test("home page does not render large safety and source panels", () => {
   assert.doesNotMatch(pageSource, /<Panel title="数据来源"/);
 });
 
-test("home side panel shows procedure results before diagnosis hypotheses", () => {
-  const procedurePanelIndex = pageSource.indexOf('<Panel title="查体与检查申请">');
-  const hypothesisPanelIndex = pageSource.indexOf('<Panel title="诊断假设">');
+test("app theme uses Claude-like paper palette with Chinese font fallbacks", () => {
+  assert.match(globalsSource, /--background: #FAF9F5;/);
+  assert.match(globalsSource, /--foreground: #141413;/);
+  assert.match(globalsSource, /--card: #FFFFFF;/);
+  assert.match(globalsSource, /--muted: #F5F4ED;/);
+  assert.match(globalsSource, /--muted-foreground: #6B6A68;/);
+  assert.match(globalsSource, /--border: #E8E6DA;/);
+  assert.match(globalsSource, /--brand: #AE5630;/);
+  assert.match(globalsSource, /--brand-hover: #C4633A;/);
+  assert.match(globalsSource, /--font-ui: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;/);
+  assert.match(globalsSource, /--font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;/);
+  assert.match(globalsSource, /--font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;/);
+  assert.match(globalsSource, /--color-brand: var\(--brand\);/);
+  assert.match(globalsSource, /--color-brand-hover: var\(--brand-hover\);/);
+  assert.match(globalsSource, /body \{[\s\S]*?font-family: var\(--font-ui\);/);
+  assert.match(layoutSource, /<body className="font-ui">/);
+  assert.doesNotMatch(layoutSource, /next\/font\/google/);
+  assert.doesNotMatch(layoutSource, /Inter\(/);
+});
 
+test("home page uses Claude-like brand tokens without legacy teal hardcoding", () => {
+  assert.doesNotMatch(pageSource, /#2F6868|#2f6868/);
+  assert.match(pageSource, /bg-brand\/10/);
+  assert.match(pageSource, /hover:bg-brand-hover/);
+  assert.match(pageSource, /focus:ring-brand\/15/);
+});
+
+test("case and history pages use Claude-like brand tokens without legacy teal hardcoding", () => {
+  assert.doesNotMatch(casesSource, /#2F6868|#2f6868/);
+  assert.doesNotMatch(historySource, /#2F6868|#2f6868/);
+  assert.match(casesSource, /bg-brand\/5/);
+  assert.match(casesSource, /bg-brand\/10/);
+  assert.match(casesSource, /hover:bg-brand-hover/);
+  assert.match(historySource, /bg-brand\/5/);
+  assert.match(historySource, /bg-brand\/10/);
+  assert.match(historySource, /hover:bg-brand-hover/);
+});
+
+test("safety and sources pages use Claude-like brand tokens without legacy teal hardcoding", () => {
+  assert.doesNotMatch(safetySource, /#2F6868|#2f6868/);
+  assert.doesNotMatch(sourcesSource, /#2F6868|#2f6868/);
+  assert.match(safetySource, /bg-brand\/5/);
+  assert.match(sourcesSource, /bg-brand\/5/);
+});
+
+test("report page uses Claude-like brand tokens without legacy teal hardcoding", () => {
+  assert.doesNotMatch(reportSource, /#2F6868|#2f6868|rgba\(47, 104, 104/);
+  assert.match(reportSource, /const REPORT_BRAND_COLOR = "var\(--brand\)";/);
+  assert.match(reportSource, /const REPORT_BRAND_SCORE_TRACK_COLOR = "color-mix\(in srgb, var\(--brand\) 12%, transparent\)";/);
+  assert.match(reportSource, /hover:bg-brand-hover/);
+  assert.match(reportSource, /bg-brand\/5/);
+  assert.match(reportSource, /bg-brand\/10/);
+  assert.match(reportSource, /stroke=\{REPORT_BRAND_COLOR\}/);
+  assert.match(reportSource, /fill=\{REPORT_BRAND_COLOR\}/);
+});
+
+test("home header links to the learning profile page", () => {
+  const headerSource = getHeaderSource();
+
+  assert.match(headerSource, /href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
+});
+
+test("profile page reads backend aggregated learning profile without per-session report requests", () => {
+  assert.ok(existsSync(profilePageUrl), "profile page should exist");
+  assert.match(profileSource, /export default function ProfilePage\(\)/);
+  assert.match(profileSource, /fetch\("\/api\/me\/profile", \{/);
+  assert.match(profileSource, /type CurrentUserProfileResponse = Readonly<\{/);
+  assert.match(profileSource, /function toLearningProfile\(/);
+  assert.match(profileSource, /credentials: "same-origin"/);
+  assert.doesNotMatch(profileSource, /`\/api\/me\/sessions\/\$\{sessionId\}\/report`/);
+  assert.doesNotMatch(profileSource, /getCurrentUserSessionReport/);
+  assert.doesNotMatch(profileSource, /Promise\.all\(sessions\.map/);
+  assert.match(profileSource, /训练次数/);
+  assert.match(profileSource, /平均分/);
+  assert.match(profileSource, /薄弱项/);
+  assert.match(profileSource, /Skill 积累/);
+  assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
+  assert.match(profileSource, /enabled_skill_count: number;/);
+  assert.match(profileSource, /applied_skill_count: number;/);
+  assert.match(profileSource, /enabled_skills: readonly EnabledSkillSummary\[];/);
+  assert.match(profileSource, /profile\.skillAccumulation\.enabled_skill_count/);
+  assert.match(profileSource, /profile\.skillAccumulation\.applied_skill_count/);
+  assert.match(profileSource, /profile\.skillAccumulation\.enabled_skills\.map/);
+  assert.match(profileSource, /已启用 Skill/);
+  assert.match(profileSource, /应用次数/);
+  assert.match(profileSource, /支持次数/);
+  assert.match(profileSource, /暂无已启用 Skill/);
+});
+
+test("home workspace exposes OSCE workflow navigation and next-step guidance", () => {
+  assert.match(pageSource, /type WorkflowStepDefinition = Readonly<\{/);
+  assert.match(pageSource, /const workflowStepDefinitions: readonly WorkflowStepDefinition\[\] = \[/);
+  assert.match(pageSource, /label: "进入病例"/);
+  assert.match(pageSource, /label: "查看报告"/);
+  assert.match(pageSource, /function getWorkflowStepStatus\(stepKey: WorkflowStepDefinition\["key"\], session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): StageStatus/);
+  assert.match(pageSource, /function getNextWorkflowSuggestion\(session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): string/);
+  assert.match(pageSource, /"请先询问起病、部位、性质、程度和伴随症状。"/);
+  assert.match(pageSource, /<Panel title="OSCE 流程导航" description="按完整训练闭环提示下一步操作。">/);
+  assert.match(pageSource, /<p className="text-sm font-semibold text-brand">下一步建议<\/p>/);
+});
+
+test("home workspace can resume current user's persisted backend session", () => {
+  assert.match(pageSource, /credentials: "same-origin"/);
+  assert.match(pageSource, /const requestedSessionId = searchParams\.get\("session_id"\);/);
+  assert.match(pageSource, /function getSession\(sessionId: string\): Promise<OsceSession>/);
+  assert.match(pageSource, /`\/api\/me\/sessions\/\$\{sessionId\}`/);
+  assert.match(pageSource, /if \(isCheckingAuth\) \{/);
+  assert.match(pageSource, /if \(!authUser\) \{/);
+  assert.match(pageSource, /setStatusText\("请先登录后再开始或恢复训练。"\);/);
+  assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\(selectedCaseId \? "已选择病例，发送问诊或点击训练操作后开始新会话。" : "请选择病例后再开始训练。"\);[\s\S]*?return;[\s\S]*?\}/);
+  assert.match(pageSource, /const sessionIdToRestore = requestedSessionId;/);
+  assert.match(pageSource, /const nextSession = await getSession\(sessionIdToRestore\);/);
+  assert.match(pageSource, /setStatusText\("已恢复后端训练会话，可以继续训练。"\);/);
+  assert.match(pageSource, /`\/api\/me\/sessions\/\$\{sessionId\}\/report`/);
+  assert.match(pageSource, /async function getRequestErrorMessage\(response: Response\): Promise<string>/);
+  assert.match(pageSource, /if \(response\.status === 401\) \{/);
+  assert.match(pageSource, /return "请先登录后再继续训练。";/);
+  assert.match(pageSource, /setIsAuthDialogOpen\(true\);/);
+  assert.doesNotMatch(pageSource, /requestedSessionId\s*\? await getSession\(requestedSessionId\)\s*: await createSession\(selectedCaseId\)/);
+  assert.doesNotMatch(pageSource, /throw new Error\(detail \|\| `请求失败：\$\{response\.status\}`\);/);
+  assert.match(pageSource, /\}, \[authUser, isCheckingAuth, requestedSessionId, selectedCaseId\]\);/);
+});
+
+test("home workspace starts without a default case and only prepares a case after selection", () => {
+  assert.match(pageSource, /const initialCaseId = searchParams\.get\("case_id"\);/);
+  assert.match(pageSource, /const \[selectedCaseId, setSelectedCaseId\] = useState<string \| null>\(initialCaseId\);/);
+  assert.doesNotMatch(pageSource, /searchParams\.get\("case_id"\) \?\? DEFAULT_CASE_ID/);
+  assert.match(pageSource, /const selectedCase = useMemo\([\s\S]*?selectedCaseId \? caseOptionsState\.find\(\(caseOption\) => caseOption\.id === selectedCaseId\) \?\? null : null/);
+  assert.match(pageSource, /function CaseSelectionPrompt\(/);
+  assert.match(pageSource, /<div className="flex justify-center">[\s\S]*?<div className="w-full max-w-xl rounded-xl/);
+  assert.match(pageSource, /text-center/);
+  assert.match(pageSource, /<CaseSelectionPrompt selectedCase=\{selectedCase\} \/>/);
+  assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
+  assert.match(pageSource, /const preparedOpeningTaskCard = session\?\.opening_task_card \?\? selectedCase\?\.openingTaskCard \?\? null;/);
+  assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>/);
+  assert.match(pageSource, /if \(!session\) \{\s*return \[\];\s*\}/);
+  assert.doesNotMatch(pageSource, /speaker: "patient"[\s\S]{0,240}请先选择一个病例；进入病例后/);
+});
+
+test("home workspace creates a new backend session only after a selected-case training action", () => {
+  assert.match(pageSource, /const \[isCreating, setIsCreating\] = useState\(false\);/);
+  assert.match(pageSource, /async function ensureActiveSession\(\): Promise<OsceSession \| null>/);
+  assert.match(pageSource, /if \(session\) \{[\s\S]*?return session;[\s\S]*?\}/);
+  assert.match(pageSource, /if \(!selectedCaseId\) \{[\s\S]*?setStatusText\("请先选择病例，再开始训练。"\);[\s\S]*?return null;[\s\S]*?\}/);
+  assert.match(pageSource, /const nextSession = await createSession\(selectedCaseId\);/);
+  assert.match(pageSource, /const activeSession = await ensureActiveSession\(\);/);
+  assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
+  assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
+  assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isSending\}/);
+});
+
+
+test("home case card points users to the case selection page", () => {
+  assert.match(pageSource, /<Panel[\s\S]*title="病例信息与选择"[\s\S]*description="先选择病例，再开始 OSCE 训练。"/);
+  assert.match(pageSource, />当前选择<\/p>/);
+  assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
+  assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
+  assert.doesNotMatch(pageSource, /const \[isCaseSelectorOpen, setIsCaseSelectorOpen\]/);
+  assert.doesNotMatch(pageSource, /caseOptionsState\.map\(\(caseOption\) =>/);
+  assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="当前病例"/);
+  assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例选择"/);
+});
+
+
+test("home right sidebar starts with progress and keeps collapsible cards bounded", () => {
+  assert.match(pageSource, /type RightPanelKey = "evidence" \| "procedures" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /function CollapsiblePanel\(/);
+  assert.match(pageSource, /maxContentHeightClass = "max-h-64"/);
+  assert.match(pageSource, /overflow-y-auto pr-1/);
+  assert.match(pageSource, /const \[rightPanelOpenStates, setRightPanelOpenStates\] = useState<Record<RightPanelKey, boolean>>/);
+  assert.match(pageSource, /report: true,/);
+  assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) =>/);
+
+  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">');
+  const progressPanelIndex = pageSource.indexOf('title="训练进度与素材覆盖"', rightAsideIndex);
+  const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
+  assert.notEqual(rightAsideIndex, -1);
+  assert.notEqual(progressPanelIndex, -1);
+  assert.notEqual(evidencePanelIndex, -1);
+  assert.ok(progressPanelIndex < evidencePanelIndex);
+
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="已收集线索"[\s\S]*maxContentHeightClass="max-h-64"/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="查体与检查申请"[\s\S]*maxContentHeightClass="max-h-64"/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"[\s\S]*maxContentHeightClass="max-h-48"/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="评分报告"[\s\S]*maxContentHeightClass="max-h-96"/);
+});
+
+
+test("home sidebars prioritize guidance, case context, progress, and evidence flow", () => {
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-80 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:block">');
+  const guidancePanelIndex = pageSource.indexOf('title="问诊引导"', leftAsideIndex);
+  const casePanelIndex = pageSource.indexOf('title="病例信息与选择"', leftAsideIndex);
+  const workflowPanelIndex = pageSource.indexOf('title="OSCE 流程导航"', leftAsideIndex);
+  assert.notEqual(leftAsideIndex, -1);
+  assert.notEqual(guidancePanelIndex, -1);
+  assert.notEqual(casePanelIndex, -1);
+  assert.notEqual(workflowPanelIndex, -1);
+  assert.ok(guidancePanelIndex < casePanelIndex);
+  assert.ok(casePanelIndex < workflowPanelIndex);
+
+  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">');
+  const procedurePanelIndex = pageSource.indexOf('title="查体与检查申请"', rightAsideIndex);
+  const hypothesisPanelIndex = pageSource.indexOf('title="诊断假设"', rightAsideIndex);
   assert.notEqual(procedurePanelIndex, -1);
   assert.notEqual(hypothesisPanelIndex, -1);
   assert.ok(procedurePanelIndex < hypothesisPanelIndex);
+});
+
+test("home quick actions allow realistic sequence jumps but show teaching reminders", () => {
+  assert.match(pageSource, /const shouldShowPhysicalExamSequenceReminder = activeSession\.training_progress\.history\.covered === 0;/);
+  assert.match(pageSource, /const shouldShowAuxiliaryTestSequenceReminder = activeSession\.training_progress\.physical_exam\.requested === 0;/);
+  assert.match(pageSource, /OSCE 通常建议先完成核心病史采集，再进入查体。/);
+  assert.match(pageSource, /现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isRequestingExam\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isRequestingTest\}/);
+  assert.doesNotMatch(pageSource, /canRequestPhysicalExam/);
+  assert.doesNotMatch(pageSource, /canRequestAuxiliaryTest/);
+});
+
+test("home quick actions are available after a case is selected and before a backend session exists", () => {
+  assert.match(pageSource, /const physicalExamOptions = session\?\.physical_exam_options \?\? selectedCase\?\.physicalExamOptions \?\? \[\];/);
+  assert.match(pageSource, /const auxiliaryTestOptions = session\?\.auxiliary_test_options \?\? selectedCase\?\.auxiliaryTestOptions \?\? \[\];/);
+  assert.match(pageSource, /physicalExamOptions\.map/);
+  assert.match(pageSource, /auxiliaryTestOptions\.map/);
+  assert.doesNotMatch(pageSource, /session\?\.physical_exam_options\.map/);
+  assert.doesNotMatch(pageSource, /session\?\.auxiliary_test_options\.map/);
 });
 
 test("home diagnosis hypothesis panel can record in-progress hypotheses", () => {
@@ -39,12 +270,210 @@ test("home diagnosis hypothesis panel can record in-progress hypotheses", () => 
 });
 
 
+test("home diagnosis submission form collects structured OSCE reasoning fields", () => {
+  assert.match(pageSource, /const \[diagnosisValue, setDiagnosisValue\] = useState\(""\);/);
+  assert.match(pageSource, /const \[differentialDiagnosisValue, setDifferentialDiagnosisValue\] = useState\(""\);/);
+  assert.match(pageSource, /const \[supportingEvidenceValue, setSupportingEvidenceValue\] = useState\(""\);/);
+  assert.match(pageSource, /const \[exclusionEvidenceValue, setExclusionEvidenceValue\] = useState\(""\);/);
+  assert.match(pageSource, /const \[nextStepValue, setNextStepValue\] = useState\(""\);/);
+  assert.doesNotMatch(pageSource, /const DEFAULT_DIAGNOSIS/);
+  assert.doesNotMatch(pageSource, /const DEFAULT_REASONING/);
+  assert.match(pageSource, /function buildStructuredReasoning\(/);
+  assert.match(pageSource, /鉴别诊断：\$\{differentialDiagnosis\}/);
+  assert.match(pageSource, /支持依据：\$\{supportingEvidence\}/);
+  assert.match(pageSource, /排除依据：\$\{exclusionEvidence\}/);
+  assert.match(pageSource, /下一步方向：\$\{nextStep\}/);
+  assert.match(pageSource, /id="differential-diagnosis-input"/);
+  assert.match(pageSource, /placeholder="至少 2 个合理鉴别诊断"/);
+  assert.match(pageSource, /id="supporting-evidence-input"/);
+  assert.match(pageSource, /id="exclusion-evidence-input"/);
+  assert.match(pageSource, /id="next-step-input"/);
+  assert.match(pageSource, /function resizeTextareaToContent\(textarea: HTMLTextAreaElement\): void/);
+  assert.match(pageSource, /const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;/);
+  assert.match(pageSource, /Math\.min\(textarea\.scrollHeight, DIAGNOSIS_TEXTAREA_MAX_HEIGHT\)/);
+  assert.match(pageSource, /resize-y max-h-40 overflow-y-auto/);
+  assert.match(pageSource, /onInput=\{\(event\) => resizeTextareaToContent\(event\.currentTarget\)\}/);
+  assert.match(pageSource, /!differentialDiagnosisValue\.trim\(\)/);
+  assert.match(pageSource, /!supportingEvidenceValue\.trim\(\)/);
+  assert.match(pageSource, /!exclusionEvidenceValue\.trim\(\)/);
+  assert.match(pageSource, /!nextStepValue\.trim\(\)/);
+});
+
+
 test("home workspace can request socratic hints and render coach messages", () => {
   assert.match(pageSource, /type HintResponse = OsceSession &/);
   assert.match(pageSource, /function requestHint\(sessionId: string\): Promise<HintResponse>/);
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/hint/);
   assert.match(pageSource, /message\.role === "coach"/);
-  assert.match(pageSource, /label: "过程提示"/);
+  assert.match(pageSource, /label: getCoachMessageLabel\(message\.content\)/);
+  assert.match(pageSource, /"过程提示"/);
   assert.match(pageSource, /onClick=\{handleHintRequest\}/);
   assert.match(pageSource, />\{isRequestingHint \? "提示生成中" : "请求提示"\}<\/button>/);
+});
+
+
+test("home workspace highlights safety guardrail replies", () => {
+  assert.match(pageSource, /function getCoachMessageLabel\(content: string\): "安全边界" \| "过程提示"/);
+  assert.match(pageSource, /content\.includes\("本系统仅用于 OSCE 教学模拟训练"\) \? "安全边界" : "过程提示"/);
+  assert.match(pageSource, /`安全边界：\$\{session\?\.safety_flags\.length \?\? 0\} 次`/);
+});
+
+
+test("home current case card can show student-visible patient profile modal", () => {
+  assert.match(pageSource, /type StudentVisiblePatientProfile = Readonly<\{/);
+  assert.match(pageSource, /patient_profile: StudentVisiblePatientProfile;/);
+  assert.match(pageSource, /const \[isPatientProfileOpen, setIsPatientProfileOpen\] = useState\(false\);/);
+  assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
+  assert.match(pageSource, />\s*患者信息\s*<\/button>/);
+  assert.match(pageSource, /aria-label="关闭患者信息弹窗"/);
+  assert.match(pageSource, /以上为 OSCE 教学模拟开局信息，不包含隐藏病史、查体、检查或标准诊断。/);
+});
+
+
+test("home workspace renders opening task card in the dialogue area and inquiry guidance in the sidebar", () => {
+  assert.match(pageSource, /type OpeningTaskCard = Readonly<\{/);
+  assert.match(pageSource, /opening_task_card: OpeningTaskCard;/);
+  assert.match(pageSource, /type InquiryGuidance = Readonly<\{/);
+  assert.match(pageSource, /inquiry_guidance: InquiryGuidance;/);
+  assert.match(pageSource, /function OpeningTaskCardMessage\(/);
+  assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>[\s\S]*\{chatMessages\.map/);
+  assert.match(pageSource, /openingTaskCard\.role/);
+  assert.match(pageSource, /openingTaskCard\.scenario/);
+  assert.match(pageSource, /openingTaskCard\.tasks\.map/);
+  assert.doesNotMatch(pageSource, /<Panel title="开局任务卡"/);
+  assert.match(pageSource, /<Panel title="问诊引导" description="优先完成不会泄露诊断的核心病史采集。">/);
+  assert.match(pageSource, /session\?\.inquiry_guidance\.priority/);
+  assert.match(pageSource, /session\.inquiry_guidance\.suggested_questions\.map/);
+  assert.match(pageSource, /onClick=\{\(\) => setInputValue\(question\)\}/);
+  assert.match(pageSource, /session\.inquiry_guidance\.categories\.map/);
+});
+
+
+test("home workspace renders training progress and opens developer coverage map from a button", () => {
+  assert.match(pageSource, /type TrainingProgress = Readonly<\{/);
+  assert.match(pageSource, /training_progress: TrainingProgress;/);
+  assert.match(pageSource, /type CoverageMapItem = Readonly<\{/);
+  assert.match(pageSource, /id: string;/);
+  assert.match(pageSource, /label: string;/);
+  assert.match(pageSource, /status: "covered" \| "pending";/);
+  assert.match(pageSource, /type CoverageMapPayload = Readonly<\{/);
+  assert.match(pageSource, /coverage_map: CoverageMapPayload;/);
+  assert.match(pageSource, /function formatProgressCount\(covered: number, total: number\): string/);
+  assert.match(pageSource, /function CoverageMap\(/);
+  assert.match(pageSource, /const \[isCoverageMapOpen, setIsCoverageMapOpen\] = useState\(false\);/);
+  assert.match(pageSource, /session\?\.training_progress\.next_focus \?\? workflowSuggestion/);
+  assert.match(pageSource, /<Panel title="训练进度与素材覆盖" description="用病例素材覆盖度提示下一步训练动作。">/);
+  assert.match(pageSource, />问诊线索<\/p>/);
+  assert.match(pageSource, />查体项目<\/p>/);
+  assert.match(pageSource, />辅助检查<\/p>/);
+  assert.match(pageSource, />推理证据<\/p>/);
+  assert.match(pageSource, />\s*开发者功能：查看素材覆盖图谱\s*<\/button>/);
+  assert.match(pageSource, /onClick=\{\(\) => setIsCoverageMapOpen\(true\)\}/);
+  assert.match(pageSource, /开发者功能 · 素材覆盖图谱/);
+  assert.match(pageSource, /已覆盖/);
+  assert.match(pageSource, /待覆盖/);
+  assert.match(pageSource, /trainingProgress\.coverage_map\.history/);
+  assert.match(pageSource, /trainingProgress\.coverage_map\.physical_exam/);
+  assert.match(pageSource, /trainingProgress\.coverage_map\.auxiliary_test/);
+  assert.match(pageSource, /trainingProgress\.coverage_map\.reasoning/);
+  assert.match(pageSource, /item\.label/);
+  assert.match(pageSource, /item\.id/);
+  assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
+  assert.doesNotMatch(pageSource, /function buildCoverageMapItems/);
+  assert.doesNotMatch(pageSource, /待问诊素材：/);
+  assert.doesNotMatch(pageSource, /待做必查体：/);
+  assert.doesNotMatch(pageSource, /待做必检查：/);
+  assert.doesNotMatch(pageSource, /待覆盖推理证据：/);
+  assert.doesNotMatch(pageSource, /canonical_answer/);
+});
+
+test("home workspace relies on backend persisted records instead of local training history", () => {
+  assert.doesNotMatch(pageSource, /saveTrainingHistoryRecord/);
+  assert.doesNotMatch(pageSource, /savedHistorySessionId/);
+  assert.doesNotMatch(pageSource, /toTrainingHistoryMessage/);
+  assert.doesNotMatch(pageSource, /toTrainingHistoryProcedureResult/);
+  assert.doesNotMatch(pageSource, /保存训练记录/);
+  assert.match(pageSource, /href="\/history"[\s\S]*?>\s*训练记录\s*<\/Link>/);
+});
+
+test("report page reads current user's backend session snapshot for original dialogue", () => {
+  assert.match(reportSource, /type BackendSession = Readonly<\{/);
+  assert.match(reportSource, /const \[backendSession, setBackendSession\] = useState<BackendSession \| null>\(null\);/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`\)/);
+  assert.match(reportSource, /requestJson<BackendSession>\(`\/api\/me\/sessions\/\$\{nextSessionId\}`\)/);
+  assert.match(reportSource, /fetch\(path, \{/);
+  assert.match(reportSource, /credentials: "same-origin"/);
+  assert.doesNotMatch(reportSource, /readTrainingHistoryRecords/);
+  assert.doesNotMatch(reportSource, /TrainingHistoryRecord/);
+  assert.doesNotMatch(reportSource, /`\/api\/sessions\/\$\{nextSessionId\}\/report`/);
+  assert.match(reportSource, /<h2 className="text-sm font-semibold">原始对话记录<\/h2>/);
+  assert.match(reportSource, /backendSession\?\.messages\.map/);
+  assert.match(reportSource, /backendProcedureResults\.map/);
+  assert.match(reportSource, /从后端训练 session 读取/);
+  assert.match(reportSource, /后端 session 暂无原始对话记录/);
+  assert.match(reportSource, /const workbenchHref = sessionId \? `\/\?session_id=\$\{sessionId\}` : "\/";/);
+  assert.match(reportSource, /href=\{workbenchHref\}[\s\S]*?>\s*返回工作台\s*<\/Link>/);
+});
+
+test("history page lists backend sessions as the only official records", () => {
+  assert.match(historySource, /type PersistedSessionSummary = Readonly<\{/);
+  assert.match(historySource, /type PersistedSessionListResponse = Readonly<\{/);
+  assert.match(historySource, /async function getCurrentUserSessions\(\): Promise<readonly PersistedSessionSummary\[\]>/);
+  assert.match(historySource, /async function deleteCurrentUserSession\(sessionId: string\): Promise<void>/);
+  assert.match(historySource, /fetch\("\/api\/me\/sessions", \{/);
+  assert.match(historySource, /fetch\(`\/api\/me\/sessions\/\$\{sessionId\}`, \{/);
+  assert.match(historySource, /method: "DELETE"/);
+  assert.match(historySource, /credentials: "same-origin"/);
+  assert.match(historySource, /const \[backendSessions, setBackendSessions\] = useState<readonly PersistedSessionSummary\[\]>\(\[\]\);/);
+  assert.match(historySource, /const \[deletingSessionId, setDeletingSessionId\] = useState<string \| null>\(null\);/);
+  assert.match(historySource, /setBackendSessions\(await getCurrentUserSessions\(\)\)/);
+  assert.match(historySource, /setBackendSessions\(\(currentSessions\) => currentSessions\.filter\(\(session\) => session\.session_id !== sessionId\)\)/);
+  assert.match(historySource, /<p className="text-sm font-semibold text-brand">后端持久记录<\/p>/);
+  assert.match(historySource, /backendSessions\.map\(\(session\) =>/);
+  assert.match(historySource, /const workbenchHref = backendSessions\[0\] \? `\/\?session_id=\$\{backendSessions\[0\]\.session_id\}` : "\/";/);
+  assert.match(historySource, /href=\{workbenchHref\}[\s\S]*?>\s*返回工作台\s*<\/Link>/);
+  assert.match(historySource, /href=\{`\/\?session_id=\$\{session\.session_id\}`\}/);
+  assert.match(historySource, />\s*继续训练\s*<\/Link>/);
+  assert.match(historySource, /href=\{`\/report\?session_id=\$\{session\.session_id\}`\}/);
+  assert.match(historySource, /onClick=\{\(\) => handleDeleteBackendSession\(session\.session_id\)\}/);
+  assert.match(historySource, /\{deletingSessionId === session\.session_id \? "删除中" : "删除记录"\}/);
+  assert.doesNotMatch(historySource, /本机历史/);
+  assert.doesNotMatch(historySource, /localStorage/);
+  assert.doesNotMatch(historySource, /readTrainingHistoryRecords/);
+  assert.doesNotMatch(historySource, /clearTrainingHistoryRecords/);
+  assert.doesNotMatch(historySource, /deleteTrainingHistoryRecord/);
+});
+
+test("cases page starts selected cases in a prepared workspace without creating sessions", () => {
+  assert.match(casesSource, /href=\{`\/\?case_id=\$\{encodeURIComponent\(caseSummary\.case_id\)\}`\}/);
+  assert.match(casesSource, />\s*选择并进入工作台\s*<\/Link>/);
+  assert.doesNotMatch(casesSource, /创建新的本地 session/);
+});
+
+test("home page renders login/register dialog on the existing workspace", () => {
+  assert.ok(existsSync(authClientUrl), "home auth client should exist");
+  assert.match(authClientSource, /export type AuthUser = Readonly<\{/);
+  assert.match(authClientSource, /export async function getCurrentUser\(\): Promise<AuthUser \| null>/);
+  assert.match(authClientSource, /export async function loginUser\(email: string, password: string\): Promise<AuthUser>/);
+  assert.match(authClientSource, /export async function registerUser\(email: string, password: string, displayName: string\): Promise<AuthUser>/);
+  assert.match(authClientSource, /export async function logoutUser\(\): Promise<void>/);
+  assert.match(pageSource, /import \{ getCurrentUser, loginUser, logoutUser, registerUser \} from "\.\/auth-client";/);
+  assert.match(pageSource, /import type \{ AuthUser \} from "\.\/auth-client";/);
+  assert.match(pageSource, /const DEFAULT_AUTH_EMAIL = "1@1\.test";/);
+  assert.match(pageSource, /const DEFAULT_AUTH_PASSWORD = "1";/);
+  assert.match(pageSource, /const \[authUser, setAuthUser\] = useState<AuthUser \| null>\(null\);/);
+  assert.match(pageSource, /const \[isAuthDialogOpen, setIsAuthDialogOpen\] = useState\(false\);/);
+  assert.match(pageSource, /const \[authEmail, setAuthEmail\] = useState\(DEFAULT_AUTH_EMAIL\);/);
+  assert.match(pageSource, /const \[authPassword, setAuthPassword\] = useState\(DEFAULT_AUTH_PASSWORD\);/);
+  assert.match(pageSource, /setAuthEmail\(DEFAULT_AUTH_EMAIL\);/);
+  assert.match(pageSource, /setAuthPassword\(DEFAULT_AUTH_PASSWORD\);/);
+  assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "pointer-events-none blur-sm"/);
+  assert.match(pageSource, /\{!isCheckingAuth && isAuthDialogOpen \? \(/);
+  assert.match(pageSource, /backdrop-blur/);
+  assert.match(pageSource, />\s*登录 \/ 注册\s*</);
+  assert.match(pageSource, /id="auth-email-input"/);
+  assert.match(pageSource, /id="auth-password-input"/);
+  assert.match(pageSource, /id="auth-display-name-input"/);
+  assert.match(pageSource, />\{isSubmittingAuth \? "处理中" : authMode === "login" \? "登录" : "注册"\}<\/button>/);
+  assert.match(pageSource, />\s*退出登录\s*</);
 });

@@ -1,0 +1,46 @@
+import { strict as assert } from "node:assert";
+import { existsSync, readFileSync } from "node:fs";
+import { test } from "node:test";
+
+const adminPageUrl = new URL("./src/app/page.tsx", import.meta.url);
+const adminPageSource = existsSync(adminPageUrl) ? readFileSync(adminPageUrl, "utf8") : "";
+
+test("admin dashboard reads management data and exposes review actions", () => {
+  assert.ok(existsSync(adminPageUrl), "admin dashboard page should exist");
+  assert.match(adminPageSource, /type AdminSessionSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminSessionReport = Readonly<\{/);
+  assert.match(adminPageSource, /type EvaluationBatchSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type EvaluationBatchDetail = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminTrainingInsights = Readonly<\{/);
+  assert.match(adminPageSource, /type FrequentMissedItem = Readonly<\{/);
+  assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingEventRecord = Readonly<\{/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/sessions"/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/report`/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/events`/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/insights"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evaluations"/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/evaluations\/\$\{batchId\}`/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/candidates"/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}`/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
+  assert.match(adminPageSource, /Clinical OSCE 管理后台/);
+  assert.match(adminPageSource, /总览/);
+  assert.match(adminPageSource, /训练 Session/);
+  assert.match(adminPageSource, /评分报告/);
+  assert.match(adminPageSource, /错误模式统计/);
+  assert.match(adminPageSource, /常见漏项/);
+  assert.match(adminPageSource, /学习建议/);
+  assert.match(adminPageSource, /系统评测/);
+  assert.match(adminPageSource, /训练日志/);
+  assert.match(adminPageSource, /候选 Skill 审核/);
+  assert.match(adminPageSource, /事件类型/);
+  assert.match(adminPageSource, /事件内容/);
+  assert.match(adminPageSource, /回归通过/);
+  assert.match(adminPageSource, /批准并启用/);
+  assert.match(adminPageSource, /拒绝候选/);
+  assert.match(adminPageSource, /教学策略/);
+});

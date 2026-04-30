@@ -1,13 +1,6 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  preload: true,
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "问诊推理舱",
@@ -24,7 +17,7 @@ type RootLayoutProps = Readonly<{
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="zh-CN">
-      <body className={inter.className}>{children}</body>
+      <body className="font-ui">{children}</body>
     </html>
   );
 }
