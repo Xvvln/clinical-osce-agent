@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  --admin-paper: #faf9f5;
+  --admin-ink: #2d221c;
+  --admin-muted: #76675f;
+  --admin-accent: #ae5630;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--admin-paper);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, rgba(174, 86, 48, 0.12), transparent 32rem), var(--admin-paper);
+  color: var(--admin-ink);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}

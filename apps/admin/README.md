@@ -11,17 +11,20 @@
 - 错误模式统计：读取 `GET /api/admin/insights`，展示常见漏项和学习建议。
 - 系统评测：读取 `GET /api/admin/evaluations` 与 `GET /api/admin/evaluations/{batch_id}`，展示评测批次和失败详情。
 - 候选 Skill 审核：读取候选列表与详情，并调用批准/拒绝接口。
+- 独立构建配置：已提供 `package.json`、`tsconfig.json`、`next.config.mjs`、`postcss.config.mjs`、root layout 和全局样式。
 
 ## 当前边界
 
 - 这是本地演示阶段的教师视角只读后台，尚未接入管理员登录态、角色鉴权、审计日志、分页筛选或图表化统计。
 - 病例/rubric 编辑、跨 Session 报告列表和从管理端触发评测运行仍延后。
-- 当前目录没有独立 `package.json`、`tsconfig.json` 和构建脚本；页面契约先由结构测试锁定。
+- 当前页面契约由结构测试锁定，真实编译由独立 `typecheck` 和 `build` 命令验证。
 
 ## 验证
 
 ```bash
 node --test "F:/杂物/个人开发/clinical-osce-agent/apps/admin/admin-skill-review.test.mjs"
+corepack pnpm --dir "F:/杂物/个人开发/clinical-osce-agent/apps/admin" typecheck
+corepack pnpm --dir "F:/杂物/个人开发/clinical-osce-agent/apps/admin" build
 ```
 
 后端管理 API 回归测试：

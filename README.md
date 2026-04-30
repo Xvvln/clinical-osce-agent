@@ -38,7 +38,7 @@
 clinical-osce-agent/
 ├── apps/
 │   ├── web/                     # 学生端 Next.js 工作台
-│   └── admin/                   # 管理端占位
+│   └── admin/                   # 管理端 Next.js 看板
 ├── data/
 │   ├── attribution/             # 数据来源、许可和风险登记
 │   ├── cases/                   # 结构化教学病例 JSON
