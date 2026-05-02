@@ -1,9 +1,38 @@
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class TrainingSkillCandidateContext:
+    item_id: str
+    support_count: int
+    case_ids: list[str]
+    source_report_count: int
+    related_recommendations: list[str]
+
+
+class TrainingSkillCandidateGenerator(Protocol):
+    def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
+        ...
+
+
+class TemplateTrainingSkillCandidateGenerator:
+    def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
+        return _build_candidate(
+            item_id=context.item_id,
+            support_count=context.support_count,
+            case_ids=context.case_ids,
+            source_report_count=context.source_report_count,
+            related_recommendations=context.related_recommendations,
+        )
 
 
 class TrainingSkillCandidateService:
+    def __init__(self, generator: TrainingSkillCandidateGenerator | None = None) -> None:
+        self._generator = generator or TemplateTrainingSkillCandidateGenerator()
+
     def propose_candidates(self, insights: dict[str, Any], min_count: int = 2) -> list[dict[str, Any]]:
         source_report_count = insights.get("report_count", 0)
         related_recommendations = [
@@ -16,15 +45,14 @@ class TrainingSkillCandidateService:
             support_count = missed_item["count"]
             if support_count < min_count:
                 continue
-            candidates.append(
-                _build_candidate(
-                    item_id=missed_item["item_id"],
-                    support_count=support_count,
-                    case_ids=missed_item["case_ids"],
-                    source_report_count=source_report_count,
-                    related_recommendations=related_recommendations,
-                )
+            context = TrainingSkillCandidateContext(
+                item_id=missed_item["item_id"],
+                support_count=support_count,
+                case_ids=missed_item["case_ids"],
+                source_report_count=source_report_count,
+                related_recommendations=related_recommendations,
             )
+            candidates.append(self._generator.generate_candidate(context))
         return candidates
 
 
