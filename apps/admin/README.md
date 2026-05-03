@@ -6,17 +6,21 @@
 
 - 总览区：展示训练 Session、错误模式、候选 Skill、系统评测和当前报告状态。
 - 训练 Session：读取 `GET /api/admin/sessions`，展示全部训练记录摘要。
-- 评分报告：读取 `GET /api/admin/sessions/{session_id}/report`，展示单个训练报告。
+- 评分报告：读取 `GET /api/admin/reports` 展示跨 Session 报告列表，并读取 `GET /api/admin/sessions/{session_id}/report` 展示单个训练报告。
 - 训练日志：读取 `GET /api/admin/sessions/{session_id}/events`，展示训练事件类型与事件内容。
 - 错误模式统计：读取 `GET /api/admin/insights`，展示常见漏项和学习建议。
-- 系统评测：读取 `GET /api/admin/evaluations` 与 `GET /api/admin/evaluations/{batch_id}`，展示评测批次和失败详情。
-- 候选 Skill 审核：读取候选列表与详情，并调用批准/拒绝接口。
+- 系统评测：读取 `GET /api/admin/evaluations` 与 `GET /api/admin/evaluations/{batch_id}`，展示评测批次和失败详情；也可通过 `POST /api/admin/evals/run` 触发一次演示 smoke 评测并刷新选中新批次。
+- 候选 Skill 审核：读取候选列表、详情与候选维度审核审计事件，可通过 `POST /api/admin/evolution/candidates/generate` 从训练日志生成候选，并调用批准/拒绝接口。
+- 长列表筛选：病例台账、训练 Session、跨 Session 报告和候选 Skill 支持前端本地筛选。
 - 独立构建配置：已提供 `package.json`、`tsconfig.json`、`next.config.mjs`、`postcss.config.mjs`、root layout 和全局样式。
+- 未登录/无权限提示：当 `/api/admin/*` 返回 401 或 403 时，页面状态区分别展示登录提示和管理员权限提示，而不是泛化读取失败。
+- 管理员白名单：后端通过 `CLINICAL_OSCE_ADMIN_EMAILS` 管理员邮箱白名单限制 `/api/admin/*`。
+- 审核审计事件：批准/拒绝候选 Skill 后，后端写入最小审核审计事件；页面展示独立审核审计日志，并在候选详情区展示候选维度审计事件。
 
 ## 当前边界
 
-- 这是本地演示阶段的教师视角只读后台，尚未接入管理员登录态、角色鉴权、审计日志、分页筛选或图表化统计。
-- 病例/rubric 编辑、跨 Session 报告列表和从管理端触发评测运行仍延后。
+- 这是本地演示阶段的教师视角复盘与审核后台；后端 `/api/admin/*` 已要求登录 Cookie，并通过 `CLINICAL_OSCE_ADMIN_EMAILS` 管理员邮箱白名单做最小鉴权，前端提供 401 未登录提示和 403 无管理员权限提示；候选生成与审核动作已写入最小审计事件，页面已展示独立审核审计日志和候选维度审计事件；长列表已支持前端本地筛选，但尚未提供服务端分页、导出或图表化统计。
+- 病例/rubric 编辑、服务端分页、图表化统计和更复杂的评测编排仍延后。
 - 当前页面契约由结构测试锁定，真实编译由独立 `typecheck` 和 `build` 命令验证。
 
 ## 验证

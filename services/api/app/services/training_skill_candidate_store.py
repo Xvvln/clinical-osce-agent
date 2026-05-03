@@ -26,6 +26,13 @@ class TrainingSkillCandidateStore:
                 (candidate["candidate_id"], json.dumps(payload, ensure_ascii=False)),
             )
 
+    def save_candidate_unless_reviewed(self, candidate: dict[str, Any], review: dict[str, Any]) -> bool:
+        existing_candidate = self.get_candidate(str(candidate["candidate_id"]))
+        if existing_candidate is not None and existing_candidate["review"]["status"] in {"approved", "rejected"}:
+            return False
+        self.save_candidate(candidate, review)
+        return True
+
     def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:

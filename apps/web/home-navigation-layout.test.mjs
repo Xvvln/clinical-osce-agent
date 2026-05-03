@@ -450,6 +450,15 @@ test("cases page starts selected cases in a prepared workspace without creating 
   assert.doesNotMatch(casesSource, /创建新的本地 session/);
 });
 
+test("cases page does not expose raw case details to student users", () => {
+  assert.doesNotMatch(casesSource, /\/api\/cases\/\$\{encodeURIComponent\(caseId\)\}\/raw/);
+  assert.doesNotMatch(casesSource, /getCaseRaw/);
+  assert.doesNotMatch(casesSource, /CaseRawPayload/);
+  assert.doesNotMatch(casesSource, /CaseRawDialog/);
+  assert.doesNotMatch(casesSource, /查看原始数据/);
+  assert.doesNotMatch(casesSource, /读取病例原始数据失败/);
+});
+
 test("home page renders login/register dialog on the existing workspace", () => {
   assert.ok(existsSync(authClientUrl), "home auth client should exist");
   assert.match(authClientSource, /export type AuthUser = Readonly<\{/);

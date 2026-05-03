@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app import main
+from app.services.auth_store import AuthStore
 
 
-client = TestClient(app)
+client = TestClient(main.app)
 
 
 def test_list_cases_returns_valid_case_summaries() -> None:
@@ -67,8 +68,43 @@ def test_list_cases_returns_valid_case_summaries() -> None:
     assert "急性阑尾炎" not in str(appendicitis_case)
 
 
-def test_get_case_raw_returns_complete_case_payload() -> None:
-    response = client.get("/api/cases/appendicitis_001/raw")
+def test_get_case_raw_requires_login(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as unauthenticated_client:
+        response = unauthenticated_client.get("/api/cases/appendicitis_001/raw")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "not authenticated"}
+
+
+def test_get_case_raw_rejects_non_admin_user(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as non_admin_client:
+        register_response = non_admin_client.post(
+            "/api/auth/register",
+            json={"email": "student@example.test", "password": "safe-student-password", "display_name": "学生"},
+        )
+        assert register_response.status_code == 200
+        response = non_admin_client.get("/api/cases/appendicitis_001/raw")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "admin access required"}
+
+
+def test_get_case_raw_returns_complete_case_payload_for_admin(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as admin_client:
+        register_response = admin_client.post(
+            "/api/auth/register",
+            json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
+        )
+        assert register_response.status_code == 200
+        response = admin_client.get("/api/cases/appendicitis_001/raw")
 
     assert response.status_code == 200
     payload = response.json()

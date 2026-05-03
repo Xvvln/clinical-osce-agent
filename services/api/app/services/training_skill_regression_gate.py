@@ -4,11 +4,20 @@ from typing import Any
 
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
 
+FORBIDDEN_CANDIDATE_TERMS = [
+    "治疗方案",
+    "用药剂量",
+    "用药建议",
+    "手术方案",
+    "处置建议",
+]
+
 
 class TrainingSkillRegressionGate:
     def review_candidate(self, candidate: dict[str, Any], batch_result: EvaluationBatchResult) -> dict[str, Any]:
-        regression_passed = batch_result.passed
-        return {
+        safety_violations = _candidate_safety_violations(candidate)
+        regression_passed = batch_result.passed and not safety_violations
+        review: dict[str, Any] = {
             "candidate_id": candidate["candidate_id"],
             "status": "ready_for_review" if regression_passed else "blocked_by_regression",
             "regression_passed": regression_passed,
@@ -21,6 +30,17 @@ class TrainingSkillRegressionGate:
                 if not result.passed
             ],
         }
+        if safety_violations:
+            review["candidate_safety_violations"] = safety_violations
+        return review
+
+
+def _candidate_safety_violations(candidate: dict[str, Any]) -> list[str]:
+    candidate_text = " ".join(
+        str(candidate.get(field, ""))
+        for field in ["title", "description", "suggested_strategy", "trigger_item_id"]
+    )
+    return [term for term in FORBIDDEN_CANDIDATE_TERMS if term in candidate_text]
 
 
 def _blocking_failure(result: EvaluationResult) -> dict[str, Any]:

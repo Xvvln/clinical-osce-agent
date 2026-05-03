@@ -75,7 +75,8 @@ clinical-osce-agent/
 | --- | --- | --- |
 | `/health` | GET | 健康检查 |
 | `/api/cases` | GET | 获取病例摘要列表 |
-| `/api/cases/{case_id}/raw` | GET | 获取单个病例完整结构 |
+| `/api/cases/{case_id}/raw` | GET | 兼容保留：管理员鉴权后获取单个病例完整结构 |
+| `/api/admin/cases/{case_id}/raw` | GET | 管理端读取单个病例完整结构 |
 | `/api/sessions` | POST | 创建训练 session |
 | `/api/sessions/{session_id}` | GET | 查询训练状态 |
 | `/api/sessions/{session_id}/message` | POST | 发送问诊问题 |

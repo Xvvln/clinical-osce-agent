@@ -110,6 +110,110 @@ def test_training_skill_candidate_store_lists_candidate_summaries_in_insert_orde
     ]
 
 
+def test_training_skill_candidate_store_does_not_overwrite_reviewed_candidate_when_saving_unless_reviewed(tmp_path) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    store = TrainingSkillCandidateStore(database_path)
+    store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "trigger_item_id": "reasoning_core",
+            "title": "临床推理链纠偏提示",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+        },
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 2,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    assert store.approve_candidate("skill_candidate_reasoning_core", reviewer_id="teacher_demo") is True
+
+    saved = store.save_candidate_unless_reviewed(
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "trigger_item_id": "reasoning_core",
+            "title": "刷新后的候选",
+            "status": "draft",
+            "source_report_count": 5,
+            "support_count": 5,
+        },
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "status": "blocked_by_regression",
+            "regression_passed": False,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 1,
+            "blocking_failures": [],
+        },
+    )
+
+    candidate = TrainingSkillCandidateStore(database_path).get_candidate("skill_candidate_reasoning_core")
+    assert saved is False
+    assert candidate["title"] == "临床推理链纠偏提示"
+    assert candidate["source_report_count"] == 2
+    assert candidate["support_count"] == 2
+    assert candidate["review"]["status"] == "approved"
+    assert candidate["review"]["reviewer_id"] == "teacher_demo"
+
+
+def test_training_skill_candidate_store_refreshes_unreviewed_candidate_when_saving_unless_reviewed(tmp_path) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    store = TrainingSkillCandidateStore(database_path)
+    store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_ht_location",
+            "trigger_item_id": "ht_location",
+            "title": "旧候选",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+        },
+        {
+            "candidate_id": "skill_candidate_ht_location",
+            "status": "blocked_by_regression",
+            "regression_passed": False,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 1,
+            "blocking_failures": [],
+        },
+    )
+
+    saved = store.save_candidate_unless_reviewed(
+        {
+            "candidate_id": "skill_candidate_ht_location",
+            "trigger_item_id": "ht_location",
+            "title": "刷新后的候选",
+            "status": "draft",
+            "source_report_count": 4,
+            "support_count": 4,
+        },
+        {
+            "candidate_id": "skill_candidate_ht_location",
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 2,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+
+    candidate = TrainingSkillCandidateStore(database_path).get_candidate("skill_candidate_ht_location")
+    assert saved is True
+    assert candidate["title"] == "刷新后的候选"
+    assert candidate["source_report_count"] == 4
+    assert candidate["support_count"] == 4
+    assert candidate["review"]["status"] == "ready_for_review"
+
+
 def test_training_skill_candidate_store_approves_ready_candidate(tmp_path) -> None:
     database_path = tmp_path / "training_skill_candidates.sqlite3"
     store = TrainingSkillCandidateStore(database_path)

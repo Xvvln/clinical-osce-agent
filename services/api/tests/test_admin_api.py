@@ -1,6 +1,10 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
 
 from app import main
+from app.services.auth_store import AuthStore
 from app.services.evaluation_result_store import EvaluationResultStore
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
 from app.services.osce_session_service import OsceSession, osce_session_service
@@ -9,6 +13,108 @@ from app.services.report_store import ReportStore
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
+
+
+@contextmanager
+def authenticated_admin_client(tmp_path, monkeypatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/auth/register",
+            json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
+        )
+        assert response.status_code == 200
+        yield client
+
+
+def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as unauthenticated_client:
+        responses = [
+            unauthenticated_client.get("/api/admin/evolution/candidates"),
+            unauthenticated_client.get("/api/admin/evolution/candidates/missing_candidate"),
+            unauthenticated_client.get("/api/admin/evolution/candidates/missing_candidate/events"),
+            unauthenticated_client.get("/api/admin/evolution/events"),
+            unauthenticated_client.post("/api/admin/evolution/candidates/generate"),
+            unauthenticated_client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
+            unauthenticated_client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
+            unauthenticated_client.get("/api/admin/insights"),
+            unauthenticated_client.get("/api/admin/evaluations"),
+            unauthenticated_client.get("/api/admin/evaluations/missing_batch"),
+            unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
+            unauthenticated_client.get("/api/cases/appendicitis_001/raw"),
+            unauthenticated_client.get("/api/admin/cases/appendicitis_001/raw"),
+            unauthenticated_client.get("/api/admin/rubrics/appendicitis_001_rubric"),
+            unauthenticated_client.get("/api/admin/sources"),
+            unauthenticated_client.get("/api/admin/reports"),
+            unauthenticated_client.get("/api/admin/sessions"),
+            unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
+            unauthenticated_client.get("/api/admin/sessions/missing_session/events"),
+        ]
+
+    assert [response.status_code for response in responses] == [401] * len(responses)
+    assert all(response.json() == {"detail": "not authenticated"} for response in responses)
+
+
+def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as client:
+        register_response = client.post(
+            "/api/auth/register",
+            json={"email": "student@example.test", "password": "safe-student-password", "display_name": "学生"},
+        )
+        assert register_response.status_code == 200
+
+        responses = [
+            client.get("/api/admin/evolution/candidates"),
+            client.get("/api/admin/evolution/candidates/missing_candidate"),
+            client.get("/api/admin/evolution/candidates/missing_candidate/events"),
+            client.get("/api/admin/evolution/events"),
+            client.post("/api/admin/evolution/candidates/generate"),
+            client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
+            client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
+            client.get("/api/admin/insights"),
+            client.get("/api/admin/evaluations"),
+            client.get("/api/admin/evaluations/missing_batch"),
+            client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
+            client.get("/api/cases/appendicitis_001/raw"),
+            client.get("/api/admin/cases/appendicitis_001/raw"),
+            client.get("/api/admin/rubrics/appendicitis_001_rubric"),
+            client.get("/api/admin/sources"),
+            client.get("/api/admin/reports"),
+            client.get("/api/admin/sessions"),
+            client.get("/api/admin/sessions/missing_session/report"),
+            client.get("/api/admin/sessions/missing_session/events"),
+        ]
+
+    assert [response.status_code for response in responses] == [403] * len(responses)
+    assert all(response.json() == {"detail": "admin access required"} for response in responses)
+
+
+def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
+    main.app.openapi_schema = None
+
+    schema = main.app.openapi()["components"]["schemas"]["AdminTrainingSkillReviewRequest"]
+
+    assert schema["required"] == ["candidate_id"]
+    assert list(schema["properties"]) == ["candidate_id"]
+
+
+def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/cases/appendicitis_001/raw")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) == {"case"}
+    case_payload = payload["case"]
+    assert case_payload["case_id"] == "appendicitis_001"
+    assert case_payload["history"]["hidden_facts"][0]["canonical_answer"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert case_payload["diagnosis"]["reasoning_points"][0]["point_id"] == "appendicitis_001.rp_01"
 
 
 def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch) -> None:
@@ -34,7 +140,7 @@ def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch
     )
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evolution/candidates")
 
     assert response.status_code == 200
@@ -73,7 +179,7 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
     )
     monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/sessions")
 
     assert response.status_code == 200
@@ -105,7 +211,7 @@ def test_admin_can_read_session_training_events(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/sessions/session_admin_log/events")
 
     assert response.status_code == 200
@@ -180,7 +286,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
     monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/insights")
 
     assert response.status_code == 200
@@ -208,6 +314,63 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
     }
 
 
+def test_admin_can_read_rubric_detail(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/rubrics/appendicitis_001_rubric")
+
+    assert response.status_code == 200
+    rubric = response.json()["rubric"]
+    assert rubric["rubric_id"] == "appendicitis_001_rubric"
+    assert rubric["case_id"] == "appendicitis_001"
+    assert rubric["version"] == "v1"
+    assert rubric["total_score"] == 100
+    assert rubric["schema_version"] == "1.1"
+    assert rubric["dimensions"][0]["dimension_id"] == "history_taking"
+    assert rubric["dimensions"][0]["weight"] == 25
+    assert rubric["dimensions"][0]["scoring_mode"] == "rule"
+    assert rubric["dimensions"][0]["items"][0] == {
+        "item_id": "ht_onset",
+        "description": "追问起病时间",
+        "max_score": 3,
+        "match_rule": {
+            "kind": "intent_keyword",
+            "spec": {
+                "topic": "现病史",
+                "slot": "onset",
+                "any_of_keywords": ["什么时候", "何时", "起病", "开始"],
+            },
+        },
+        "evidence_expected": ["appendicitis_001.hf_01"],
+    }
+
+
+def test_admin_rubric_detail_returns_404_for_missing_rubric(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/rubrics/missing_rubric")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "rubric not found"}
+
+
+def test_admin_can_list_source_registry_entries(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/sources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["sources"]) == 5
+    assert payload["sources"][0] == {
+        "source_id": "fareez_osce_2022",
+        "source_name": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
+        "source_url": "https://doi.org/10.6084/m9.figshare.c.5545842.v1",
+        "license": "CC BY 4.0",
+        "data_type": "dialogue",
+        "allowed_usage": ["training_reference", "evaluation_reference", "demo_reference"],
+        "transformation": "download original zip, then extract and convert into structured OSCE case assets",
+        "attribution_required": True,
+        "risk_note": "原始数据偏呼吸系统问诊，不足以直接覆盖完整病例闭环。",
+    }
+
 
 def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> None:
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
@@ -221,7 +384,7 @@ def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> Non
     )
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evaluations")
 
     assert response.status_code == 200
@@ -258,7 +421,7 @@ def test_admin_can_read_evaluation_batch_detail(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evaluations/batch_regression")
 
     assert response.status_code == 200
@@ -289,11 +452,316 @@ def test_admin_evaluation_detail_returns_404_for_missing_batch(tmp_path, monkeyp
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evaluations/missing_batch")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "evaluation batch not found"}
+
+
+
+def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    captured_case_ids: list[str] = []
+    captured_service = None
+
+    def fake_run_evaluation_cases(evaluation_cases, service):
+        nonlocal captured_service
+        captured_case_ids.extend(evaluation_case.case_id for evaluation_case in evaluation_cases)
+        captured_service = service
+        return EvaluationBatchResult(
+            total_cases=1,
+            passed_cases=1,
+            failed_cases=0,
+            results=[
+                EvaluationResult(
+                    session_id="session_admin_eval",
+                    actual_total_score=32,
+                    expected_total_score=32,
+                    forbidden_term_violations=[],
+                    passed=True,
+                    duration_ms=42,
+                )
+            ],
+            passed=True,
+            total_duration_ms=42,
+        )
+
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(main, "run_evaluation_cases", fake_run_evaluation_cases, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/evals/run", json={"batch_id": "batch_admin_manual"})
+
+    expected_evaluation = {
+        "batch_id": "batch_admin_manual",
+        "total_cases": 1,
+        "passed_cases": 1,
+        "failed_cases": 0,
+        "results": [
+            {
+                "session_id": "session_admin_eval",
+                "actual_total_score": 32,
+                "expected_total_score": 32,
+                "forbidden_term_violations": [],
+                "passed": True,
+                "duration_ms": 42,
+            }
+        ],
+        "passed": True,
+        "total_duration_ms": 42,
+    }
+    assert response.status_code == 200
+    assert response.json() == {"evaluation": expected_evaluation}
+    assert evaluation_store.get_batch_result("batch_admin_manual") == expected_evaluation
+    assert captured_case_ids == ["appendicitis_001"]
+    assert captured_service is osce_session_service
+
+
+
+def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    session_store.save_session(
+        OsceSession(
+            session_id="session_skill_candidate_one",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="report_ready",
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_skill_candidate_two",
+            student_id="student_b",
+            case_id="pneumonia_001",
+            stage="report_ready",
+        )
+    )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    event_store.append_event(
+        session_id="session_skill_candidate_one",
+        case_id="appendicitis_001",
+        student_id="student_a",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_one",
+            "total_score": 55,
+            "missed_items": ["reasoning_core"],
+            "knowledge_recommendations": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                    "title": "补充临床推理证据链",
+                }
+            ],
+        },
+    )
+    event_store.append_event(
+        session_id="session_skill_candidate_two",
+        case_id="pneumonia_001",
+        student_id="student_b",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_two",
+            "total_score": 68,
+            "missed_items": ["reasoning_core"],
+            "knowledge_recommendations": [
+                {
+                    "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
+                    "title": "补充临床推理证据链",
+                }
+            ],
+        },
+    )
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    captured_case_ids: list[str] = []
+    captured_service = None
+
+    def fake_run_evaluation_cases(evaluation_cases, service):
+        nonlocal captured_service
+        captured_case_ids.extend(evaluation_case.case_id for evaluation_case in evaluation_cases)
+        captured_service = service
+        return EvaluationBatchResult(
+            total_cases=1,
+            passed_cases=1,
+            failed_cases=0,
+            results=[],
+            passed=True,
+            total_duration_ms=20,
+        )
+
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(main, "run_evaluation_cases", fake_run_evaluation_cases, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/evolution/candidates/generate")
+        candidates_response = client.get("/api/admin/evolution/candidates")
+        audit_response = client.get("/api/admin/evolution/events")
+
+    expected_candidate_summary = {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "trigger_item_id": "reasoning_core",
+        "title": "临床推理链纠偏提示",
+        "status": "ready_for_review",
+        "regression_passed": True,
+        "source_report_count": 2,
+        "support_count": 2,
+    }
+    assert response.status_code == 200
+    assert response.json() == {
+        "generated_count": 1,
+        "saved_count": 1,
+        "ready_for_review_count": 1,
+        "blocked_by_regression_count": 0,
+        "candidates": [expected_candidate_summary],
+    }
+    assert candidates_response.status_code == 200
+    assert candidates_response.json() == {"candidates": [expected_candidate_summary]}
+    assert evaluation_store.get_batch_result("admin_skill_candidate_generation_smoke")["passed"] is True
+    assert audit_response.status_code == 200
+    assert len(audit_response.json()["events"]) == 1
+    assert audit_response.json()["events"][0]["event_type"] == "admin_skill_candidate_generated"
+    assert audit_response.json()["events"][0]["payload"] == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "review_status": "ready_for_review",
+        "support_count": 2,
+        "source_report_count": 2,
+    }
+    assert captured_case_ids == ["appendicitis_001"]
+    assert captured_service is osce_session_service
+
+
+
+def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_candidates(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    for session_id, student_id, case_id in [
+        ("session_reviewed_one", "student_a", "appendicitis_001"),
+        ("session_reviewed_two", "student_b", "pneumonia_001"),
+    ]:
+        session_store.save_session(
+            OsceSession(
+                session_id=session_id,
+                student_id=student_id,
+                case_id=case_id,
+                stage="report_ready",
+            )
+        )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    for session_id, student_id, case_id in [
+        ("session_reviewed_one", "student_a", "appendicitis_001"),
+        ("session_reviewed_two", "student_b", "pneumonia_001"),
+    ]:
+        event_store.append_event(
+            session_id=session_id,
+            case_id=case_id,
+            student_id=student_id,
+            event_type="report_generated",
+            payload={
+                "report_id": f"report_{session_id}",
+                "total_score": 70,
+                "missed_items": ["reasoning_core", "ht_location"],
+                "knowledge_recommendations": [],
+            },
+        )
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    for candidate_id, trigger_item_id in [
+        ("skill_candidate_reasoning_core", "reasoning_core"),
+        ("skill_candidate_ht_location", "ht_location"),
+    ]:
+        candidate_store.save_candidate(
+            {
+                "candidate_id": candidate_id,
+                "trigger_item_id": trigger_item_id,
+                "title": "已审核候选",
+                "status": "draft",
+                "source_report_count": 1,
+                "support_count": 1,
+            },
+            {
+                "candidate_id": candidate_id,
+                "status": "ready_for_review",
+                "regression_passed": True,
+                "evaluation_total_cases": 1,
+                "evaluation_passed_cases": 1,
+                "evaluation_failed_cases": 0,
+                "blocking_failures": [],
+            },
+        )
+    assert candidate_store.approve_candidate("skill_candidate_reasoning_core", reviewer_id="teacher_demo") is True
+    assert candidate_store.reject_candidate("skill_candidate_ht_location", reviewer_id="teacher_demo") is True
+
+    def fake_run_evaluation_cases(evaluation_cases, service):
+        return EvaluationBatchResult(
+            total_cases=1,
+            passed_cases=1,
+            failed_cases=0,
+            results=[],
+            passed=True,
+            total_duration_ms=20,
+        )
+
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(main, "run_evaluation_cases", fake_run_evaluation_cases, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/evolution/candidates/generate")
+
+    assert response.status_code == 200
+    assert response.json()["generated_count"] == 2
+    assert response.json()["saved_count"] == 0
+    approved_candidate = candidate_store.get_candidate("skill_candidate_reasoning_core")
+    rejected_candidate = candidate_store.get_candidate("skill_candidate_ht_location")
+    assert approved_candidate["title"] == "已审核候选"
+    assert approved_candidate["source_report_count"] == 1
+    assert approved_candidate["support_count"] == 1
+    assert approved_candidate["review"]["status"] == "approved"
+    assert rejected_candidate["title"] == "已审核候选"
+    assert rejected_candidate["source_report_count"] == 1
+    assert rejected_candidate["support_count"] == 1
+    assert rejected_candidate["review"]["status"] == "rejected"
+
+
+
+def test_admin_can_list_session_reports(tmp_path, monkeypatch) -> None:
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    first_report = {
+        "report_id": "report_session_first",
+        "session_id": "session_first",
+        "case_id": "appendicitis_001",
+        "student_id": "student_first",
+        "total_score": 78,
+        "dimension_scores": {"history_taking": 16, "reasoning": 13},
+        "missed_items": ["reasoning_core"],
+        "knowledge_recommendations": [],
+    }
+    second_report = {
+        "report_id": "report_session_second",
+        "session_id": "session_second",
+        "case_id": "appendicitis_002",
+        "student_id": "student_second",
+        "total_score": 91,
+        "dimension_scores": {"history_taking": 20, "reasoning": 18},
+        "missed_items": [],
+        "knowledge_recommendations": [
+            {"title": "保持鉴别诊断结构", "reference": "rubric:appendicitis_002_rubric.item.reasoning_core"}
+        ],
+    }
+    report_store.save_report(first_report)
+    report_store.save_report(second_report)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/reports")
+
+    assert response.status_code == 200
+    assert response.json() == {"reports": [second_report, first_report]}
 
 
 
@@ -315,7 +783,7 @@ def test_admin_can_read_session_report(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/sessions/session_admin_report/report")
 
     assert response.status_code == 200
@@ -340,7 +808,7 @@ def test_admin_session_report_returns_404_for_missing_report(tmp_path, monkeypat
     report_store = ReportStore(tmp_path / "reports.sqlite3")
     monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/sessions/missing_session/report")
 
     assert response.status_code == 404
@@ -374,7 +842,7 @@ def test_admin_can_read_training_skill_candidate_detail(tmp_path, monkeypatch) -
     )
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evolution/candidates/skill_candidate_reasoning_core")
 
     assert response.status_code == 200
@@ -406,16 +874,157 @@ def test_admin_candidate_detail_returns_404_for_missing_candidate(tmp_path, monk
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/evolution/candidates/missing_candidate")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "candidate not found"}
 
 
+def test_admin_can_list_training_skill_review_audit_events(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "trigger_item_id": "reasoning_core",
+            "title": "临床推理链纠偏提示",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+        },
+        {
+            "candidate_id": "skill_candidate_reasoning_core",
+            "status": "approved",
+            "regression_passed": True,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 2,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_history_gap",
+            "trigger_item_id": "history_gap",
+            "title": "问诊漏项提醒",
+            "status": "draft",
+            "source_report_count": 1,
+            "support_count": 1,
+        },
+        {
+            "candidate_id": "skill_candidate_history_gap",
+            "status": "rejected",
+            "regression_passed": False,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 1,
+            "blocking_failures": [],
+        },
+    )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    event_store.append_event(
+        session_id="skill_candidate_reasoning_core",
+        case_id="reasoning_core",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_approved",
+        payload={
+            "candidate_id": "skill_candidate_reasoning_core",
+            "reviewer_email": "admin@example.test",
+            "skill_id": "skill_reasoning_core",
+        },
+    )
+    event_store.append_event(
+        session_id="skill_candidate_history_gap",
+        case_id="history_gap",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_rejected",
+        payload={
+            "candidate_id": "skill_candidate_history_gap",
+            "reviewer_email": "admin@example.test",
+        },
+    )
+    event_store.append_event(
+        session_id="student_session",
+        case_id="appendicitis_001",
+        student_id="student@example.test",
+        event_type="history_message",
+        payload={"message": "疼痛多久了？"},
+    )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/evolution/events")
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert len(events) == 2
+    assert {event["session_id"] for event in events} == {
+        "skill_candidate_reasoning_core",
+        "skill_candidate_history_gap",
+    }
+    assert {event["event_type"] for event in events} == {
+        "admin_skill_candidate_approved",
+        "admin_skill_candidate_rejected",
+    }
+    assert all(event["student_id"] == "admin@example.test" for event in events)
+    assert all(event["payload"]["reviewer_email"] == "admin@example.test" for event in events)
+
+
+def test_admin_can_list_training_skill_candidate_audit_events(tmp_path, monkeypatch) -> None:
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    event_store.append_event(
+        session_id="skill_candidate_reasoning_core",
+        case_id="reasoning_core",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_approved",
+        payload={
+            "candidate_id": "skill_candidate_reasoning_core",
+            "reviewer_email": "admin@example.test",
+            "skill_id": "skill_reasoning_core",
+        },
+    )
+    event_store.append_event(
+        session_id="skill_candidate_reasoning_core",
+        case_id="reasoning_core",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_rejected",
+        payload={
+            "candidate_id": "skill_candidate_reasoning_core",
+            "reviewer_email": "admin@example.test",
+        },
+    )
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/evolution/candidates/skill_candidate_reasoning_core/events")
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert len(events) == 2
+    assert [event["session_id"] for event in events] == ["skill_candidate_reasoning_core"] * 2
+    assert [event["case_id"] for event in events] == ["reasoning_core"] * 2
+    assert [event["student_id"] for event in events] == ["admin@example.test"] * 2
+    assert [event["event_type"] for event in events] == [
+        "admin_skill_candidate_approved",
+        "admin_skill_candidate_rejected",
+    ]
+    assert events[0]["payload"] == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "reviewer_email": "admin@example.test",
+        "skill_id": "skill_reasoning_core",
+    }
+    assert events[1]["payload"] == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "reviewer_email": "admin@example.test",
+    }
+    assert all(event["created_at"] for event in events)
+
+
 def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeypatch) -> None:
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     candidate_store.save_candidate(
         {
             "candidate_id": "skill_candidate_reasoning_core",
@@ -440,11 +1049,12 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
     )
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_skill_store", skill_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post(
             "/api/admin/evolution/approve",
-            json={"candidate_id": "skill_candidate_reasoning_core", "reviewer_id": "admin@example.test"},
+            json={"candidate_id": "skill_candidate_reasoning_core", "reviewer_id": "spoofed@example.test"},
         )
 
     assert response.status_code == 200
@@ -465,11 +1075,22 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "source_report_count": 2,
         "support_count": 2,
     }
+    audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
+    assert len(audit_events) == 1
+    assert audit_events[0]["case_id"] == "reasoning_core"
+    assert audit_events[0]["student_id"] == "admin@example.test"
+    assert audit_events[0]["event_type"] == "admin_skill_candidate_approved"
+    assert audit_events[0]["payload"] == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "reviewer_email": "admin@example.test",
+        "skill_id": "skill_reasoning_core",
+    }
 
 
 def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, monkeypatch) -> None:
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     candidate_store.save_candidate(
         {
             "candidate_id": "skill_candidate_reasoning_core",
@@ -494,11 +1115,12 @@ def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, mo
     )
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_skill_store", skill_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post(
             "/api/admin/evolution/reject",
-            json={"candidate_id": "skill_candidate_reasoning_core", "reviewer_id": "admin@example.test"},
+            json={"candidate_id": "skill_candidate_reasoning_core", "reviewer_id": "spoofed@example.test"},
         )
 
     assert response.status_code == 200
@@ -508,6 +1130,15 @@ def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, mo
     }
     assert candidate_store.get_candidate("skill_candidate_reasoning_core")["review"]["reviewer_id"] == "admin@example.test"
     assert skill_store.list_enabled_skills() == []
+    audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
+    assert len(audit_events) == 1
+    assert audit_events[0]["case_id"] == "reasoning_core"
+    assert audit_events[0]["student_id"] == "admin@example.test"
+    assert audit_events[0]["event_type"] == "admin_skill_candidate_rejected"
+    assert audit_events[0]["payload"] == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "reviewer_email": "admin@example.test",
+    }
 
 
 def test_admin_review_returns_404_for_missing_candidate(tmp_path, monkeypatch) -> None:
@@ -516,7 +1147,7 @@ def test_admin_review_returns_404_for_missing_candidate(tmp_path, monkeypatch) -
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_skill_store", skill_store, raising=False)
 
-    with TestClient(main.app) as client:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post(
             "/api/admin/evolution/approve",
             json={"candidate_id": "missing_candidate", "reviewer_id": "admin@example.test"},

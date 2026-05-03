@@ -36,6 +36,14 @@ class ReportStore:
             return None
         return json.loads(row[0])
 
+    def list_reports(self) -> list[dict[str, Any]]:
+        self._initialize()
+        with sqlite3.connect(self.database_path) as connection:
+            rows = connection.execute(
+                "SELECT report_json FROM reports ORDER BY rowid DESC",
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:

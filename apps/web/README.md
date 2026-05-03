@@ -12,7 +12,7 @@
 
 当前已接入最小后端 session API：页面加载后创建训练会话，问诊输入会调用 `/api/sessions/{session_id}/message` 并展示标准化病人回复；查体和辅助检查快捷项会随当前病例 session 返回的 `physical_exam_options` 与 `auxiliary_test_options` 动态渲染，并分别调用 `/api/sessions/{session_id}/physical-exam` 与 `/api/sessions/{session_id}/auxiliary-test` 展示返回结果；诊断提交区会随当前病例 session 返回的 `diagnosis_draft` 初始化默认诊断与推理依据，提交时调用 `/api/sessions/{session_id}/submit-diagnosis`，随后读取 `/api/sessions/{session_id}/report` 并在右侧展示结构化评分报告，包括总分、维度进度、亮点、推理问题、下一轮训练重点，以及按 `case`、`source`、`rubric`、`evidence` 分组展示的来源引用。
 
-病例选择入口已在左侧落地，并会从 `/api/cases` 读取 `data/cases/*.json` 生成的真实病例列表；独立病例选择页 `/cases` 已接入，可展示 5 个结构化病例并跳转工作台创建对应训练 session；当前 5 个结构化病例均可创建训练 session，查体、辅助检查按钮和诊断提交草稿已按病例数据动态切换。
+病例选择入口已在左侧落地，并会从 `/api/cases` 读取 `data/cases/*.json` 生成的学生可见病例摘要；独立病例选择页 `/cases` 已接入，可展示 5 个结构化病例并跳转工作台创建对应训练 session，但不再读取完整病例 raw JSON；当前 5 个结构化病例均可创建训练 session，查体、辅助检查按钮和诊断提交草稿已按病例数据动态切换。
 
 工作台顶部已接入安全声明和数据来源两个小入口；独立安全声明页 `/safety` 用于集中展示教学模拟、真实诊疗边界、急症提示和输出边界清单，独立数据来源页 `/sources` 用于解释 `case`、`source`、`rubric`、`evidence` 四类来源引用，并展示 5 条公开来源登记、加工方式、许可和风险说明。
 
