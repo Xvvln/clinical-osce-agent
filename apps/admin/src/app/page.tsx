@@ -1086,6 +1086,10 @@ export default function AdminDashboardPage() {
     if (!selectedCandidate) {
       return;
     }
+    if (selectedCandidate.review.status !== "ready_for_review") {
+      setStatusText(`候选已审核，当前状态为 ${selectedCandidate.review.status}，不能重复审核。`);
+      return;
+    }
     if (action === "approve") {
       await approveTrainingSkillCandidate(selectedCandidate.candidate_id);
     } else {
@@ -1103,6 +1107,8 @@ export default function AdminDashboardPage() {
     setCandidateAuditEvents(await getTrainingSkillCandidateEvents(selectedCandidate.candidate_id));
     setStatusText(action === "approve" ? "已批准并启用候选 Skill。" : "已拒绝候选 Skill。");
   }
+
+  const canReviewSelectedCandidate = selectedCandidate?.review.status === "ready_for_review";
 
   return (
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
@@ -1895,22 +1901,28 @@ export default function AdminDashboardPage() {
                       <p className="text-xs font-medium text-[#AE5630]">{selectedCandidate.review.status}</p>
                       <h3 className="mt-1 text-lg font-semibold">{selectedCandidate.title}</h3>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A]"
-                        onClick={() => void handleReview("approve")}
-                        type="button"
-                      >
-                        批准并启用
-                      </button>
-                      <button
-                        className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257] transition hover:bg-[#F1ECE2]"
-                        onClick={() => void handleReview("reject")}
-                        type="button"
-                      >
-                        拒绝候选
-                      </button>
-                    </div>
+                    {canReviewSelectedCandidate ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A]"
+                          onClick={() => void handleReview("approve")}
+                          type="button"
+                        >
+                          批准并启用
+                        </button>
+                        <button
+                          className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257] transition hover:bg-[#F1ECE2]"
+                          onClick={() => void handleReview("reject")}
+                          type="button"
+                        >
+                          拒绝候选
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257]">
+                        候选已审核，当前状态为 {selectedCandidate.review.status}。
+                      </p>
+                    )}
                   </div>
                   <div className="mt-4 grid gap-3">
                     <div>

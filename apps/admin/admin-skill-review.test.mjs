@@ -77,6 +77,13 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /setCandidateAuditEvents\(await getTrainingSkillCandidateEvents\(candidateId\)\)/);
 });
 
+test("admin review actions are only available for ready candidates", () => {
+  assert.match(adminPageSource, /const canReviewSelectedCandidate = selectedCandidate\?\.review\.status === "ready_for_review"/);
+  assert.match(adminPageSource, /if \(selectedCandidate\.review\.status !== "ready_for_review"\) \{/);
+  assert.match(adminPageSource, /\{canReviewSelectedCandidate \? \(/);
+  assert.match(adminPageSource, /候选已审核，当前状态为 \{selectedCandidate\.review\.status\}/);
+});
+
 test("admin dashboard shows dedicated prompts for authentication and authorization API responses", () => {
   assert.match(adminPageSource, /const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。"/);
   assert.match(adminPageSource, /const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。"/);
