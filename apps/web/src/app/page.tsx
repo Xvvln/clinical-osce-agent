@@ -1216,7 +1216,7 @@ function CaseSelectionPrompt({ selectedCase }: Readonly<{ selectedCase: CaseOpti
             : "进入病例后，系统会显示开局任务卡；在首次训练动作前不会创建训练记录。"}
         </p>
         <Link
-          className="mt-3 inline-flex rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover"
+          className="mt-3 inline-flex items-center justify-center rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
           href="/cases"
         >
           选择病例
@@ -2108,7 +2108,7 @@ function HomeContent() {
                   <p className="mt-1 text-muted-foreground">尚未选择病例，请先进入病例库选择训练场景。</p>
                 )}
                 <button
-                  className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-center text-xs font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-center text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!preparedPatientProfile}
                   onClick={() => setIsPatientProfileOpen(true)}
                   type="button"
@@ -2117,7 +2117,7 @@ function HomeContent() {
                 </button>
               </div>
               <Link
-                className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover"
+                className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
                 href="/cases"
               >
                 选择病例
@@ -2200,7 +2200,7 @@ function HomeContent() {
               </div>
             ) : (
               <button
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
+                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                 onClick={() => setIsAuthDialogOpen(true)}
                 type="button"
               >
@@ -2262,7 +2262,7 @@ function HomeContent() {
                       value={inputValue}
                     />
                     <button
-                      className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!authUser || !selectedCaseId || isCreating || !inputValue.trim() || isSending}
                       type="submit"
                     >
@@ -2272,14 +2272,14 @@ function HomeContent() {
                 </form>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
-                    className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium shadow-xs transition hover:bg-accent"
+                    className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                     onClick={() => setInputValue("什么时候开始疼的？")}
                     type="button"
                   >
                     问现病史
                   </button>
                   <button
-                    className="rounded-md border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-md border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
                     onClick={handleHintRequest}
                     type="button"
@@ -2373,7 +2373,7 @@ function HomeContent() {
                       value={nextStepValue}
                     />
                     <button
-                      className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-fit"
+                      className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-fit"
                       disabled={
                         !authUser ||
                         isCreating ||
@@ -2440,7 +2440,7 @@ function HomeContent() {
                     {session.training_progress.next_focus}
                   </div>
                   <button
-                    className="w-full rounded-lg border border-dashed border-brand/30 bg-brand/5 px-3 py-2 text-left text-xs font-medium text-brand transition hover:bg-brand/10"
+                    className="w-full rounded-lg border border-dashed border-brand/30 bg-brand/5 px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-brand transition hover:bg-brand/10"
                     onClick={() => setIsCoverageMapOpen(true)}
                     type="button"
                   >
@@ -2519,7 +2519,7 @@ function HomeContent() {
                     value={hypothesisValue}
                   />
                   <button
-                    className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!session || !hypothesisValue.trim() || isRecordingHypothesis}
                     onClick={handleHypothesisSubmit}
                     type="button"
@@ -2578,7 +2578,7 @@ function HomeContent() {
                     </div>
                     <p className="mt-3 text-xs leading-5 text-muted-foreground">{feedbackReport.feedback_summary}</p>
                     <Link
-                      className="mt-4 inline-flex rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover"
+                      className="mt-4 inline-flex items-center justify-center rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
                       href={`/report?session_id=${feedbackReport.session_id}`}
                     >
                       打开独立报告页
@@ -2786,7 +2786,7 @@ function HomeContent() {
               </div>
               <button
                 aria-label="关闭患者信息弹窗"
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                 onClick={() => setIsPatientProfileOpen(false)}
                 type="button"
               >
@@ -2830,7 +2830,7 @@ function HomeContent() {
               </div>
               <button
                 aria-label="关闭素材覆盖图谱"
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                 onClick={() => setIsCoverageMapOpen(false)}
                 type="button"
               >
@@ -2854,7 +2854,7 @@ function HomeContent() {
               </div>
               <button
                 aria-label="关闭 API 配置说明"
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                 onClick={() => setIsApiConfigHelpOpen(false)}
                 type="button"
               >
@@ -2994,7 +2994,7 @@ function HomeContent() {
             </div>
             <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-muted p-1">
               <button
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition ${
                   authMode === "login" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => setAuthMode("login")}
@@ -3003,7 +3003,7 @@ function HomeContent() {
                 登录
               </button>
               <button
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition ${
                   authMode === "register" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
                 }`}
                 onClick={() => setAuthMode("register")}
@@ -3059,7 +3059,7 @@ function HomeContent() {
               ) : null}
               {authErrorText ? <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{authErrorText}</p> : null}
               <button
-                className="w-full rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isCheckingAuth || isSubmittingAuth || !authEmail.trim() || !authPassword}
                 type="submit"
               >{isSubmittingAuth ? "处理中" : authMode === "login" ? "登录" : "注册"}</button>

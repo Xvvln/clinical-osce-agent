@@ -17,6 +17,21 @@ const adminGlobalsSource = existsSync(adminGlobalsUrl) ? readFileSync(adminGloba
 const adminNextConfigSource = existsSync(adminNextConfigUrl) ? readFileSync(adminNextConfigUrl, "utf8") : "";
 const adminPostcssConfigSource = existsSync(adminPostcssConfigUrl) ? readFileSync(adminPostcssConfigUrl, "utf8") : "";
 
+function getInteractiveElementsWithLabel(source, label) {
+  return (source.match(/<(?:button|Link|a)\b[\s\S]*?<\/(?:button|Link|a)>/g) ?? []).filter((element) => element.includes(label));
+}
+
+function assertInteractiveLabelsDoNotWrap(sourceName, source, labels) {
+  for (const label of labels) {
+    const matchingElements = getInteractiveElementsWithLabel(source, label);
+    assert.ok(matchingElements.length > 0, `${sourceName} should render an interactive action labelled ${label}`);
+
+    for (const element of matchingElements) {
+      assert.match(element, /whitespace-nowrap/, `${sourceName} action ${label} should prevent multi-line button text`);
+    }
+  }
+}
+
 test("admin dashboard reads management data and exposes review actions", () => {
   assert.ok(existsSync(adminPageUrl), "admin dashboard page should exist");
   assert.match(adminPageSource, /type AdminSessionSummary = Readonly<\{/);
@@ -84,6 +99,16 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /candidateAuditEvents\.length > 0/);
   assert.match(adminPageSource, /setAuditEvents\(nextAuditEvents\)/);
   assert.match(adminPageSource, /setCandidateAuditEvents\(await getTrainingSkillCandidateEvents\(candidateId\)\)/);
+});
+
+test("admin action buttons keep Chinese labels on one line", () => {
+  assertInteractiveLabelsDoNotWrap("admin dashboard", adminPageSource, [
+    "管理员登录",
+    "从训练日志生成候选 Skill",
+    "批准并启用",
+    "拒绝候选",
+    "登录中",
+  ]);
 });
 
 test("admin review actions are only available for ready candidates", () => {

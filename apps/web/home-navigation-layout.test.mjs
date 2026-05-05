@@ -22,6 +22,21 @@ function getHeaderSource() {
   return headerMatch[0];
 }
 
+function getInteractiveElementsWithLabel(source, label) {
+  return (source.match(/<(?:button|Link|a)\b[\s\S]*?<\/(?:button|Link|a)>/g) ?? []).filter((element) => element.includes(label));
+}
+
+function assertInteractiveLabelsDoNotWrap(sourceName, source, labels) {
+  for (const label of labels) {
+    const matchingElements = getInteractiveElementsWithLabel(source, label);
+    assert.ok(matchingElements.length > 0, `${sourceName} should render an interactive action labelled ${label}`);
+
+    for (const element of matchingElements) {
+      assert.match(element, /whitespace-nowrap/, `${sourceName} action ${label} should prevent multi-line button text`);
+    }
+  }
+}
+
 test("home header keeps safety and source links out of the top navigation", () => {
   const headerSource = getHeaderSource();
 
@@ -61,6 +76,23 @@ test("home page uses Claude-like brand tokens without legacy teal hardcoding", (
   assert.match(pageSource, /bg-brand\/10/);
   assert.match(pageSource, /hover:bg-brand-hover/);
   assert.match(pageSource, /focus:ring-brand\/15/);
+});
+
+test("student action buttons keep Chinese labels on one line", () => {
+  assertInteractiveLabelsDoNotWrap("home page", pageSource, [
+    "登录 / 注册",
+    "关闭菜单",
+    "退出登录",
+    "关闭",
+    "保存配置",
+    "测试连通性",
+  ]);
+  assertInteractiveLabelsDoNotWrap("history page", historySource, ["返回工作台", "继续训练", "删除记录"]);
+  assertInteractiveLabelsDoNotWrap("cases page", casesSource, ["返回工作台", "选择并进入工作台"]);
+  assertInteractiveLabelsDoNotWrap("report page", reportSource, ["返回工作台"]);
+  assertInteractiveLabelsDoNotWrap("profile page", profileSource, ["返回工作台", "继续训练"]);
+  assertInteractiveLabelsDoNotWrap("safety page", safetySource, ["返回工作台"]);
+  assertInteractiveLabelsDoNotWrap("sources page", sourcesSource, ["返回工作台"]);
 });
 
 test("home page replaces the Next dev ball with an OSCE floating dock", () => {

@@ -110,7 +110,7 @@ export default function HistoryPage() {
               </p>
             </div>
             <Link
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
+              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
               href={workbenchHref}
             >
               返回工作台
@@ -151,25 +151,25 @@ export default function HistoryPage() {
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <Link
-                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
+                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs transition hover:bg-accent"
                       href={`/api/me/sessions/${session.session_id}`}
                     >
                       查看状态
                     </Link>
                     <Link
-                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground shadow-xs transition hover:bg-accent"
+                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs transition hover:bg-accent"
                       href={`/?session_id=${session.session_id}`}
                     >
                       继续训练
                     </Link>
                     <Link
-                      className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-xs transition hover:bg-brand-hover"
+                      className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
                       href={`/report?session_id=${session.session_id}`}
                     >
                       打开报告
                     </Link>
                     <button
-                      className="w-fit rounded-md border border-destructive/30 bg-background px-3 py-2 text-xs font-medium text-destructive shadow-xs transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="w-fit rounded-md border border-destructive/30 bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-destructive shadow-xs transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={deletingSessionId !== null}
                       onClick={() => handleDeleteBackendSession(session.session_id)}
                       type="button"
@@ -188,7 +188,7 @@ export default function HistoryPage() {
               登录后开始训练会自动创建数据库 session；完成问诊、查体、检查或报告后，可回到这里继续训练或打开报告。
             </p>
             <Link
-              className="mt-5 inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover"
+              className="mt-5 inline-flex items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
               href="/"
             >
               开始训练

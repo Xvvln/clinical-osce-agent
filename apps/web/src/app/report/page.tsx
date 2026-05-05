@@ -423,14 +423,14 @@ export default function ReportPage() {
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
-                  className="rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-brand-hover"
+                  className="rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
                   onClick={handleCopyReportLink}
                   type="button"
                 >
                   复制报告链接
                 </button>
                 <Link
-                  className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
+                  className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                   href={workbenchHref}
                 >
                   返回工作台

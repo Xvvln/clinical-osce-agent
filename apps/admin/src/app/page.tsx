@@ -1167,7 +1167,7 @@ export default function AdminDashboardPage() {
             <div className="flex flex-col gap-2 sm:items-end">
               <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-4 py-2 text-xs font-medium text-[#AE5630]">{statusText}</p>
               <button
-                className="rounded-md border border-[#AE5630] bg-white px-4 py-2 text-sm font-semibold text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                className="rounded-md border border-[#AE5630] bg-white px-4 py-2 text-sm font-semibold whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
                 onClick={() => setIsAdminLoginDialogOpen(true)}
                 type="button"
               >
@@ -1406,7 +1406,7 @@ export default function AdminDashboardPage() {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
-                className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium text-[#AE5630] transition hover:bg-[#AE5630]/10 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isCaseImportBusy}
                 onClick={() => void handleValidateCaseImport()}
                 type="button"
@@ -1414,7 +1414,7 @@ export default function AdminDashboardPage() {
                 导入前预检
               </button>
               <button
-                className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={!canImportCasePayload}
                 onClick={() => void handleImportCasePayload()}
                 type="button"
@@ -1480,14 +1480,14 @@ export default function AdminDashboardPage() {
                     value={sessionIdInput}
                   />
                   <button
-                    className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A]"
+                    className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
                     onClick={() => void handleLoadSessionReport()}
                     type="button"
                   >
                     读报告
                   </button>
                   <button
-                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257] transition hover:bg-[#F1ECE2]"
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2]"
                     onClick={() => void handleLoadSessionEvents()}
                     type="button"
                   >
@@ -1738,7 +1738,7 @@ export default function AdminDashboardPage() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-xl font-semibold">系统评测</h2>
                 <button
-                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={isRunningEvaluation}
                   onClick={() => void handleRunEvaluation()}
                   type="button"
@@ -1822,7 +1822,7 @@ export default function AdminDashboardPage() {
                       <h3 className="mt-1 text-sm font-semibold">{selectedEvaluation.batch_id}</h3>
                     </div>
                     <button
-                      className="rounded-md border border-[#2F6868] bg-white px-3 py-2 text-xs font-medium text-[#2F6868] transition hover:bg-[#E7F0EC]"
+                      className="rounded-md border border-[#2F6868] bg-white px-3 py-2 text-xs font-medium whitespace-nowrap text-[#2F6868] transition hover:bg-[#E7F0EC]"
                       onClick={() => downloadEvaluationBatchJson(selectedEvaluation)}
                       type="button"
                     >
@@ -1939,7 +1939,7 @@ export default function AdminDashboardPage() {
                 <h2 className="text-xl font-semibold">候选 Skill 审核</h2>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
-                    className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={isGeneratingCandidates}
                     onClick={() => void handleGenerateTrainingSkillCandidates()}
                     type="button"
@@ -1991,14 +1991,14 @@ export default function AdminDashboardPage() {
                     {canReviewSelectedCandidate ? (
                       <div className="flex flex-wrap gap-2">
                         <button
-                          className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A]"
+                          className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
                           onClick={() => void handleReview("approve")}
                           type="button"
                         >
                           批准并启用
                         </button>
                         <button
-                          className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257] transition hover:bg-[#F1ECE2]"
+                          className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2]"
                           onClick={() => void handleReview("reject")}
                           type="button"
                         >
@@ -2097,7 +2097,7 @@ export default function AdminDashboardPage() {
               </div>
               {adminLoginErrorText ? <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{adminLoginErrorText}</p> : null}
               <button
-                className="w-full rounded-lg border border-[#AE5630] bg-[#AE5630] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-lg border border-[#AE5630] bg-[#AE5630] px-4 py-2 text-sm font-semibold whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoggingIn || !adminEmail.trim() || !adminPassword}
                 type="submit"
               >
