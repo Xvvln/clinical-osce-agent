@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.services.runtime_model_config_store import runtime_model_config_store
+
 
 def build_admin_model_config() -> dict[str, Any]:
     return {
         "policy": {
             "secrets_persisted": False,
-            "runtime_write_supported": False,
-            "configuration_source": "environment",
+            "runtime_write_supported": True,
+            "configuration_source": "environment_or_runtime_memory",
         },
         "providers": [
             _gemini_patient_api_config(),
@@ -113,25 +115,29 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
 
 
 def _openai_compatible_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_OPENAI_ENABLED")
-    secret_configured = bool(_env("OSCE_OPENAI_API_KEY"))
-    model = _env("OSCE_OPENAI_MODEL")
+    runtime_config = runtime_model_config_store.get_active_config()
+    runtime_active = runtime_config is not None and runtime_config.provider == "openai_compatible"
+    enabled = runtime_active or _truthy_env("OSCE_OPENAI_ENABLED")
+    secret_configured = runtime_active or bool(_env("OSCE_OPENAI_API_KEY"))
+    model = runtime_config.model if runtime_active else _env("OSCE_OPENAI_MODEL")
+    base_url = runtime_config.base_url if runtime_active else _env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1")
+    proxy_url = runtime_config.proxy_url if runtime_active else _env("OSCE_OPENAI_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and secret_configured and bool(model)
     return _provider_config(
         provider_id="openai_compatible",
         label="OpenAI 兼容模型",
-        capability="预留 OpenAI / 兼容 Chat Completions 接入配置",
+        capability="标准化病人、llm_rubric 语义评分、训练模式级候选 Skill 文案生成",
         enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
         auth_mode="api_key",
         model=model,
-        base_url=_env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        proxy_url=_env("OSCE_OPENAI_PROXY_URL", "http://127.0.0.1:7897"),
+        base_url=base_url,
+        proxy_url=proxy_url,
         required_env=["OSCE_OPENAI_ENABLED=true", "OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_OPENAI_API_KEY", "configured" if secret_configured else ""), ("OSCE_OPENAI_MODEL", model)]),
-        integration_status="configuration_only",
-        notes="当前先纳入统一配置台账；实际评分/患者/Skill 生成仍未默认切到 OpenAI。",
+        integration_status="wired",
+        notes="支持环境变量或学生端本次运行时配置；密钥只保存在进程内存，不写入文件或数据库。",
     )
 
 

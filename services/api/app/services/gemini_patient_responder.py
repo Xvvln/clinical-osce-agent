@@ -10,6 +10,9 @@ from google.genai import types
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.runtime_model_config_store import runtime_model_config_store
+
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的标准化病人，只能把 canonical_answer 改写成自然口语回答。
@@ -85,9 +88,26 @@ class GeminiPatientResponder:
         return reply
 
 
+class OpenAICompatiblePatientResponder:
+    def __init__(self, settings: OpenAICompatibleSettings, client: OpenAICompatibleChatClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or OpenAICompatibleChatClient(settings)
+
+    def __call__(self, request: PatientResponderRequest) -> str:
+        response = self._client.complete_json(
+            system_prompt=SYSTEM_PROMPT_TEMPLATE,
+            payload=request.model_dump(),
+            response_model=PatientResponderResponse,
+            temperature=0.4,
+        )
+        reply = response.reply.strip()
+        _assert_no_forbidden_terms(reply, request.forbidden_terms)
+        return reply
+
+
 class LazyGeminiPatientResponder:
     def __init__(self) -> None:
-        self._responder: GeminiPatientResponder | None = None
+        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | None = None
 
     def __call__(self, request: PatientResponderRequest) -> str:
         if self._responder is None:
@@ -99,7 +119,15 @@ def create_default_gemini_patient_responder() -> LazyGeminiPatientResponder:
     return LazyGeminiPatientResponder()
 
 
-def _create_configured_responder() -> GeminiPatientResponder:
+def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatiblePatientResponder:
+    runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
+    if runtime_openai_settings is not None:
+        return OpenAICompatiblePatientResponder(runtime_openai_settings)
+
+    openai_settings = OpenAICompatibleSettings()
+    if openai_settings.is_configured:
+        return OpenAICompatiblePatientResponder(openai_settings)
+
     settings = GeminiPatientSettings()
     os.environ["HTTP_PROXY"] = settings.proxy_url
     os.environ["HTTPS_PROXY"] = settings.proxy_url
@@ -140,6 +168,7 @@ def _assert_no_forbidden_terms(reply: str, forbidden_terms: list[str]) -> None:
 __all__ = [
     "GeminiPatientResponder",
     "GeminiPatientSettings",
+    "OpenAICompatiblePatientResponder",
     "PatientResponderRequest",
     "PatientResponderResponse",
     "create_default_gemini_patient_responder",

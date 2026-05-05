@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -46,11 +47,21 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
         raise ValueError("api_key is required for openai_compatible")
     if not model:
         raise ValueError("model is required for openai_compatible")
-    endpoint = _join_url(base_url or DEFAULT_OPENAI_COMPATIBLE_BASE_URL, "/models")
+    endpoint = _join_url(base_url or DEFAULT_OPENAI_COMPATIBLE_BASE_URL, "/chat/completions")
     return _test_http_endpoint(
         provider=provider,
         endpoint=endpoint,
         headers={"Authorization": f"Bearer {api_key}"},
+        method="POST",
+        body={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "只输出 JSON。"},
+                {"role": "user", "content": json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":"))},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        },
         proxy_url=proxy_url,
         success_message="OpenAI 兼容服务端连通性测试通过。",
     )
@@ -80,16 +91,22 @@ def _test_http_endpoint(
     headers: dict[str, str],
     proxy_url: str,
     success_message: str,
+    method: str = "GET",
+    body: dict[str, object] | None = None,
 ) -> dict[str, object]:
     try:
         client_options: dict[str, Any] = {
             "timeout": STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
             "follow_redirects": True,
+            "trust_env": False,
         }
-        if proxy_url:
+        if _should_use_proxy(proxy_url):
             client_options["proxy"] = proxy_url
         with httpx.Client(**client_options) as client:
-            response = client.get(endpoint, headers=headers)
+            if method == "POST":
+                response = client.post(endpoint, headers=headers, json=body or {})
+            else:
+                response = client.get(endpoint, headers=headers)
     except httpx.HTTPError as exc:
         return _connectivity_result(
             ok=False,
@@ -121,6 +138,11 @@ def _connectivity_result(*, ok: bool, provider: str, message: str, checked_url: 
         "message": message,
         "checked_url": checked_url,
     }
+
+
+def _should_use_proxy(proxy_url: str) -> bool:
+    normalized = proxy_url.strip().lower()
+    return bool(normalized and normalized not in {"direct", "none", "false", "off", "no"})
 
 
 __all__ = ["test_student_model_config_connectivity"]

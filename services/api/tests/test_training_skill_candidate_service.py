@@ -2,7 +2,9 @@ import os
 
 import pytest
 
+from app.services import openai_compatible_chat_client as openai_module
 from app.services.training_skill_candidate_service import (
+    OpenAICompatibleTrainingSkillCandidateGenerator,
     TemplateTrainingSkillCandidateGenerator,
     TrainingSkillCandidateContext,
     TrainingSkillCandidateGenerationError,
@@ -12,6 +14,7 @@ from app.services.training_skill_candidate_service import (
     VertexGeminiTrainingSkillCandidateGenerator,
     create_default_training_skill_candidate_generator,
 )
+from app.services.runtime_model_config_store import runtime_model_config_store
 
 
 class FakeSkillCandidateModels:
@@ -173,6 +176,74 @@ def test_create_default_training_skill_candidate_generator_sets_proxy_when_enabl
     assert "HTTP_PROXY" in os.environ
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+
+
+class FakeOpenAICompatibleSkillCandidateResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"title":"兼容模型生成的训练模式 Skill","description":"围绕多项高频漏项生成的训练级纠偏说明。","suggested_strategy":"提交诊断前，先按本轮反复漏掉的证据链逐项复盘。"}',
+                    },
+                }
+            ],
+        }
+
+
+class FakeOpenAICompatibleHttpClient:
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeOpenAICompatibleHttpClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeOpenAICompatibleSkillCandidateResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeOpenAICompatibleSkillCandidateResponse()
+
+
+def test_create_default_training_skill_candidate_generator_uses_runtime_openai_compatible_config(monkeypatch) -> None:
+    FakeOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "gemini-via-clprox",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatibleHttpClient)
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    try:
+        generator = create_default_training_skill_candidate_generator()
+        assert isinstance(generator, OpenAICompatibleTrainingSkillCandidateGenerator)
+        candidate = generator.generate_candidate(_training_pattern_candidate_context())
+    finally:
+        runtime_model_config_store.clear()
+
+    assert candidate["candidate_id"] == "skill_candidate_training_pattern_reasoning_core_rs_exclude"
+    assert candidate["trigger_item_ids"] == ["reasoning_core", "rs_exclude"]
+    assert candidate["title"] == "兼容模型生成的训练模式 Skill"
+    assert candidate["source_report_count"] == 3
+    assert candidate["support_count"] == 2
+    assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
+    assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
 
 
 def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern() -> None:

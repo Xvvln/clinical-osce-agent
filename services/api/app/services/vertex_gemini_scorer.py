@@ -10,6 +10,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
+from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.runtime_model_config_store import runtime_model_config_store
 
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 临床思维训练的评分员。你只能依据输入中列出的 required_evidence 和学生的 student_final_reasoning 打分。你不得引入输入之外的医学事实。
 
@@ -53,7 +55,29 @@ class VertexGeminiRubricScorer:
         return LlmRubricResponse.model_validate_json(response.text)
 
 
-def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | None:
+class OpenAICompatibleRubricScorer:
+    def __init__(self, settings: OpenAICompatibleSettings, client: OpenAICompatibleChatClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or OpenAICompatibleChatClient(settings)
+
+    def __call__(self, request: LlmRubricRequest) -> LlmRubricResponse:
+        return self._client.complete_json(
+            system_prompt=SYSTEM_PROMPT_TEMPLATE,
+            payload=request.model_dump(),
+            response_model=LlmRubricResponse,
+            temperature=0.1,
+        )
+
+
+def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICompatibleRubricScorer | None:
+    runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
+    if runtime_openai_settings is not None:
+        return OpenAICompatibleRubricScorer(runtime_openai_settings)
+
+    openai_settings = OpenAICompatibleSettings()
+    if openai_settings.is_configured:
+        return OpenAICompatibleRubricScorer(openai_settings)
+
     settings = VertexGeminiSettings()
     if not settings.enabled or not settings.project:
         return None
@@ -66,4 +90,9 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | None:
         return None
 
 
-__all__ = ["VertexGeminiRubricScorer", "VertexGeminiSettings", "create_default_vertex_gemini_scorer"]
+__all__ = [
+    "OpenAICompatibleRubricScorer",
+    "VertexGeminiRubricScorer",
+    "VertexGeminiSettings",
+    "create_default_vertex_gemini_scorer",
+]

@@ -1205,7 +1205,7 @@ export default function AdminDashboardPage() {
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Model Configuration</p>
               <h2 className="mt-1 text-xl font-semibold">模型 / API 配置</h2>
-              <p className="mt-2 text-sm leading-6 text-[#6F6257]">统一查看 Gemini、Vertex 和 OpenAI 兼容模型的启用状态；密钥不落库，只从环境变量或本地 .env 读取。</p>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">统一查看 Gemini、Vertex 和 OpenAI 兼容模型的启用状态；密钥不落库，可来自环境变量、本地 .env 或本次运行时内存配置。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
               {modelConfig ? `配置来源：${modelConfig.policy.configuration_source}` : "读取中"}

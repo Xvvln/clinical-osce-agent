@@ -192,8 +192,8 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     payload = response.json()
     assert payload["policy"] == {
         "secrets_persisted": False,
-        "runtime_write_supported": False,
-        "configuration_source": "environment",
+        "runtime_write_supported": True,
+        "configuration_source": "environment_or_runtime_memory",
     }
     providers = {provider["provider_id"]: provider for provider in payload["providers"]}
     assert providers["gemini_patient_api"]["configured"] is True
@@ -206,7 +206,7 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["openai_compatible"]["configured"] is True
     assert providers["openai_compatible"]["model"] == "openai-demo-model"
     assert providers["openai_compatible"]["base_url"] == "https://api.openai.example/v1"
-    assert providers["openai_compatible"]["integration_status"] == "configuration_only"
+    assert providers["openai_compatible"]["integration_status"] == "wired"
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

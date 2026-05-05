@@ -12,6 +12,7 @@ from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
+from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.training_insight_service import TrainingInsightService
@@ -479,6 +480,28 @@ def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, objec
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/api/model-config/runtime")
+def apply_model_config_runtime(request: StudentModelConfigTestRequest) -> dict[str, object]:
+    try:
+        runtime_config = runtime_model_config_store.apply_config(
+            {
+                "provider": request.provider,
+                "api_key": request.api_key,
+                "model": request.model,
+                "base_url": request.base_url,
+                "proxy_url": request.proxy_url,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return runtime_config.public_payload()
+
+
+@app.get("/api/model-config/runtime")
+def get_model_config_runtime() -> dict[str, object]:
+    return runtime_model_config_store.public_status()
 
 
 @app.get("/api/cases")

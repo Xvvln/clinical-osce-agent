@@ -1,6 +1,8 @@
 import os
 
 from app.services import gemini_patient_responder as module
+from app.services import openai_compatible_chat_client as openai_module
+from app.services.runtime_model_config_store import runtime_model_config_store
 
 
 class FakeModels:
@@ -49,3 +51,78 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["ALL_PROXY"] == "http://127.0.0.1:7897"
+
+
+class FakeOpenAICompatiblePatientResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"reply":"我右下腹疼得比较明显。"}',
+                    },
+                }
+            ],
+        }
+
+
+class FakeOpenAICompatibleHttpClient:
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeOpenAICompatibleHttpClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeOpenAICompatiblePatientResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeOpenAICompatiblePatientResponse()
+
+
+def test_create_configured_patient_responder_uses_runtime_openai_compatible_config(monkeypatch) -> None:
+    FakeOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "gemini-via-clprox",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatibleHttpClient)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+        reply = responder(
+            module.PatientResponderRequest(
+                case_id="appendicitis_001",
+                case_title="急性腹痛问诊",
+                chief_complaint="腹痛 1 天",
+                student_message="哪里疼？",
+                current_intent="ask_location",
+                canonical_answer="右下腹疼痛明显。",
+                forbidden_terms=["急性阑尾炎"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert reply == "我右下腹疼得比较明显。"
+    assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
+    assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
+    assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"

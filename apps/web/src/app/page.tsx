@@ -42,6 +42,16 @@ type StudentApiConfigTestResponse = Readonly<{
   checked_url?: string;
 }>;
 
+type StudentApiConfigRuntimeResponse = Readonly<{
+  active: boolean;
+  provider: ApiConfigProvider | "";
+  model: string;
+  base_url: string;
+  proxy_url: string;
+  integration_targets: readonly string[];
+  message: string;
+}>;
+
 type ApiConfigProviderOption = Readonly<{
   id: ApiConfigProvider;
   label: string;
@@ -981,6 +991,19 @@ function testStudentApiConfigConnection(config: StudentApiConfig): Promise<Stude
   });
 }
 
+function applyStudentApiConfigToRuntime(config: StudentApiConfig): Promise<StudentApiConfigRuntimeResponse> {
+  return requestJson<StudentApiConfigRuntimeResponse>("/api/model-config/runtime", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: config.provider,
+      api_key: config.apiKey,
+      model: config.model,
+      base_url: config.baseUrl,
+      proxy_url: config.proxyUrl,
+    }),
+  });
+}
+
 async function getCases(): Promise<readonly CaseOption[]> {
   const response = await requestJson<CaseListResponse>("/api/cases", {
     method: "GET",
@@ -1228,9 +1251,10 @@ function HomeContent() {
   const [osceDockMenuGroup, setOsceDockMenuGroup] = useState<OsceDockMenuGroup | null>(null);
   const [isApiConfigHelpOpen, setIsApiConfigHelpOpen] = useState(false);
   const [studentApiConfig, setStudentApiConfig] = useState<StudentApiConfig>(createDefaultStudentApiConfig());
-  const [apiConfigStatusText, setApiConfigStatusText] = useState("配置仅保存到本机浏览器。");
+  const [apiConfigStatusText, setApiConfigStatusText] = useState("OpenAI 兼容配置可保存并应用到本次后端运行时。");
   const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
+  const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
     procedures: true,
@@ -1568,13 +1592,27 @@ function HomeContent() {
       proxyUrl: providerOption.defaultProxyUrl,
     }));
     setApiConfigTestResult(null);
-    setApiConfigStatusText("已切换服务端，保存后生效。");
+    setApiConfigStatusText(provider === "openai_compatible" ? "已切换服务端，保存后会应用到本次后端运行时。" : "已切换服务端，保存后写入本机浏览器。");
   }
 
-  function handleSaveStudentApiConfig(): void {
+  async function handleSaveStudentApiConfig(): Promise<void> {
     saveStudentApiConfig(studentApiConfig);
-    setApiConfigStatusText("已保存到本机浏览器。");
     setApiConfigTestResult(null);
+    if (studentApiConfig.provider !== "openai_compatible") {
+      setApiConfigStatusText("已保存到本机浏览器；跨模块训练注入请使用 OpenAI 兼容服务端。");
+      return;
+    }
+
+    setIsApplyingStudentApiConfig(true);
+    setApiConfigStatusText("正在应用到后端运行时...");
+    try {
+      const result = await applyStudentApiConfigToRuntime(studentApiConfig);
+      setApiConfigStatusText(result.message);
+    } catch (error) {
+      setApiConfigStatusText(error instanceof Error ? error.message : "应用到后端运行时失败。");
+    } finally {
+      setIsApplyingStudentApiConfig(false);
+    }
   }
 
   async function handleTestStudentApiConfig(): Promise<void> {
@@ -2797,7 +2835,7 @@ function HomeContent() {
               <div>
                 <p className="text-xs font-medium text-brand">系统与配置</p>
                 <h2 className="mt-1 text-base font-semibold">API 配置</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；配置只保存到本机浏览器。</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；OpenAI 兼容配置会同步应用到本次后端运行时。</p>
               </div>
               <button
                 aria-label="关闭 API 配置说明"
@@ -2902,7 +2940,8 @@ function HomeContent() {
               </p>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent"
+                  className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isApplyingStudentApiConfig}
                   onClick={handleSaveStudentApiConfig}
                   type="button"
                 >
@@ -2910,7 +2949,7 @@ function HomeContent() {
                 </button>
                 <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
               </div>
-              <p className="text-xs leading-5 text-muted-foreground">该配置只用于学生端连通性检查，不参与标准诊断裁判或评分决策。</p>
+              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容配置可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
             </div>
           </div>
         </div>
