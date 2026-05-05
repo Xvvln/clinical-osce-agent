@@ -76,6 +76,21 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
 });
 
+test("home OSCE dock can be dragged and snaps to the viewport edge", () => {
+  assert.match(pageSource, /type OsceDockPosition = Readonly<\{/);
+  assert.match(pageSource, /const OSCE_DOCK_DRAG_THRESHOLD = 4;/);
+  assert.match(pageSource, /const osceDockDragRef = useRef<OsceDockDragState \| null>\(null\);/);
+  assert.match(pageSource, /function getSnappedOsceDockPosition/);
+  assert.match(pageSource, /window\.innerWidth/);
+  assert.match(pageSource, /setOsceDockPosition\(getSnappedOsceDockPosition/);
+  assert.match(pageSource, /onPointerDown=\{handleOsceDockPointerDown\}/);
+  assert.match(pageSource, /onPointerMove=\{handleOsceDockPointerMove\}/);
+  assert.match(pageSource, /onPointerUp=\{handleOsceDockPointerUp\}/);
+  assert.match(pageSource, /onPointerCancel=\{handleOsceDockPointerCancel\}/);
+  assert.match(pageSource, /side === "right" \? "right-0" : "left-0"/);
+  assert.match(pageSource, /touch-none cursor-grab/);
+});
+
 test("case and history pages use Claude-like brand tokens without legacy teal hardcoding", () => {
   assert.doesNotMatch(casesSource, /#2F6868|#2f6868/);
   assert.doesNotMatch(historySource, /#2F6868|#2f6868/);

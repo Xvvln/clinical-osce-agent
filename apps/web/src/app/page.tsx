@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, FormEvent, PointerEvent, ReactNode } from "react";
 import { getCurrentUser, loginUser, logoutUser, registerUser } from "./auth-client";
 import type { AuthUser } from "./auth-client";
 
@@ -20,6 +20,24 @@ type WorkflowStepDefinition = Readonly<{
 }>;
 
 type RightPanelKey = "evidence" | "procedures" | "hypotheses" | "report";
+
+type OsceDockSide = "left" | "right";
+
+type OsceDockPosition = Readonly<{
+  x: number;
+  y: number;
+  side: OsceDockSide;
+  isReady: boolean;
+}>;
+
+type OsceDockDragState = Readonly<{
+  pointerId: number;
+  startPointerX: number;
+  startPointerY: number;
+  startX: number;
+  startY: number;
+  moved: boolean;
+}>;
 
 type CoverageMapItem = Readonly<{
   id: string;
@@ -324,6 +342,9 @@ const STUDENT_ID = "web_demo";
 const DEFAULT_AUTH_EMAIL = "1@1.test";
 const DEFAULT_AUTH_PASSWORD = "1";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
+const OSCE_DOCK_MARGIN = 20;
+const OSCE_DOCK_BUTTON_SIZE = 56;
+const OSCE_DOCK_DRAG_THRESHOLD = 4;
 
 const unavailablePatientProfile: StudentVisiblePatientProfile = {
   age: "未开放",
@@ -735,6 +756,49 @@ function getDimensionMaxScoresFromRubricScores(rubricScores: Readonly<Record<str
   return dimensionMaxScores;
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getBoundedOsceDockPosition(x: number, y: number, side: OsceDockSide): OsceDockPosition {
+  if (typeof window === "undefined") {
+    return {
+      x: OSCE_DOCK_MARGIN,
+      y: OSCE_DOCK_MARGIN,
+      side,
+      isReady: false,
+    };
+  }
+
+  const maxX = Math.max(OSCE_DOCK_MARGIN, window.innerWidth - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN);
+  const maxY = Math.max(OSCE_DOCK_MARGIN, window.innerHeight - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN);
+
+  return {
+    x: clampNumber(x, OSCE_DOCK_MARGIN, maxX),
+    y: clampNumber(y, OSCE_DOCK_MARGIN, maxY),
+    side,
+    isReady: true,
+  };
+}
+
+function getSideSnappedOsceDockPosition(side: OsceDockSide, y: number): OsceDockPosition {
+  if (typeof window === "undefined") {
+    return getBoundedOsceDockPosition(OSCE_DOCK_MARGIN, y, side);
+  }
+
+  const snappedX = side === "left" ? OSCE_DOCK_MARGIN : window.innerWidth - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN;
+  return getBoundedOsceDockPosition(snappedX, y, side);
+}
+
+function getSnappedOsceDockPosition(x: number, y: number): OsceDockPosition {
+  if (typeof window === "undefined") {
+    return getSideSnappedOsceDockPosition("left", y);
+  }
+
+  const side: OsceDockSide = x + OSCE_DOCK_BUTTON_SIZE / 2 < window.innerWidth / 2 ? "left" : "right";
+  return getSideSnappedOsceDockPosition(side, y);
+}
+
 function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
   return {
     id: caseSummary.case_id,
@@ -1068,6 +1132,14 @@ function HomeContent() {
   const [authErrorText, setAuthErrorText] = useState<string | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  const [osceDockPosition, setOsceDockPosition] = useState<OsceDockPosition>({
+    x: OSCE_DOCK_MARGIN,
+    y: OSCE_DOCK_MARGIN,
+    side: "left",
+    isReady: false,
+  });
+  const osceDockDragRef = useRef<OsceDockDragState | null>(null);
+  const suppressOsceDockClickRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -1213,6 +1285,25 @@ function HomeContent() {
   }, [authUser, isCheckingAuth, requestedSessionId, selectedCaseId]);
 
   useEffect(() => {
+    function snapDockToCurrentEdge() {
+      setOsceDockPosition((currentPosition) => {
+        if (!currentPosition.isReady) {
+          return getSideSnappedOsceDockPosition("left", window.innerHeight - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN);
+        }
+
+        return getSideSnappedOsceDockPosition(currentPosition.side, currentPosition.y);
+      });
+    }
+
+    snapDockToCurrentEdge();
+    window.addEventListener("resize", snapDockToCurrentEdge);
+
+    return () => {
+      window.removeEventListener("resize", snapDockToCurrentEdge);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!feedbackReport && !session?.feedback_report) {
       return;
     }
@@ -1227,6 +1318,105 @@ function HomeContent() {
       ...currentStates,
       [panelKey]: !currentStates[panelKey],
     }));
+  }
+
+  function getOsceDockSideFromX(x: number): OsceDockSide {
+    if (typeof window === "undefined") {
+      return "left";
+    }
+
+    return x + OSCE_DOCK_BUTTON_SIZE / 2 < window.innerWidth / 2 ? "left" : "right";
+  }
+
+  function handleOsceDockPointerDown(event: PointerEvent<HTMLButtonElement>) {
+    const buttonRect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    osceDockDragRef.current = {
+      pointerId: event.pointerId,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      startX: buttonRect.left,
+      startY: buttonRect.top,
+      moved: false,
+    };
+    setOsceDockPosition(getBoundedOsceDockPosition(buttonRect.left, buttonRect.top, getOsceDockSideFromX(buttonRect.left)));
+  }
+
+  function handleOsceDockPointerMove(event: PointerEvent<HTMLButtonElement>) {
+    const dragState = osceDockDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragState.startPointerX;
+    const deltaY = event.clientY - dragState.startPointerY;
+    const hasMoved = dragState.moved || Math.abs(deltaX) > OSCE_DOCK_DRAG_THRESHOLD || Math.abs(deltaY) > OSCE_DOCK_DRAG_THRESHOLD;
+    const nextX = dragState.startX + deltaX;
+    const nextY = dragState.startY + deltaY;
+
+    osceDockDragRef.current = {
+      ...dragState,
+      moved: hasMoved,
+    };
+
+    if (!hasMoved) {
+      return;
+    }
+
+    event.preventDefault();
+    suppressOsceDockClickRef.current = true;
+    setOsceDockPosition(getBoundedOsceDockPosition(nextX, nextY, getOsceDockSideFromX(nextX)));
+  }
+
+  function handleOsceDockPointerUp(event: PointerEvent<HTMLButtonElement>) {
+    const dragState = osceDockDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    osceDockDragRef.current = null;
+
+    if (!dragState.moved) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextX = dragState.startX + event.clientX - dragState.startPointerX;
+    const nextY = dragState.startY + event.clientY - dragState.startPointerY;
+    setOsceDockPosition(getSnappedOsceDockPosition(nextX, nextY));
+    window.setTimeout(() => {
+      suppressOsceDockClickRef.current = false;
+    }, 0);
+  }
+
+  function handleOsceDockPointerCancel(event: PointerEvent<HTMLButtonElement>) {
+    const dragState = osceDockDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    osceDockDragRef.current = null;
+    setOsceDockPosition((currentPosition) => getSnappedOsceDockPosition(currentPosition.x, currentPosition.y));
+    window.setTimeout(() => {
+      suppressOsceDockClickRef.current = false;
+    }, 0);
+  }
+
+  function handleOsceDockButtonClick() {
+    if (suppressOsceDockClickRef.current) {
+      suppressOsceDockClickRef.current = false;
+      return;
+    }
+
+    setIsOsceDockOpen((isOpen) => !isOpen);
   }
 
   const selectedCase = useMemo(
@@ -1288,6 +1478,17 @@ function HomeContent() {
     [feedbackReport, session],
   );
   const trainingSuggestion = session?.training_progress.next_focus ?? workflowSuggestion;
+  const osceDockStyle: CSSProperties = osceDockPosition.isReady
+    ? {
+        left: `${osceDockPosition.x}px`,
+        top: `${osceDockPosition.y}px`,
+      }
+    : {
+        bottom: `${OSCE_DOCK_MARGIN}px`,
+        left: `${OSCE_DOCK_MARGIN}px`,
+      };
+  const osceDockPanelAlignmentClass = osceDockPosition.side === "right" ? "right-0" : "left-0";
+  const osceDockPanelVerticalClass = osceDockPosition.isReady && osceDockPosition.y < 260 ? "top-16" : "bottom-16";
 
   const scoringPreview = useMemo(
     () => [
@@ -2225,9 +2426,9 @@ function HomeContent() {
           </aside>
         </div>
       </section>
-      <div className="fixed bottom-5 left-5 z-40">
+      <div className="fixed z-40" style={osceDockStyle}>
         {isOsceDockOpen ? (
-          <section className="mb-3 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-background p-4 shadow-xl">
+          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-background p-4 shadow-xl`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">OSCE Dock</p>
@@ -2287,8 +2488,13 @@ function HomeContent() {
         ) : null}
         <button
           aria-label="打开 OSCE 快捷入口"
-          className="flex size-14 items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover focus:ring-2 focus:ring-brand/20"
-          onClick={() => setIsOsceDockOpen((isOpen) => !isOpen)}
+          aria-pressed={isOsceDockOpen}
+          className="flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
+          onClick={handleOsceDockButtonClick}
+          onPointerCancel={handleOsceDockPointerCancel}
+          onPointerDown={handleOsceDockPointerDown}
+          onPointerMove={handleOsceDockPointerMove}
+          onPointerUp={handleOsceDockPointerUp}
           type="button"
         >
           OSCE
