@@ -20,6 +20,8 @@ class RuntimeModelConfig:
     model: str
     base_url: str
     proxy_url: str
+    project: str = ""
+    location: str = "global"
 
     def to_openai_compatible_settings(self) -> OpenAICompatibleSettings:
         return OpenAICompatibleSettings(
@@ -31,6 +33,18 @@ class RuntimeModelConfig:
         )
 
     def public_payload(self) -> dict[str, object]:
+        if self.provider == "vertex_gemini_adc":
+            return {
+                "active": True,
+                "provider": self.provider,
+                "model": self.model,
+                "base_url": self.project,
+                "proxy_url": self.proxy_url,
+                "project": self.project,
+                "location": self.location,
+                "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+                "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
+            }
         return {
             "active": True,
             "provider": self.provider,
@@ -49,17 +63,25 @@ class RuntimeModelConfigStore:
 
     def apply_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
         provider = _normalize_text(config.get("provider", ""))
-        if provider != "openai_compatible":
-            raise ValueError("runtime model config currently supports openai_compatible only")
+        if provider not in {"openai_compatible", "vertex_gemini_adc"}:
+            raise ValueError("runtime model config currently supports openai_compatible or vertex_gemini_adc only")
 
         api_key = _normalize_text(config.get("api_key", ""))
         model = _normalize_text(config.get("model", ""))
         base_url = _normalize_text(config.get("base_url", "")) or "https://api.openai.com/v1"
         proxy_url = _normalize_text(config.get("proxy_url", ""))
-        if not api_key:
+        if provider == "openai_compatible" and not api_key:
             raise ValueError("api_key is required for openai_compatible")
         if not model:
-            raise ValueError("model is required for openai_compatible")
+            raise ValueError(f"model is required for {provider}")
+        project = ""
+        location = "global"
+        if provider == "vertex_gemini_adc":
+            project = base_url
+            base_url = project
+            location = _normalize_text(config.get("location", "")) or "global"
+            if not project:
+                raise ValueError("project is required for vertex_gemini_adc")
 
         runtime_config = RuntimeModelConfig(
             provider=provider,
@@ -67,6 +89,8 @@ class RuntimeModelConfigStore:
             model=model,
             base_url=base_url,
             proxy_url=proxy_url,
+            project=project,
+            location=location,
         )
         with self._lock:
             self._active_config = runtime_config
@@ -81,6 +105,12 @@ class RuntimeModelConfigStore:
         if active_config is None or active_config.provider != "openai_compatible":
             return None
         return active_config.to_openai_compatible_settings()
+
+    def get_vertex_gemini_adc_config(self) -> RuntimeModelConfig | None:
+        active_config = self.get_active_config()
+        if active_config is None or active_config.provider != "vertex_gemini_adc":
+            return None
+        return active_config
 
     def clear(self) -> None:
         with self._lock:

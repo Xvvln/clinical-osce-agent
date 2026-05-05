@@ -246,6 +246,33 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_openai_c
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
 
 
+def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_gemini_adc_config(monkeypatch) -> None:
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-flash-lite-preview",
+            "base_url": "demo-project",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+    try:
+        generator = create_default_training_skill_candidate_generator(client=FakeSkillCandidateClient())
+    finally:
+        runtime_model_config_store.clear()
+
+    assert isinstance(generator, VertexGeminiTrainingSkillCandidateGenerator)
+    assert generator._settings.project == "demo-project"
+    assert generator._settings.location == "global"
+    assert generator._settings.skill_candidate_model == "gemini-3.1-flash-lite-preview"
+    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+
+
 def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern() -> None:
     captured_contexts: list[TrainingSkillCandidateContext] = []
 

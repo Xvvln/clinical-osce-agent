@@ -126,3 +126,46 @@ def test_create_configured_patient_responder_uses_runtime_openai_compatible_conf
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
+
+
+def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_config(monkeypatch) -> None:
+    captured_clients: list[FakeVertexClient] = []
+
+    def fake_client(**kwargs: object) -> FakeVertexClient:
+        client = FakeVertexClient(**kwargs)
+        captured_clients.append(client)
+        return client
+
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-flash-lite-preview",
+            "base_url": "demo-project",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(module.genai, "Client", fake_client)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+    finally:
+        runtime_model_config_store.clear()
+
+    assert responder._settings.use_vertex is True
+    assert responder._settings.project == "demo-project"
+    assert responder._settings.location == "global"
+    assert responder._settings.model == "gemini-3.1-flash-lite-preview"
+    assert captured_clients[0].kwargs == {
+        "vertexai": True,
+        "project": "demo-project",
+        "location": "global",
+    }
+    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"

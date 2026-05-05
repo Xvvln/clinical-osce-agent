@@ -144,6 +144,20 @@ def create_default_training_skill_candidate_generator(
     if runtime_openai_settings is not None:
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=runtime_openai_settings)
 
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    if runtime_vertex_config is not None:
+        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        return VertexGeminiTrainingSkillCandidateGenerator(
+            settings=VertexGeminiSkillCandidateSettings(
+                skill_candidate_enabled=True,
+                project=runtime_vertex_config.project,
+                location=runtime_vertex_config.location,
+                skill_candidate_model=runtime_vertex_config.model,
+                proxy_url=runtime_vertex_config.proxy_url,
+            ),
+            client=client,
+        )
+
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=openai_settings)
@@ -151,9 +165,7 @@ def create_default_training_skill_candidate_generator(
     settings = VertexGeminiSkillCandidateSettings()
     if not settings.skill_candidate_enabled or not settings.project:
         return TemplateTrainingSkillCandidateGenerator()
-    os.environ["HTTP_PROXY"] = settings.proxy_url
-    os.environ["HTTPS_PROXY"] = settings.proxy_url
-    os.environ["ALL_PROXY"] = settings.proxy_url
+    _apply_process_proxy(settings.proxy_url)
     return VertexGeminiTrainingSkillCandidateGenerator(settings=settings, client=client)
 
 
@@ -259,6 +271,14 @@ def _candidate_description(context: TrainingSkillCandidateContext) -> str:
         for item in context.missed_items
     )
     return f"{context.source_report_count} 份报告中反复出现 {len(context.missed_items)} 类训练漏项：{missed_item_summaries}。"
+
+
+def _apply_process_proxy(proxy_url: str) -> None:
+    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
+        return
+    os.environ["HTTP_PROXY"] = proxy_url
+    os.environ["HTTPS_PROXY"] = proxy_url
+    os.environ["ALL_PROXY"] = proxy_url
 
 
 training_skill_candidate_service = TrainingSkillCandidateService()

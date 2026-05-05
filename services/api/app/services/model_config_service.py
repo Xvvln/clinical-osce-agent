@@ -46,8 +46,13 @@ def _gemini_patient_api_config() -> dict[str, Any]:
 
 
 def _gemini_patient_vertex_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
-    project = _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_active = runtime_vertex_config is not None
+    enabled = runtime_active or _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
+    project = runtime_vertex_config.project if runtime_active else _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    model = runtime_vertex_config.model if runtime_active else _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL", "gemini-3.1-flash-lite-preview")
+    location = runtime_vertex_config.location if runtime_active else _env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and bool(project)
     return _provider_config(
         provider_id="gemini_patient_vertex",
@@ -57,10 +62,10 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
         configured=configured,
         secret_configured=False,
         auth_mode="vertex_adc",
-        model=_env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL", "gemini-3.1-flash-lite-preview"),
+        model=model,
         project=project,
-        location=_env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global"),
-        proxy_url=_env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897"),
+        location=location,
+        proxy_url=proxy_url,
         required_env=["OSCE_GEMINI_PATIENT_USE_VERTEX=true", "OSCE_GEMINI_PATIENT_PROJECT 或 OSCE_VERTEX_PROJECT"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_GEMINI_PATIENT_PROJECT 或 OSCE_VERTEX_PROJECT", project)]),
         integration_status="wired",
@@ -69,8 +74,13 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
 
 
 def _vertex_rubric_scorer_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_VERTEX_ENABLED")
-    project = _env("OSCE_VERTEX_PROJECT")
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_active = runtime_vertex_config is not None
+    enabled = runtime_active or _truthy_env("OSCE_VERTEX_ENABLED")
+    project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
+    model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_MODEL", "gemini-3.1-flash-lite-preview")
+    location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and bool(project)
     return _provider_config(
         provider_id="vertex_rubric_scorer",
@@ -80,10 +90,10 @@ def _vertex_rubric_scorer_config() -> dict[str, Any]:
         configured=configured,
         secret_configured=False,
         auth_mode="vertex_adc",
-        model=_env("OSCE_VERTEX_MODEL", "gemini-3.1-flash-lite-preview"),
+        model=model,
         project=project,
-        location=_env("OSCE_VERTEX_LOCATION", "global"),
-        proxy_url=_env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897"),
+        location=location,
+        proxy_url=proxy_url,
         required_env=["OSCE_VERTEX_ENABLED=true", "OSCE_VERTEX_PROJECT"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_PROJECT", project)]),
         integration_status="wired",
@@ -92,8 +102,13 @@ def _vertex_rubric_scorer_config() -> dict[str, Any]:
 
 
 def _vertex_skill_candidate_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED")
-    project = _env("OSCE_VERTEX_PROJECT")
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_active = runtime_vertex_config is not None
+    enabled = runtime_active or _truthy_env("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED")
+    project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
+    model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", "gemini-3.1-flash-lite-preview")
+    location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and bool(project)
     return _provider_config(
         provider_id="vertex_skill_candidate",
@@ -103,10 +118,10 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
         configured=configured,
         secret_configured=False,
         auth_mode="vertex_adc",
-        model=_env("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", "gemini-3.1-flash-lite-preview"),
+        model=model,
         project=project,
-        location=_env("OSCE_VERTEX_LOCATION", "global"),
-        proxy_url=_env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897"),
+        location=location,
+        proxy_url=proxy_url,
         required_env=["OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=true", "OSCE_VERTEX_PROJECT"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_PROJECT", project)]),
         integration_status="wired",

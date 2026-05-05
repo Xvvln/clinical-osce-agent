@@ -16,7 +16,7 @@
 
 独立安全声明页 `/safety` 用于集中展示教学模拟、真实诊疗边界、急症提示和输出边界清单，独立数据来源页 `/sources` 用于解释 `case`、`source`、`rubric`、`evidence` 四类来源引用，并展示 5 条公开来源登记、加工方式、许可和风险说明；这两个入口已收纳到 OSCE Dock，不再占用顶部导航。
 
-学生端已关闭 Next.js 开发模式自带悬浮 indicator，并实现自有 OSCE Dock：圆形入口默认位于左下角，按钮内部带白色镂空圆环，可自由拖动，松手后自动吸附到左右屏幕边缘；展开后默认只显示白色一级菜单，一级菜单按“训练操作台 / 系统与配置 / 资料与说明 / 关闭菜单”排列，点击前三项才会在侧边继续展开对应子菜单，进入病例库、评分报告、过程提示、患者信息、安全声明和数据来源。`API 配置` 会在学生端白色弹窗内选择自定义后端、Gemini Developer API 或 OpenAI 兼容服务端，填写 API Key、模型、Base URL 和代理；OpenAI 兼容配置保存时会调用 `/api/model-config/runtime` 应用到本次后端进程内存，并可用于标准化病人、`llm_rubric` 和 Skill 候选文案生成。`/api/model-config/test` 可测试连通性：自定义后端测试 `/health`，Gemini Developer API 测试 `/v1beta/models`，OpenAI 兼容服务端发出最小 `/chat/completions` 探针。后端不落库、不回显密钥；规则评分、病例标准答案和诊断裁判仍由后端确定性控制。
+学生端已关闭 Next.js 开发模式自带悬浮 indicator，并实现自有 OSCE Dock：圆形入口默认位于左下角，按钮内部带白色镂空圆环，可自由拖动，松手后自动吸附到左右屏幕边缘；展开后默认只显示白色一级菜单，一级菜单按“训练操作台 / 系统与配置 / 资料与说明 / 关闭菜单”排列，点击前三项才会在侧边继续展开对应子菜单，进入病例库、评分报告、过程提示、患者信息、安全声明和数据来源。`API 配置` 会在学生端白色弹窗内选择自定义后端、Gemini Developer API、Vertex Gemini ADC 或 OpenAI 兼容服务端；Vertex Gemini ADC 不需要 API Key，只填写 Project ID、模型和代理。OpenAI 兼容与 Vertex Gemini ADC 配置保存时会调用 `/api/model-config/runtime` 应用到本次后端进程内存，并可用于标准化病人、`llm_rubric` 和 Skill 候选文案生成。`/api/model-config/test` 可测试连通性：自定义后端测试 `/health`，Gemini Developer API 测试 `/v1beta/models`，Vertex Gemini ADC 通过本机 ADC 发起最小 Gemini 调用，OpenAI 兼容服务端发出最小 `/chat/completions` 探针。学生端配置保存到浏览器 `localStorage`；后端运行时配置不落库、不回显密钥，重启后需要重新应用或改用 `.env` / 环境变量持久化。规则评分、病例标准答案和诊断裁判仍由后端确定性控制。
 
 顶部导航的登录态入口已改为“测试账号”菜单，展开后居中显示训练记录和学习画像，并提供红色退出登录按钮，避免学生端顶部堆叠过多入口。
 

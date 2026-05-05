@@ -74,6 +74,19 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
     if runtime_openai_settings is not None:
         return OpenAICompatibleRubricScorer(runtime_openai_settings)
 
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    if runtime_vertex_config is not None:
+        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        return VertexGeminiRubricScorer(
+            settings=VertexGeminiSettings(
+                enabled=True,
+                project=runtime_vertex_config.project,
+                location=runtime_vertex_config.location,
+                model=runtime_vertex_config.model,
+                proxy_url=runtime_vertex_config.proxy_url,
+            )
+        )
+
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
         return OpenAICompatibleRubricScorer(openai_settings)
@@ -81,13 +94,19 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
     settings = VertexGeminiSettings()
     if not settings.enabled or not settings.project:
         return None
-    os.environ["HTTP_PROXY"] = settings.proxy_url
-    os.environ["HTTPS_PROXY"] = settings.proxy_url
-    os.environ["ALL_PROXY"] = settings.proxy_url
+    _apply_process_proxy(settings.proxy_url)
     try:
         return VertexGeminiRubricScorer(settings=settings)
     except ImportError:
         return None
+
+
+def _apply_process_proxy(proxy_url: str) -> None:
+    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
+        return
+    os.environ["HTTP_PROXY"] = proxy_url
+    os.environ["HTTPS_PROXY"] = proxy_url
+    os.environ["ALL_PROXY"] = proxy_url
 
 
 __all__ = [

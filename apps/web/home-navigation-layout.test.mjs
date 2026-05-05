@@ -107,7 +107,7 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
 });
 
 test("home OSCE dock opens student API config dialog instead of navigating directly to admin", () => {
-  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "openai_compatible";/);
+  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "vertex_gemini_adc" \| "openai_compatible";/);
   assert.match(pageSource, /const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";/);
   assert.match(pageSource, /function createDefaultStudentApiConfig\(\): StudentApiConfig/);
   assert.match(pageSource, /function loadStudentApiConfig\(\): StudentApiConfig/);
@@ -122,10 +122,11 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\s*服务端\s*</);
   assert.match(pageSource, />\s*自定义后端\s*</);
   assert.match(pageSource, />\s*Gemini Developer API\s*</);
+  assert.match(pageSource, />\s*Vertex Gemini ADC\s*</);
   assert.match(pageSource, />\s*OpenAI 兼容\s*</);
   assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
-  assert.doesNotMatch(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-3/);
   assert.match(pageSource, /id="student-api-key-input"/);
+  assert.match(pageSource, /disabled=\{studentApiConfig\.provider === "vertex_gemini_adc"\}/);
   assert.match(pageSource, /id="student-api-model-input"/);
   assert.match(pageSource, /id="student-api-base-url-input"/);
   assert.match(pageSource, /id="student-api-proxy-url-input"/);

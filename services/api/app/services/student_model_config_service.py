@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import httpx
+from google import genai
+from google.genai import types
 
 
-SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {"custom_backend", "local_backend", "gemini", "openai_compatible"}
+SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {
+    "custom_backend",
+    "local_backend",
+    "gemini",
+    "vertex_gemini_adc",
+    "openai_compatible",
+}
 DEFAULT_CUSTOM_BACKEND_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
 DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_VERTEX_GEMINI_LOCATION = "global"
 STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS = 5.0
 
 
@@ -41,6 +51,18 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
             headers={"x-goog-api-key": api_key},
             proxy_url=proxy_url,
             success_message="Gemini Developer API 连通性测试通过。",
+        )
+
+    if provider == "vertex_gemini_adc":
+        if not base_url:
+            raise ValueError("project is required for vertex_gemini_adc")
+        if not model:
+            raise ValueError("model is required for vertex_gemini_adc")
+        return _test_vertex_gemini_adc(
+            project=base_url,
+            location=DEFAULT_VERTEX_GEMINI_LOCATION,
+            model=model,
+            proxy_url=proxy_url,
         )
 
     if not api_key:
@@ -138,6 +160,42 @@ def _connectivity_result(*, ok: bool, provider: str, message: str, checked_url: 
         "message": message,
         "checked_url": checked_url,
     }
+
+
+def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_url: str) -> dict[str, object]:
+    checked_url = f"vertex://{project}/{location}/{model}"
+    try:
+        _apply_process_proxy(proxy_url)
+        client = genai.Client(vertexai=True, project=project, location=location)
+        client.models.generate_content(
+            model=model,
+            contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
+            config=types.GenerateContentConfig(
+                system_instruction="只输出 JSON。",
+                response_mime_type="application/json",
+            ),
+        )
+    except Exception as exc:
+        return _connectivity_result(
+            ok=False,
+            provider="vertex_gemini_adc",
+            message=f"Vertex Gemini ADC 连通性测试失败：{exc.__class__.__name__}",
+            checked_url=checked_url,
+        )
+    return _connectivity_result(
+        ok=True,
+        provider="vertex_gemini_adc",
+        message="Vertex Gemini ADC 连通性测试通过。",
+        checked_url=checked_url,
+    )
+
+
+def _apply_process_proxy(proxy_url: str) -> None:
+    if not _should_use_proxy(proxy_url):
+        return
+    os.environ["HTTP_PROXY"] = proxy_url
+    os.environ["HTTPS_PROXY"] = proxy_url
+    os.environ["ALL_PROXY"] = proxy_url
 
 
 def _should_use_proxy(proxy_url: str) -> bool:

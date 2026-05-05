@@ -150,13 +150,13 @@ CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=safe-admin-password
 当前模型配置边界：
 
 - Gemini Developer API 可用于学生端标准化病人表达层，密钥只从环境变量读取。
-- Vertex Gemini 可用于标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；通过 ADC（Application Default Credentials，应用默认凭证）认证，不在系统内保存凭据文件。
+- Vertex Gemini 可用于标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；通过 ADC（Application Default Credentials，应用默认凭证）认证，不在系统内保存凭据文件。学生端 API 配置弹窗可选择 `Vertex Gemini ADC`，填写 Project ID、模型和代理后应用到本次后端运行时。
 - OpenAI 兼容配置可通过 `OSCE_OPENAI_*` 环境变量，或学生端 `/api/model-config/runtime` 本次运行时内存配置，接入标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；底层按 Chat Completions 请求 `{base_url}/chat/completions`，可用 `OSCE_OPENAI_PROXY_URL=http://127.0.0.1:7897` 或 `direct` 控制代理。
-- 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不会把运行时密钥写入数据库或 `.env`。
+- 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不会把运行时密钥写入数据库或 `.env`。学生端弹窗配置会保存在浏览器 `localStorage`，后端运行时配置只保存在当前 FastAPI 进程内存；需要重启后仍生效时，请写入 `.env` / 环境变量。
 
 本地演示管理员账号已在管理端登录弹窗中预填：`admin-demo@example.test / safe-admin-password`。后端会在首次使用这组凭据登录时创建或刷新该演示账号，并把它视为管理员邮箱；正式部署前应设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED=false`，改用自己的 `CLINICAL_OSCE_ADMIN_EMAILS` 白名单和真实账号。
 
-如果通过 Vertex AI（Google Cloud 托管模型服务）使用 ADC，请在本机完成 Google Cloud 登录，并把项目 ID 设置到 `OSCE_GEMINI_PATIENT_PROJECT` 或 `OSCE_VERTEX_PROJECT`，不要把真实项目 ID 或凭证提交到仓库。真实模型调用默认按本地演示环境使用 `http://127.0.0.1:7897` 代理；如果你的网络环境不同，请修改对应 `*_PROXY_URL`。
+如果通过 Vertex AI（Google Cloud 托管模型服务）使用 ADC，请在本机完成 Google Cloud 登录，并把项目 ID 设置到 `OSCE_GEMINI_PATIENT_PROJECT` 或 `OSCE_VERTEX_PROJECT`，不要把真实项目 ID 或凭证提交到仓库。真实模型调用默认按本地演示环境使用 `http://127.0.0.1:7897` 代理；如果你的网络环境不同，请修改对应 `*_PROXY_URL`。ADC 凭据由本机 Google Cloud 配置管理，本项目只保存 Project ID、模型名和代理等非凭据信息。
 
 ### 3. 启动后端
 

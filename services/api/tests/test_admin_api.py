@@ -19,6 +19,7 @@ from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_service import TemplateTrainingSkillCandidateGenerator, TrainingSkillCandidateService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
+from app.services.runtime_model_config_store import runtime_model_config_store
 
 
 @contextmanager
@@ -207,6 +208,35 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["openai_compatible"]["model"] == "openai-demo-model"
     assert providers["openai_compatible"]["base_url"] == "https://api.openai.example/v1"
     assert providers["openai_compatible"]["integration_status"] == "wired"
+
+
+def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-flash-lite-preview",
+            "base_url": "demo-project",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+
+    try:
+        with authenticated_admin_client(tmp_path, monkeypatch) as client:
+            response = client.get("/api/admin/model-config")
+    finally:
+        runtime_model_config_store.clear()
+
+    assert response.status_code == 200
+    providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
+    assert providers["gemini_patient_vertex"]["configured"] is True
+    assert providers["gemini_patient_vertex"]["project"] == "demo-project"
+    assert providers["gemini_patient_vertex"]["model"] == "gemini-3.1-flash-lite-preview"
+    assert providers["vertex_rubric_scorer"]["configured"] is True
+    assert providers["vertex_rubric_scorer"]["project"] == "demo-project"
+    assert providers["vertex_skill_candidate"]["configured"] is True
+    assert providers["vertex_skill_candidate"]["project"] == "demo-project"
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

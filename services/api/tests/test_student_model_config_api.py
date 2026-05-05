@@ -50,6 +50,26 @@ class _FakeOpenAICompatibleProbeClient:
         return _FakeConnectivityResponse()
 
 
+class _FakeVertexGeminiModels:
+    calls: list[dict[str, object]] = []
+
+    def generate_content(self, *, model: str, contents: str, config: object) -> object:
+        self.calls.append({"model": model, "contents": contents, "config": config})
+
+        class Response:
+            text = '{"ok":true}'
+
+        return Response()
+
+
+class _FakeVertexGeminiClient:
+    created: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.created.append(kwargs)
+        self.models = _FakeVertexGeminiModels()
+
+
 def test_student_model_config_test_accepts_custom_backend_without_admin_login(monkeypatch) -> None:
     _FakeHttpxClient.requested_urls = []
     _FakeHttpxClient.requested_headers = []
@@ -127,6 +147,33 @@ def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(
     assert "student-openai-secret" not in response.text
 
 
+def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(monkeypatch) -> None:
+    _FakeVertexGeminiClient.created = []
+    _FakeVertexGeminiModels.calls = []
+    monkeypatch.setattr(student_model_config_service.genai, "Client", _FakeVertexGeminiClient)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/model-config/test",
+            json={
+                "provider": "vertex_gemini_adc",
+                "api_key": "",
+                "model": "gemini-3.1-flash-lite-preview",
+                "base_url": "demo-project",
+                "proxy_url": "http://127.0.0.1:7897",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["provider"] == "vertex_gemini_adc"
+    assert payload["checked_url"] == "vertex://demo-project/global/gemini-3.1-flash-lite-preview"
+    assert _FakeVertexGeminiClient.created == [{"vertexai": True, "project": "demo-project", "location": "global"}]
+    assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-flash-lite-preview"
+    assert "api_key" not in str(_FakeVertexGeminiClient.created)
+
+
 def test_student_can_apply_openai_compatible_config_to_runtime_without_leaking_secret() -> None:
     runtime_model_config_store.clear()
     with TestClient(main.app) as client:
@@ -158,3 +205,36 @@ def test_student_can_apply_openai_compatible_config_to_runtime_without_leaking_s
     assert status_response.json()["provider"] == "openai_compatible"
     assert "student-openai-secret" not in response.text
     assert "student-openai-secret" not in status_response.text
+
+
+def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key() -> None:
+    runtime_model_config_store.clear()
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/model-config/runtime",
+            json={
+                "provider": "vertex_gemini_adc",
+                "api_key": "",
+                "model": "gemini-3.1-flash-lite-preview",
+                "base_url": "demo-project",
+                "proxy_url": "http://127.0.0.1:7897",
+            },
+        )
+        status_response = client.get("/api/model-config/runtime")
+    runtime_model_config_store.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "active": True,
+        "provider": "vertex_gemini_adc",
+        "model": "gemini-3.1-flash-lite-preview",
+        "base_url": "demo-project",
+        "proxy_url": "http://127.0.0.1:7897",
+        "project": "demo-project",
+        "location": "global",
+        "integration_targets": ["patient_responder", "llm_rubric_scorer", "skill_candidate_generator"],
+        "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
+    }
+    assert status_response.status_code == 200
+    assert status_response.json()["provider"] == "vertex_gemini_adc"
+    assert "api_key" not in response.text

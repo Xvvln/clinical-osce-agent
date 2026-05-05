@@ -124,14 +124,26 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
     if runtime_openai_settings is not None:
         return OpenAICompatiblePatientResponder(runtime_openai_settings)
 
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    if runtime_vertex_config is not None:
+        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        return GeminiPatientResponder(
+            settings=GeminiPatientSettings(
+                api_key="",
+                use_vertex=True,
+                project=runtime_vertex_config.project,
+                location=runtime_vertex_config.location,
+                model=runtime_vertex_config.model,
+                proxy_url=runtime_vertex_config.proxy_url,
+            )
+        )
+
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
         return OpenAICompatiblePatientResponder(openai_settings)
 
     settings = GeminiPatientSettings()
-    os.environ["HTTP_PROXY"] = settings.proxy_url
-    os.environ["HTTPS_PROXY"] = settings.proxy_url
-    os.environ["ALL_PROXY"] = settings.proxy_url
+    _apply_process_proxy(settings.proxy_url)
 
     if settings.use_vertex:
         project = settings.project or os.getenv("OSCE_VERTEX_PROJECT", "")
@@ -163,6 +175,14 @@ def _assert_no_forbidden_terms(reply: str, forbidden_terms: list[str]) -> None:
     leaked_terms = [term for term in forbidden_terms if term and term in reply]
     if leaked_terms:
         raise RuntimeError(f"标准化病人回答包含禁止泄露词：{leaked_terms}")
+
+
+def _apply_process_proxy(proxy_url: str) -> None:
+    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
+        return
+    os.environ["HTTP_PROXY"] = proxy_url
+    os.environ["HTTPS_PROXY"] = proxy_url
+    os.environ["ALL_PROXY"] = proxy_url
 
 
 __all__ = [
