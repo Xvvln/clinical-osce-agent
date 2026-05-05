@@ -407,6 +407,8 @@ type AdminAuditEventsResponse = Readonly<{
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
 const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。";
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
+const DEMO_ADMIN_EMAIL = "admin-demo@example.test";
+const DEMO_ADMIN_PASSWORD = "safe-admin-password";
 
 class AdminApiError extends Error {
   readonly status: number;
@@ -800,8 +802,8 @@ export default function AdminDashboardPage() {
   const [sessionIdInput, setSessionIdInput] = useState("");
   const [trainingEvents, setTrainingEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [statusText, setStatusText] = useState("正在读取管理后台数据...");
-  const [adminEmail, setAdminEmail] = useState("admin@example.test");
-  const [adminPassword, setAdminPassword] = useState("");
+  const [adminEmail, setAdminEmail] = useState(DEMO_ADMIN_EMAIL);
+  const [adminPassword, setAdminPassword] = useState(DEMO_ADMIN_PASSWORD);
   const [adminLoginErrorText, setAdminLoginErrorText] = useState<string | null>(null);
   const [isAdminLoginDialogOpen, setIsAdminLoginDialogOpen] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -926,7 +928,6 @@ export default function AdminDashboardPage() {
     setIsLoggingIn(true);
     try {
       const user = await loginAdminUser(email, adminPassword);
-      setAdminPassword("");
       setAdminLoginErrorText(null);
       setIsAdminLoginDialogOpen(false);
       setStatusText(`已登录管理员账号：${user.email}，正在读取管理后台数据...`);
@@ -2063,6 +2064,7 @@ export default function AdminDashboardPage() {
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-[#8A7D6F]">Clinical OSCE Agent Admin</p>
               <h2 className="mt-2 text-xl font-semibold">管理员登录</h2>
               <p className="mt-2 text-sm leading-6 text-[#6F6257]">登录管理员账号后读取训练 Session、评分报告、系统评测和候选 Skill 审核数据。</p>
+              <p className="mt-2 rounded-lg border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-2 text-xs leading-5 text-[#AE5630]">演示账号已预填：{DEMO_ADMIN_EMAIL} / {DEMO_ADMIN_PASSWORD}</p>
             </div>
             <form className="mt-5 space-y-4" onSubmit={(event) => void handleAdminLogin(event)}>
               <div className="space-y-2">
@@ -2074,7 +2076,7 @@ export default function AdminDashboardPage() {
                   className="w-full rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm outline-none transition placeholder:text-[#8A7D6F] focus:border-[#AE5630] focus:ring-2 focus:ring-[#AE5630]/15"
                   id="admin-email-input"
                   onChange={(event) => setAdminEmail(event.target.value)}
-                  placeholder="admin@example.test"
+                  placeholder={DEMO_ADMIN_EMAIL}
                   type="email"
                   value={adminEmail}
                 />

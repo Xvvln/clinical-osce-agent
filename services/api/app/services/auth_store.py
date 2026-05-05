@@ -49,6 +49,44 @@ class AuthStore:
             return None
         return user
 
+    def upsert_user_password(self, email: str, password: str, display_name: str | None = None) -> dict[str, str]:
+        self._initialize()
+        normalized_email = _normalize_email(email)
+        password_salt = secrets.token_hex(16)
+        password_hash = _hash_password(password, password_salt)
+        now = datetime.now(UTC).isoformat()
+        next_display_name = display_name.strip() if display_name and display_name.strip() else normalized_email
+        with sqlite3.connect(self.database_path) as connection:
+            row = connection.execute(
+                """
+                SELECT user_id, email, display_name, password_hash, password_salt, created_at
+                FROM users
+                WHERE email = ?
+                """,
+                (normalized_email,),
+            ).fetchone()
+            if row is None:
+                user_id = str(uuid4())
+                connection.execute(
+                    """
+                    INSERT INTO users (user_id, email, display_name, password_hash, password_salt, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, normalized_email, next_display_name, password_hash, password_salt, now),
+                )
+                row = (user_id, normalized_email, next_display_name, password_hash, password_salt, now)
+            else:
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET display_name = ?, password_hash = ?, password_salt = ?
+                    WHERE email = ?
+                    """,
+                    (next_display_name, password_hash, password_salt, normalized_email),
+                )
+                row = (row[0], row[1], next_display_name, password_hash, password_salt, row[5])
+        return _user_from_row(row)
+
     def authenticate_user(self, email: str, password: str) -> dict[str, str] | None:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:

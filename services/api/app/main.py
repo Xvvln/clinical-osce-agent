@@ -23,6 +23,12 @@ from app.validators.case_validator import validate_case, validate_case_rubric_pa
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
+DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
+DEMO_ADMIN_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_EMAIL"
+DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
+DEFAULT_DEMO_ADMIN_EMAIL = "admin-demo@example.test"
+DEFAULT_DEMO_ADMIN_PASSWORD = "safe-admin-password"
+DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_approved",
     "admin_skill_candidate_generated",
@@ -202,11 +208,34 @@ def _require_current_user(auth_token: str | None) -> dict[str, str]:
 
 
 def _get_admin_email_set() -> set[str]:
-    return {
+    admin_emails = {
         email.strip().lower()
         for email in os.environ.get(ADMIN_EMAILS_ENV_NAME, "").split(",")
         if email.strip()
     }
+    if _is_demo_admin_enabled():
+        admin_emails.add(_get_demo_admin_email())
+    return admin_emails
+
+
+def _is_demo_admin_enabled() -> bool:
+    return os.environ.get(DEMO_ADMIN_ENABLED_ENV_NAME, "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _get_demo_admin_email() -> str:
+    return os.environ.get(DEMO_ADMIN_EMAIL_ENV_NAME, DEFAULT_DEMO_ADMIN_EMAIL).strip().lower()
+
+
+def _get_demo_admin_password() -> str:
+    return os.environ.get(DEMO_ADMIN_PASSWORD_ENV_NAME, DEFAULT_DEMO_ADMIN_PASSWORD)
+
+
+def _matches_demo_admin_credentials(email: str, password: str) -> bool:
+    return _is_demo_admin_enabled() and email.strip().lower() == _get_demo_admin_email() and password == _get_demo_admin_password()
+
+
+def _ensure_demo_admin_user(email: str, password: str) -> dict[str, str]:
+    return auth_store.upsert_user_password(email=email, password=password, display_name=DEFAULT_DEMO_ADMIN_DISPLAY_NAME)
 
 
 def _require_admin_user(auth_token: str | None) -> dict[str, str]:
@@ -393,6 +422,8 @@ def register(request: AuthRegisterRequest, response: Response) -> dict[str, obje
 def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
     _validate_auth_request(request.email, request.password)
     user = auth_store.authenticate_user(request.email, request.password)
+    if user is None and _matches_demo_admin_credentials(request.email, request.password):
+        user = _ensure_demo_admin_user(request.email, request.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     _set_auth_cookie(response, auth_store.create_session(user["user_id"]))

@@ -140,6 +140,37 @@ def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
     assert list(schema["properties"]) == ["candidate_id"]
 
 
+def test_demo_admin_can_login_with_hardcoded_credentials_without_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
+    monkeypatch.delenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", raising=False)
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as client:
+        login_response = client.post(
+            "/api/auth/login",
+            json={"email": "admin-demo@example.test", "password": "safe-admin-password"},
+        )
+        assert login_response.status_code == 200
+        assert login_response.json()["user"]["email"] == "admin-demo@example.test"
+        admin_response = client.get("/api/admin/model-config")
+
+    assert admin_response.status_code == 200
+
+
+def test_demo_admin_hardcoded_credentials_can_be_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "false")
+    monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"email": "admin-demo@example.test", "password": "safe-admin-password"},
+        )
+
+    assert response.status_code == 401
+
+
 def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_API_KEY", "gemini-secret-value")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_MODEL", "gemini-demo-model")

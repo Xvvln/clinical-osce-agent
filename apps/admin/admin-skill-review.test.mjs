@@ -111,8 +111,10 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /async function loginAdminUser\(email: string, password: string\): Promise<AuthUser>/);
   assert.match(adminPageSource, /fetch\("\/api\/auth\/login"/);
   assert.match(adminPageSource, /credentials: "same-origin"/);
-  assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\("admin@example\.test"\)/);
-  assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(""\)/);
+  assert.match(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin-demo@example.test"/);
+  assert.match(adminPageSource, /const DEMO_ADMIN_PASSWORD = "safe-admin-password"/);
+  assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\(DEMO_ADMIN_EMAIL\)/);
+  assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(DEMO_ADMIN_PASSWORD\)/);
   assert.match(adminPageSource, /const \[isAdminLoginDialogOpen, setIsAdminLoginDialogOpen\] = useState\(false\)/);
   assert.match(adminPageSource, /async function handleAdminLogin\(event: FormEvent<HTMLFormElement>\)/);
   assert.match(adminPageSource, /setIsAdminLoginDialogOpen\(true\)/);
@@ -126,7 +128,7 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /id="admin-email-input"/);
   assert.match(adminPageSource, /id="admin-password-input"/);
   assert.match(adminPageSource, /type="password"/);
-  assert.match(adminPageSource, /setAdminPassword\(""\)/);
+  assert.match(adminPageSource, /演示账号已预填/);
   assert.match(adminPageSource, /await loadDashboard\(\)/);
 });
 
