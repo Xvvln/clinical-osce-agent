@@ -68,10 +68,14 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);
   assert.match(pageSource, /const \[isOsceDockOpen, setIsOsceDockOpen\] = useState\(false\);/);
   assert.match(pageSource, /const \[osceDockMenuGroup, setOsceDockMenuGroup\] = useState<OsceDockMenuGroup>\("training"\);/);
+  assert.match(pageSource, /const osceDockSubmenuAlignmentClass = osceDockPosition\.side === "right" \? "right-full mr-2" : "left-full ml-2";/);
   assert.match(pageSource, /aria-label="打开 OSCE 快捷入口"/);
   assert.match(pageSource, /setIsOsceDockOpen\(\(isOpen\) => !isOpen\)/);
-  assert.match(pageSource, /OSCE 快捷入口/);
+  assert.doesNotMatch(pageSource, />\s*OSCE 快捷入口\s*</);
+  assert.doesNotMatch(pageSource, /OSCE Dock/);
   assert.match(pageSource, /bg-white p-4 shadow-xl/);
+  assert.match(pageSource, /<div className="grid w-28 gap-2">/);
+  assert.match(pageSource, /absolute top-0 \$\{osceDockSubmenuAlignmentClass\} w-44 rounded-2xl border border-border bg-white p-2 shadow-xl/);
   assert.match(pageSource, /setOsceDockMenuGroup\("training"\)/);
   assert.match(pageSource, /setOsceDockMenuGroup\("resources"\)/);
   assert.match(pageSource, /setOsceDockMenuGroup\("system"\)/);
@@ -88,6 +92,8 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /onClick=\{\(\) => void handleHintRequest\(\)\}/);
   assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
   assert.match(pageSource, /const osceDockActionClass = "[^"]*whitespace-nowrap/);
+  assert.match(pageSource, /absolute -inset-2 rounded-full border-2 border-white bg-transparent/);
+  assert.match(pageSource, /relative flex size-14/);
 });
 
 test("home header uses a test account menu for profile actions", () => {
@@ -101,6 +107,7 @@ test("home header uses a test account menu for profile actions", () => {
   assert.match(headerSource, /href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
   assert.match(headerSource, /onClick=\{handleLogout\}/);
   assert.match(headerSource, /border-red-200 bg-red-50 text-red-700/);
+  assert.match(headerSource, /inline-flex w-full items-center justify-center/);
   assert.doesNotMatch(headerSource, />\s*退出登录\s*<\/button>[\s\S]*\{authUser \? \(/);
 });
 

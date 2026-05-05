@@ -1495,9 +1495,10 @@ function HomeContent() {
       };
   const osceDockPanelAlignmentClass = osceDockPosition.side === "right" ? "right-0" : "left-0";
   const osceDockPanelVerticalClass = osceDockPosition.isReady && osceDockPosition.y < 260 ? "top-16" : "bottom-16";
+  const osceDockSubmenuAlignmentClass = osceDockPosition.side === "right" ? "right-full mr-2" : "left-full ml-2";
   const osceDockActionClass = "rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent";
   const osceDockButtonActionClass = "rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
-  const osceDockMenuButtonClass = "rounded-lg border border-border px-3 py-2 text-center text-xs font-medium whitespace-nowrap transition hover:bg-accent";
+  const osceDockMenuButtonClass = "rounded-lg border border-border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent";
 
   const scoringPreview = useMemo(
     () => [
@@ -1953,7 +1954,7 @@ function HomeContent() {
                       学习画像
                     </Link>
                     <button
-                      className="mt-1 w-full rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-left text-sm font-medium whitespace-nowrap transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="mt-1 inline-flex w-full items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={isSubmittingAuth}
                       onClick={handleLogout}
                       type="button"
@@ -2441,23 +2442,8 @@ function HomeContent() {
       </section>
       <div className="fixed z-40" style={osceDockStyle}>
         {isOsceDockOpen ? (
-          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-white p-4 shadow-xl`}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">OSCE Dock</p>
-                <h2 className="mt-1 text-base font-semibold">OSCE 快捷入口</h2>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">{trainingSuggestion}</p>
-              </div>
-              <button
-                aria-label="关闭 OSCE 快捷入口"
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
-                onClick={() => setIsOsceDockOpen(false)}
-                type="button"
-              >
-                关闭
-              </button>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2">
+          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} rounded-2xl border border-border bg-white p-4 shadow-xl`}>
+            <div className="grid w-28 gap-2">
               <button
                 className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "training" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
                 onClick={() => setOsceDockMenuGroup("training")}
@@ -2479,10 +2465,18 @@ function HomeContent() {
               >
                 系统
               </button>
+              <button
+                aria-label="关闭 OSCE 快捷入口"
+                className="rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent"
+                onClick={() => setIsOsceDockOpen(false)}
+                type="button"
+              >
+                关闭
+              </button>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className={`absolute top-0 ${osceDockSubmenuAlignmentClass} w-44 rounded-2xl border border-border bg-white p-2 shadow-xl`}>
               {osceDockMenuGroup === "training" ? (
-                <>
+                <div className="grid gap-2">
                   <Link className={osceDockActionClass} href="/cases">
                     病例库
                   </Link>
@@ -2509,24 +2503,24 @@ function HomeContent() {
                   >
                     患者信息
                   </button>
-                </>
+                </div>
               ) : null}
               {osceDockMenuGroup === "resources" ? (
-                <>
+                <div className="grid gap-2">
                   <Link className={osceDockActionClass} href="/safety">
                     安全声明
                   </Link>
                   <Link className={osceDockActionClass} href="/sources">
                     数据来源
                   </Link>
-                </>
+                </div>
               ) : null}
               {osceDockMenuGroup === "system" ? (
-                <>
+                <div className="grid gap-2">
                   <a className={osceDockActionClass} href={ADMIN_MODEL_CONFIG_URL} rel="noreferrer" target="_blank">
                     API 配置
                   </a>
-                </>
+                </div>
               ) : null}
             </div>
           </section>
@@ -2534,7 +2528,7 @@ function HomeContent() {
         <button
           aria-label="打开 OSCE 快捷入口"
           aria-pressed={isOsceDockOpen}
-          className="flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
+          className="relative flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
           onClick={handleOsceDockButtonClick}
           onPointerCancel={handleOsceDockPointerCancel}
           onPointerDown={handleOsceDockPointerDown}
@@ -2542,7 +2536,8 @@ function HomeContent() {
           onPointerUp={handleOsceDockPointerUp}
           type="button"
         >
-          OSCE
+          <span className="pointer-events-none absolute -inset-2 rounded-full border-2 border-white bg-transparent" />
+          <span className="relative z-10">OSCE</span>
         </button>
       </div>
       {isPatientProfileOpen && preparedPatientProfile ? (
