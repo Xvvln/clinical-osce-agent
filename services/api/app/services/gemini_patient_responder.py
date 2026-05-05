@@ -103,6 +103,7 @@ def _create_configured_responder() -> GeminiPatientResponder:
     settings = GeminiPatientSettings()
     os.environ["HTTP_PROXY"] = settings.proxy_url
     os.environ["HTTPS_PROXY"] = settings.proxy_url
+    os.environ["ALL_PROXY"] = settings.proxy_url
 
     if settings.use_vertex:
         project = settings.project or os.getenv("OSCE_VERTEX_PROJECT", "")

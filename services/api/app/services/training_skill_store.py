@@ -65,12 +65,15 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "skill_id": f"skill_{candidate['trigger_item_id']}",
         "source_candidate_id": candidate["candidate_id"],
         "trigger_item_id": candidate["trigger_item_id"],
+        "trigger_item_ids": list(candidate.get("trigger_item_ids", [])),
+        "case_ids": list(candidate.get("case_ids", [])),
         "title": candidate["title"],
         "description": candidate["description"],
         "suggested_strategy": candidate["suggested_strategy"],
         "status": "enabled",
         "source_report_count": candidate["source_report_count"],
         "support_count": candidate["support_count"],
+        "related_recommendations": list(candidate.get("related_recommendations", [])),
     }
 
 

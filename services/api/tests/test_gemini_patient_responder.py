@@ -32,6 +32,7 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     monkeypatch.setenv("GOOGLE_API_KEY", "")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7897")
 
     responder = module._create_configured_responder()
 
@@ -47,3 +48,4 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     }
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["ALL_PROXY"] == "http://127.0.0.1:7897"

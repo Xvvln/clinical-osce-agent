@@ -6,6 +6,7 @@ const authClientUrl = new URL("./src/app/auth-client.ts", import.meta.url);
 const profilePageUrl = new URL("./src/app/profile/page.tsx", import.meta.url);
 const pageSource = readFileSync(new URL("./src/app/page.tsx", import.meta.url), "utf8");
 const reportSource = readFileSync(new URL("./src/app/report/page.tsx", import.meta.url), "utf8");
+const reportModelSource = readFileSync(new URL("./src/app/report/report-model.ts", import.meta.url), "utf8");
 const profileSource = existsSync(profilePageUrl) ? readFileSync(profilePageUrl, "utf8") : "";
 const historySource = readFileSync(new URL("./src/app/history/page.tsx", import.meta.url), "utf8");
 const casesSource = readFileSync(new URL("./src/app/cases/page.tsx", import.meta.url), "utf8");
@@ -297,6 +298,23 @@ test("home diagnosis submission form collects structured OSCE reasoning fields",
   assert.match(pageSource, /!supportingEvidenceValue\.trim\(\)/);
   assert.match(pageSource, /!exclusionEvidenceValue\.trim\(\)/);
   assert.match(pageSource, /!nextStepValue\.trim\(\)/);
+  assert.doesNotMatch(pageSource, /setDiagnosisValue\(nextSession\.diagnosis_draft\.diagnosis\)/);
+  assert.doesNotMatch(pageSource, /setSupportingEvidenceValue\(nextSession\.diagnosis_draft\.reasoning\)/);
+});
+
+test("report dimension max scores are derived from rubric score metadata", () => {
+  for (const source of [pageSource, reportModelSource]) {
+    assert.match(source, /type RubricScoreItem = Readonly<\{/);
+  }
+  assert.match(reportSource, /type RubricScoreItem,/);
+  for (const source of [pageSource, reportSource]) {
+    assert.match(source, /function getDimensionMaxScoresFromRubricScores\(/);
+    assert.match(source, /rubricScore\.dimension_id/);
+    assert.match(source, /rubricScore\.max_score/);
+    assert.doesNotMatch(source, /const scoreDimensionMaxScores: Readonly<Record<string, number>> = \{/);
+  }
+  assert.match(pageSource, /const reportDimensionMaxScores = useMemo\(\(\) => getDimensionMaxScoresFromRubricScores\(feedbackReport\?\.rubric_scores\), \[feedbackReport\?\.rubric_scores\]\);/);
+  assert.match(reportSource, /const dimensionMaxScores = useMemo\(\(\) => getDimensionMaxScoresFromRubricScores\(report\?\.rubric_scores\), \[report\?\.rubric_scores\]\);/);
 });
 
 

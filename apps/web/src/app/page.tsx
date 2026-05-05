@@ -203,6 +203,13 @@ type SourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+type RubricScoreItem = Readonly<{
+  score: number;
+  max_score: number;
+  dimension_id: string;
+  description: string;
+}>;
+
 type FeedbackReport = Readonly<{
   session_id: string;
   case_id: string;
@@ -428,15 +435,6 @@ const scoreDimensionLabels: Readonly<Record<string, string>> = {
   main_diagnosis: "主诊断",
   differential_diagnosis: "鉴别诊断",
   reasoning: "推理链",
-};
-
-const scoreDimensionMaxScores: Readonly<Record<string, number>> = {
-  history_taking: 25,
-  physical_exam: 15,
-  auxiliary_test: 15,
-  main_diagnosis: 15,
-  differential_diagnosis: 15,
-  reasoning: 15,
 };
 
 function getStageClass(status: StageStatus): string {
@@ -717,6 +715,24 @@ function getScorePercent(score: number, maxScore: number): number {
   }
 
   return Math.min(Math.round((score / maxScore) * 100), 100);
+}
+
+function isRubricScoreItem(value: unknown): value is RubricScoreItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.dimension_id === "string" && typeof candidate.max_score === "number";
+}
+
+function getDimensionMaxScoresFromRubricScores(rubricScores: Readonly<Record<string, unknown>> | undefined): Readonly<Record<string, number>> {
+  const dimensionMaxScores: Record<string, number> = {};
+  for (const rubricScore of Object.values(rubricScores ?? {})) {
+    if (isRubricScoreItem(rubricScore)) {
+      dimensionMaxScores[rubricScore.dimension_id] = (dimensionMaxScores[rubricScore.dimension_id] ?? 0) + rubricScore.max_score;
+    }
+  }
+  return dimensionMaxScores;
 }
 
 function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
@@ -1167,8 +1183,6 @@ function HomeContent() {
 
         setSession(nextSession);
         setSelectedCaseId(nextSession.case_id);
-        setDiagnosisValue(nextSession.diagnosis_draft.diagnosis);
-        setSupportingEvidenceValue(nextSession.diagnosis_draft.reasoning);
         setStatusText("已恢复后端训练会话，可以继续训练。");
         setErrorText(null);
       } catch (error) {
@@ -1266,6 +1280,7 @@ function HomeContent() {
     () => groupSourceReferences(feedbackReport?.source_reference_items ?? [], feedbackReport?.source_references ?? []),
     [feedbackReport?.source_reference_items, feedbackReport?.source_references],
   );
+  const reportDimensionMaxScores = useMemo(() => getDimensionMaxScoresFromRubricScores(feedbackReport?.rubric_scores), [feedbackReport?.rubric_scores]);
 
   const workflowSuggestion = useMemo(
     () => getNextWorkflowSuggestion(session, feedbackReport),
@@ -1370,8 +1385,6 @@ function HomeContent() {
       const nextSession = await createSession(selectedCaseId);
       setSession(nextSession);
       setSelectedCaseId(nextSession.case_id);
-      setDiagnosisValue(nextSession.diagnosis_draft.diagnosis);
-      setSupportingEvidenceValue(nextSession.diagnosis_draft.reasoning);
       setStatusText("已创建训练会话，可以继续训练。");
       return nextSession;
     } catch (error) {
@@ -2126,7 +2139,7 @@ function HomeContent() {
                     <div className="space-y-2 rounded-xl border border-border bg-background p-3">
                       <p className="text-xs font-medium">维度得分</p>
                       {reportDimensions.map(([key, score]) => {
-                        const maxScore = scoreDimensionMaxScores[key] ?? 100;
+                        const maxScore = reportDimensionMaxScores[key] ?? 100;
                         const percent = getScorePercent(score, maxScore);
                         return (
                           <div className="space-y-1" key={key}>

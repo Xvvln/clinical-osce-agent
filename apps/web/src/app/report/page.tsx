@@ -9,6 +9,7 @@ import {
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type RubricScoreItem,
   type SourceReferenceItem,
 } from "./report-model";
 
@@ -80,15 +81,6 @@ const scoreDimensionLabels: Readonly<Record<string, string>> = {
   reasoning: "推理链",
 };
 
-const scoreDimensionMaxScores: Readonly<Record<string, number>> = {
-  history_taking: 25,
-  physical_exam: 15,
-  auxiliary_test: 15,
-  main_diagnosis: 15,
-  differential_diagnosis: 15,
-  reasoning: 15,
-};
-
 const REPORT_BRAND_COLOR = "var(--brand)";
 const REPORT_BRAND_SCORE_TRACK_COLOR = "color-mix(in srgb, var(--brand) 12%, transparent)";
 const REPORT_BRAND_GRID_OPACITY = 0.16;
@@ -100,6 +92,24 @@ function getScorePercent(score: number, maxScore: number): number {
   }
 
   return Math.min(Math.round((score / maxScore) * 100), 100);
+}
+
+function isRubricScoreItem(value: unknown): value is RubricScoreItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.dimension_id === "string" && typeof candidate.max_score === "number";
+}
+
+function getDimensionMaxScoresFromRubricScores(rubricScores: Readonly<Record<string, unknown>> | undefined): Readonly<Record<string, number>> {
+  const dimensionMaxScores: Record<string, number> = {};
+  for (const rubricScore of Object.values(rubricScores ?? {})) {
+    if (isRubricScoreItem(rubricScore)) {
+      dimensionMaxScores[rubricScore.dimension_id] = (dimensionMaxScores[rubricScore.dimension_id] ?? 0) + rubricScore.max_score;
+    }
+  }
+  return dimensionMaxScores;
 }
 
 function getScoreStatus(score: number): string {
@@ -364,10 +374,11 @@ export default function ReportPage() {
     };
   }, []);
 
+  const dimensionMaxScores = useMemo(() => getDimensionMaxScoresFromRubricScores(report?.rubric_scores), [report?.rubric_scores]);
   const dimensions = useMemo<readonly DimensionInsight[]>(
     () =>
       Object.entries(report?.dimension_scores ?? {}).map(([key, score]) => {
-        const maxScore = scoreDimensionMaxScores[key] ?? 100;
+        const maxScore = dimensionMaxScores[key] ?? 100;
         return {
           key,
           label: scoreDimensionLabels[key] ?? key,
@@ -376,7 +387,7 @@ export default function ReportPage() {
           percent: getScorePercent(score, maxScore),
         };
       }),
-    [report?.dimension_scores],
+    [dimensionMaxScores, report?.dimension_scores],
   );
 
   const sortedDimensions = useMemo(

@@ -1699,12 +1699,15 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "skill_id": "skill_reasoning_core",
         "source_candidate_id": "skill_candidate_reasoning_core",
         "trigger_item_id": "reasoning_core",
+        "trigger_item_ids": [],
+        "case_ids": [],
         "title": "临床推理链纠偏提示",
         "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
         "status": "enabled",
         "source_report_count": 2,
         "support_count": 2,
+        "related_recommendations": [],
     }
     audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
     assert len(audit_events) == 1

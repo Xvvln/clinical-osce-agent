@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import yaml
+
 from app.graph.osce_graph import build_osce_graph
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
@@ -17,6 +19,7 @@ from app.validators.case_validator import validate_case
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
+RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 
 
 @dataclass
@@ -81,7 +84,10 @@ class OsceSessionService:
     def create_session(self, case_id: str, student_id: str) -> dict[str, Any]:
         graph_state = self.osce_graph.invoke(_initial_graph_state(case_id))
         case = load_case_node(graph_state["case_id"])
-        enabled_skills = self.training_skill_store.list_enabled_skills()
+        enabled_skills = _enabled_skills_for_case(
+            self.training_skill_store.list_enabled_skills(),
+            graph_state["case_id"],
+        )
         session = OsceSession(
             session_id=str(uuid4()),
             student_id=student_id,
@@ -492,8 +498,8 @@ def _serialize_auxiliary_test_option(test: AuxiliaryTestItem) -> dict[str, Any]:
 
 def _serialize_diagnosis_draft(case: Case) -> dict[str, str]:
     return {
-        "diagnosis": case.diagnosis.main_diagnosis,
-        "reasoning": "".join(reasoning_point.statement for reasoning_point in case.diagnosis.reasoning_points),
+        "diagnosis": "",
+        "reasoning": "",
     }
 
 
@@ -705,6 +711,45 @@ def _training_progress_next_focus(
 
 def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
+
+
+def _enabled_skills_for_case(skills: list[dict[str, Any]], case_id: str) -> list[dict[str, Any]]:
+    rubric_item_ids = _rubric_item_ids(case_id)
+    return [skill for skill in skills if _enabled_skill_applies_to_case(skill, case_id, rubric_item_ids)]
+
+
+def _enabled_skill_applies_to_case(skill: dict[str, Any], case_id: str, rubric_item_ids: set[str]) -> bool:
+    case_ids = [str(skill_case_id) for skill_case_id in skill.get("case_ids", [])]
+    if case_ids:
+        return case_id in case_ids
+
+    related_recommendations = [str(reference) for reference in skill.get("related_recommendations", [])]
+    if related_recommendations:
+        rubric_prefix = f"rubric:{case_id}_rubric."
+        return any(reference.startswith(rubric_prefix) or reference == f"case:{case_id}" for reference in related_recommendations)
+
+    trigger_item_ids = [str(item_id) for item_id in skill.get("trigger_item_ids", [])]
+    if trigger_item_ids:
+        return bool(set(trigger_item_ids) & rubric_item_ids)
+
+    trigger_item_id = str(skill.get("trigger_item_id", ""))
+    if trigger_item_id in rubric_item_ids:
+        return True
+    if trigger_item_id.startswith("training_pattern_"):
+        return any(item_id in trigger_item_id for item_id in rubric_item_ids)
+    return False
+
+
+def _rubric_item_ids(case_id: str) -> set[str]:
+    rubric_path = RUBRICS_DIR / f"{case_id}_rubric.yaml"
+    if not rubric_path.exists():
+        return set()
+    rubric = yaml.safe_load(rubric_path.read_text(encoding="utf-8"))
+    return {
+        str(item["item_id"])
+        for dimension in rubric.get("dimensions", [])
+        for item in dimension.get("items", [])
+    }
 
 
 def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:

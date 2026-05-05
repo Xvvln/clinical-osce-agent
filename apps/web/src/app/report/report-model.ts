@@ -21,12 +21,19 @@ export type SourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+export type RubricScoreItem = Readonly<{
+  score: number;
+  max_score: number;
+  dimension_id: string;
+  description: string;
+}>;
+
 export type FeedbackReportPayload = Readonly<{
   session_id: string;
   case_id: string;
   total_score: number;
   dimension_scores: Readonly<Record<string, number>>;
-  rubric_scores: Readonly<Record<string, unknown>>;
+  rubric_scores: Readonly<Record<string, RubricScoreItem>>;
   missed_items: readonly string[];
   strengths: readonly string[];
   reasoning_errors: readonly string[];

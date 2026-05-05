@@ -89,6 +89,7 @@ def test_create_default_vertex_gemini_scorer_sets_7897_proxy(tmp_path, monkeypat
     monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7897")
     monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", lambda **kwargs: FakeClient())
 
     scorer = create_default_vertex_gemini_scorer()
@@ -96,6 +97,7 @@ def test_create_default_vertex_gemini_scorer_sets_7897_proxy(tmp_path, monkeypat
     assert scorer is not None
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["ALL_PROXY"] == "http://127.0.0.1:7897"
 
 
 def test_create_default_vertex_gemini_scorer_falls_back_when_client_dependency_is_missing(monkeypatch) -> None:

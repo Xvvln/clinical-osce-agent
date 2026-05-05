@@ -116,6 +116,7 @@ def create_default_training_skill_candidate_generator(
         return TemplateTrainingSkillCandidateGenerator()
     os.environ["HTTP_PROXY"] = settings.proxy_url
     os.environ["HTTPS_PROXY"] = settings.proxy_url
+    os.environ["ALL_PROXY"] = settings.proxy_url
     return VertexGeminiTrainingSkillCandidateGenerator(settings=settings, client=client)
 
 
@@ -188,6 +189,7 @@ def _candidate_from_content(
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": [item.item_id for item in context.missed_items],
+        "case_ids": list(context.case_ids),
         "title": content.title,
         "description": content.description,
         "suggested_strategy": content.suggested_strategy,
@@ -203,6 +205,7 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": [item.item_id for item in context.missed_items],
+        "case_ids": list(context.case_ids),
         "title": "OSCE 训练模式纠偏提示",
         "description": _candidate_description(context),
         "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",

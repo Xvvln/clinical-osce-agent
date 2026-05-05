@@ -215,6 +215,7 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
         {
             "candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
+            "case_ids": ["appendicitis_001"],
             "title": "临床推理链纠偏提示",
             "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
             "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
@@ -333,7 +334,7 @@ def test_current_user_can_delete_only_owned_session(tmp_path) -> None:
     assert list_response.json() == {"sessions": []}
 
 
-def test_create_session_returns_case_specific_diagnosis_draft() -> None:
+def test_create_session_does_not_return_case_specific_diagnosis_draft() -> None:
     create_response = client.post(
         "/api/sessions",
         json={"case_id": "pneumonia_001", "student_id": "student_demo"},
@@ -343,8 +344,8 @@ def test_create_session_returns_case_specific_diagnosis_draft() -> None:
     created = create_response.json()
     assert created["case_id"] == "pneumonia_001"
     assert created["diagnosis_draft"] == {
-        "diagnosis": "社区获得性肺炎",
-        "reasoning": "发热、咳嗽、黄痰和呼吸相关胸痛提示下呼吸道感染。体温升高及右下肺湿啰音支持肺部感染体征。血常规炎症指标升高且胸片见右下肺浸润影，支持社区获得性肺炎。",
+        "diagnosis": "",
+        "reasoning": "",
     }
 
 
@@ -477,11 +478,14 @@ def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> Non
         {
             "candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
+            "trigger_item_ids": ["reasoning_core"],
+            "case_ids": ["appendicitis_001"],
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
             "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
             "source_report_count": 3,
             "support_count": 2,
+            "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
             "review": {"status": "approved", "regression_passed": True},
         }
     )
@@ -495,6 +499,33 @@ def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> Non
     assert create_response.json()["evolution_candidates"] == [
         "临床推理链纠偏提示：在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
     ]
+
+
+def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_case(tmp_path) -> None:
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_abdominal_pattern",
+            "trigger_item_id": "training_pattern_dxd_crohn_dxd_ectopic",
+            "trigger_item_ids": ["dxd_crohn", "dxd_ectopic"],
+            "case_ids": ["appendicitis_001"],
+            "title": "急腹症鉴别诊断与全面评估逻辑训练",
+            "description": "急腹症鉴别诊断反复遗漏。",
+            "suggested_strategy": "只在腹痛病例中提示学生系统性排除急腹症相关鉴别诊断。",
+            "source_report_count": 7,
+            "support_count": 7,
+            "related_recommendations": ["rubric:appendicitis_001_rubric.item.dxd_crohn"],
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "acs_001", "student_id": "student_demo"},
+    )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["evolution_candidates"] == []
 
 
 def test_osce_session_returns_training_progress_map() -> None:
@@ -655,8 +686,8 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     assert created["case_title"] == "右下腹痛教学病例"
     assert created["chief_complaint"] == "转移性右下腹痛 24 小时，伴恶心、低热"
     assert created["diagnosis_draft"] == {
-        "diagnosis": "急性阑尾炎",
-        "reasoning": "转移性右下腹痛是急性阑尾炎的典型症状。McBurney 点压痛、反跳痛、肌紧张和 Rovsing 征提示右下腹腹膜刺激征。白细胞升高伴 CRP 升高支持炎症性腹痛。腹部超声或腹部 CT 的阑尾异常表现支持阑尾区炎症。尿常规阴性有助于排除输尿管结石。男性患者可直接排除异位妊娠。低热和腹部呼吸运动减弱支持局部炎症刺激。",
+        "diagnosis": "",
+        "reasoning": "",
     }
     assert created["physical_exam_options"] == [
         {
@@ -961,6 +992,7 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         {
             "candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
+            "case_ids": ["appendicitis_001"],
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
             "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
@@ -1060,6 +1092,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         {
             "candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
+            "case_ids": ["appendicitis_001"],
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
             "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
