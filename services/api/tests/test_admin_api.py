@@ -16,6 +16,7 @@ from app.services.osce_session_service import OsceSession, OsceSessionService, o
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
 from app.services.training_event_store import TrainingEventStore
+from app.services.training_skill_candidate_service import TemplateTrainingSkillCandidateGenerator, TrainingSkillCandidateService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
 
@@ -1630,6 +1631,115 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "reviewer_email": "admin@example.test",
         "skill_id": "skill_reasoning_core",
     }
+
+
+def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    session_service = OsceSessionService(
+        report_store=ReportStore(tmp_path / "reports.sqlite3"),
+        training_event_store=event_store,
+        training_skill_store=TrainingSkillStore(tmp_path / "training_skills.sqlite3"),
+        session_store=OsceSessionStore(tmp_path / "osce_sessions.sqlite3"),
+    )
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    candidate_service = TrainingSkillCandidateService(generator=TemplateTrainingSkillCandidateGenerator())
+
+    monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
+    monkeypatch.setattr(main, "osce_session_service", session_service, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_service", candidate_service, raising=False)
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+
+    with TestClient(main.app) as client:
+        student_register = client.post(
+            "/api/auth/register",
+            json={"email": "student-loop@example.test", "password": "safe-student-password", "display_name": "学生"},
+        )
+        assert student_register.status_code == 200
+
+        for _ in range(2):
+            session_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+            assert session_response.status_code == 200
+            session_id = session_response.json()["session_id"]
+            submit_response = client.post(
+                f"/api/sessions/{session_id}/submit-diagnosis",
+                json={"diagnosis": "暂不确定", "reasoning": "证据不足，先提交一次低质量训练。"},
+            )
+            assert submit_response.status_code == 200
+            report_response = client.get(f"/api/sessions/{session_id}/report")
+            assert report_response.status_code == 200
+            report = report_response.json()
+            assert report["source_reference_items"]
+            assert report["explanation_source_items"]
+
+        admin_register = client.post(
+            "/api/auth/register",
+            json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
+        )
+        assert admin_register.status_code == 200
+
+        insights_response = client.get("/api/admin/insights")
+        assert insights_response.status_code == 200
+        assert insights_response.json()["insights"]["report_count"] == 2
+
+        generate_response = client.post("/api/admin/evolution/candidates/generate")
+        assert generate_response.status_code == 200
+        generated_payload = generate_response.json()
+        assert generated_payload["generated_count"] == 1
+        assert generated_payload["ready_for_review_count"] == 1
+        candidate_id = generated_payload["candidates"][0]["candidate_id"]
+
+        candidate_detail_response = client.get(f"/api/admin/evolution/candidates/{candidate_id}")
+        assert candidate_detail_response.status_code == 200
+        candidate = candidate_detail_response.json()["candidate"]
+        assert candidate["candidate_id"].startswith("skill_candidate_training_pattern_")
+        assert len(candidate["trigger_item_ids"]) > 1
+        assert candidate["source_report_count"] == 2
+        assert candidate["support_count"] == 2
+        assert candidate["review"]["status"] == "ready_for_review"
+        assert candidate["review"]["regression_passed"] is True
+
+        approve_response = client.post("/api/admin/evolution/approve", json={"candidate_id": candidate_id})
+        assert approve_response.status_code == 200
+        skill_id = approve_response.json()["skill_id"]
+
+        student_login = client.post(
+            "/api/auth/login",
+            json={"email": "student-loop@example.test", "password": "safe-student-password"},
+        )
+        assert student_login.status_code == 200
+        later_session_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+        assert later_session_response.status_code == 200
+        later_session = later_session_response.json()
+        later_session_id = later_session["session_id"]
+        assert later_session["evolution_candidates"] == [
+            f"{candidate['title']}：{candidate['suggested_strategy']}"
+        ]
+
+        hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
+        assert hint_response.status_code == 200
+        assert "本轮训练重点" in hint_response.json()["hint"]
+        profile_response = client.get("/api/me/profile")
+        assert profile_response.status_code == 200
+        assert profile_response.json()["profile"]["skill_accumulation"]["enabled_skill_count"] == 1
+        assert profile_response.json()["profile"]["skill_accumulation"]["applied_skill_count"] == 1
+
+        admin_login = client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.test", "password": "safe-admin-password"},
+        )
+        assert admin_login.status_code == 200
+        later_events_response = client.get(f"/api/admin/sessions/{later_session_id}/events")
+        assert later_events_response.status_code == 200
+        later_events = later_events_response.json()["events"]
+        assert [event["event_type"] for event in later_events][:2] == [
+            "session_created",
+            "training_skill_applied",
+        ]
+        assert later_events[1]["payload"]["skill_id"] == skill_id
 
 
 def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, monkeypatch) -> None:
