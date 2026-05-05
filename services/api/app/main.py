@@ -13,6 +13,7 @@ from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.rule_evaluator import RUBRICS_DIR
+from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
@@ -160,6 +161,14 @@ class SubmitDiagnosisRequest(BaseModel):
 
 class HypothesisRequest(BaseModel):
     hypothesis: str
+
+
+class StudentModelConfigTestRequest(BaseModel):
+    provider: str
+    api_key: str = ""
+    model: str = ""
+    base_url: str = ""
+    proxy_url: str = ""
 
 
 class AdminTrainingSkillReviewRequest(BaseModel):
@@ -454,6 +463,22 @@ def read_root() -> dict[str, str]:
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/model-config/test")
+def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, object]:
+    try:
+        return test_student_model_config_connectivity(
+            {
+                "provider": request.provider,
+                "api_key": request.api_key,
+                "model": request.model,
+                "base_url": request.base_url,
+                "proxy_url": request.proxy_url,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @app.get("/api/cases")

@@ -25,6 +25,30 @@ type OsceDockMenuGroup = "training" | "resources" | "system";
 
 type OsceDockSide = "left" | "right";
 
+type ApiConfigProvider = "local_backend" | "gemini" | "openai_compatible";
+
+type StudentApiConfig = Readonly<{
+  provider: ApiConfigProvider;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  proxyUrl: string;
+}>;
+
+type StudentApiConfigTestResponse = Readonly<{
+  ok: boolean;
+  provider: ApiConfigProvider;
+  message: string;
+  checked_url?: string;
+}>;
+
+type ApiConfigProviderOption = Readonly<{
+  id: ApiConfigProvider;
+  label: string;
+  defaultModel: string;
+  defaultBaseUrl: string;
+}>;
+
 type OsceDockPosition = Readonly<{
   x: number;
   y: number;
@@ -345,10 +369,32 @@ const DEFAULT_AUTH_EMAIL = "1@1.test";
 const DEFAULT_AUTH_PASSWORD = "1";
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
 const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
+const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
 const OSCE_DOCK_MARGIN = 20;
 const OSCE_DOCK_BUTTON_SIZE = 56;
 const OSCE_DOCK_DRAG_THRESHOLD = 4;
+
+const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
+  {
+    id: "local_backend",
+    label: "本地后端",
+    defaultModel: "",
+    defaultBaseUrl: "http://127.0.0.1:8000",
+  },
+  {
+    id: "gemini",
+    label: "Gemini Developer API",
+    defaultModel: "gemini-3.1-flash-lite-preview",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com",
+  },
+  {
+    id: "openai_compatible",
+    label: "OpenAI 兼容",
+    defaultModel: "gpt-4.1-mini",
+    defaultBaseUrl: "https://api.openai.com/v1",
+  },
+];
 
 const unavailablePatientProfile: StudentVisiblePatientProfile = {
   age: "未开放",
@@ -857,6 +903,73 @@ async function requestJson<TResponse>(path: string, init: RequestInit): Promise<
   return (await response.json()) as TResponse;
 }
 
+function isApiConfigProvider(value: unknown): value is ApiConfigProvider {
+  return apiConfigProviderOptions.some((option) => option.id === value);
+}
+
+function getApiConfigProviderOption(provider: ApiConfigProvider): ApiConfigProviderOption {
+  return apiConfigProviderOptions.find((option) => option.id === provider) ?? apiConfigProviderOptions[0];
+}
+
+function createDefaultStudentApiConfig(): StudentApiConfig {
+  const defaultProvider = apiConfigProviderOptions[0];
+  return {
+    provider: defaultProvider.id,
+    apiKey: "",
+    model: defaultProvider.defaultModel,
+    baseUrl: defaultProvider.defaultBaseUrl,
+    proxyUrl: "http://127.0.0.1:7897",
+  };
+}
+
+function loadStudentApiConfig(): StudentApiConfig {
+  const defaultConfig = createDefaultStudentApiConfig();
+  if (typeof window === "undefined") {
+    return defaultConfig;
+  }
+
+  const storedValue = window.localStorage.getItem(STUDENT_API_CONFIG_STORAGE_KEY);
+  if (!storedValue) {
+    return defaultConfig;
+  }
+
+  try {
+    const parsedValue = JSON.parse(storedValue) as Readonly<Partial<StudentApiConfig>>;
+    const provider = isApiConfigProvider(parsedValue.provider) ? parsedValue.provider : defaultConfig.provider;
+    const providerOption = getApiConfigProviderOption(provider);
+    return {
+      provider,
+      apiKey: typeof parsedValue.apiKey === "string" ? parsedValue.apiKey : "",
+      model: typeof parsedValue.model === "string" ? parsedValue.model : providerOption.defaultModel,
+      baseUrl: typeof parsedValue.baseUrl === "string" ? parsedValue.baseUrl : providerOption.defaultBaseUrl,
+      proxyUrl: typeof parsedValue.proxyUrl === "string" ? parsedValue.proxyUrl : defaultConfig.proxyUrl,
+    };
+  } catch {
+    return defaultConfig;
+  }
+}
+
+function saveStudentApiConfig(config: StudentApiConfig): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(STUDENT_API_CONFIG_STORAGE_KEY, JSON.stringify(config));
+}
+
+function testStudentApiConfigConnection(config: StudentApiConfig): Promise<StudentApiConfigTestResponse> {
+  return requestJson<StudentApiConfigTestResponse>("/api/model-config/test", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: config.provider,
+      api_key: config.apiKey,
+      model: config.model,
+      base_url: config.baseUrl,
+      proxy_url: config.proxyUrl,
+    }),
+  });
+}
+
 async function getCases(): Promise<readonly CaseOption[]> {
   const response = await requestJson<CaseListResponse>("/api/cases", {
     method: "GET",
@@ -1102,6 +1215,11 @@ function HomeContent() {
   const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isOsceDockOpen, setIsOsceDockOpen] = useState(false);
   const [osceDockMenuGroup, setOsceDockMenuGroup] = useState<OsceDockMenuGroup | null>(null);
+  const [isApiConfigHelpOpen, setIsApiConfigHelpOpen] = useState(false);
+  const [studentApiConfig, setStudentApiConfig] = useState<StudentApiConfig>(createDefaultStudentApiConfig());
+  const [apiConfigStatusText, setApiConfigStatusText] = useState("配置仅保存到本机浏览器。");
+  const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
+  const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
     procedures: true,
@@ -1146,6 +1264,10 @@ function HomeContent() {
   });
   const osceDockDragRef = useRef<OsceDockDragState | null>(null);
   const suppressOsceDockClickRef = useRef(false);
+
+  useEffect(() => {
+    setStudentApiConfig(loadStudentApiConfig());
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1425,6 +1547,40 @@ function HomeContent() {
     setIsOsceDockOpen(false);
   }
 
+  function handleStudentApiProviderChange(provider: ApiConfigProvider): void {
+    const providerOption = getApiConfigProviderOption(provider);
+    setStudentApiConfig((currentConfig) => ({
+      ...currentConfig,
+      provider,
+      model: providerOption.defaultModel,
+      baseUrl: providerOption.defaultBaseUrl,
+    }));
+    setApiConfigTestResult(null);
+    setApiConfigStatusText("已切换服务端，保存后生效。");
+  }
+
+  function handleSaveStudentApiConfig(): void {
+    saveStudentApiConfig(studentApiConfig);
+    setApiConfigStatusText("已保存到本机浏览器。");
+    setApiConfigTestResult(null);
+  }
+
+  async function handleTestStudentApiConfig(): Promise<void> {
+    setIsTestingStudentApiConfig(true);
+    setApiConfigStatusText("正在测试连通性...");
+    setApiConfigTestResult(null);
+    try {
+      const result = await testStudentApiConfigConnection(studentApiConfig);
+      setApiConfigTestResult(result);
+      setApiConfigStatusText(result.message);
+    } catch (error) {
+      setApiConfigStatusText(error instanceof Error ? error.message : "连通性测试失败。");
+      setApiConfigTestResult(null);
+    } finally {
+      setIsTestingStudentApiConfig(false);
+    }
+  }
+
   function handleOsceDockButtonClick() {
     if (suppressOsceDockClickRef.current) {
       suppressOsceDockClickRef.current = false;
@@ -1445,6 +1601,7 @@ function HomeContent() {
   const auxiliaryTestOptions = session?.auxiliary_test_options ?? selectedCase?.auxiliaryTestOptions ?? [];
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
+  const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
     if (!session) {
@@ -2530,9 +2687,9 @@ function HomeContent() {
                 ) : null}
                 {osceDockMenuGroup === "system" ? (
                   <div className="grid gap-2">
-                    <a className={osceDockActionClass} href={ADMIN_MODEL_CONFIG_URL} rel="noreferrer" target="_blank">
+                    <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
                       API 配置
-                    </a>
+                    </button>
                   </div>
                 ) : null}
               </div>
@@ -2617,6 +2774,131 @@ function HomeContent() {
             </div>
             <div className="mt-4">
               <CoverageMap trainingProgress={session.training_progress} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isApiConfigHelpOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium text-brand">系统与配置</p>
+                <h2 className="mt-1 text-base font-semibold">API 配置</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；配置只保存到本机浏览器。</p>
+              </div>
+              <button
+                aria-label="关闭 API 配置说明"
+                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
+                onClick={() => setIsApiConfigHelpOpen(false)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-5 space-y-4">
+              <section className="space-y-2">
+                <p className="text-sm font-medium">服务端</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
+                      studentApiConfig.provider === "local_backend" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                    }`}
+                    onClick={() => handleStudentApiProviderChange("local_backend")}
+                    type="button"
+                  >
+                    本地后端
+                  </button>
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
+                      studentApiConfig.provider === "gemini" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                    }`}
+                    onClick={() => handleStudentApiProviderChange("gemini")}
+                    type="button"
+                  >
+                    Gemini Developer API
+                  </button>
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
+                      studentApiConfig.provider === "openai_compatible" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                    }`}
+                    onClick={() => handleStudentApiProviderChange("openai_compatible")}
+                    type="button"
+                  >
+                    OpenAI 兼容
+                  </button>
+                </div>
+              </section>
+              <div className="grid gap-3">
+                <label className="space-y-1 text-sm font-medium" htmlFor="student-api-key-input">
+                  <span>API Key</span>
+                  <input
+                    autoComplete="off"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    id="student-api-key-input"
+                    onChange={(event) => {
+                      setStudentApiConfig((currentConfig) => ({ ...currentConfig, apiKey: event.target.value }));
+                      setApiConfigTestResult(null);
+                    }}
+                    placeholder={studentApiConfig.provider === "local_backend" ? "本地后端无需填写" : "输入服务商密钥"}
+                    type="password"
+                    value={studentApiConfig.apiKey}
+                  />
+                </label>
+                <label className="space-y-1 text-sm font-medium" htmlFor="student-api-model-input">
+                  <span>模型</span>
+                  <input
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    id="student-api-model-input"
+                    onChange={(event) => {
+                      setStudentApiConfig((currentConfig) => ({ ...currentConfig, model: event.target.value }));
+                      setApiConfigTestResult(null);
+                    }}
+                    placeholder={selectedApiConfigProviderOption.defaultModel || "本地后端无需模型名"}
+                    value={studentApiConfig.model}
+                  />
+                </label>
+                <label className="space-y-1 text-sm font-medium" htmlFor="student-api-base-url-input">
+                  <span>Base URL</span>
+                  <input
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    id="student-api-base-url-input"
+                    onChange={(event) => {
+                      setStudentApiConfig((currentConfig) => ({ ...currentConfig, baseUrl: event.target.value }));
+                      setApiConfigTestResult(null);
+                    }}
+                    value={studentApiConfig.baseUrl}
+                  />
+                </label>
+                <label className="space-y-1 text-sm font-medium" htmlFor="student-api-proxy-url-input">
+                  <span>代理</span>
+                  <input
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    id="student-api-proxy-url-input"
+                    onChange={(event) => {
+                      setStudentApiConfig((currentConfig) => ({ ...currentConfig, proxyUrl: event.target.value }));
+                      setApiConfigTestResult(null);
+                    }}
+                    placeholder="http://127.0.0.1:7897"
+                    value={studentApiConfig.proxyUrl}
+                  />
+                </label>
+              </div>
+              <p className="rounded-lg border border-border bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                {apiConfigStatusText}
+                {apiConfigTestResult?.checked_url ? <span className="block break-all">检查地址：{apiConfigTestResult.checked_url}</span> : null}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent"
+                  onClick={handleSaveStudentApiConfig}
+                  type="button"
+                >
+                  保存配置
+                </button>
+                <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">该配置只用于学生端连通性检查，不参与标准诊断裁判或评分决策。</p>
             </div>
           </div>
         </div>

@@ -68,6 +68,7 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);
   assert.match(pageSource, /const \[isOsceDockOpen, setIsOsceDockOpen\] = useState\(false\);/);
   assert.match(pageSource, /const \[osceDockMenuGroup, setOsceDockMenuGroup\] = useState<OsceDockMenuGroup \| null>\(null\);/);
+  assert.match(pageSource, /const \[isApiConfigHelpOpen, setIsApiConfigHelpOpen\] = useState\(false\);/);
   assert.match(pageSource, /const osceDockSubmenuAlignmentClass = osceDockPosition\.side === "right" \? "right-full mr-2" : "left-full ml-2";/);
   assert.match(pageSource, /aria-label="打开 OSCE 快捷入口"/);
   assert.match(pageSource, /function selectOsceDockMenuGroup\(nextGroup: OsceDockMenuGroup\): void/);
@@ -91,7 +92,8 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /href="\/profile"/);
   assert.match(pageSource, /href="\/safety"/);
   assert.match(pageSource, /href="\/sources"/);
-  assert.match(pageSource, /href=\{ADMIN_MODEL_CONFIG_URL\}/);
+  assert.match(pageSource, /onClick=\{\(\) => setIsApiConfigHelpOpen\(true\)\}/);
+  assert.doesNotMatch(pageSource, /<a className=\{osceDockActionClass\} href=\{ADMIN_MODEL_CONFIG_URL\}/);
   assert.match(pageSource, /API 配置/);
   assert.match(pageSource, /安全声明/);
   assert.match(pageSource, /数据来源/);
@@ -102,6 +104,33 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /absolute inset-1 rounded-full border-2 border-white bg-transparent/);
   assert.doesNotMatch(pageSource, /absolute -inset-2 rounded-full border-2 border-white/);
   assert.match(pageSource, /relative flex size-14/);
+});
+
+test("home OSCE dock opens local API config help instead of navigating directly to admin", () => {
+  assert.match(pageSource, /type ApiConfigProvider = "local_backend" \| "gemini" \| "openai_compatible";/);
+  assert.match(pageSource, /const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";/);
+  assert.match(pageSource, /function createDefaultStudentApiConfig\(\): StudentApiConfig/);
+  assert.match(pageSource, /function loadStudentApiConfig\(\): StudentApiConfig/);
+  assert.match(pageSource, /function saveStudentApiConfig\(config: StudentApiConfig\): void/);
+  assert.match(pageSource, /function testStudentApiConfigConnection\(config: StudentApiConfig\): Promise<StudentApiConfigTestResponse>/);
+  assert.match(pageSource, /\/api\/model-config\/test/);
+  assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);
+  assert.match(pageSource, /aria-label="关闭 API 配置说明"/);
+  assert.match(pageSource, />\s*API 配置\s*</);
+  assert.match(pageSource, />\s*服务端\s*</);
+  assert.match(pageSource, />\s*本地后端\s*</);
+  assert.match(pageSource, />\s*Gemini Developer API\s*</);
+  assert.match(pageSource, />\s*OpenAI 兼容\s*</);
+  assert.match(pageSource, /id="student-api-key-input"/);
+  assert.match(pageSource, /id="student-api-model-input"/);
+  assert.match(pageSource, /id="student-api-base-url-input"/);
+  assert.match(pageSource, /id="student-api-proxy-url-input"/);
+  assert.match(pageSource, /onClick=\{handleSaveStudentApiConfig\}/);
+  assert.match(pageSource, /onClick=\{\(\) => void handleTestStudentApiConfig\(\)\}/);
+  assert.match(pageSource, />\s*保存配置\s*<\/button>/);
+  assert.match(pageSource, />\{isTestingStudentApiConfig \? "测试中" : "测试连通性"\}<\/button>/);
+  assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
+  assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
 });
 
 test("home header uses a test account menu for profile actions", () => {
