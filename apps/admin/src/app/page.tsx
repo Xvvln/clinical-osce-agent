@@ -154,6 +154,22 @@ type TrainingSkillCandidateDetail = Readonly<{
   review: TrainingSkillCandidateReview;
 }>;
 
+type TrainingSkillEffectGroup = Readonly<{
+  session_count: number;
+  average_total_score: number;
+  missed_item_counts: Record<string, number>;
+  skill_ids: readonly string[];
+}>;
+
+type TrainingSkillEffectSummary = Readonly<{
+  status: "ready" | "insufficient_samples";
+  label: string;
+  min_sessions_per_group: number;
+  score_delta: number | null;
+  with_skill: TrainingSkillEffectGroup;
+  without_skill: TrainingSkillEffectGroup;
+}>;
+
 type TrainingEventRecord = Readonly<{
   session_id: string;
   case_id: string;
@@ -324,6 +340,10 @@ type EvaluationRunResponse = Readonly<{
 
 type AdminInsightsResponse = Readonly<{
   insights: AdminTrainingInsights;
+}>;
+
+type AdminSkillEffectsResponse = Readonly<{
+  skill_effects: TrainingSkillEffectSummary;
 }>;
 
 type CandidateListResponse = Readonly<{
@@ -511,6 +531,13 @@ async function getAdminInsights(): Promise<AdminTrainingInsights> {
   await assertAdminResponseOk(response, "读取错误模式统计");
   const payload = (await response.json()) as AdminInsightsResponse;
   return payload.insights;
+}
+
+async function getTrainingSkillEffects(): Promise<TrainingSkillEffectSummary> {
+  const response = await fetch("/api/admin/evolution/skill-effects", { method: "GET" });
+  await assertAdminResponseOk(response, "读取 Skill 效果统计");
+  const payload = (await response.json()) as AdminSkillEffectsResponse;
+  return payload.skill_effects;
 }
 
 async function getAdminEvaluations(): Promise<readonly EvaluationBatchSummary[]> {
@@ -715,6 +742,7 @@ export default function AdminDashboardPage() {
   const [selectedReport, setSelectedReport] = useState<AdminSessionReport | null>(null);
   const [reports, setReports] = useState<readonly AdminSessionReport[]>([]);
   const [insights, setInsights] = useState<AdminTrainingInsights | null>(null);
+  const [skillEffects, setSkillEffects] = useState<TrainingSkillEffectSummary | null>(null);
   const [evaluations, setEvaluations] = useState<readonly EvaluationBatchSummary[]>([]);
   const [selectedEvaluation, setSelectedEvaluation] = useState<EvaluationBatchDetail | null>(null);
   const [isRunningEvaluation, setIsRunningEvaluation] = useState(false);
@@ -792,12 +820,13 @@ export default function AdminDashboardPage() {
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
 
   async function loadDashboard() {
-    const [nextCases, nextSources, nextSessions, nextReports, nextInsights, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
+    const [nextCases, nextSources, nextSessions, nextReports, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminSessions(),
       getAdminReports(),
       getAdminInsights(),
+      getTrainingSkillEffects(),
       getAdminEvaluations(),
       getTrainingSkillCandidates(),
       getAdminAuditEvents(),
@@ -807,6 +836,7 @@ export default function AdminDashboardPage() {
     setSessions(nextSessions);
     setReports(nextReports);
     setInsights(nextInsights);
+    setSkillEffects(nextSkillEffects);
     setEvaluations(nextEvaluations);
     setCandidates(nextCandidates);
     setAuditEvents(nextAuditEvents);
@@ -1014,13 +1044,15 @@ export default function AdminDashboardPage() {
     setStatusText("正在从训练日志生成候选 Skill...");
     try {
       const result = await generateTrainingSkillCandidates();
-      const [nextInsights, nextCandidates, nextEvaluations, nextAuditEvents] = await Promise.all([
+      const [nextInsights, nextSkillEffects, nextCandidates, nextEvaluations, nextAuditEvents] = await Promise.all([
         getAdminInsights(),
+        getTrainingSkillEffects(),
         getTrainingSkillCandidates(),
         getAdminEvaluations(),
         getAdminAuditEvents(),
       ]);
       setInsights(nextInsights);
+      setSkillEffects(nextSkillEffects);
       setCandidates(nextCandidates);
       setEvaluations(nextEvaluations);
       setAuditEvents(nextAuditEvents);
@@ -1059,10 +1091,14 @@ export default function AdminDashboardPage() {
     } else {
       await rejectTrainingSkillCandidate(selectedCandidate.candidate_id);
     }
-    const nextCandidates = await getTrainingSkillCandidates();
-    const nextAuditEvents = await getAdminAuditEvents();
+    const [nextCandidates, nextAuditEvents, nextSkillEffects] = await Promise.all([
+      getTrainingSkillCandidates(),
+      getAdminAuditEvents(),
+      getTrainingSkillEffects(),
+    ]);
     setCandidates(nextCandidates);
     setAuditEvents(nextAuditEvents);
+    setSkillEffects(nextSkillEffects);
     setSelectedCandidate(await getTrainingSkillCandidate(selectedCandidate.candidate_id));
     setCandidateAuditEvents(await getTrainingSkillCandidateEvents(selectedCandidate.candidate_id));
     setStatusText(action === "approve" ? "已批准并启用候选 Skill。" : "已拒绝候选 Skill。");
@@ -1762,6 +1798,47 @@ export default function AdminDashboardPage() {
                   <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">暂无独立审核审计日志。</p>
                 )}
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Skill Effects</p>
+                  <h2 className="mt-1 text-xl font-semibold">Skill 效果统计</h2>
+                </div>
+                <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
+                  {skillEffects?.label ?? "待读取"}
+                </p>
+              </div>
+              {skillEffects ? (
+                <div className="mt-4 grid gap-3">
+                  {skillEffects.status === "insufficient_samples" ? (
+                    <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm leading-6 text-[#6F6257]">
+                      样本不足：使用 Skill 与未使用 Skill 的训练报告各至少需要 {skillEffects.min_sessions_per_group} 份，当前只展示描述性计数，不计算提升。
+                    </p>
+                  ) : (
+                    <p className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm leading-6 text-[#6F6257]">
+                      描述性对比：使用 Skill 组平均分较未使用组 {skillEffects.score_delta !== null && skillEffects.score_delta >= 0 ? "+" : ""}{skillEffects.score_delta} 分，仅用于教学复盘，不作为因果结论。
+                    </p>
+                  )}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
+                      <p className="text-xs text-[#8A7D6F]">使用 Skill 组</p>
+                      <p className="mt-1 text-2xl font-semibold">{skillEffects.with_skill.session_count}</p>
+                      <p className="mt-1 text-xs text-[#6F6257]">平均分 {skillEffects.with_skill.average_total_score.toFixed(1)}</p>
+                      <p className="mt-2 break-words text-xs text-[#8A7D6F]">Skill：{skillEffects.with_skill.skill_ids.length > 0 ? skillEffects.with_skill.skill_ids.join("、") : "无"}</p>
+                    </div>
+                    <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
+                      <p className="text-xs text-[#8A7D6F]">未使用 Skill 组</p>
+                      <p className="mt-1 text-2xl font-semibold">{skillEffects.without_skill.session_count}</p>
+                      <p className="mt-1 text-xs text-[#6F6257]">平均分 {skillEffects.without_skill.average_total_score.toFixed(1)}</p>
+                      <p className="mt-2 text-xs text-[#8A7D6F]">漏项种类 {Object.keys(skillEffects.without_skill.missed_item_counts).length}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 Skill 效果统计。</p>
+              )}
             </section>
 
             <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">

@@ -15,6 +15,7 @@ from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
+from app.services.training_skill_effect_service import TrainingSkillEffectService
 from app.services.training_skill_regression_gate import training_skill_regression_gate
 from app.validators.case_validator import validate_case, validate_case_rubric_pair, validate_rubric
 
@@ -728,6 +729,16 @@ def get_admin_training_insights(
     session_ids = _real_training_session_ids()
     insights = TrainingInsightService(osce_session_service.training_event_store).summarize_sessions(session_ids)
     return {"insights": insights}
+
+
+@app.get("/api/admin/evolution/skill-effects")
+def get_admin_training_skill_effects(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    session_ids = _real_training_session_ids()
+    skill_effects = TrainingSkillEffectService(osce_session_service.training_event_store).summarize_sessions(session_ids)
+    return {"skill_effects": skill_effects}
 
 
 @app.get("/api/admin/evaluations")

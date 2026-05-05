@@ -683,6 +683,89 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
     }
 
 
+def test_admin_can_read_training_skill_effect_summary_with_insufficient_samples(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    session_store.save_session(
+        OsceSession(
+            session_id="session_effect_with_skill",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="report_ready",
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_effect_without_skill",
+            student_id="student_b",
+            case_id="appendicitis_001",
+            stage="report_ready",
+        )
+    )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    event_store.append_event(
+        session_id="session_effect_with_skill",
+        case_id="appendicitis_001",
+        student_id="student_a",
+        event_type="training_skill_applied",
+        payload={
+            "skill_id": "skill_training_pattern_reasoning_core",
+            "title": "训练模式纠偏提示",
+            "suggested_strategy": "提醒学生复盘证据链。",
+        },
+    )
+    event_store.append_event(
+        session_id="session_effect_with_skill",
+        case_id="appendicitis_001",
+        student_id="student_a",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_with_skill",
+            "total_score": 70,
+            "missed_items": ["ht_location"],
+            "knowledge_recommendations": [],
+        },
+    )
+    event_store.append_event(
+        session_id="session_effect_without_skill",
+        case_id="appendicitis_001",
+        student_id="student_b",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_without_skill",
+            "total_score": 55,
+            "missed_items": ["ht_location", "reasoning_core"],
+            "knowledge_recommendations": [],
+        },
+    )
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/evolution/skill-effects")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "skill_effects": {
+            "status": "insufficient_samples",
+            "label": "样本不足",
+            "min_sessions_per_group": 2,
+            "score_delta": None,
+            "with_skill": {
+                "session_count": 1,
+                "average_total_score": 70.0,
+                "missed_item_counts": {"ht_location": 1},
+                "skill_ids": ["skill_training_pattern_reasoning_core"],
+            },
+            "without_skill": {
+                "session_count": 1,
+                "average_total_score": 55.0,
+                "missed_item_counts": {"ht_location": 1, "reasoning_core": 1},
+                "skill_ids": [],
+            },
+        }
+    }
+
+
 def test_admin_can_read_rubric_detail(tmp_path, monkeypatch) -> None:
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/rubrics/appendicitis_001_rubric")

@@ -29,6 +29,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingEventRecord = Readonly<\{/);
@@ -43,6 +44,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}\/events`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/events"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/skill-effects"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /Clinical OSCE 管理后台/);
@@ -58,6 +60,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /系统评测/);
   assert.match(adminPageSource, /训练日志/);
   assert.match(adminPageSource, /候选 Skill 审核/);
+  assert.match(adminPageSource, /Skill 效果统计/);
+  assert.match(adminPageSource, /样本不足/);
+  assert.match(adminPageSource, /skillEffects\.status === "insufficient_samples"/);
   assert.match(adminPageSource, /事件类型/);
   assert.match(adminPageSource, /事件内容/);
   assert.match(adminPageSource, /回归通过/);
@@ -278,12 +283,14 @@ test("admin dashboard can generate candidate skills from training logs", () => {
   assert.match(adminPageSource, /const \[isGeneratingCandidates, setIsGeneratingCandidates\] = useState\(false\)/);
   assert.match(adminPageSource, /async function handleGenerateTrainingSkillCandidates\(\)/);
   assert.match(adminPageSource, /const result = await generateTrainingSkillCandidates\(\)/);
-  assert.match(adminPageSource, /const \[nextInsights, nextCandidates, nextEvaluations, nextAuditEvents\] = await Promise\.all/);
+  assert.match(adminPageSource, /const \[nextInsights, nextSkillEffects, nextCandidates, nextEvaluations, nextAuditEvents\] = await Promise\.all/);
   assert.match(adminPageSource, /getAdminInsights\(\)/);
+  assert.match(adminPageSource, /getTrainingSkillEffects\(\)/);
   assert.match(adminPageSource, /getTrainingSkillCandidates\(\)/);
   assert.match(adminPageSource, /getAdminEvaluations\(\)/);
   assert.match(adminPageSource, /getAdminAuditEvents\(\)/);
   assert.match(adminPageSource, /setInsights\(nextInsights\)/);
+  assert.match(adminPageSource, /setSkillEffects\(nextSkillEffects\)/);
   assert.match(adminPageSource, /setCandidates\(nextCandidates\)/);
   assert.match(adminPageSource, /setEvaluations\(nextEvaluations\)/);
   assert.match(adminPageSource, /setAuditEvents\(nextAuditEvents\)/);

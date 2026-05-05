@@ -10,6 +10,25 @@ class TrainingSkillEffectService:
     def __init__(self, event_store: TrainingEventStore = training_event_store) -> None:
         self.event_store = event_store
 
+    def summarize_sessions(self, session_ids: list[str], min_sessions_per_group: int = 2) -> dict[str, Any]:
+        comparison = self.compare_sessions(session_ids)
+        with_skill = comparison["with_skill"]
+        without_skill = comparison["without_skill"]
+        has_sufficient_samples = (
+            with_skill["session_count"] >= min_sessions_per_group
+            and without_skill["session_count"] >= min_sessions_per_group
+        )
+        score_delta = None
+        if has_sufficient_samples:
+            score_delta = round(with_skill["average_total_score"] - without_skill["average_total_score"], 2)
+        return {
+            "status": "ready" if has_sufficient_samples else "insufficient_samples",
+            "label": "可描述性对比" if has_sufficient_samples else "样本不足",
+            "min_sessions_per_group": min_sessions_per_group,
+            "score_delta": score_delta,
+            **comparison,
+        }
+
     def compare_sessions(self, session_ids: list[str]) -> dict[str, Any]:
         groups = {
             "with_skill": _empty_group(),
