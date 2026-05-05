@@ -25,7 +25,7 @@ type OsceDockMenuGroup = "training" | "resources" | "system";
 
 type OsceDockSide = "left" | "right";
 
-type ApiConfigProvider = "local_backend" | "gemini" | "openai_compatible";
+type ApiConfigProvider = "custom_backend" | "gemini" | "openai_compatible";
 
 type StudentApiConfig = Readonly<{
   provider: ApiConfigProvider;
@@ -47,6 +47,7 @@ type ApiConfigProviderOption = Readonly<{
   label: string;
   defaultModel: string;
   defaultBaseUrl: string;
+  defaultProxyUrl: string;
 }>;
 
 type OsceDockPosition = Readonly<{
@@ -377,22 +378,25 @@ const OSCE_DOCK_DRAG_THRESHOLD = 4;
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
-    id: "local_backend",
-    label: "本地后端",
+    id: "custom_backend",
+    label: "自定义后端",
     defaultModel: "",
     defaultBaseUrl: "http://127.0.0.1:8000",
+    defaultProxyUrl: "",
   },
   {
     id: "gemini",
     label: "Gemini Developer API",
     defaultModel: "gemini-3.1-flash-lite-preview",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
+    defaultProxyUrl: "http://127.0.0.1:7897",
   },
   {
     id: "openai_compatible",
     label: "OpenAI 兼容",
     defaultModel: "gpt-4.1-mini",
     defaultBaseUrl: "https://api.openai.com/v1",
+    defaultProxyUrl: "http://127.0.0.1:7897",
   },
 ];
 
@@ -907,6 +911,13 @@ function isApiConfigProvider(value: unknown): value is ApiConfigProvider {
   return apiConfigProviderOptions.some((option) => option.id === value);
 }
 
+function normalizeApiConfigProvider(value: unknown, fallbackProvider: ApiConfigProvider): ApiConfigProvider {
+  if (value === "local_backend") {
+    return "custom_backend";
+  }
+  return isApiConfigProvider(value) ? value : fallbackProvider;
+}
+
 function getApiConfigProviderOption(provider: ApiConfigProvider): ApiConfigProviderOption {
   return apiConfigProviderOptions.find((option) => option.id === provider) ?? apiConfigProviderOptions[0];
 }
@@ -918,7 +929,7 @@ function createDefaultStudentApiConfig(): StudentApiConfig {
     apiKey: "",
     model: defaultProvider.defaultModel,
     baseUrl: defaultProvider.defaultBaseUrl,
-    proxyUrl: "http://127.0.0.1:7897",
+    proxyUrl: defaultProvider.defaultProxyUrl,
   };
 }
 
@@ -935,14 +946,14 @@ function loadStudentApiConfig(): StudentApiConfig {
 
   try {
     const parsedValue = JSON.parse(storedValue) as Readonly<Partial<StudentApiConfig>>;
-    const provider = isApiConfigProvider(parsedValue.provider) ? parsedValue.provider : defaultConfig.provider;
+    const provider = normalizeApiConfigProvider(parsedValue.provider, defaultConfig.provider);
     const providerOption = getApiConfigProviderOption(provider);
     return {
       provider,
       apiKey: typeof parsedValue.apiKey === "string" ? parsedValue.apiKey : "",
       model: typeof parsedValue.model === "string" ? parsedValue.model : providerOption.defaultModel,
       baseUrl: typeof parsedValue.baseUrl === "string" ? parsedValue.baseUrl : providerOption.defaultBaseUrl,
-      proxyUrl: typeof parsedValue.proxyUrl === "string" ? parsedValue.proxyUrl : defaultConfig.proxyUrl,
+      proxyUrl: typeof parsedValue.proxyUrl === "string" ? parsedValue.proxyUrl : providerOption.defaultProxyUrl,
     };
   } catch {
     return defaultConfig;
@@ -1554,6 +1565,7 @@ function HomeContent() {
       provider,
       model: providerOption.defaultModel,
       baseUrl: providerOption.defaultBaseUrl,
+      proxyUrl: providerOption.defaultProxyUrl,
     }));
     setApiConfigTestResult(null);
     setApiConfigStatusText("已切换服务端，保存后生效。");
@@ -2799,15 +2811,15 @@ function HomeContent() {
             <div className="mt-5 space-y-4">
               <section className="space-y-2">
                 <p className="text-sm font-medium">服务端</p>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "local_backend" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                      studentApiConfig.provider === "custom_backend" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
                     }`}
-                    onClick={() => handleStudentApiProviderChange("local_backend")}
+                    onClick={() => handleStudentApiProviderChange("custom_backend")}
                     type="button"
                   >
-                    本地后端
+                    自定义后端
                   </button>
                   <button
                     className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
@@ -2840,7 +2852,7 @@ function HomeContent() {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, apiKey: event.target.value }));
                       setApiConfigTestResult(null);
                     }}
-                    placeholder={studentApiConfig.provider === "local_backend" ? "本地后端无需填写" : "输入服务商密钥"}
+                    placeholder={studentApiConfig.provider === "custom_backend" ? "自定义后端可选" : "输入服务商密钥"}
                     type="password"
                     value={studentApiConfig.apiKey}
                   />
@@ -2854,7 +2866,7 @@ function HomeContent() {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, model: event.target.value }));
                       setApiConfigTestResult(null);
                     }}
-                    placeholder={selectedApiConfigProviderOption.defaultModel || "本地后端无需模型名"}
+                    placeholder={selectedApiConfigProviderOption.defaultModel || "自定义后端可选"}
                     value={studentApiConfig.model}
                   />
                 </label>

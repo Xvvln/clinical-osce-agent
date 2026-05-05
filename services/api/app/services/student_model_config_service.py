@@ -5,7 +5,8 @@ from typing import Any
 import httpx
 
 
-SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {"local_backend", "gemini", "openai_compatible"}
+SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {"custom_backend", "local_backend", "gemini", "openai_compatible"}
+DEFAULT_CUSTOM_BACKEND_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
 DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
 STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS = 5.0
@@ -18,13 +19,16 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
     base_url = _normalize_text(config.get("base_url", ""))
     proxy_url = _normalize_text(config.get("proxy_url", ""))
 
-    if provider == "local_backend":
-        return {
-            "ok": True,
-            "provider": provider,
-            "message": "已连接本地 API 服务。",
-            "checked_url": "/health",
-        }
+    if provider == "custom_backend":
+        endpoint = _join_url(base_url or DEFAULT_CUSTOM_BACKEND_BASE_URL, "/health")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        return _test_http_endpoint(
+            provider=provider,
+            endpoint=endpoint,
+            headers=headers,
+            proxy_url=proxy_url,
+            success_message="自定义后端连通性测试通过。",
+        )
 
     if provider == "gemini":
         if not api_key:
@@ -54,6 +58,8 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
 
 def _normalize_provider(value: str) -> str:
     provider = _normalize_text(value)
+    if provider == "local_backend":
+        return "custom_backend"
     if provider not in SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS:
         raise ValueError(f"unsupported provider: {provider or 'empty'}")
     return provider

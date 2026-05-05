@@ -106,21 +106,25 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /relative flex size-14/);
 });
 
-test("home OSCE dock opens local API config help instead of navigating directly to admin", () => {
-  assert.match(pageSource, /type ApiConfigProvider = "local_backend" \| "gemini" \| "openai_compatible";/);
+test("home OSCE dock opens student API config dialog instead of navigating directly to admin", () => {
+  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "openai_compatible";/);
   assert.match(pageSource, /const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";/);
   assert.match(pageSource, /function createDefaultStudentApiConfig\(\): StudentApiConfig/);
   assert.match(pageSource, /function loadStudentApiConfig\(\): StudentApiConfig/);
   assert.match(pageSource, /function saveStudentApiConfig\(config: StudentApiConfig\): void/);
   assert.match(pageSource, /function testStudentApiConfigConnection\(config: StudentApiConfig\): Promise<StudentApiConfigTestResponse>/);
   assert.match(pageSource, /\/api\/model-config\/test/);
+  assert.match(pageSource, /defaultProxyUrl: ""/);
+  assert.match(pageSource, /defaultProxyUrl: "http:\/\/127\.0\.0\.1:7897"/);
   assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);
   assert.match(pageSource, /aria-label="关闭 API 配置说明"/);
   assert.match(pageSource, />\s*API 配置\s*</);
   assert.match(pageSource, />\s*服务端\s*</);
-  assert.match(pageSource, />\s*本地后端\s*</);
+  assert.match(pageSource, />\s*自定义后端\s*</);
   assert.match(pageSource, />\s*Gemini Developer API\s*</);
   assert.match(pageSource, />\s*OpenAI 兼容\s*</);
+  assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
+  assert.doesNotMatch(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-3/);
   assert.match(pageSource, /id="student-api-key-input"/);
   assert.match(pageSource, /id="student-api-model-input"/);
   assert.match(pageSource, /id="student-api-base-url-input"/);
