@@ -125,9 +125,31 @@ OSCE_GEMINI_PATIENT_USE_VERTEX=false
 OSCE_GEMINI_PATIENT_PROJECT=
 OSCE_GEMINI_PATIENT_LOCATION=global
 OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview
+OSCE_GEMINI_PATIENT_PROXY_URL=http://127.0.0.1:7897
+
+OSCE_VERTEX_ENABLED=false
+OSCE_VERTEX_PROJECT=
+OSCE_VERTEX_LOCATION=global
+OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview
+OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=false
+OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview
+OSCE_VERTEX_PROXY_URL=http://127.0.0.1:7897
+
+OSCE_OPENAI_ENABLED=false
+OSCE_OPENAI_API_KEY=
+OSCE_OPENAI_BASE_URL=https://api.openai.com/v1
+OSCE_OPENAI_MODEL=
+OSCE_OPENAI_PROXY_URL=http://127.0.0.1:7897
 ```
 
-如果通过 Vertex AI（Google Cloud 托管模型服务）使用 ADC（Application Default Credentials，应用默认凭证），请在本机完成 Google Cloud 登录，并把 `OSCE_GEMINI_PATIENT_PROJECT` 设置为你自己的项目 ID，不要把真实项目 ID 或凭证提交到仓库。
+当前模型配置边界：
+
+- Gemini Developer API 可用于学生端标准化病人表达层，密钥只从环境变量读取。
+- Vertex Gemini 可用于标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；通过 ADC（Application Default Credentials，应用默认凭证）认证，不在系统内保存凭据文件。
+- OpenAI 兼容配置已进入统一配置台账，可配置 `base_url`、模型名、API key 和代理；当前仍是 `configuration_only`，尚未默认接入患者模拟、评分或 Skill 生成链路。
+- 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不支持运行时写入密钥。
+
+如果通过 Vertex AI（Google Cloud 托管模型服务）使用 ADC，请在本机完成 Google Cloud 登录，并把项目 ID 设置到 `OSCE_GEMINI_PATIENT_PROJECT` 或 `OSCE_VERTEX_PROJECT`，不要把真实项目 ID 或凭证提交到仓库。真实模型调用默认按本地演示环境使用 `http://127.0.0.1:7897` 代理；如果你的网络环境不同，请修改对应 `*_PROXY_URL`。
 
 ### 3. 启动后端
 

@@ -261,6 +261,31 @@ type AdminSourceRegistryEntry = Readonly<{
   risk_note: string;
 }>;
 
+type AdminModelProviderConfig = Readonly<{
+  provider_id: string;
+  label: string;
+  capability: string;
+  enabled: boolean;
+  configured: boolean;
+  secret_configured: boolean;
+  auth_mode: string;
+  model: string;
+  base_url: string;
+  project: string;
+  location: string;
+  proxy_url: string;
+  required_env: readonly string[];
+  missing_env: readonly string[];
+  integration_status: string;
+  notes: string;
+}>;
+
+type AdminModelConfigPolicy = Readonly<{
+  secrets_persisted: boolean;
+  runtime_write_supported: boolean;
+  configuration_source: string;
+}>;
+
 type AuthUser = Readonly<{
   user_id: string;
   email: string;
@@ -286,6 +311,11 @@ type AdminRubricResponse = Readonly<{
 
 type AdminSourcesResponse = Readonly<{
   sources: readonly AdminSourceRegistryEntry[];
+}>;
+
+type AdminModelConfigResponse = Readonly<{
+  providers: readonly AdminModelProviderConfig[];
+  policy: AdminModelConfigPolicy;
 }>;
 
 type AdminCaseImportPayload = Readonly<{
@@ -455,6 +485,12 @@ async function getAdminSources(): Promise<readonly AdminSourceRegistryEntry[]> {
   await assertAdminResponseOk(response, "读取数据来源登记表");
   const payload = (await response.json()) as AdminSourcesResponse;
   return payload.sources;
+}
+
+async function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
+  const response = await fetch("/api/admin/model-config", { method: "GET" });
+  await assertAdminResponseOk(response, "读取模型 API 配置");
+  return (await response.json()) as AdminModelConfigResponse;
 }
 
 function getAdminCaseImportPayloadKey(caseText: string, rubricText: string): string {
@@ -737,6 +773,7 @@ export default function AdminDashboardPage() {
   const [selectedCaseRaw, setSelectedCaseRaw] = useState<AdminCaseRaw | null>(null);
   const [selectedRubric, setSelectedRubric] = useState<AdminRubricDetail | null>(null);
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
+  const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
   const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedReport, setSelectedReport] = useState<AdminSessionReport | null>(null);
@@ -820,9 +857,10 @@ export default function AdminDashboardPage() {
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
 
   async function loadDashboard() {
-    const [nextCases, nextSources, nextSessions, nextReports, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
+    const [nextCases, nextSources, nextModelConfig, nextSessions, nextReports, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
+      getAdminModelConfig(),
       getAdminSessions(),
       getAdminReports(),
       getAdminInsights(),
@@ -833,6 +871,7 @@ export default function AdminDashboardPage() {
     ]);
     setCases(nextCases);
     setSources(nextSources);
+    setModelConfig(nextModelConfig);
     setSessions(nextSessions);
     setReports(nextReports);
     setInsights(nextInsights);
@@ -1158,6 +1197,53 @@ export default function AdminDashboardPage() {
             <p className="text-xs text-[#8A7D6F]">总览 · 当前报告</p>
             <p className="mt-2 text-3xl font-semibold">{selectedReport ? selectedReport.total_score : "—"}</p>
           </article>
+        </section>
+
+        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Model Configuration</p>
+              <h2 className="mt-1 text-xl font-semibold">模型 / API 配置</h2>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">统一查看 Gemini、Vertex 和 OpenAI 兼容模型的启用状态；密钥不落库，只从环境变量或本地 .env 读取。</p>
+            </div>
+            <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
+              {modelConfig ? `配置来源：${modelConfig.policy.configuration_source}` : "读取中"}
+            </p>
+          </div>
+          {modelConfig ? (
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {modelConfig.providers.map((provider) => (
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={provider.provider_id}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold">{provider.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-[#6F6257]">{provider.capability}</p>
+                    </div>
+                    <span className={`rounded-full border px-2 py-1 text-[11px] ${provider.configured ? "border-green-200 bg-green-50 text-green-700" : "border-[#E6DFD2] bg-white text-[#6F6257]"}`}>
+                      {provider.configured ? "已配置" : provider.enabled ? "缺少配置" : "未启用"}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs text-[#6F6257] sm:grid-cols-2">
+                    <p>模型：{provider.model || "未设置"}</p>
+                    <p>认证：{provider.auth_mode}</p>
+                    <p>密钥：{provider.secret_configured ? "已配置" : "未配置 / 使用 ADC"}</p>
+                    <p>状态：{provider.integration_status}</p>
+                    {provider.base_url ? <p className="break-words">Base URL：{provider.base_url}</p> : null}
+                    {provider.project ? <p className="break-words">Project：{provider.project}</p> : null}
+                    {provider.location ? <p>Location：{provider.location}</p> : null}
+                    {provider.proxy_url ? <p className="break-words">Proxy：{provider.proxy_url}</p> : null}
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
+                  {provider.missing_env.length > 0 ? (
+                    <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">缺少：{provider.missing_env.join("、")}</p>
+                  ) : null}
+                  <p className="mt-2 text-[11px] leading-5 text-[#8A7D6F]">环境变量：{provider.required_env.join("、")}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取模型 / API 配置。</p>
+          )}
         </section>
 
         <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">

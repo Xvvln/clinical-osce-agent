@@ -30,6 +30,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingEventRecord = Readonly<\{/);
@@ -45,6 +47,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}\/events`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/events"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/skill-effects"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /Clinical OSCE 管理后台/);
@@ -61,6 +64,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /训练日志/);
   assert.match(adminPageSource, /候选 Skill 审核/);
   assert.match(adminPageSource, /Skill 效果统计/);
+  assert.match(adminPageSource, /模型 \/ API 配置/);
+  assert.match(adminPageSource, /Gemini、Vertex 和 OpenAI 兼容模型/);
+  assert.match(adminPageSource, /provider\.label/);
+  assert.match(adminPageSource, /provider\.integration_status/);
+  assert.match(adminPageSource, /密钥不落库/);
   assert.match(adminPageSource, /样本不足/);
   assert.match(adminPageSource, /skillEffects\.status === "insufficient_samples"/);
   assert.match(adminPageSource, /事件类型/);

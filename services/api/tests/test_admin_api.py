@@ -79,6 +79,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             unauthenticated_client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             unauthenticated_client.get("/api/admin/sources"),
+            unauthenticated_client.get("/api/admin/model-config"),
             unauthenticated_client.get("/api/admin/reports"),
             unauthenticated_client.get("/api/admin/sessions"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
@@ -119,6 +120,7 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             client.get("/api/admin/sources"),
+            client.get("/api/admin/model-config"),
             client.get("/api/admin/reports"),
             client.get("/api/admin/sessions"),
             client.get("/api/admin/sessions/missing_session/report"),
@@ -136,6 +138,44 @@ def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
 
     assert schema["required"] == ["candidate_id"]
     assert list(schema["properties"]) == ["candidate_id"]
+
+
+def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_API_KEY", "gemini-secret-value")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_MODEL", "gemini-demo-model")
+    monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
+    monkeypatch.setenv("OSCE_VERTEX_MODEL", "gemini-rubric-model")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "openai-secret-value")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "openai-demo-model")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://api.openai.example/v1")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/model-config")
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert "gemini-secret-value" not in response_text
+    assert "openai-secret-value" not in response_text
+    payload = response.json()
+    assert payload["policy"] == {
+        "secrets_persisted": False,
+        "runtime_write_supported": False,
+        "configuration_source": "environment",
+    }
+    providers = {provider["provider_id"]: provider for provider in payload["providers"]}
+    assert providers["gemini_patient_api"]["configured"] is True
+    assert providers["gemini_patient_api"]["secret_configured"] is True
+    assert providers["gemini_patient_api"]["model"] == "gemini-demo-model"
+    assert providers["vertex_rubric_scorer"]["enabled"] is True
+    assert providers["vertex_rubric_scorer"]["configured"] is True
+    assert providers["vertex_rubric_scorer"]["missing_env"] == []
+    assert providers["openai_compatible"]["enabled"] is True
+    assert providers["openai_compatible"]["configured"] is True
+    assert providers["openai_compatible"]["model"] == "openai-demo-model"
+    assert providers["openai_compatible"]["base_url"] == "https://api.openai.example/v1"
+    assert providers["openai_compatible"]["integration_status"] == "configuration_only"
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

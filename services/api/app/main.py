@@ -10,6 +10,7 @@ from app.graph.osce_graph import build_osce_graph
 from app.services.auth_store import auth_store
 from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
+from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.training_insight_service import TrainingInsightService
@@ -588,6 +589,14 @@ def list_admin_sources(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return {"sources": _load_admin_sources()}
+
+
+@app.get("/api/admin/model-config")
+def get_admin_model_config(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return build_admin_model_config()
 
 
 @app.get("/api/admin/evolution/candidates")
