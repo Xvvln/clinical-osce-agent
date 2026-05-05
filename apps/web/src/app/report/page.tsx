@@ -9,6 +9,7 @@ import {
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type SourceReferenceItem,
 } from "./report-model";
 
 type DimensionInsight = Readonly<{
@@ -24,11 +25,18 @@ type RadarPoint = Readonly<{
   y: number;
 }>;
 
+type SourceReferenceDisplayItem = Readonly<{
+  reference: string;
+  sourceType: string;
+  title: string;
+  metadata: Readonly<Record<string, unknown>>;
+}>;
+
 type SourceReferenceGroup = Readonly<{
   key: string;
   title: string;
   description: string;
-  references: readonly string[];
+  references: readonly SourceReferenceDisplayItem[];
 }>;
 
 type BackendMessage = Readonly<{
@@ -133,6 +141,13 @@ function getSourceReferenceLabel(reference: string): string {
   return reference.slice(separatorIndex + 1);
 }
 
+function getSourceReferenceMetadataText(metadata: Readonly<Record<string, unknown>>): string {
+  const license = typeof metadata.license === "string" ? `许可：${metadata.license}` : "";
+  const sourceUrl = typeof metadata.source_url === "string" ? `来源：${metadata.source_url}` : "";
+
+  return [license, sourceUrl].filter(Boolean).join(" · ");
+}
+
 function getRecommendationKindLabel(reference: string): string {
   if (reference.startsWith("case:")) {
     return "下一病例训练";
@@ -201,13 +216,29 @@ function getSourceReferenceGroupMeta(key: string): Omit<SourceReferenceGroup, "r
   return meta[key] ?? meta.other;
 }
 
-function groupSourceReferences(references: readonly string[]): readonly SourceReferenceGroup[] {
+function groupSourceReferences(
+  items: readonly SourceReferenceItem[],
+  fallbackReferences: readonly string[],
+): readonly SourceReferenceGroup[] {
   const groupOrder = ["case", "source", "rubric", "evidence", "other"];
-  const groupedReferences = references.reduce<Record<string, string[]>>((groups, reference) => {
-    const key = getSourceReferenceGroupKey(reference);
+  const displayItems = items.length > 0
+    ? items.map((item) => ({
+        reference: item.reference,
+        sourceType: item.source_type,
+        title: item.title,
+        metadata: item.metadata,
+      }))
+    : fallbackReferences.map((reference) => ({
+        reference,
+        sourceType: getSourceReferenceGroupKey(reference),
+        title: getSourceReferenceLabel(reference),
+        metadata: {},
+      }));
+  const groupedReferences = displayItems.reduce<Record<string, SourceReferenceDisplayItem[]>>((groups, item) => {
+    const key = item.sourceType || getSourceReferenceGroupKey(item.reference);
     return {
       ...groups,
-      [key]: [...(groups[key] ?? []), reference],
+      [key]: [...(groups[key] ?? []), item],
     };
   }, {});
 
@@ -356,8 +387,8 @@ export default function ReportPage() {
   const strongestDimension = sortedDimensions[0] ?? null;
   const weakestDimension = sortedDimensions[sortedDimensions.length - 1] ?? null;
   const sourceReferenceGroups = useMemo(
-    () => groupSourceReferences(report?.source_references ?? []),
-    [report?.source_references],
+    () => groupSourceReferences(report?.source_reference_items ?? [], report?.source_references ?? []),
+    [report?.source_reference_items, report?.source_references],
   );
   const backendProcedureResults = useMemo(() => buildBackendProcedureResults(backendSession), [backendSession]);
   const totalPercent = report ? getScorePercent(report.total_score, 100) : 0;
@@ -778,11 +809,16 @@ function SourceReferenceGroups({ groups }: Readonly<{ groups: readonly SourceRef
               <h3 className="text-sm font-semibold text-foreground">{group.title}</h3>
               <p className="mt-1 text-xs leading-5">{group.description}</p>
               <ul className="mt-3 space-y-2">
-                {group.references.map((reference) => (
-                  <li className="rounded-lg bg-background/80 px-3 py-2 font-mono text-xs" key={reference}>
-                    {getSourceReferenceLabel(reference)}
-                  </li>
-                ))}
+                {group.references.map((item) => {
+                  const metadataText = getSourceReferenceMetadataText(item.metadata);
+                  return (
+                    <li className="rounded-lg bg-background/80 px-3 py-2 text-xs" key={item.reference}>
+                      <p className="font-medium text-foreground">{item.title}</p>
+                      <p className="mt-1 break-all font-mono text-muted-foreground">{item.reference}</p>
+                      {metadataText ? <p className="mt-1 break-all text-muted-foreground">{metadataText}</p> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </article>
           ))}

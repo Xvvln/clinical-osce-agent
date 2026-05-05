@@ -164,6 +164,42 @@ test("admin dashboard shows a read-only case rubric and source ledger", () => {
   assert.match(adminPageSource, /source_attribution/);
 });
 
+test("admin dashboard can validate and import case rubric payloads", () => {
+  assert.match(adminPageSource, /type AdminCaseImportPayload = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminCaseValidationResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminCaseImportResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminCaseImportReadyState = Readonly<\{/);
+  assert.match(adminPageSource, /function parseAdminImportJson\(text: string, label: string\): Record<string, unknown>/);
+  assert.match(adminPageSource, /function getAdminCaseImportPayloadKey\(caseText: string, rubricText: string\): string/);
+  assert.match(adminPageSource, /function buildAdminCaseImportPayload\(/);
+  assert.match(adminPageSource, /async function validateAdminCaseImport\(payload: AdminCaseImportPayload\): Promise<AdminCaseValidationResponse>/);
+  assert.match(adminPageSource, /async function importAdminCasePayload\(payload: AdminCaseImportPayload\): Promise<AdminCaseImportResponse>/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/cases\/validate"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/cases\/import"/);
+  assert.match(adminPageSource, /body: JSON\.stringify\(payload\)/);
+  assert.match(adminPageSource, /const \[caseImportJsonText, setCaseImportJsonText\] = useState\(""\)/);
+  assert.match(adminPageSource, /const \[rubricImportJsonText, setRubricImportJsonText\] = useState\(""\)/);
+  assert.match(adminPageSource, /const \[caseImportResult, setCaseImportResult\] = useState<AdminCaseImportStatus \| null>\(null\)/);
+  assert.match(adminPageSource, /const \[validatedCaseImport, setValidatedCaseImport\] = useState<AdminCaseImportReadyState \| null>\(null\)/);
+  assert.match(adminPageSource, /const \[isCaseImportBusy, setIsCaseImportBusy\] = useState\(false\)/);
+  assert.match(adminPageSource, /const currentCaseImportPayloadKey = getAdminCaseImportPayloadKey\(caseImportJsonText, rubricImportJsonText\)/);
+  assert.match(adminPageSource, /const canImportCasePayload =/);
+  assert.match(adminPageSource, /async function handleValidateCaseImport\(\)/);
+  assert.match(adminPageSource, /setValidatedCaseImport\(result\.valid \? \{ payloadKey: currentCaseImportPayloadKey, result \} : null\)/);
+  assert.match(adminPageSource, /async function handleImportCasePayload\(\)/);
+  assert.match(adminPageSource, /disabled=\{!canImportCasePayload\}/);
+  assert.match(adminPageSource, /setCaseImportResult\(null\)/);
+  assert.match(adminPageSource, /setValidatedCaseImport\(null\)/);
+  assert.match(adminPageSource, /setCases\(await getAdminCases\(\)\)/);
+  assert.match(adminPageSource, /病例 \/ Rubric 导入/);
+  assert.match(adminPageSource, /粘贴病例 JSON/);
+  assert.match(adminPageSource, /粘贴 Rubric JSON/);
+  assert.match(adminPageSource, /导入前预检/);
+  assert.match(adminPageSource, /正式导入/);
+  assert.match(adminPageSource, /imported=false/);
+  assert.match(adminPageSource, /valid=false/);
+});
+
 test("admin dashboard filters long management lists locally", () => {
   assert.match(adminPageSource, /const \[caseSearchText, setCaseSearchText\] = useState\(""\)/);
   assert.match(adminPageSource, /const \[sessionSearchText, setSessionSearchText\] = useState\(""\)/);

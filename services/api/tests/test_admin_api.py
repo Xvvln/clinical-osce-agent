@@ -1,13 +1,18 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
+import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+import yaml
 
 from app import main
+from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.auth_store import AuthStore
 from app.services.evaluation_result_store import EvaluationResultStore
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
-from app.services.osce_session_service import OsceSession, osce_session_service
+from app.services.osce_session_service import OsceSession, OsceSessionService, osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
 from app.services.training_event_store import TrainingEventStore
@@ -16,16 +21,38 @@ from app.services.training_skill_store import TrainingSkillStore
 
 
 @contextmanager
-def authenticated_admin_client(tmp_path, monkeypatch) -> Iterator[TestClient]:
+def authenticated_admin_client(
+    tmp_path,
+    monkeypatch,
+    *,
+    raise_server_exceptions: bool = True,
+) -> Iterator[TestClient]:
     monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
-    with TestClient(main.app) as client:
+    with TestClient(main.app, raise_server_exceptions=raise_server_exceptions) as client:
         response = client.post(
             "/api/auth/register",
             json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
         )
         assert response.status_code == 200
         yield client
+
+
+def load_case_and_rubric_payload(case_id: str = "appendicitis_001") -> tuple[dict[str, object], dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[3]
+    case_payload = json.loads((repo_root / "data" / "cases" / f"{case_id}.json").read_text(encoding="utf-8"))
+    rubric_payload = yaml.safe_load((repo_root / "data" / "rubrics" / f"{case_id}_rubric.yaml").read_text(encoding="utf-8"))
+    return case_payload, rubric_payload
+
+
+def configure_case_import_directories(tmp_path, monkeypatch) -> tuple[Path, Path]:
+    cases_dir = tmp_path / "cases"
+    rubrics_dir = tmp_path / "rubrics"
+    cases_dir.mkdir()
+    rubrics_dir.mkdir()
+    monkeypatch.setattr(main, "CASES_DIR", cases_dir, raising=False)
+    monkeypatch.setattr(main, "RUBRICS_DIR", rubrics_dir, raising=False)
+    return cases_dir, rubrics_dir
 
 
 def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
@@ -46,6 +73,8 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             unauthenticated_client.get("/api/cases/appendicitis_001/raw"),
             unauthenticated_client.get("/api/admin/cases/appendicitis_001/raw"),
+            unauthenticated_client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
+            unauthenticated_client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             unauthenticated_client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             unauthenticated_client.get("/api/admin/sources"),
             unauthenticated_client.get("/api/admin/reports"),
@@ -83,6 +112,8 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             client.get("/api/cases/appendicitis_001/raw"),
             client.get("/api/admin/cases/appendicitis_001/raw"),
+            client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
+            client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             client.get("/api/admin/sources"),
             client.get("/api/admin/reports"),
@@ -115,6 +146,223 @@ def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) 
     assert case_payload["case_id"] == "appendicitis_001"
     assert case_payload["history"]["hidden_facts"][0]["canonical_answer"] == "24 小时前开始，最初是上腹部隐痛。"
     assert case_payload["diagnosis"]["reasoning_points"][0]["point_id"] == "appendicitis_001.rp_01"
+
+
+
+def test_admin_can_validate_case_and_rubric_payload(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/validate", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "valid": True,
+        "case_id": "appendicitis_001",
+        "rubric_id": "appendicitis_001_rubric",
+        "errors": [],
+    }
+
+
+
+def test_admin_case_validate_returns_invalid_for_case_schema_error(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    invalid_case = deepcopy(case_payload)
+    invalid_case["diagnosis"].pop("reasoning_points")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/validate", json={"case": invalid_case, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert len(payload["errors"]) >= 1
+    assert "reasoning_points" in " ".join(payload["errors"])
+
+
+
+def test_admin_case_validate_returns_invalid_for_case_rubric_pair_error(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    invalid_rubric = deepcopy(rubric_payload)
+    invalid_rubric["dimensions"][0]["items"][0]["evidence_expected"] = ["missing.evidence_id"]
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/validate", json={"case": case_payload, "rubric": invalid_rubric})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert len(payload["errors"]) == 1
+    assert "rubric evidence missing from case" in payload["errors"][0]
+    assert "missing.evidence_id" in payload["errors"][0]
+
+
+
+def test_admin_can_import_valid_case_and_rubric_payload(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/import", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "imported": True,
+        "case_id": "appendicitis_001",
+        "rubric_id": "appendicitis_001_rubric",
+        "errors": [],
+    }
+    assert json.loads((cases_dir / "appendicitis_001.json").read_text(encoding="utf-8")) == case_payload
+    assert yaml.safe_load((rubrics_dir / "appendicitis_001_rubric.yaml").read_text(encoding="utf-8")) == rubric_payload
+
+
+
+def test_admin_case_import_rejects_existing_case_without_overwrite(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    existing_case_path = cases_dir / "appendicitis_001.json"
+    existing_case_path.write_text('{"existing": true}', encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/import", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert payload["errors"] == ["case already exists: appendicitis_001"]
+    assert existing_case_path.read_text(encoding="utf-8") == '{"existing": true}'
+    assert not (rubrics_dir / "appendicitis_001_rubric.yaml").exists()
+
+
+
+def test_admin_case_import_rejects_existing_rubric_without_overwrite(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    existing_rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    existing_rubric_path.write_text("rubric_id: existing\n", encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/import", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert payload["errors"] == ["rubric already exists: appendicitis_001_rubric"]
+    assert not (cases_dir / "appendicitis_001.json").exists()
+    assert existing_rubric_path.read_text(encoding="utf-8") == "rubric_id: existing\n"
+
+
+
+def test_admin_case_import_rejects_case_created_after_preflight_without_overwrite(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    original_open = Path.open
+
+    def racing_open(self, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if self == case_path and ("w" in mode or "x" in mode):
+            with original_open(self, "w", encoding="utf-8") as file:
+                file.write('{"raced": true}')
+            raise FileExistsError(str(self))
+        return original_open(self, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    with authenticated_admin_client(tmp_path, monkeypatch, raise_server_exceptions=False) as client:
+        response = client.post("/api/admin/cases/import", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert payload["errors"] == ["case already exists: appendicitis_001"]
+    assert case_path.read_text(encoding="utf-8") == '{"raced": true}'
+    assert not (rubrics_dir / "appendicitis_001_rubric.yaml").exists()
+
+
+
+def test_admin_case_import_rolls_back_case_when_rubric_write_fails(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    original_open = Path.open
+
+    def failing_rubric_open(self, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if self == rubric_path and ("w" in mode or "x" in mode):
+            raise OSError("rubric disk unavailable")
+        return original_open(self, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", failing_rubric_open)
+
+    with authenticated_admin_client(tmp_path, monkeypatch, raise_server_exceptions=False) as client:
+        response = client.post("/api/admin/cases/import", json={"case": case_payload, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert len(payload["errors"]) == 1
+    assert "import write failed" in payload["errors"][0]
+    assert "rubric disk unavailable" in payload["errors"][0]
+    assert not (cases_dir / "appendicitis_001.json").exists()
+    assert not rubric_path.exists()
+
+
+
+def test_admin_case_import_rejects_invalid_payload_without_writing(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    invalid_case = deepcopy(case_payload)
+    invalid_case["diagnosis"].pop("reasoning_points")
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/import", json={"case": invalid_case, "rubric": rubric_payload})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert len(payload["errors"]) >= 1
+    assert "reasoning_points" in " ".join(payload["errors"])
+    assert not (cases_dir / "appendicitis_001.json").exists()
+    assert not (rubrics_dir / "appendicitis_001_rubric.yaml").exists()
+
+
+
+def test_admin_case_import_rejects_path_traversal_ids(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    unsafe_case = deepcopy(case_payload)
+    unsafe_rubric = deepcopy(rubric_payload)
+    unsafe_case["case_id"] = "../appendicitis_unsafe"
+    unsafe_case["rubric_ref"]["rubric_id"] = "../appendicitis_unsafe_rubric"
+    unsafe_rubric["case_id"] = "../appendicitis_unsafe"
+    unsafe_rubric["rubric_id"] = "../appendicitis_unsafe_rubric"
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/cases/import", json={"case": unsafe_case, "rubric": unsafe_rubric})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "imported": False,
+        "case_id": "../appendicitis_unsafe",
+        "rubric_id": "../appendicitis_unsafe_rubric",
+        "errors": ["invalid case_id: ../appendicitis_unsafe", "invalid rubric_id: ../appendicitis_unsafe_rubric"],
+    }
+    assert list(cases_dir.iterdir()) == []
+    assert list(rubrics_dir.iterdir()) == []
+
 
 
 def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch) -> None:
@@ -190,6 +438,67 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
     assert payload["sessions"][0]["stage"] == "diagnosis_submitted"
     assert isinstance(payload["sessions"][0]["created_at"], str)
     assert isinstance(payload["sessions"][0]["updated_at"], str)
+    assert payload["pagination"] == {"limit": 2, "offset": 0, "total": 2}
+
+
+
+def test_admin_can_paginate_training_session_summaries(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_old",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="history",
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_recent",
+            student_id="student_b",
+            case_id="hyperthyroid_001",
+            stage="diagnosis_submitted",
+        )
+    )
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/sessions?limit=1&offset=1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [session["session_id"] for session in payload["sessions"]] == ["session_admin_old"]
+    assert payload["pagination"] == {"limit": 1, "offset": 1, "total": 2}
+
+
+
+def test_admin_can_filter_training_session_summaries(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_old",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="history",
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_recent",
+            student_id="student_b",
+            case_id="hyperthyroid_001",
+            stage="diagnosis_submitted",
+        )
+    )
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/sessions", params={"q": "student_b", "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [session["session_id"] for session in payload["sessions"]] == ["session_admin_recent"]
+    assert payload["pagination"] == {"limit": 5, "offset": 0, "total": 1}
 
 
 
@@ -244,6 +553,14 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             stage="report_ready",
         )
     )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_eval",
+            student_id="admin_eval_student_pass",
+            case_id="appendicitis_001",
+            stage="report_ready",
+        )
+    )
     event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     event_store.append_event(
         session_id="session_insight_one",
@@ -264,6 +581,14 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "title": "胸痛伴出汗教学病例",
                 },
             ],
+            "source_reference_items": [
+                {
+                    "reference": "source:fareez_osce_2022",
+                    "source_type": "source",
+                    "title": "Fareez OSCE 数据集",
+                    "metadata": {"license": "CC BY 4.0"},
+                }
+            ],
         },
     )
     event_store.append_event(
@@ -279,6 +604,39 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                 {
                     "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
                     "title": "补充临床推理证据链",
+                }
+            ],
+            "source_reference_items": [
+                {
+                    "reference": "source:fareez_osce_2022",
+                    "source_type": "source",
+                    "title": "Fareez OSCE 数据集",
+                    "metadata": {"license": "CC BY 4.0"},
+                }
+            ],
+        },
+    )
+    event_store.append_event(
+        session_id="session_admin_eval",
+        case_id="appendicitis_001",
+        student_id="admin_eval_student_pass",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_admin_eval",
+            "total_score": 32,
+            "missed_items": ["admin_eval_only"],
+            "knowledge_recommendations": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.admin_eval_only",
+                    "title": "系统评测专用漏项",
+                }
+            ],
+            "source_reference_items": [
+                {
+                    "reference": "source:admin_eval_fixture",
+                    "source_type": "source",
+                    "title": "系统评测固定数据",
+                    "metadata": {},
                 }
             ],
         },
@@ -309,6 +667,16 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "title": "补充临床推理证据链",
                     "count": 1,
                 },
+            ],
+            "frequent_source_references": [
+                {
+                    "reference": "source:fareez_osce_2022",
+                    "source_type": "source",
+                    "title": "Fareez OSCE 数据集",
+                    "count": 2,
+                    "case_ids": ["appendicitis_001", "pneumonia_001"],
+                    "metadata": {"license": "CC BY 4.0"},
+                }
             ],
         }
     }
@@ -440,6 +808,17 @@ def test_admin_can_read_evaluation_batch_detail(tmp_path, monkeypatch) -> None:
                     "expected_total_score": 80,
                     "forbidden_term_violations": ["治疗方案"],
                     "passed": False,
+                    "source_reference_count": 0,
+                    "source_reference_types": [],
+                    "rag_source_coverage_passed": False,
+                    "rag_rubric_reference_coverage_ratio": 0.0,
+                    "missing_rubric_references": [],
+                    "rag_explanation_coverage_passed": False,
+                    "rag_explanation_coverage_ratio": 0.0,
+                    "missing_explanation_references": [],
+                    "rag_evidence_coverage_passed": False,
+                    "rag_evidence_coverage_ratio": 0.0,
+                    "missing_evidence_references": [],
                     "duration_ms": 66,
                 }
             ],
@@ -457,6 +836,42 @@ def test_admin_evaluation_detail_returns_404_for_missing_batch(tmp_path, monkeyp
 
     assert response.status_code == 404
     assert response.json() == {"detail": "evaluation batch not found"}
+
+
+
+def test_admin_can_run_real_evaluation_batch_without_gemini_patient_api_key(tmp_path, monkeypatch) -> None:
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    session_service = OsceSessionService(
+        report_store=ReportStore(tmp_path / "reports.sqlite3"),
+        training_event_store=TrainingEventStore(tmp_path / "training_events.sqlite3"),
+        training_skill_store=TrainingSkillStore(tmp_path / "training_skills.sqlite3"),
+        session_store=OsceSessionStore(tmp_path / "osce_sessions.sqlite3"),
+    )
+
+    def fail_if_gemini_responder_is_used():
+        raise AssertionError("admin eval should not call Gemini patient responder")
+
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(main, "osce_session_service", session_service, raising=False)
+    monkeypatch.setattr(
+        gemini_patient_responder_module,
+        "_create_configured_responder",
+        fail_if_gemini_responder_is_used,
+        raising=False,
+    )
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/evals/run", json={"batch_id": "batch_admin_real"})
+
+    assert response.status_code == 200
+    evaluation = response.json()["evaluation"]
+    assert evaluation["batch_id"] == "batch_admin_real"
+    assert evaluation["total_cases"] == 1
+    assert evaluation["results"][0]["source_reference_count"] > 0
+    assert evaluation["results"][0]["rag_source_coverage_passed"] is True
+    assert evaluation["results"][0]["rag_explanation_coverage_passed"] is True
+    assert evaluation["results"][0]["rag_evidence_coverage_passed"] is True
+    assert evaluation_store.get_batch_result("batch_admin_real") == evaluation
 
 
 
@@ -479,6 +894,17 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
                     actual_total_score=32,
                     expected_total_score=32,
                     forbidden_term_violations=[],
+                    source_reference_count=3,
+                    source_reference_types=["case", "source", "rubric"],
+                    rag_source_coverage_passed=True,
+                    rag_rubric_reference_coverage_ratio=1.0,
+                    missing_rubric_references=[],
+                    rag_explanation_coverage_passed=True,
+                    rag_explanation_coverage_ratio=1.0,
+                    missing_explanation_references=[],
+                    rag_evidence_coverage_passed=True,
+                    rag_evidence_coverage_ratio=1.0,
+                    missing_evidence_references=[],
                     passed=True,
                     duration_ms=42,
                 )
@@ -505,6 +931,17 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
                 "expected_total_score": 32,
                 "forbidden_term_violations": [],
                 "passed": True,
+                "source_reference_count": 3,
+                "source_reference_types": ["case", "source", "rubric"],
+                "rag_source_coverage_passed": True,
+                "rag_rubric_reference_coverage_ratio": 1.0,
+                "missing_rubric_references": [],
+                "rag_explanation_coverage_passed": True,
+                "rag_explanation_coverage_ratio": 1.0,
+                "missing_explanation_references": [],
+                "rag_evidence_coverage_passed": True,
+                "rag_evidence_coverage_ratio": 1.0,
+                "missing_evidence_references": [],
                 "duration_ms": 42,
             }
         ],
@@ -515,7 +952,12 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
     assert response.json() == {"evaluation": expected_evaluation}
     assert evaluation_store.get_batch_result("batch_admin_manual") == expected_evaluation
     assert captured_case_ids == ["appendicitis_001"]
-    assert captured_service is osce_session_service
+    assert isinstance(captured_service, OsceSessionService)
+    assert captured_service is not osce_session_service
+    assert captured_service.report_store is osce_session_service.report_store
+    assert captured_service.training_event_store is osce_session_service.training_event_store
+    assert captured_service.training_skill_store is osce_session_service.training_skill_store
+    assert captured_service.session_store is osce_session_service.session_store
 
 
 
@@ -534,6 +976,14 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
             session_id="session_skill_candidate_two",
             student_id="student_b",
             case_id="pneumonia_001",
+            stage="report_ready",
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_skill_candidate_admin_eval",
+            student_id="admin_eval_student_pass",
+            case_id="appendicitis_001",
             stage="report_ready",
         )
     )
@@ -572,6 +1022,23 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
             ],
         },
     )
+    event_store.append_event(
+        session_id="session_skill_candidate_admin_eval",
+        case_id="appendicitis_001",
+        student_id="admin_eval_student_pass",
+        event_type="report_generated",
+        payload={
+            "report_id": "report_admin_eval",
+            "total_score": 32,
+            "missed_items": ["reasoning_core"],
+            "knowledge_recommendations": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                    "title": "系统评测专用推理漏项",
+                }
+            ],
+        },
+    )
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
     captured_case_ids: list[str] = []
@@ -602,9 +1069,9 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         audit_response = client.get("/api/admin/evolution/events")
 
     expected_candidate_summary = {
-        "candidate_id": "skill_candidate_reasoning_core",
-        "trigger_item_id": "reasoning_core",
-        "title": "临床推理链纠偏提示",
+        "candidate_id": "skill_candidate_training_pattern_reasoning_core",
+        "trigger_item_id": "training_pattern_reasoning_core",
+        "title": "OSCE 训练模式纠偏提示",
         "status": "ready_for_review",
         "regression_passed": True,
         "source_report_count": 2,
@@ -625,13 +1092,18 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     assert len(audit_response.json()["events"]) == 1
     assert audit_response.json()["events"][0]["event_type"] == "admin_skill_candidate_generated"
     assert audit_response.json()["events"][0]["payload"] == {
-        "candidate_id": "skill_candidate_reasoning_core",
+        "candidate_id": "skill_candidate_training_pattern_reasoning_core",
         "review_status": "ready_for_review",
         "support_count": 2,
         "source_report_count": 2,
     }
     assert captured_case_ids == ["appendicitis_001"]
-    assert captured_service is osce_session_service
+    assert isinstance(captured_service, OsceSessionService)
+    assert captured_service is not osce_session_service
+    assert captured_service.report_store is osce_session_service.report_store
+    assert captured_service.training_event_store is osce_session_service.training_event_store
+    assert captured_service.training_skill_store is osce_session_service.training_skill_store
+    assert captured_service.session_store is osce_session_service.session_store
 
 
 
@@ -668,31 +1140,28 @@ def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_ca
         )
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
-    for candidate_id, trigger_item_id in [
-        ("skill_candidate_reasoning_core", "reasoning_core"),
-        ("skill_candidate_ht_location", "ht_location"),
-    ]:
-        candidate_store.save_candidate(
-            {
-                "candidate_id": candidate_id,
-                "trigger_item_id": trigger_item_id,
-                "title": "已审核候选",
-                "status": "draft",
-                "source_report_count": 1,
-                "support_count": 1,
-            },
-            {
-                "candidate_id": candidate_id,
-                "status": "ready_for_review",
-                "regression_passed": True,
-                "evaluation_total_cases": 1,
-                "evaluation_passed_cases": 1,
-                "evaluation_failed_cases": 0,
-                "blocking_failures": [],
-            },
-        )
-    assert candidate_store.approve_candidate("skill_candidate_reasoning_core", reviewer_id="teacher_demo") is True
-    assert candidate_store.reject_candidate("skill_candidate_ht_location", reviewer_id="teacher_demo") is True
+    reviewed_candidate_id = "skill_candidate_training_pattern_ht_location_reasoning_core"
+    candidate_store.save_candidate(
+        {
+            "candidate_id": reviewed_candidate_id,
+            "trigger_item_id": "training_pattern_ht_location_reasoning_core",
+            "trigger_item_ids": ["ht_location", "reasoning_core"],
+            "title": "已审核训练模式候选",
+            "status": "draft",
+            "source_report_count": 1,
+            "support_count": 1,
+        },
+        {
+            "candidate_id": reviewed_candidate_id,
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    assert candidate_store.approve_candidate(reviewed_candidate_id, reviewer_id="teacher_demo") is True
 
     def fake_run_evaluation_cases(evaluation_cases, service):
         return EvaluationBatchResult(
@@ -714,18 +1183,13 @@ def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_ca
         response = client.post("/api/admin/evolution/candidates/generate")
 
     assert response.status_code == 200
-    assert response.json()["generated_count"] == 2
+    assert response.json()["generated_count"] == 1
     assert response.json()["saved_count"] == 0
-    approved_candidate = candidate_store.get_candidate("skill_candidate_reasoning_core")
-    rejected_candidate = candidate_store.get_candidate("skill_candidate_ht_location")
-    assert approved_candidate["title"] == "已审核候选"
+    approved_candidate = candidate_store.get_candidate("skill_candidate_training_pattern_ht_location_reasoning_core")
+    assert approved_candidate["title"] == "已审核训练模式候选"
     assert approved_candidate["source_report_count"] == 1
     assert approved_candidate["support_count"] == 1
     assert approved_candidate["review"]["status"] == "approved"
-    assert rejected_candidate["title"] == "已审核候选"
-    assert rejected_candidate["source_report_count"] == 1
-    assert rejected_candidate["support_count"] == 1
-    assert rejected_candidate["review"]["status"] == "rejected"
 
 
 
@@ -761,7 +1225,88 @@ def test_admin_can_list_session_reports(tmp_path, monkeypatch) -> None:
         response = client.get("/api/admin/reports")
 
     assert response.status_code == 200
-    assert response.json() == {"reports": [second_report, first_report]}
+    assert response.json() == {
+        "reports": [second_report, first_report],
+        "pagination": {"limit": 2, "offset": 0, "total": 2},
+    }
+
+
+
+def test_admin_can_paginate_session_reports(tmp_path, monkeypatch) -> None:
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    first_report = {
+        "report_id": "report_session_first",
+        "session_id": "session_first",
+        "case_id": "appendicitis_001",
+        "student_id": "student_first",
+        "total_score": 78,
+        "dimension_scores": {"history_taking": 16, "reasoning": 13},
+        "missed_items": ["reasoning_core"],
+        "knowledge_recommendations": [],
+    }
+    second_report = {
+        "report_id": "report_session_second",
+        "session_id": "session_second",
+        "case_id": "appendicitis_002",
+        "student_id": "student_second",
+        "total_score": 91,
+        "dimension_scores": {"history_taking": 20, "reasoning": 18},
+        "missed_items": [],
+        "knowledge_recommendations": [
+            {"title": "保持鉴别诊断结构", "reference": "rubric:appendicitis_002_rubric.item.reasoning_core"}
+        ],
+    }
+    report_store.save_report(first_report)
+    report_store.save_report(second_report)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/reports?limit=1&offset=1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "reports": [first_report],
+        "pagination": {"limit": 1, "offset": 1, "total": 2},
+    }
+
+
+
+def test_admin_can_filter_session_reports(tmp_path, monkeypatch) -> None:
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    first_report = {
+        "report_id": "report_session_first",
+        "session_id": "session_first",
+        "case_id": "appendicitis_001",
+        "student_id": "student_first",
+        "total_score": 78,
+        "dimension_scores": {"history_taking": 16, "reasoning": 13},
+        "missed_items": ["reasoning_core"],
+        "knowledge_recommendations": [],
+    }
+    second_report = {
+        "report_id": "report_session_second",
+        "session_id": "session_second",
+        "case_id": "appendicitis_002",
+        "student_id": "student_second",
+        "total_score": 91,
+        "dimension_scores": {"history_taking": 20, "reasoning": 18},
+        "missed_items": [],
+        "knowledge_recommendations": [
+            {"title": "保持鉴别诊断结构", "reference": "rubric:appendicitis_002_rubric.item.reasoning_core"}
+        ],
+    }
+    report_store.save_report(first_report)
+    report_store.save_report(second_report)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/reports", params={"q": "保持鉴别诊断结构", "limit": 5})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "reports": [second_report],
+        "pagination": {"limit": 5, "offset": 0, "total": 1},
+    }
 
 
 

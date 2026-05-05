@@ -108,6 +108,7 @@ def evaluate_rubric_item(
     item: dict[str, Any],
     llm_scorer: LlmRubricScorer | None = None,
 ) -> dict[str, Any]:
+    item_id = item["item_id"]
     match_rule = item["match_rule"]
     kind = match_rule["kind"]
     spec = match_rule["spec"]
@@ -127,7 +128,7 @@ def evaluate_rubric_item(
         score = max_score if matched_evidence else 0
         return {"trace": _build_score_trace(item, score, matched_evidence)}
     if kind == "diagnosis_concept":
-        matched_evidence = [session.final_submission["diagnosis"]] if _diagnosis_matches(session, spec) and session.final_submission else []
+        matched_evidence = _matched_diagnosis_concept_evidence(session, item_id, spec)
         score = max_score if matched_evidence else 0
         return {"trace": _build_score_trace(item, score, matched_evidence)}
     if kind == "reasoning_coverage":
@@ -162,12 +163,23 @@ def _build_score_trace(
     )
 
 
-def _diagnosis_matches(session: RuleEvaluationSession, spec: dict[str, Any]) -> bool:
+def _matched_diagnosis_concept_evidence(
+    session: RuleEvaluationSession,
+    item_id: str,
+    spec: dict[str, Any],
+) -> list[str]:
     if not session.final_submission:
-        return False
-    diagnosis = session.final_submission["diagnosis"].lower()
+        return []
     concepts = [spec["target"], *spec.get("synonyms", [])]
-    return any(concept.lower() in diagnosis for concept in concepts)
+    source_texts = [session.final_submission["diagnosis"]]
+    if item_id.startswith("dxd_"):
+        source_texts.append(session.final_submission["reasoning"])
+    return [text for text in source_texts if _text_contains_any_concept(text, concepts)]
+
+
+def _text_contains_any_concept(text: str, concepts: list[str]) -> bool:
+    normalized_text = text.lower()
+    return any(concept.lower() in normalized_text for concept in concepts)
 
 
 def _evaluate_llm_rubric(

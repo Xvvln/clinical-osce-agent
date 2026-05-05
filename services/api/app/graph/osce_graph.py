@@ -11,7 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
-from app.services.source_retriever import retrieve_feedback_sources
+from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
 from app.validators.case_validator import validate_case
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -321,8 +321,14 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         if item_id in rubric_scores
     ]
     knowledge_recommendations = recommend_knowledge_items(report)
-    source_references = retrieve_feedback_sources(report, state.get("revealed_facts", []))
+    source_items = retrieve_feedback_source_items(report, state.get("revealed_facts", []))
+    source_references = [item.reference for item in source_items]
     llm_reasoning_feedback = _build_llm_reasoning_feedback(rubric_scores)
+    explanation_source_items = _build_explanation_source_items(
+        report.get("case_id", ""),
+        rubric_scores,
+        report.get("dimension_traces", {}),
+    )
 
     feedback_report = {
         **report,
@@ -332,11 +338,22 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "next_recommendations": next_recommendations,
         "knowledge_recommendations": knowledge_recommendations,
         "llm_reasoning_feedback": llm_reasoning_feedback,
+        "explanation_source_items": explanation_source_items,
         "source_references": source_references,
+        "source_reference_items": [_serialize_feedback_source_item(item) for item in source_items],
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
         "created_at": "2026-04-24T00:00:00Z",
     }
     return {"stage": "feedback", "retrieved_sources": source_references, "feedback_report": feedback_report}
+
+
+def _serialize_feedback_source_item(item: FeedbackSourceItem) -> dict[str, Any]:
+    return {
+        "reference": item.reference,
+        "source_type": item.source_type,
+        "title": item.title,
+        "metadata": item.metadata,
+    }
 
 
 def _build_llm_reasoning_feedback(rubric_scores: dict[str, Any]) -> list[dict[str, Any]]:
@@ -353,6 +370,106 @@ def _build_llm_reasoning_feedback(rubric_scores: dict[str, Any]) -> list[dict[st
         for item_id, item_score in rubric_scores.items()
         if "rationale" in item_score
     ]
+
+
+def _build_explanation_source_items(
+    case_id: str,
+    rubric_scores: dict[str, Any],
+    dimension_traces: Any,
+) -> list[dict[str, Any]]:
+    explanation_items: list[dict[str, Any]] = []
+    evidence_references_by_item = _evidence_references_by_rubric_item(rubric_scores, dimension_traces)
+    for item_id, item_score in rubric_scores.items():
+        evidence_references = evidence_references_by_item.get(item_id, [])
+        if item_score["score"] > 0:
+            explanation_items.append(
+                _build_explanation_source_item(
+                    case_id=case_id,
+                    kind="strength",
+                    text=f"{item_score['description']}：已完成。",
+                    rubric_item_id=item_id,
+                    evidence_references=evidence_references,
+                )
+            )
+        if (
+            item_score["dimension_id"] in {"differential_diagnosis", "reasoning"}
+            and item_score["score"] < item_score["max_score"]
+        ):
+            explanation_items.append(
+                _build_explanation_source_item(
+                    case_id=case_id,
+                    kind="reasoning_error",
+                    text=f"{item_score['description']}：评分轨迹未找到足够证据。",
+                    rubric_item_id=item_id,
+                    evidence_references=evidence_references,
+                )
+            )
+        if "rationale" in item_score:
+            explanation_items.append(
+                _build_explanation_source_item(
+                    case_id=case_id,
+                    kind="llm_reasoning_feedback",
+                    text=str(item_score["rationale"]),
+                    rubric_item_id=item_id,
+                    evidence_references=evidence_references,
+                )
+            )
+    return explanation_items
+
+
+def _build_explanation_source_item(
+    case_id: str,
+    kind: str,
+    text: str,
+    rubric_item_id: str,
+    evidence_references: list[str],
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "text": text,
+        "rubric_item_id": rubric_item_id,
+        "source_references": [f"rubric:{case_id}_rubric.item.{rubric_item_id}", *evidence_references],
+    }
+
+
+def _evidence_references_by_rubric_item(
+    rubric_scores: dict[str, Any],
+    dimension_traces: Any,
+) -> dict[str, list[str]]:
+    references_by_item: dict[str, list[str]] = {}
+    if isinstance(dimension_traces, dict):
+        for traces in dimension_traces.values():
+            if not isinstance(traces, list):
+                continue
+            for trace in traces:
+                if not isinstance(trace, dict) or trace.get("match_kind") == "intent_keyword":
+                    continue
+                rubric_item_id = trace.get("rubric_item_id")
+                if not isinstance(rubric_item_id, str) or not rubric_item_id:
+                    continue
+                _append_evidence_references(references_by_item, rubric_item_id, trace.get("matched_evidence", []))
+
+    for item_id, item_score in rubric_scores.items():
+        if not isinstance(item_id, str) or not isinstance(item_score, dict):
+            continue
+        _append_evidence_references(references_by_item, item_id, item_score.get("covered_evidence", []))
+    return references_by_item
+
+
+def _append_evidence_references(
+    references_by_item: dict[str, list[str]],
+    rubric_item_id: str,
+    evidence_items: Any,
+) -> None:
+    if not isinstance(evidence_items, list):
+        return
+    for evidence in evidence_items:
+        if not isinstance(evidence, str) or not evidence:
+            continue
+        evidence_reference = f"evidence:{evidence}"
+        item_references = references_by_item.setdefault(rubric_item_id, [])
+        if evidence_reference not in item_references:
+            item_references.append(evidence_reference)
 
 
 def _build_socratic_hint(state: OsceGraphState) -> str:

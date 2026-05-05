@@ -160,6 +160,8 @@ def test_current_user_profile_requires_logged_in_user() -> None:
 def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_path, authenticated_user: dict[str, str]) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
     osce_session_service._sessions.clear()
     current_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     current_session_id = current_response.json()["session_id"]
@@ -870,6 +872,11 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         "rubric:appendicitis_001_rubric.item.dxd_crohn",
         "rubric:appendicitis_001_rubric.item.dxd_ectopic",
         "rubric:appendicitis_001_rubric.item.rs_exclude",
+        "rubric:appendicitis_001_rubric.item.ht_onset",
+        "rubric:appendicitis_001_rubric.item.pe_rebound",
+        "rubric:appendicitis_001_rubric.item.ax_cbc",
+        "rubric:appendicitis_001_rubric.item.dx_main",
+        "rubric:appendicitis_001_rubric.item.rs_support",
         "evidence:appendicitis_001.hf_01",
         "evidence:abd.palpation.rebound",
         "evidence:lab.cbc",
@@ -1105,7 +1112,13 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "diagnosis": "急性阑尾炎",
         "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
     }
-    assert events[6]["payload"] == {
+    report_event_payload = events[6]["payload"]
+    assert {
+        "report_id": report_event_payload["report_id"],
+        "total_score": report_event_payload["total_score"],
+        "missed_items": report_event_payload["missed_items"],
+        "knowledge_recommendations": report_event_payload["knowledge_recommendations"],
+    } == {
         "report_id": f"{session_id}_report",
         "total_score": 32,
         "missed_items": [
@@ -1231,3 +1244,15 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
             },
         ],
     }
+    assert report_event_payload["source_references"][:3] == [
+        "case:appendicitis_001",
+        "source:fareez_osce_2022",
+        "rubric:appendicitis_001_rubric.item.ht_migration",
+    ]
+    assert report_event_payload["source_reference_items"][0] == {
+        "reference": "case:appendicitis_001",
+        "source_type": "case",
+        "title": "右下腹痛教学病例",
+        "metadata": {},
+    }
+    assert report_event_payload["source_reference_items"][1]["metadata"]["license"] == "CC BY 4.0"

@@ -15,6 +15,11 @@ class TrainingInsightService:
         missed_item_case_ids: dict[str, set[str]] = defaultdict(set)
         recommendation_counts: Counter[str] = Counter()
         recommendation_titles: dict[str, str] = {}
+        source_reference_counts: Counter[str] = Counter()
+        source_reference_case_ids: dict[str, set[str]] = defaultdict(set)
+        source_reference_types: dict[str, str] = {}
+        source_reference_titles: dict[str, str] = {}
+        source_reference_metadata: dict[str, dict[str, Any]] = {}
         report_count = 0
 
         for session_id in session_ids:
@@ -33,6 +38,13 @@ class TrainingInsightService:
                         continue
                     recommendation_counts[reference] += 1
                     recommendation_titles[reference] = recommendation["title"]
+                for source_reference_item in payload.get("source_reference_items", []):
+                    reference = source_reference_item["reference"]
+                    source_reference_counts[reference] += 1
+                    source_reference_case_ids[reference].add(case_id)
+                    source_reference_types[reference] = source_reference_item["source_type"]
+                    source_reference_titles[reference] = source_reference_item["title"]
+                    source_reference_metadata[reference] = source_reference_item.get("metadata", {})
 
         return {
             "session_count": len(session_ids),
@@ -56,6 +68,20 @@ class TrainingInsightService:
                     key=lambda item: (-item[1], _recommendation_kind_rank(item[0]), item[0]),
                 )
             ],
+            "frequent_source_references": [
+                {
+                    "reference": reference,
+                    "source_type": source_reference_types[reference],
+                    "title": source_reference_titles[reference],
+                    "count": count,
+                    "case_ids": sorted(source_reference_case_ids[reference]),
+                    "metadata": source_reference_metadata[reference],
+                }
+                for reference, count in sorted(
+                    source_reference_counts.items(),
+                    key=lambda item: (-item[1], _source_reference_kind_rank(item[0]), item[0]),
+                )
+            ],
         }
 
 
@@ -65,6 +91,18 @@ def _recommendation_kind_rank(reference: str) -> int:
     if reference.startswith("knowledge:"):
         return 1
     return 2
+
+
+def _source_reference_kind_rank(reference: str) -> int:
+    if reference.startswith("source:"):
+        return 0
+    if reference.startswith("case:"):
+        return 1
+    if reference.startswith("rubric:"):
+        return 2
+    if reference.startswith("evidence:"):
+        return 3
+    return 4
 
 
 training_insight_service = TrainingInsightService()

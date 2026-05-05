@@ -64,6 +64,12 @@ class OsceSessionService:
     def list_cases(self) -> list[dict[str, Any]]:
         return [_serialize_case_summary(load_case_node(case_path.stem)) for case_path in sorted(CASES_DIR.glob("*.json"))]
 
+    def get_case_detail(self, case_id: str) -> dict[str, Any] | None:
+        case_path = CASES_DIR / f"{case_id}.json"
+        if not case_path.exists():
+            return None
+        return _serialize_case_summary(load_case_node(case_id))
+
     def get_case_raw(self, case_id: str) -> dict[str, Any] | None:
         case_path = CASES_DIR / f"{case_id}.json"
         if not case_path.exists():
@@ -242,6 +248,8 @@ class OsceSessionService:
                     "total_score": session.feedback_report["total_score"],
                     "missed_items": session.feedback_report["missed_items"],
                     "knowledge_recommendations": session.feedback_report["knowledge_recommendations"],
+                    "source_references": session.feedback_report["source_references"],
+                    "source_reference_items": session.feedback_report["source_reference_items"],
                 },
             )
         return session.feedback_report

@@ -31,6 +31,20 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                     "reason": "病例库暂无同模块病例，推荐用于下一轮对照训练。",
                 },
             ],
+            "source_reference_items": [
+                {
+                    "reference": "source:fareez_osce_2022",
+                    "source_type": "source",
+                    "title": "Fareez OSCE 数据集",
+                    "metadata": {"license": "CC BY 4.0"},
+                },
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                    "source_type": "rubric",
+                    "title": "推理链覆盖关键证据并能自圆其说",
+                    "metadata": {},
+                },
+            ],
         },
     )
     store.append_event(
@@ -54,6 +68,14 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                     "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
                     "title": "推理链覆盖关键证据并能自圆其说",
                     "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
+                }
+            ],
+            "source_reference_items": [
+                {
+                    "reference": "source:fareez_osce_2022",
+                    "source_type": "source",
+                    "title": "Fareez OSCE 数据集",
+                    "metadata": {"license": "CC BY 4.0"},
                 }
             ],
         },
@@ -91,6 +113,24 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "reference": "knowledge:appendicitis_001.rp_03",
                 "title": "急性阑尾炎诊断依据",
                 "count": 1,
+            },
+        ],
+        "frequent_source_references": [
+            {
+                "reference": "source:fareez_osce_2022",
+                "source_type": "source",
+                "title": "Fareez OSCE 数据集",
+                "count": 2,
+                "case_ids": ["appendicitis_001", "pneumonia_001"],
+                "metadata": {"license": "CC BY 4.0"},
+            },
+            {
+                "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                "source_type": "rubric",
+                "title": "推理链覆盖关键证据并能自圆其说",
+                "count": 1,
+                "case_ids": ["appendicitis_001"],
+                "metadata": {},
             },
         ],
     }

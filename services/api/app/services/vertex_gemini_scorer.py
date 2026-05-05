@@ -59,7 +59,10 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | None:
         return None
     os.environ["HTTP_PROXY"] = settings.proxy_url
     os.environ["HTTPS_PROXY"] = settings.proxy_url
-    return VertexGeminiRubricScorer(settings=settings)
+    try:
+        return VertexGeminiRubricScorer(settings=settings)
+    except ImportError:
+        return None
 
 
 __all__ = ["VertexGeminiRubricScorer", "VertexGeminiSettings", "create_default_vertex_gemini_scorer"]

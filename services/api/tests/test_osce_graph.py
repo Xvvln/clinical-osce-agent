@@ -458,6 +458,33 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
     assert "evidence:lab.cbc" in result["retrieved_sources"]
     assert "evidence:急性阑尾炎" in result["retrieved_sources"]
     assert feedback_report["source_references"] == result["retrieved_sources"]
+    assert feedback_report["source_reference_items"][0] == {
+        "reference": "case:appendicitis_001",
+        "source_type": "case",
+        "title": "右下腹痛教学病例",
+        "metadata": {},
+    }
+    assert feedback_report["source_reference_items"][1]["reference"] == "source:fareez_osce_2022"
+    assert feedback_report["source_reference_items"][1]["source_type"] == "source"
+    assert feedback_report["source_reference_items"][1]["metadata"]["license"] == "CC BY 4.0"
+    assert {
+        "reference": "rubric:appendicitis_001_rubric.item.ht_migration",
+        "source_type": "rubric",
+        "title": "追问疼痛部位及转移特征",
+        "metadata": {},
+    } in feedback_report["source_reference_items"]
+    assert {
+        "kind": "strength",
+        "text": "主要诊断命中急性阑尾炎：已完成。",
+        "rubric_item_id": "dx_main",
+        "source_references": ["rubric:appendicitis_001_rubric.item.dx_main", "evidence:急性阑尾炎"],
+    } in feedback_report["explanation_source_items"]
+    assert {
+        "kind": "reasoning_error",
+        "text": "提出输尿管结石并说明排除依据：评分轨迹未找到足够证据。",
+        "rubric_item_id": "dxd_urolith",
+        "source_references": ["rubric:appendicitis_001_rubric.item.dxd_urolith"],
+    } in feedback_report["explanation_source_items"]
     assert feedback_report["feedback_summary"] == "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。"
     assert "created_at" in feedback_report
     report_text = str(feedback_report)
@@ -523,6 +550,12 @@ def test_osce_graph_uses_injected_llm_scorer_for_llm_rubric_items() -> None:
             "rationale": "排除依据覆盖尿常规，仍缺少完整鉴别说明。",
         },
     ]
+    assert {
+        "kind": "llm_reasoning_feedback",
+        "text": "排除依据覆盖尿常规，仍缺少完整鉴别说明。",
+        "rubric_item_id": "rs_exclude",
+        "source_references": ["rubric:appendicitis_001_rubric.item.rs_exclude", "evidence:appendicitis_001.rp_05"],
+    } in result["feedback_report"]["explanation_source_items"]
     assert [request.rubric_item_id for request in captured_requests] == ["rs_exclude"]
     assert captured_requests[0].student_final_reasoning == "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"
 

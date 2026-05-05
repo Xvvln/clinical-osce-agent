@@ -44,6 +44,10 @@ def _collect_references(report: dict[str, Any], revealed_facts: list[str]) -> li
         if item_id in rubric_scores:
             references.append(f"rubric:{case_id}_rubric.item.{item_id}")
 
+    for item_id in rubric_scores:
+        if isinstance(item_id, str):
+            references.append(f"rubric:{case_id}_rubric.item.{item_id}")
+
     for fact_id in revealed_facts:
         references.append(f"evidence:{fact_id}")
 

@@ -67,28 +67,44 @@ def test_vertex_gemini_settings_defaults_to_global_gemini_31_flash_lite() -> Non
     assert settings.proxy_url == "http://127.0.0.1:7897"
 
 
-def test_create_default_vertex_gemini_scorer_returns_none_when_disabled(monkeypatch) -> None:
+def test_create_default_vertex_gemini_scorer_returns_none_when_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OSCE_VERTEX_ENABLED", raising=False)
     monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
 
     assert create_default_vertex_gemini_scorer() is None
 
 
-def test_create_default_vertex_gemini_scorer_requires_project_when_enabled(monkeypatch) -> None:
+def test_create_default_vertex_gemini_scorer_requires_project_when_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
     monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
 
     assert create_default_vertex_gemini_scorer() is None
 
 
-def test_create_default_vertex_gemini_scorer_sets_7897_proxy(monkeypatch) -> None:
+def test_create_default_vertex_gemini_scorer_sets_7897_proxy(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", lambda **kwargs: FakeClient())
 
     scorer = create_default_vertex_gemini_scorer()
 
     assert scorer is not None
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+
+
+def test_create_default_vertex_gemini_scorer_falls_back_when_client_dependency_is_missing(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
+
+    def raise_missing_dependency(*args: object, **kwargs: object) -> object:
+        raise ImportError("Using SOCKS proxy, but the 'socksio' package is not installed.")
+
+    monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", raise_missing_dependency)
+
+    assert create_default_vertex_gemini_scorer() is None

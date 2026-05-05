@@ -33,6 +33,7 @@ def test_retrieve_feedback_source_items_returns_indexed_case_source_and_evidence
         "case:appendicitis_001",
         "source:fareez_osce_2022",
         "rubric:appendicitis_001_rubric.item.ht_migration",
+        "rubric:appendicitis_001_rubric.item.dx_main",
         "evidence:appendicitis_001.hf_01",
         "evidence:abd.palpation.rebound",
         "evidence:急性阑尾炎",
@@ -44,12 +45,14 @@ def test_retrieve_feedback_source_items_returns_indexed_case_source_and_evidence
     assert items[1].metadata["license"] == "CC BY 4.0"
     assert items[2].title == "追问疼痛部位及转移特征"
     assert items[2].source_type == "rubric"
-    assert items[3].title == "24 小时前开始，最初是上腹部隐痛。"
-    assert items[3].source_type == "evidence"
-    assert items[4].title == "右下腹反跳痛阳性。"
+    assert items[3].title == "主要诊断命中急性阑尾炎"
+    assert items[3].source_type == "rubric"
+    assert items[4].title == "24 小时前开始，最初是上腹部隐痛。"
     assert items[4].source_type == "evidence"
-    assert items[5].title == "急性阑尾炎"
+    assert items[5].title == "右下腹反跳痛阳性。"
     assert items[5].source_type == "evidence"
+    assert items[6].title == "急性阑尾炎"
+    assert items[6].source_type == "evidence"
 
 
 def test_retrieve_feedback_sources_keeps_stable_reference_contract() -> None:

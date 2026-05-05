@@ -3,18 +3,20 @@ import os
 from typing import Any
 
 import yaml
-from fastapi import Cookie, FastAPI, HTTPException, Response, status
+from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
+from app.graph.osce_graph import build_osce_graph
 from app.services.auth_store import auth_store
 from app.services.evaluation_result_store import evaluation_result_store
-from app.services.evaluation_runner import EvaluationCase, EvaluationStep, run_evaluation_cases
-from app.services.osce_session_service import osce_session_service
+from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
+from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
 from app.services.training_skill_regression_gate import training_skill_regression_gate
+from app.validators.case_validator import validate_case, validate_case_rubric_pair, validate_rubric
 
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
@@ -25,6 +27,7 @@ ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_rejected",
 }
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
+ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
 SOURCE_REGISTRY_PATH = RUBRICS_DIR.parent / "attribution" / "source_registry" / "sources.json"
 ADMIN_EVALUATION_CASES = [
     EvaluationCase(
@@ -44,6 +47,59 @@ ADMIN_EVALUATION_CASES = [
         forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
     ),
 ]
+
+
+def _canonical_admin_patient_responder(request: object) -> str:
+    return str(getattr(request, "canonical_answer"))
+
+
+def _build_admin_evaluation_service() -> OsceSessionService:
+    return OsceSessionService(
+        report_store=osce_session_service.report_store,
+        training_event_store=osce_session_service.training_event_store,
+        training_skill_store=osce_session_service.training_skill_store,
+        session_store=osce_session_service.session_store,
+        graph=build_osce_graph(patient_responder=_canonical_admin_patient_responder),
+    )
+
+
+def _run_admin_evaluation_cases() -> EvaluationBatchResult:
+    return run_evaluation_cases(ADMIN_EVALUATION_CASES, _build_admin_evaluation_service())
+
+
+def _real_training_session_ids() -> list[str]:
+    return [
+        str(session["session_id"])
+        for session in osce_session_service.session_store.list_session_summaries()
+        if not str(session.get("student_id", "")).startswith(ADMIN_EVALUATION_STUDENT_ID_PREFIX)
+    ]
+
+
+def _filter_admin_items(items: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return items
+    return [
+        item
+        for item in items
+        if normalized_query in json.dumps(item, ensure_ascii=False, sort_keys=True).lower()
+    ]
+
+
+def _build_paginated_admin_payload(
+    key: str,
+    items: list[dict[str, Any]],
+    limit: int | None,
+    offset: int,
+    query: str,
+) -> dict[str, object]:
+    filtered_items = _filter_admin_items(items, query)
+    effective_limit = limit if limit is not None else max(len(filtered_items) - offset, 0)
+    return {
+        key: filtered_items[offset : offset + effective_limit],
+        "pagination": {"limit": effective_limit, "offset": offset, "total": len(filtered_items)},
+    }
+
 
 PROFILE_DIMENSION_LABELS: dict[str, str] = {
     "history_taking": "问诊",
@@ -100,6 +156,16 @@ class HypothesisRequest(BaseModel):
 
 class AdminTrainingSkillReviewRequest(BaseModel):
     candidate_id: str
+
+
+class AdminCaseValidationRequest(BaseModel):
+    case: dict[str, Any]
+    rubric: dict[str, Any] | None = None
+
+
+class AdminCaseImportRequest(BaseModel):
+    case: dict[str, Any]
+    rubric: dict[str, Any]
 
 
 class AdminEvaluationRunRequest(BaseModel):
@@ -362,11 +428,109 @@ def list_cases() -> dict[str, object]:
     return {"cases": osce_session_service.list_cases()}
 
 
+def _get_case_detail_response(case_id: str) -> dict[str, object]:
+    case_payload = osce_session_service.get_case_detail(case_id)
+    if case_payload is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return {"case": case_payload}
+
+
 def _get_case_raw_response(case_id: str) -> dict[str, object]:
     case_payload = osce_session_service.get_case_raw(case_id)
     if case_payload is None:
         raise HTTPException(status_code=404, detail="case not found")
     return {"case": case_payload}
+
+
+def _build_admin_case_validation_response(request: AdminCaseValidationRequest) -> dict[str, object]:
+    errors: list[str] = []
+    case_id = request.case.get("case_id")
+    rubric_id = request.rubric.get("rubric_id") if request.rubric is not None else None
+    case_model = None
+    rubric_model = None
+
+    try:
+        case_model = validate_case(request.case)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    if request.rubric is not None:
+        try:
+            rubric_model = validate_rubric(request.rubric)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if case_model is not None and rubric_model is not None:
+        try:
+            validate_case_rubric_pair(case_model, rubric_model)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    return {"valid": not errors, "case_id": case_id, "rubric_id": rubric_id, "errors": errors}
+
+
+def _is_safe_admin_import_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and "/" not in value and "\\" not in value and ".." not in value
+
+
+def _build_admin_case_import_response(request: AdminCaseImportRequest) -> dict[str, object]:
+    case_id = request.case.get("case_id")
+    rubric_id = request.rubric.get("rubric_id")
+    errors: list[str] = []
+
+    if not _is_safe_admin_import_id(case_id):
+        errors.append(f"invalid case_id: {case_id}")
+    if not _is_safe_admin_import_id(rubric_id):
+        errors.append(f"invalid rubric_id: {rubric_id}")
+    if errors:
+        return {"imported": False, "case_id": case_id, "rubric_id": rubric_id, "errors": errors}
+
+    validation = _build_admin_case_validation_response(
+        AdminCaseValidationRequest(case=request.case, rubric=request.rubric)
+    )
+    errors.extend(str(error) for error in validation["errors"])
+    if errors:
+        return {"imported": False, "case_id": case_id, "rubric_id": rubric_id, "errors": errors}
+
+    case_path = CASES_DIR / f"{case_id}.json"
+    rubric_path = RUBRICS_DIR / f"{rubric_id}.yaml"
+    if case_path.exists():
+        errors.append(f"case already exists: {case_id}")
+    if rubric_path.exists():
+        errors.append(f"rubric already exists: {rubric_id}")
+    if errors:
+        return {"imported": False, "case_id": case_id, "rubric_id": rubric_id, "errors": errors}
+
+    case_content = json.dumps(request.case, ensure_ascii=False, indent=2) + "\n"
+    rubric_content = yaml.safe_dump(request.rubric, allow_unicode=True, sort_keys=False)
+    created_paths = []
+    try:
+        with case_path.open("x", encoding="utf-8") as case_file:
+            case_file.write(case_content)
+        created_paths.append(case_path)
+        with rubric_path.open("x", encoding="utf-8") as rubric_file:
+            rubric_file.write(rubric_content)
+        created_paths.append(rubric_path)
+    except FileExistsError:
+        for created_path in reversed(created_paths):
+            created_path.unlink(missing_ok=True)
+        conflict_error = f"rubric already exists: {rubric_id}" if created_paths else f"case already exists: {case_id}"
+        return {"imported": False, "case_id": case_id, "rubric_id": rubric_id, "errors": [conflict_error]}
+    except OSError as exc:
+        for created_path in reversed(created_paths):
+            created_path.unlink(missing_ok=True)
+        return {
+            "imported": False,
+            "case_id": case_id,
+            "rubric_id": rubric_id,
+            "errors": [f"import write failed: {exc}"],
+        }
+    return {"imported": True, "case_id": case_id, "rubric_id": rubric_id, "errors": []}
+
+
+@app.get("/api/cases/{case_id}")
+def get_case_detail(case_id: str) -> dict[str, object]:
+    return _get_case_detail_response(case_id)
 
 
 @app.get("/api/cases/{case_id}/raw")
@@ -385,6 +549,24 @@ def get_admin_case_raw(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return _get_case_raw_response(case_id)
+
+
+@app.post("/api/admin/cases/validate")
+def validate_admin_case(
+    request: AdminCaseValidationRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return _build_admin_case_validation_response(request)
+
+
+@app.post("/api/admin/cases/import")
+def import_admin_case(
+    request: AdminCaseImportRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return _build_admin_case_import_response(request)
 
 
 @app.get("/api/admin/rubrics/{rubric_id}")
@@ -428,13 +610,10 @@ def generate_admin_training_skill_candidates(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
-    session_ids = [
-        str(session["session_id"])
-        for session in osce_session_service.session_store.list_session_summaries()
-    ]
+    session_ids = _real_training_session_ids()
     insights = TrainingInsightService(osce_session_service.training_event_store).summarize_sessions(session_ids)
     candidates = training_skill_candidate_service.propose_candidates(insights, min_count=2)
-    batch_result = run_evaluation_cases(ADMIN_EVALUATION_CASES, osce_session_service)
+    batch_result = _run_admin_evaluation_cases()
     evaluation_result_store.save_batch_result(ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID, batch_result)
     saved_candidate_summaries: list[dict[str, object]] = []
     ready_for_review_count = 0
@@ -546,10 +725,7 @@ def get_admin_training_insights(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    session_ids = [
-        str(session["session_id"])
-        for session in osce_session_service.session_store.list_session_summaries()
-    ]
+    session_ids = _real_training_session_ids()
     insights = TrainingInsightService(osce_session_service.training_event_store).summarize_sessions(session_ids)
     return {"insights": insights}
 
@@ -568,7 +744,7 @@ def run_admin_evaluation(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    batch_result = run_evaluation_cases(ADMIN_EVALUATION_CASES, osce_session_service)
+    batch_result = _run_admin_evaluation_cases()
     evaluation_result_store.save_batch_result(request.batch_id, batch_result)
     return {"evaluation": evaluation_result_store.get_batch_result(request.batch_id)}
 
@@ -587,18 +763,36 @@ def get_admin_evaluation(
 
 @app.get("/api/admin/reports")
 def list_admin_reports(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"reports": osce_session_service.report_store.list_reports()}
+    return _build_paginated_admin_payload(
+        "reports",
+        osce_session_service.report_store.list_reports(),
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.get("/api/admin/sessions")
 def list_admin_sessions(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"sessions": osce_session_service.session_store.list_session_summaries()}
+    return _build_paginated_admin_payload(
+        "sessions",
+        osce_session_service.session_store.list_session_summaries(),
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.get("/api/admin/sessions/{session_id}/report")

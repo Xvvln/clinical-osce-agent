@@ -68,6 +68,47 @@ def test_list_cases_returns_valid_case_summaries() -> None:
     assert "急性阑尾炎" not in str(appendicitis_case)
 
 
+def test_get_case_detail_returns_student_safe_payload() -> None:
+    response = client.get("/api/cases/appendicitis_001")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) == {"case"}
+    case_payload = payload["case"]
+    assert case_payload["case_id"] == "appendicitis_001"
+    assert case_payload["case_title"] == "右下腹痛教学病例"
+    assert case_payload["course_module"] == "腹痛"
+    assert case_payload["difficulty"] == "初级"
+    assert case_payload["chief_complaint"] == "转移性右下腹痛 24 小时，伴恶心、低热"
+    assert case_payload["patient_profile"] == {
+        "age": "22岁",
+        "gender": "男",
+        "occupation": "学生",
+        "hospital_department": "急诊外科",
+    }
+    assert case_payload["opening_task_card"]["tasks"] == [
+        "进行有重点的病史采集",
+        "判断需要哪些查体",
+        "选择必要辅助检查",
+        "提出诊断假设和鉴别诊断",
+        "最终提交诊断与推理依据",
+    ]
+    assert case_payload["physical_exam_options"][0] == {"exam_code": "vital.temperature", "exam_name_cn": "体温"}
+    assert case_payload["auxiliary_test_options"][0] == {"test_code": "lab.cbc", "test_name_cn": "血常规", "category": "实验室"}
+    assert "hidden_facts" not in str(case_payload)
+    assert "canonical_answer" not in str(case_payload)
+    assert "result" not in str(case_payload["physical_exam_options"])
+    assert "result" not in str(case_payload["auxiliary_test_options"])
+    assert "急性阑尾炎" not in str(case_payload)
+
+
+def test_get_case_detail_returns_404_for_unknown_case() -> None:
+    response = client.get("/api/cases/not_found_001")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "case not found"}
+
+
 def test_get_case_raw_requires_login(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 

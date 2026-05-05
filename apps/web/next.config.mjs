@@ -1,3 +1,5 @@
+const webApiUrl = process.env.CLINICAL_OSCE_WEB_API_URL ?? "http://127.0.0.1:8000";
+
 const nextConfig = {
   experimental: {
     devtoolSegmentExplorer: false,
@@ -15,7 +17,7 @@ const nextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://127.0.0.1:8000/api/:path*",
+        destination: `${webApiUrl}/api/:path*`,
       },
     ];
   },

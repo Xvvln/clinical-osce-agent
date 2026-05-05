@@ -38,7 +38,7 @@ class EvaluationResultStore:
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row[0])
+        return _normalize_batch_result(json.loads(row[0]))
 
     def list_batch_summaries(self) -> list[dict[str, Any]]:
         self._initialize()
@@ -73,6 +73,24 @@ class EvaluationResultStore:
 
 def _serialize_batch_result(batch_id: str, batch_result: EvaluationBatchResult) -> dict[str, Any]:
     return {"batch_id": batch_id, **asdict(batch_result)}
+
+
+def _normalize_batch_result(batch_result: dict[str, Any]) -> dict[str, Any]:
+    for result in batch_result.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        result.setdefault("source_reference_count", 0)
+        result.setdefault("source_reference_types", [])
+        result.setdefault("rag_source_coverage_passed", False)
+        result.setdefault("rag_rubric_reference_coverage_ratio", 0.0)
+        result.setdefault("missing_rubric_references", [])
+        result.setdefault("rag_explanation_coverage_passed", False)
+        result.setdefault("rag_explanation_coverage_ratio", 0.0)
+        result.setdefault("missing_explanation_references", [])
+        result.setdefault("rag_evidence_coverage_passed", False)
+        result.setdefault("rag_evidence_coverage_ratio", 0.0)
+        result.setdefault("missing_evidence_references", [])
+    return batch_result
 
 
 evaluation_result_store = EvaluationResultStore()

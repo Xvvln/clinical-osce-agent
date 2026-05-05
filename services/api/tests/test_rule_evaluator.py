@@ -42,6 +42,34 @@ def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
     assert report["feedback_summary"] == "已完成规则评分，LLM 评分维度将在后续阶段补充。"
 
 
+def test_diagnosis_concept_scores_differential_concepts_from_structured_reasoning() -> None:
+    session = OsceSession(
+        session_id="session_demo",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        final_submission={
+            "diagnosis": "急性阑尾炎",
+            "reasoning": "\n".join(
+                [
+                    "鉴别诊断：右侧输尿管结石、克罗恩病回盲部受累、异位妊娠破裂。",
+                    "排除依据：无尿痛、尿频、肉眼血尿，尿常规阴性；无慢性腹泻或体重下降；患者为男性，因此可排除异位妊娠。",
+                ]
+            ),
+        },
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["dimension_scores"]["differential_diagnosis"] == 15
+    assert report["rubric_scores"]["dxd_urolith"]["score"] == 5
+    assert report["rubric_scores"]["dxd_crohn"]["score"] == 5
+    assert report["rubric_scores"]["dxd_ectopic"]["score"] == 5
+    assert "dxd_urolith" not in report["missed_items"]
+    assert "dxd_crohn" not in report["missed_items"]
+    assert "dxd_ectopic" not in report["missed_items"]
+
+
 def test_reasoning_coverage_scores_full_score_when_evidence_coverage_meets_threshold() -> None:
     session = OsceSession(
         session_id="session_demo",

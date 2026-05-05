@@ -16,6 +16,13 @@ type ReportRecommendation = Readonly<{
   reference: string;
 }>;
 
+type AdminSourceReferenceItem = Readonly<{
+  reference: string;
+  source_type: string;
+  title: string;
+  metadata: Readonly<Record<string, unknown>>;
+}>;
+
 type AdminSessionReport = Readonly<{
   report_id: string;
   session_id: string;
@@ -24,6 +31,8 @@ type AdminSessionReport = Readonly<{
   total_score: number;
   dimension_scores: Record<string, number>;
   missed_items: readonly string[];
+  source_references?: readonly string[];
+  source_reference_items?: readonly AdminSourceReferenceItem[];
   knowledge_recommendations: readonly ReportRecommendation[];
 }>;
 
@@ -40,6 +49,17 @@ type EvaluationCaseResult = Readonly<{
   actual_total_score: number;
   expected_total_score: number;
   forbidden_term_violations: readonly string[];
+  source_reference_count: number;
+  source_reference_types: readonly string[];
+  rag_source_coverage_passed: boolean;
+  rag_rubric_reference_coverage_ratio: number;
+  missing_rubric_references: readonly string[];
+  rag_explanation_coverage_passed: boolean;
+  rag_explanation_coverage_ratio: number;
+  missing_explanation_references: readonly string[];
+  rag_evidence_coverage_passed: boolean;
+  rag_evidence_coverage_ratio: number;
+  missing_evidence_references: readonly string[];
   passed: boolean;
   duration_ms: number;
 }>;
@@ -86,11 +106,18 @@ type FrequentLearningRecommendation = Readonly<{
   count: number;
 }>;
 
+type FrequentSourceReference = AdminSourceReferenceItem &
+  Readonly<{
+    count: number;
+    case_ids: readonly string[];
+  }>;
+
 type AdminTrainingInsights = Readonly<{
   session_count: number;
   report_count: number;
   frequent_missed_items: readonly FrequentMissedItem[];
   frequent_learning_recommendations: readonly FrequentLearningRecommendation[];
+  frequent_source_references: readonly FrequentSourceReference[];
 }>;
 
 type TrainingSkillCandidateSummary = Readonly<{
@@ -245,6 +272,32 @@ type AdminSourcesResponse = Readonly<{
   sources: readonly AdminSourceRegistryEntry[];
 }>;
 
+type AdminCaseImportPayload = Readonly<{
+  case: Record<string, unknown>;
+  rubric: Record<string, unknown>;
+}>;
+
+type AdminCaseValidationResponse = Readonly<{
+  valid: boolean;
+  case_id: string | null;
+  rubric_id: string | null;
+  errors: readonly string[];
+}>;
+
+type AdminCaseImportResponse = Readonly<{
+  imported: boolean;
+  case_id: string | null;
+  rubric_id: string | null;
+  errors: readonly string[];
+}>;
+
+type AdminCaseImportStatus = AdminCaseValidationResponse | AdminCaseImportResponse;
+
+type AdminCaseImportReadyState = Readonly<{
+  payloadKey: string;
+  result: AdminCaseValidationResponse;
+}>;
+
 type AuthLoginResponse = Readonly<{
   user: AuthUser;
 }>;
@@ -382,6 +435,47 @@ async function getAdminSources(): Promise<readonly AdminSourceRegistryEntry[]> {
   await assertAdminResponseOk(response, "读取数据来源登记表");
   const payload = (await response.json()) as AdminSourcesResponse;
   return payload.sources;
+}
+
+function getAdminCaseImportPayloadKey(caseText: string, rubricText: string): string {
+  return `${caseText}\n---rubric---\n${rubricText}`;
+}
+
+function parseAdminImportJson(text: string, label: string): Record<string, unknown> {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error(`${label} 不能为空。`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmedText) as unknown;
+  } catch {
+    throw new Error(`${label} 不是合法 JSON。`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} 必须是 JSON object。`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function validateAdminCaseImport(payload: AdminCaseImportPayload): Promise<AdminCaseValidationResponse> {
+  const response = await fetch("/api/admin/cases/validate", {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  await assertAdminResponseOk(response, "校验病例与 Rubric");
+  return (await response.json()) as AdminCaseValidationResponse;
+}
+
+async function importAdminCasePayload(payload: AdminCaseImportPayload): Promise<AdminCaseImportResponse> {
+  const response = await fetch("/api/admin/cases/import", {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  await assertAdminResponseOk(response, "导入病例与 Rubric");
+  return (await response.json()) as AdminCaseImportResponse;
 }
 
 async function getAdminSessions(): Promise<readonly AdminSessionSummary[]> {
@@ -526,6 +620,45 @@ function buildEvaluationChartSummary(
   };
 }
 
+function getSourceReferenceLabel(reference: string): string {
+  const separatorIndex = reference.indexOf(":");
+  if (separatorIndex === -1) {
+    return reference;
+  }
+  return reference.slice(separatorIndex + 1);
+}
+
+function getSourceReferenceMetadataText(metadata: Readonly<Record<string, unknown>>): string {
+  const license = typeof metadata.license === "string" ? `许可：${metadata.license}` : "";
+  const sourceUrl = typeof metadata.source_url === "string" ? `来源：${metadata.source_url}` : "";
+  return [license, sourceUrl].filter(Boolean).join(" · ");
+}
+
+function getReportSourceReferenceItems(report: AdminSessionReport): readonly AdminSourceReferenceItem[] {
+  if ((report.source_reference_items?.length ?? 0) > 0) {
+    return report.source_reference_items ?? [];
+  }
+  return (report.source_references ?? []).map((reference) => ({
+    reference,
+    source_type: reference.split(":", 1)[0] || "other",
+    title: getSourceReferenceLabel(reference),
+    metadata: {},
+  }));
+}
+
+function getAdminCaseImportStatusLabel(result: AdminCaseImportStatus): string {
+  if ("valid" in result) {
+    return result.valid ? "预检通过" : "valid=false";
+  }
+  return result.imported ? "导入成功" : "imported=false";
+}
+
+function getAdminCaseImportStatusText(result: AdminCaseImportStatus): string {
+  const label = getAdminCaseImportStatusLabel(result);
+  const errors = result.errors.length > 0 ? ` · ${result.errors.join("；")}` : "";
+  return `${label} · case_id=${result.case_id ?? "—"} · rubric_id=${result.rubric_id ?? "—"}${errors}`;
+}
+
 function buildEvaluationExportPayload(evaluation: EvaluationBatchDetail): EvaluationExportPayload {
   return {
     batch_id: evaluation.batch_id,
@@ -538,7 +671,18 @@ function buildEvaluationExportPayload(evaluation: EvaluationBatchDetail): Evalua
       expected_total_score: result.expected_total_score,
       forbidden_term_violations: result.forbidden_term_violations,
       passed: result.passed,
+      rag_rubric_reference_coverage_ratio: result.rag_rubric_reference_coverage_ratio,
+      rag_source_coverage_passed: result.rag_source_coverage_passed,
+      missing_rubric_references: result.missing_rubric_references,
+      rag_explanation_coverage_passed: result.rag_explanation_coverage_passed,
+      rag_explanation_coverage_ratio: result.rag_explanation_coverage_ratio,
+      missing_explanation_references: result.missing_explanation_references,
+      rag_evidence_coverage_passed: result.rag_evidence_coverage_passed,
+      rag_evidence_coverage_ratio: result.rag_evidence_coverage_ratio,
+      missing_evidence_references: result.missing_evidence_references,
       session_id: result.session_id,
+      source_reference_count: result.source_reference_count,
+      source_reference_types: result.source_reference_types,
     })),
     total_cases: evaluation.total_cases,
     total_duration_ms: evaluation.total_duration_ms,
@@ -578,6 +722,11 @@ export default function AdminDashboardPage() {
   const [candidates, setCandidates] = useState<readonly TrainingSkillCandidateSummary[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<TrainingSkillCandidateDetail | null>(null);
   const [caseSearchText, setCaseSearchText] = useState("");
+  const [caseImportJsonText, setCaseImportJsonText] = useState("");
+  const [rubricImportJsonText, setRubricImportJsonText] = useState("");
+  const [caseImportResult, setCaseImportResult] = useState<AdminCaseImportStatus | null>(null);
+  const [validatedCaseImport, setValidatedCaseImport] = useState<AdminCaseImportReadyState | null>(null);
+  const [isCaseImportBusy, setIsCaseImportBusy] = useState(false);
   const [sessionSearchText, setSessionSearchText] = useState("");
   const [reportSearchText, setReportSearchText] = useState("");
   const [candidateSearchText, setCandidateSearchText] = useState("");
@@ -621,6 +770,7 @@ export default function AdminDashboardPage() {
         String(report.total_score),
         ...report.missed_items,
         ...report.knowledge_recommendations.map((recommendation) => recommendation.title),
+        ...getReportSourceReferenceItems(report).flatMap((item) => [item.title, item.reference]),
       ].join(" "),
       reportSearchText,
     ),
@@ -637,6 +787,8 @@ export default function AdminDashboardPage() {
       candidateSearchText,
     ),
   );
+  const currentCaseImportPayloadKey = getAdminCaseImportPayloadKey(caseImportJsonText, rubricImportJsonText);
+  const canImportCasePayload = validatedCaseImport?.payloadKey === currentCaseImportPayloadKey && validatedCaseImport.result.valid && !isCaseImportBusy;
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
 
   async function loadDashboard() {
@@ -716,6 +868,72 @@ export default function AdminDashboardPage() {
       setStatusText(message);
     } finally {
       setIsLoggingIn(false);
+    }
+  }
+
+  function buildAdminCaseImportPayload(): AdminCaseImportPayload {
+    return {
+      case: parseAdminImportJson(caseImportJsonText, "病例 JSON"),
+      rubric: parseAdminImportJson(rubricImportJsonText, "Rubric JSON"),
+    };
+  }
+
+  function clearCaseImportResult() {
+    setCaseImportResult(null);
+    setValidatedCaseImport(null);
+  }
+
+  async function handleValidateCaseImport() {
+    setIsCaseImportBusy(true);
+    try {
+      const result = await validateAdminCaseImport(buildAdminCaseImportPayload());
+      setCaseImportResult(result);
+      setValidatedCaseImport(result.valid ? { payloadKey: currentCaseImportPayloadKey, result } : null);
+      setStatusText(getAdminCaseImportStatusText(result));
+    } catch (error: unknown) {
+      setCaseImportResult(null);
+      setValidatedCaseImport(null);
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsCaseImportBusy(false);
+    }
+  }
+
+  async function handleImportCasePayload() {
+    if (!canImportCasePayload) {
+      setStatusText("请先对当前病例与 Rubric JSON 执行导入前预检。");
+      return;
+    }
+    setIsCaseImportBusy(true);
+    try {
+      const result = await importAdminCasePayload(buildAdminCaseImportPayload());
+      setCaseImportResult(result);
+      setValidatedCaseImport(null);
+      setStatusText(getAdminCaseImportStatusText(result));
+      if (result.imported) {
+        setCases(await getAdminCases());
+        if (result.case_id) {
+          const nextCaseRaw = await getAdminCaseRaw(result.case_id);
+          setSelectedCaseRaw(nextCaseRaw);
+          setSelectedRubric(await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id));
+        }
+      }
+    } catch (error: unknown) {
+      setCaseImportResult(null);
+      setValidatedCaseImport(null);
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsCaseImportBusy(false);
     }
   }
 
@@ -1025,6 +1243,66 @@ export default function AdminDashboardPage() {
           <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
+                <p className="text-xs font-semibold text-[#AE5630]">病例 / Rubric 导入</p>
+                <h3 className="mt-1 text-sm font-semibold">受控新增正式教学资产</h3>
+                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">粘贴已解析为 JSON object 的病例与 Rubric，先导入前预检，再正式导入；后端会拒绝覆盖已有 case_id 或 rubric_id。</p>
+              </div>
+              <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">valid=false / imported=false 会保留错误列表</p>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                粘贴病例 JSON
+                <textarea
+                  className="min-h-52 rounded-xl border border-[#E6DFD2] bg-white p-3 font-mono text-xs leading-5 text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => {
+                    setCaseImportJsonText(event.target.value);
+                    clearCaseImportResult();
+                  }}
+                  placeholder="{\n  &quot;case_id&quot;: &quot;new_case_001&quot;\n}"
+                  value={caseImportJsonText}
+                />
+              </label>
+              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                粘贴 Rubric JSON
+                <textarea
+                  className="min-h-52 rounded-xl border border-[#E6DFD2] bg-white p-3 font-mono text-xs leading-5 text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => {
+                    setRubricImportJsonText(event.target.value);
+                    clearCaseImportResult();
+                  }}
+                  placeholder="{\n  &quot;rubric_id&quot;: &quot;new_case_001_rubric&quot;\n}"
+                  value={rubricImportJsonText}
+                />
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium text-[#AE5630] transition hover:bg-[#AE5630]/10 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isCaseImportBusy}
+                onClick={() => void handleValidateCaseImport()}
+                type="button"
+              >
+                导入前预检
+              </button>
+              <button
+                className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!canImportCasePayload}
+                onClick={() => void handleImportCasePayload()}
+                type="button"
+              >
+                正式导入
+              </button>
+              {caseImportResult ? (
+                <p className="rounded-full border border-[#E6DFD2] bg-white px-3 py-2 text-xs text-[#6F6257]">{getAdminCaseImportStatusText(caseImportResult)}</p>
+              ) : (
+                <p className="text-xs text-[#8A7D6F]">导入成功后会刷新病例台账并选中新病例。</p>
+              )}
+            </div>
+          </section>
+
+          <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
                 <p className="text-xs font-semibold text-[#AE5630]">数据来源登记表</p>
                 <h3 className="mt-1 text-sm font-semibold">公开来源与许可核对</h3>
                 <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">核对 source_id、source_url、allowed_usage、attribution_required 和 risk_note，确保病例来源链路可追踪。</p>
@@ -1200,6 +1478,28 @@ export default function AdminDashboardPage() {
                       ))}
                     </div>
                   </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">RAG 来源引用</h3>
+                    <div className="mt-2 grid gap-2">
+                      {getReportSourceReferenceItems(selectedReport).length > 0 ? (
+                        getReportSourceReferenceItems(selectedReport).map((item) => {
+                          const metadataText = getSourceReferenceMetadataText(item.metadata);
+                          return (
+                            <div className="rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]" key={item.reference}>
+                              <p className="font-semibold text-[#141413]">{item.title}</p>
+                              <p className="mt-1 break-all font-mono text-xs">{item.reference}</p>
+                              <p className="mt-1 text-xs text-[#8A7D6F]">类型：{item.source_type}</p>
+                              {metadataText ? <p className="mt-1 break-all text-xs text-[#8A7D6F]">{metadataText}</p> : null}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">
+                          当前报告暂无结构化来源引用。
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">
@@ -1271,6 +1571,31 @@ export default function AdminDashboardPage() {
                         ))
                       ) : (
                         <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无高频学习建议。</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">高频 RAG 来源</h3>
+                    <div className="mt-2 grid gap-2">
+                      {insights.frequent_source_references.length > 0 ? (
+                        insights.frequent_source_references.map((sourceReference) => {
+                          const metadataText = getSourceReferenceMetadataText(sourceReference.metadata);
+                          return (
+                            <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]" key={sourceReference.reference}>
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-semibold text-[#141413]">{sourceReference.title}</p>
+                                  <p className="font-mono text-[11px] text-[#AE5630]">{sourceReference.reference}</p>
+                                </div>
+                                <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{sourceReference.count} 次</span>
+                              </div>
+                              <p className="mt-2 text-xs text-[#8A7D6F]">类型：{getSourceReferenceLabel(sourceReference.reference)} · 涉及病例：{sourceReference.case_ids.join("、")}</p>
+                              {metadataText ? <p className="mt-1 text-xs text-[#8A7D6F]">{metadataText}</p> : null}
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无高频 RAG 来源。</p>
                       )}
                     </div>
                   </div>
@@ -1380,9 +1705,29 @@ export default function AdminDashboardPage() {
                   </p>
                   <div className="mt-3 grid gap-2">
                     {selectedEvaluation.results.map((result) => (
-                      <p className="rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs text-[#6F6257]" key={result.session_id}>
-                        {result.session_id} · {getPassLabel(result.passed)} · 实际 {result.actual_total_score} / 期望 {result.expected_total_score}
-                      </p>
+                      <article className="rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs text-[#6F6257]" key={result.session_id}>
+                        <p>
+                          {result.session_id} · {getPassLabel(result.passed)} · 实际 {result.actual_total_score} / 期望 {result.expected_total_score}
+                        </p>
+                        <p className="mt-2 text-[#8A7D6F]">
+                          RAG 引用覆盖：{result.rag_source_coverage_passed ? "通过" : "未通过"} · rubric 覆盖率 {Math.round(result.rag_rubric_reference_coverage_ratio * 100)}% · 来源 {result.source_reference_count} 条 · 类型 {result.source_reference_types.length > 0 ? result.source_reference_types.join("、") : "无"}
+                        </p>
+                        {result.missing_rubric_references.length > 0 ? (
+                          <p className="mt-1 font-mono text-[11px] text-[#AE5630]">缺失引用：{result.missing_rubric_references.join("、")}</p>
+                        ) : null}
+                        <p className="mt-1 text-[#8A7D6F]">
+                          解释覆盖率 {Math.round(result.rag_explanation_coverage_ratio * 100)}% · 解释来源{result.rag_explanation_coverage_passed ? "通过" : "未通过"}
+                        </p>
+                        {result.missing_explanation_references.length > 0 ? (
+                          <p className="mt-1 font-mono text-[11px] text-[#AE5630]">缺失解释来源：{result.missing_explanation_references.join("、")}</p>
+                        ) : null}
+                        <p className="mt-1 text-[#8A7D6F]">
+                          证据覆盖率 {Math.round(result.rag_evidence_coverage_ratio * 100)}% · 证据来源{result.rag_evidence_coverage_passed ? "通过" : "未通过"}
+                        </p>
+                        {result.missing_evidence_references.length > 0 ? (
+                          <p className="mt-1 font-mono text-[11px] text-[#AE5630]">缺失证据来源：{result.missing_evidence_references.join("、")}</p>
+                        ) : null}
+                      </article>
                     ))}
                   </div>
                 </article>

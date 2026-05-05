@@ -3,6 +3,7 @@ import {
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type SourceReferenceItem,
 } from "./report-model";
 
 const legacyReport = {
@@ -21,6 +22,17 @@ const legacyReport = {
 
 const nextReport = {
   ...legacyReport,
+  source_reference_items: [
+    {
+      reference: "source:fareez_osce_2022",
+      source_type: "source",
+      title: "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
+      metadata: {
+        license: "CC BY 4.0",
+        source_url: "https://doi.org/10.6084/m9.figshare.c.5545842.v1",
+      },
+    },
+  ],
   knowledge_recommendations: [
     {
       reference: "knowledge:appendicitis_001.rp_03",
@@ -33,8 +45,11 @@ const nextReport = {
 const normalizedLegacyReport = normalizeFeedbackReport(legacyReport);
 const legacyLlmFeedbackItems: readonly LlmReasoningFeedbackItem[] = normalizedLegacyReport.llm_reasoning_feedback;
 const legacyKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedLegacyReport.knowledge_recommendations;
-const nextKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizeFeedbackReport(nextReport).knowledge_recommendations;
+const normalizedNextReport = normalizeFeedbackReport(nextReport);
+const nextKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedNextReport.knowledge_recommendations;
+const nextSourceReferenceItems: readonly SourceReferenceItem[] = normalizedNextReport.source_reference_items;
 
 void legacyLlmFeedbackItems;
 void legacyKnowledgeRecommendations;
 void nextKnowledgeRecommendations;
+void nextSourceReferenceItems;

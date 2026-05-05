@@ -6,6 +6,7 @@ from app.services.training_skill_candidate_service import (
     TemplateTrainingSkillCandidateGenerator,
     TrainingSkillCandidateContext,
     TrainingSkillCandidateGenerationError,
+    TrainingSkillCandidateMissedItem,
     TrainingSkillCandidateService,
     VertexGeminiSkillCandidateSettings,
     VertexGeminiTrainingSkillCandidateGenerator,
@@ -21,7 +22,7 @@ class FakeSkillCandidateModels:
         self.calls.append({"model": model, "contents": contents, "config": config})
 
         class Response:
-            text = '{"title":"LLM 生成的推理训练 Skill","description":"基于 2 次高频漏项生成的教学 Skill。","suggested_strategy":"提交诊断前，请先按证据链复核主要诊断和鉴别诊断。"}'
+            text = '{"title":"LLM 生成的训练模式 Skill","description":"基于多项高频漏项生成的训练级教学 Skill。","suggested_strategy":"提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。"}'
 
         return Response()
 
@@ -54,9 +55,21 @@ class FakeInvalidJsonSkillCandidateClient:
         self.models = FakeInvalidJsonSkillCandidateModels()
 
 
-def _reasoning_candidate_context() -> TrainingSkillCandidateContext:
+def _training_pattern_candidate_context() -> TrainingSkillCandidateContext:
     return TrainingSkillCandidateContext(
-        item_id="reasoning_core",
+        pattern_id="training_pattern_reasoning_core_rs_exclude",
+        missed_items=[
+            TrainingSkillCandidateMissedItem(
+                item_id="reasoning_core",
+                count=2,
+                case_ids=["appendicitis_001", "pneumonia_001"],
+            ),
+            TrainingSkillCandidateMissedItem(
+                item_id="rs_exclude",
+                count=2,
+                case_ids=["appendicitis_001"],
+            ),
+        ],
         support_count=2,
         case_ids=["appendicitis_001", "pneumonia_001"],
         source_report_count=3,
@@ -67,7 +80,7 @@ def _reasoning_candidate_context() -> TrainingSkillCandidateContext:
     )
 
 
-def test_vertex_gemini_training_skill_candidate_generator_uses_context_and_response_schema() -> None:
+def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_context_and_response_schema() -> None:
     fake_client = FakeSkillCandidateClient()
     generator = VertexGeminiTrainingSkillCandidateGenerator(
         settings=VertexGeminiSkillCandidateSettings(
@@ -77,14 +90,15 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_context_and_respo
         client=fake_client,
     )
 
-    candidate = generator.generate_candidate(_reasoning_candidate_context())
+    candidate = generator.generate_candidate(_training_pattern_candidate_context())
 
     assert candidate == {
-        "candidate_id": "skill_candidate_reasoning_core",
-        "trigger_item_id": "reasoning_core",
-        "title": "LLM 生成的推理训练 Skill",
-        "description": "基于 2 次高频漏项生成的教学 Skill。",
-        "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断和鉴别诊断。",
+        "candidate_id": "skill_candidate_training_pattern_reasoning_core_rs_exclude",
+        "trigger_item_id": "training_pattern_reasoning_core_rs_exclude",
+        "trigger_item_ids": ["reasoning_core", "rs_exclude"],
+        "title": "LLM 生成的训练模式 Skill",
+        "description": "基于多项高频漏项生成的训练级教学 Skill。",
+        "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
         "status": "draft",
         "source_report_count": 3,
         "support_count": 2,
@@ -95,7 +109,10 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_context_and_respo
     }
     call = fake_client.models.calls[0]
     assert call["model"] == "gemini-3.1-flash-lite-preview"
-    assert '"item_id": "reasoning_core"' in str(call["contents"])
+    assert '"pattern_id": "training_pattern_reasoning_core_rs_exclude"' in str(call["contents"])
+    assert '"missed_items"' in str(call["contents"])
+    assert "reasoning_core" in str(call["contents"])
+    assert "rs_exclude" in str(call["contents"])
     assert "appendicitis_001" in str(call["contents"])
     assert call["config"].response_mime_type == "application/json"
     assert call["config"].response_schema.__name__ == "GeneratedTrainingSkillCandidateContent"
@@ -112,7 +129,7 @@ def test_vertex_gemini_training_skill_candidate_generator_raises_generation_erro
     )
 
     with pytest.raises(TrainingSkillCandidateGenerationError) as exc_info:
-        generator.generate_candidate(_reasoning_candidate_context())
+        generator.generate_candidate(_training_pattern_candidate_context())
 
     assert "Skill candidate generation failed" in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, RuntimeError)
@@ -128,7 +145,7 @@ def test_vertex_gemini_training_skill_candidate_generator_raises_generation_erro
     )
 
     with pytest.raises(TrainingSkillCandidateGenerationError) as exc_info:
-        generator.generate_candidate(_reasoning_candidate_context())
+        generator.generate_candidate(_training_pattern_candidate_context())
 
     assert "Skill candidate generation failed" in str(exc_info.value)
     assert exc_info.value.__cause__ is not None
@@ -157,18 +174,19 @@ def test_create_default_training_skill_candidate_generator_sets_proxy_when_enabl
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
 
 
-def test_training_skill_candidate_service_uses_injected_generator_for_high_frequency_items() -> None:
+def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern() -> None:
     captured_contexts: list[TrainingSkillCandidateContext] = []
 
     class FakeTrainingSkillCandidateGenerator:
         def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
             captured_contexts.append(context)
             return {
-                "candidate_id": f"llm_candidate_{context.item_id}",
-                "trigger_item_id": context.item_id,
-                "title": "LLM 生成的推理训练 Skill",
-                "description": f"LLM 基于 {context.support_count} 次漏项生成。",
-                "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断和鉴别诊断。",
+                "candidate_id": f"llm_candidate_{context.pattern_id}",
+                "trigger_item_id": context.pattern_id,
+                "trigger_item_ids": [item.item_id for item in context.missed_items],
+                "title": "LLM 生成的训练模式 Skill",
+                "description": f"LLM 基于 {len(context.missed_items)} 类高频漏项生成。",
+                "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
                 "status": "draft",
                 "source_report_count": context.source_report_count,
                 "support_count": context.support_count,
@@ -183,6 +201,11 @@ def test_training_skill_candidate_service_uses_injected_generator_for_high_frequ
                 "item_id": "reasoning_core",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
+            },
+            {
+                "item_id": "rs_exclude",
+                "count": 3,
+                "case_ids": ["appendicitis_001"],
             },
             {
                 "item_id": "ht_location",
@@ -210,8 +233,20 @@ def test_training_skill_candidate_service_uses_injected_generator_for_high_frequ
 
     assert captured_contexts == [
         TrainingSkillCandidateContext(
-            item_id="reasoning_core",
-            support_count=2,
+            pattern_id="training_pattern_rs_exclude_reasoning_core",
+            missed_items=[
+                TrainingSkillCandidateMissedItem(
+                    item_id="rs_exclude",
+                    count=3,
+                    case_ids=["appendicitis_001"],
+                ),
+                TrainingSkillCandidateMissedItem(
+                    item_id="reasoning_core",
+                    count=2,
+                    case_ids=["appendicitis_001", "pneumonia_001"],
+                ),
+            ],
+            support_count=3,
             case_ids=["appendicitis_001", "pneumonia_001"],
             source_report_count=3,
             related_recommendations=[
@@ -222,14 +257,15 @@ def test_training_skill_candidate_service_uses_injected_generator_for_high_frequ
     ]
     assert candidates == [
         {
-            "candidate_id": "llm_candidate_reasoning_core",
-            "trigger_item_id": "reasoning_core",
-            "title": "LLM 生成的推理训练 Skill",
-            "description": "LLM 基于 2 次漏项生成。",
-            "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断和鉴别诊断。",
+            "candidate_id": "llm_candidate_training_pattern_rs_exclude_reasoning_core",
+            "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
+            "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+            "title": "LLM 生成的训练模式 Skill",
+            "description": "LLM 基于 2 类高频漏项生成。",
+            "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
             "status": "draft",
             "source_report_count": 3,
-            "support_count": 2,
+            "support_count": 3,
             "related_recommendations": [
                 "rubric:appendicitis_001_rubric.item.reasoning_core",
                 "knowledge:appendicitis_001.rp_03",
@@ -238,7 +274,7 @@ def test_training_skill_candidate_service_uses_injected_generator_for_high_frequ
     ]
 
 
-def test_training_skill_candidate_service_proposes_reasoning_candidate_from_frequent_missed_item(monkeypatch) -> None:
+def test_training_skill_candidate_service_proposes_one_training_pattern_candidate_from_frequent_missed_items(monkeypatch) -> None:
     monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
     monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
 
@@ -250,6 +286,11 @@ def test_training_skill_candidate_service_proposes_reasoning_candidate_from_freq
                 "item_id": "reasoning_core",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
+            },
+            {
+                "item_id": "rs_exclude",
+                "count": 3,
+                "case_ids": ["appendicitis_001"],
             },
             {
                 "item_id": "ht_location",
@@ -275,14 +316,15 @@ def test_training_skill_candidate_service_proposes_reasoning_candidate_from_freq
 
     assert candidates == [
         {
-            "candidate_id": "skill_candidate_reasoning_core",
-            "trigger_item_id": "reasoning_core",
-            "title": "临床推理链纠偏提示",
-            "description": "3 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001、pneumonia_001。",
-            "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+            "candidate_id": "skill_candidate_training_pattern_rs_exclude_reasoning_core",
+            "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
+            "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+            "title": "OSCE 训练模式纠偏提示",
+            "description": "3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。",
+            "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
             "status": "draft",
             "source_report_count": 3,
-            "support_count": 2,
+            "support_count": 3,
             "related_recommendations": [
                 "rubric:appendicitis_001_rubric.item.reasoning_core",
                 "knowledge:appendicitis_001.rp_03",
@@ -291,7 +333,7 @@ def test_training_skill_candidate_service_proposes_reasoning_candidate_from_freq
     ]
 
 
-def test_training_skill_candidate_service_skips_low_frequency_missed_items(monkeypatch) -> None:
+def test_training_skill_candidate_service_skips_when_no_repeated_training_pattern(monkeypatch) -> None:
     monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
     monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
 
