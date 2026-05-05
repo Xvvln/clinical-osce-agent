@@ -64,6 +64,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /训练日志/);
   assert.match(adminPageSource, /候选 Skill 审核/);
   assert.match(adminPageSource, /Skill 效果统计/);
+  assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /模型 \/ API 配置/);
   assert.match(adminPageSource, /Gemini、Vertex 和 OpenAI 兼容模型/);
   assert.match(adminPageSource, /provider\.label/);

@@ -22,11 +22,13 @@ function getHeaderSource() {
   return headerMatch[0];
 }
 
-test("home header exposes compact safety and source links", () => {
+test("home header keeps safety and source links out of the top navigation", () => {
   const headerSource = getHeaderSource();
 
-  assert.match(headerSource, /href="\/safety"[\s\S]*?>\s*安全声明\s*<\/Link>/);
-  assert.match(headerSource, /href="\/sources"[\s\S]*?>\s*数据来源\s*<\/Link>/);
+  assert.doesNotMatch(headerSource, /href="\/safety"/);
+  assert.doesNotMatch(headerSource, /href="\/sources"/);
+  assert.doesNotMatch(headerSource, />\s*安全声明\s*<\/Link>/);
+  assert.doesNotMatch(headerSource, />\s*数据来源\s*<\/Link>/);
 });
 
 test("home page does not render large safety and source panels", () => {
@@ -62,18 +64,44 @@ test("home page uses Claude-like brand tokens without legacy teal hardcoding", (
 });
 
 test("home page replaces the Next dev ball with an OSCE floating dock", () => {
+  assert.match(pageSource, /type OsceDockMenuGroup = "training" \| "resources" \| "system";/);
+  assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);
   assert.match(pageSource, /const \[isOsceDockOpen, setIsOsceDockOpen\] = useState\(false\);/);
+  assert.match(pageSource, /const \[osceDockMenuGroup, setOsceDockMenuGroup\] = useState<OsceDockMenuGroup>\("training"\);/);
   assert.match(pageSource, /aria-label="打开 OSCE 快捷入口"/);
   assert.match(pageSource, /setIsOsceDockOpen\(\(isOpen\) => !isOpen\)/);
   assert.match(pageSource, /OSCE 快捷入口/);
+  assert.match(pageSource, /bg-white p-4 shadow-xl/);
+  assert.match(pageSource, /setOsceDockMenuGroup\("training"\)/);
+  assert.match(pageSource, /setOsceDockMenuGroup\("resources"\)/);
+  assert.match(pageSource, /setOsceDockMenuGroup\("system"\)/);
   assert.match(pageSource, /href="\/cases"/);
   assert.match(pageSource, /href="\/history"/);
   assert.match(pageSource, /href="\/profile"/);
   assert.match(pageSource, /href="\/safety"/);
   assert.match(pageSource, /href="\/sources"/);
+  assert.match(pageSource, /href=\{ADMIN_MODEL_CONFIG_URL\}/);
+  assert.match(pageSource, /API 配置/);
+  assert.match(pageSource, /安全声明/);
+  assert.match(pageSource, /数据来源/);
   assert.match(pageSource, /href=\{`\/report\?session_id=\$\{feedbackReport\.session_id\}`\}/);
   assert.match(pageSource, /onClick=\{\(\) => void handleHintRequest\(\)\}/);
   assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
+  assert.match(pageSource, /const osceDockActionClass = "[^"]*whitespace-nowrap/);
+});
+
+test("home header uses a test account menu for profile actions", () => {
+  const headerSource = getHeaderSource();
+
+  assert.match(pageSource, /const \[isAccountMenuOpen, setIsAccountMenuOpen\] = useState\(false\);/);
+  assert.match(headerSource, /aria-label="打开测试账号菜单"/);
+  assert.match(headerSource, /setIsAccountMenuOpen\(\(isOpen\) => !isOpen\)/);
+  assert.match(headerSource, />\s*测试账号\s*</);
+  assert.match(headerSource, /href="\/history"[\s\S]*?>\s*训练记录\s*<\/Link>/);
+  assert.match(headerSource, /href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
+  assert.match(headerSource, /onClick=\{handleLogout\}/);
+  assert.match(headerSource, /border-red-200 bg-red-50 text-red-700/);
+  assert.doesNotMatch(headerSource, />\s*退出登录\s*<\/button>[\s\S]*\{authUser \? \(/);
 });
 
 test("home OSCE dock can be dragged and snaps to the viewport edge", () => {

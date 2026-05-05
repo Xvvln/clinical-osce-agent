@@ -1200,7 +1200,7 @@ export default function AdminDashboardPage() {
           </article>
         </section>
 
-        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm" id="model-config">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Model Configuration</p>

@@ -21,6 +21,8 @@ type WorkflowStepDefinition = Readonly<{
 
 type RightPanelKey = "evidence" | "procedures" | "hypotheses" | "report";
 
+type OsceDockMenuGroup = "training" | "resources" | "system";
+
 type OsceDockSide = "left" | "right";
 
 type OsceDockPosition = Readonly<{
@@ -341,6 +343,8 @@ const defaultCaseOption: CaseOption = {
 const STUDENT_ID = "web_demo";
 const DEFAULT_AUTH_EMAIL = "1@1.test";
 const DEFAULT_AUTH_PASSWORD = "1";
+const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
+const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
 const OSCE_DOCK_MARGIN = 20;
 const OSCE_DOCK_BUTTON_SIZE = 56;
@@ -1097,6 +1101,7 @@ function HomeContent() {
   const [caseOptionsState, setCaseOptionsState] = useState<readonly CaseOption[]>(caseOptions);
   const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isOsceDockOpen, setIsOsceDockOpen] = useState(false);
+  const [osceDockMenuGroup, setOsceDockMenuGroup] = useState<OsceDockMenuGroup>("training");
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
     procedures: true,
@@ -1130,6 +1135,7 @@ function HomeContent() {
   const [authPassword, setAuthPassword] = useState(DEFAULT_AUTH_PASSWORD);
   const [authDisplayName, setAuthDisplayName] = useState("");
   const [authErrorText, setAuthErrorText] = useState<string | null>(null);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
   const [osceDockPosition, setOsceDockPosition] = useState<OsceDockPosition>({
@@ -1489,6 +1495,9 @@ function HomeContent() {
       };
   const osceDockPanelAlignmentClass = osceDockPosition.side === "right" ? "right-0" : "left-0";
   const osceDockPanelVerticalClass = osceDockPosition.isReady && osceDockPosition.y < 260 ? "top-16" : "bottom-16";
+  const osceDockActionClass = "rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent";
+  const osceDockButtonActionClass = "rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
+  const osceDockMenuButtonClass = "rounded-lg border border-border px-3 py-2 text-center text-xs font-medium whitespace-nowrap transition hover:bg-accent";
 
   const scoringPreview = useMemo(
     () => [
@@ -1532,6 +1541,7 @@ function HomeContent() {
       setAuthPassword("");
       setAuthDisplayName("");
       setIsAuthDialogOpen(false);
+      setIsAccountMenuOpen(false);
       setStatusText(`已登录：${nextUser.display_name}`);
     } catch (error) {
       setAuthErrorText(error instanceof Error ? error.message : "登录或注册失败。");
@@ -1547,6 +1557,7 @@ function HomeContent() {
 
     setIsSubmittingAuth(true);
     setAuthErrorText(null);
+    setIsAccountMenuOpen(false);
 
     try {
       await logoutUser();
@@ -1912,34 +1923,46 @@ function HomeContent() {
             </h2>
           </div>
           <div className="flex items-center gap-2">
-            <Link
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-              href="/safety"
-            >
-              安全声明
-            </Link>
-            <Link
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-              href="/sources"
-            >
-              数据来源
-            </Link>
-            <Link
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-              href="/history"
-            >
-              训练记录
-            </Link>
-            <Link
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
-              href="/profile"
-            >
-              学习画像
-            </Link>
             {authUser ? (
-              <span className="max-w-40 truncate rounded-md border border-brand/20 bg-brand/10 px-3 py-2 text-sm font-medium text-brand">
-                {authUser.display_name}
-              </span>
+              <div className="relative">
+                <button
+                  aria-expanded={isAccountMenuOpen}
+                  aria-label="打开测试账号菜单"
+                  className="flex items-center gap-2 rounded-md border border-brand/20 bg-brand/10 px-4 py-2 text-sm font-medium text-brand shadow-xs transition hover:bg-brand/15"
+                  onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
+                  type="button"
+                >
+                  <span className="whitespace-nowrap">测试账号</span>
+                  <span className="max-w-28 truncate text-xs text-muted-foreground">{authUser.display_name}</span>
+                </button>
+                {isAccountMenuOpen ? (
+                  <div className="absolute right-0 top-12 z-50 w-56 rounded-xl border border-border bg-white p-2 shadow-xl">
+                    <p className="px-3 py-2 text-xs leading-5 text-muted-foreground">
+                      当前登录：<span className="font-medium text-foreground">{authUser.display_name}</span>
+                    </p>
+                    <Link
+                      className="block rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent"
+                      href="/history"
+                    >
+                      训练记录
+                    </Link>
+                    <Link
+                      className="block rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent"
+                      href="/profile"
+                    >
+                      学习画像
+                    </Link>
+                    <button
+                      className="mt-1 w-full rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-left text-sm font-medium whitespace-nowrap transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isSubmittingAuth}
+                      onClick={handleLogout}
+                      type="button"
+                    >
+                      退出登录
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <button
                 className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent"
@@ -1949,16 +1972,6 @@ function HomeContent() {
                 登录 / 注册
               </button>
             )}
-            {authUser ? (
-              <button
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isSubmittingAuth}
-                onClick={handleLogout}
-                type="button"
-              >
-                退出登录
-              </button>
-            ) : null}
           </div>
         </header>
 
@@ -2428,7 +2441,7 @@ function HomeContent() {
       </section>
       <div className="fixed z-40" style={osceDockStyle}>
         {isOsceDockOpen ? (
-          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-background p-4 shadow-xl`}>
+          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-white p-4 shadow-xl`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">OSCE Dock</p>
@@ -2444,45 +2457,77 @@ function HomeContent() {
                 关闭
               </button>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/cases">
-                病例
-              </Link>
-              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/history">
-                记录
-              </Link>
-              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/profile">
-                画像
-              </Link>
-              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/safety">
-                安全
-              </Link>
-              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/sources">
-                来源
-              </Link>
-              {feedbackReport ? (
-                <Link className="rounded-lg border border-brand bg-brand px-3 py-2 font-medium text-white transition hover:bg-brand-hover" href={`/report?session_id=${feedbackReport.session_id}`}>
-                  报告
-                </Link>
-              ) : (
-                <span className="rounded-lg border border-border bg-muted px-3 py-2 font-medium text-muted-foreground">报告</span>
-              )}
+            <div className="mt-4 grid grid-cols-3 gap-2">
               <button
-                className="rounded-lg border border-border bg-background px-3 py-2 text-left font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
-                onClick={() => void handleHintRequest()}
+                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "training" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
+                onClick={() => setOsceDockMenuGroup("training")}
                 type="button"
               >
-                提示
+                训练
               </button>
               <button
-                className="rounded-lg border border-border bg-background px-3 py-2 text-left font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!preparedPatientProfile}
-                onClick={() => setIsPatientProfileOpen(true)}
+                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "resources" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
+                onClick={() => setOsceDockMenuGroup("resources")}
                 type="button"
               >
-                患者
+                资料
               </button>
+              <button
+                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "system" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
+                onClick={() => setOsceDockMenuGroup("system")}
+                type="button"
+              >
+                系统
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {osceDockMenuGroup === "training" ? (
+                <>
+                  <Link className={osceDockActionClass} href="/cases">
+                    病例库
+                  </Link>
+                  {feedbackReport ? (
+                    <Link className="rounded-lg border border-brand bg-brand px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover" href={`/report?session_id=${feedbackReport.session_id}`}>
+                      评分报告
+                    </Link>
+                  ) : (
+                    <span className="rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-muted-foreground">评分报告</span>
+                  )}
+                  <button
+                    className={osceDockButtonActionClass}
+                    disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
+                    onClick={() => void handleHintRequest()}
+                    type="button"
+                  >
+                    过程提示
+                  </button>
+                  <button
+                    className={osceDockButtonActionClass}
+                    disabled={!preparedPatientProfile}
+                    onClick={() => setIsPatientProfileOpen(true)}
+                    type="button"
+                  >
+                    患者信息
+                  </button>
+                </>
+              ) : null}
+              {osceDockMenuGroup === "resources" ? (
+                <>
+                  <Link className={osceDockActionClass} href="/safety">
+                    安全声明
+                  </Link>
+                  <Link className={osceDockActionClass} href="/sources">
+                    数据来源
+                  </Link>
+                </>
+              ) : null}
+              {osceDockMenuGroup === "system" ? (
+                <>
+                  <a className={osceDockActionClass} href={ADMIN_MODEL_CONFIG_URL} rel="noreferrer" target="_blank">
+                    API 配置
+                  </a>
+                </>
+              ) : null}
             </div>
           </section>
         ) : null}
