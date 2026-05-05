@@ -4,6 +4,7 @@ const nextConfig = {
   experimental: {
     devtoolSegmentExplorer: false,
   },
+  devIndicators: false,
   webpack(config) {
     config.watchOptions = {
       ...(config.watchOptions ?? {}),

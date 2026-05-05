@@ -61,6 +61,21 @@ test("home page uses Claude-like brand tokens without legacy teal hardcoding", (
   assert.match(pageSource, /focus:ring-brand\/15/);
 });
 
+test("home page replaces the Next dev ball with an OSCE floating dock", () => {
+  assert.match(pageSource, /const \[isOsceDockOpen, setIsOsceDockOpen\] = useState\(false\);/);
+  assert.match(pageSource, /aria-label="打开 OSCE 快捷入口"/);
+  assert.match(pageSource, /setIsOsceDockOpen\(\(isOpen\) => !isOpen\)/);
+  assert.match(pageSource, /OSCE 快捷入口/);
+  assert.match(pageSource, /href="\/cases"/);
+  assert.match(pageSource, /href="\/history"/);
+  assert.match(pageSource, /href="\/profile"/);
+  assert.match(pageSource, /href="\/safety"/);
+  assert.match(pageSource, /href="\/sources"/);
+  assert.match(pageSource, /href=\{`\/report\?session_id=\$\{feedbackReport\.session_id\}`\}/);
+  assert.match(pageSource, /onClick=\{\(\) => void handleHintRequest\(\)\}/);
+  assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
+});
+
 test("case and history pages use Claude-like brand tokens without legacy teal hardcoding", () => {
   assert.doesNotMatch(casesSource, /#2F6868|#2f6868/);
   assert.doesNotMatch(historySource, /#2F6868|#2f6868/);

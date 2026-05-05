@@ -29,6 +29,10 @@ test("Next dev Segment Explorer is disabled", () => {
   assert.equal(nextConfig.experimental?.devtoolSegmentExplorer, false);
 });
 
+test("Next dev indicator is disabled in favor of the OSCE dock", () => {
+  assert.equal(nextConfig.devIndicators, false);
+});
+
 test("Next rewrites proxy API calls to the local backend by default", async () => {
   const rewrites = await nextConfig.rewrites();
 

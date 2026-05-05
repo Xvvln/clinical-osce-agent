@@ -1032,6 +1032,7 @@ function HomeContent() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(initialCaseId);
   const [caseOptionsState, setCaseOptionsState] = useState<readonly CaseOption[]>(caseOptions);
   const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
+  const [isOsceDockOpen, setIsOsceDockOpen] = useState(false);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
     procedures: true,
@@ -2224,6 +2225,75 @@ function HomeContent() {
           </aside>
         </div>
       </section>
+      <div className="fixed bottom-5 left-5 z-40">
+        {isOsceDockOpen ? (
+          <section className="mb-3 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-border bg-background p-4 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">OSCE Dock</p>
+                <h2 className="mt-1 text-base font-semibold">OSCE 快捷入口</h2>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{trainingSuggestion}</p>
+              </div>
+              <button
+                aria-label="关闭 OSCE 快捷入口"
+                className="rounded-md border border-border bg-background px-2 py-1 text-xs font-medium shadow-xs transition hover:bg-accent"
+                onClick={() => setIsOsceDockOpen(false)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/cases">
+                病例
+              </Link>
+              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/history">
+                记录
+              </Link>
+              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/profile">
+                画像
+              </Link>
+              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/safety">
+                安全
+              </Link>
+              <Link className="rounded-lg border border-border bg-muted px-3 py-2 font-medium transition hover:bg-accent" href="/sources">
+                来源
+              </Link>
+              {feedbackReport ? (
+                <Link className="rounded-lg border border-brand bg-brand px-3 py-2 font-medium text-white transition hover:bg-brand-hover" href={`/report?session_id=${feedbackReport.session_id}`}>
+                  报告
+                </Link>
+              ) : (
+                <span className="rounded-lg border border-border bg-muted px-3 py-2 font-medium text-muted-foreground">报告</span>
+              )}
+              <button
+                className="rounded-lg border border-border bg-background px-3 py-2 text-left font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
+                onClick={() => void handleHintRequest()}
+                type="button"
+              >
+                提示
+              </button>
+              <button
+                className="rounded-lg border border-border bg-background px-3 py-2 text-left font-medium transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!preparedPatientProfile}
+                onClick={() => setIsPatientProfileOpen(true)}
+                type="button"
+              >
+                患者
+              </button>
+            </div>
+          </section>
+        ) : null}
+        <button
+          aria-label="打开 OSCE 快捷入口"
+          className="flex size-14 items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover focus:ring-2 focus:ring-brand/20"
+          onClick={() => setIsOsceDockOpen((isOpen) => !isOpen)}
+          type="button"
+        >
+          OSCE
+        </button>
+      </div>
       {isPatientProfileOpen && preparedPatientProfile ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl">
