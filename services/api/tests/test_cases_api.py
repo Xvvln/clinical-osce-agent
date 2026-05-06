@@ -62,6 +62,40 @@ def test_list_cases_returns_valid_case_summaries() -> None:
             {"test_code": "lab.urinalysis", "test_name_cn": "尿常规", "category": "实验室"},
             {"test_code": "img.abd_ct", "test_name_cn": "腹部 CT", "category": "影像"},
         ],
+        "teaching_focus": {
+            "learning_objectives": [
+                "围绕急腹症完成疼痛演变史采集",
+                "选择关键腹部查体验证右下腹体征",
+                "用基础实验室和影像检查支持或修正诊断假设",
+                "表达阳性证据与鉴别排除依据",
+            ],
+            "common_error_patterns": [
+                {
+                    "pattern_id": "appendicitis_001.pattern.history_migration_gap",
+                    "title": "腹痛演变史采集不足",
+                    "focus": "只问当前疼痛部位，漏掉起病部位、转移过程和诱发加重因素。",
+                    "related_rubric_items": ["ht_onset", "ht_migration", "ht_character"],
+                },
+                {
+                    "pattern_id": "appendicitis_001.pattern.peritoneal_exam_gap",
+                    "title": "腹膜刺激征检查不足",
+                    "focus": "完成一般查体后，没有继续验证右下腹压痛、反跳痛和局部肌紧张。",
+                    "related_rubric_items": ["pe_tenderness", "pe_rebound"],
+                },
+                {
+                    "pattern_id": "appendicitis_001.pattern.reasoning_chain_gap",
+                    "title": "证据链表达不足",
+                    "focus": "诊断假设较早出现，但没有把病史、查体、检查和鉴别排除串成完整推理。",
+                    "related_rubric_items": ["rs_support", "rs_exclude", "dxd_urolith"],
+                },
+            ],
+            "recommended_training_path": [
+                "先完成起病、部位变化、性质、程度和伴随症状问诊",
+                "再选择体温、腹部视诊、右下腹压痛和反跳痛等关键查体",
+                "随后用血常规、CRP、腹部超声和尿常规验证诊断假设与鉴别排除",
+                "最后提交诊断、支持证据、排除依据和下一步训练方向",
+            ],
+        },
     }
     assert "result" not in str(appendicitis_case["physical_exam_options"])
     assert "result" not in str(appendicitis_case["auxiliary_test_options"])
@@ -93,6 +127,14 @@ def test_get_case_detail_returns_student_safe_payload() -> None:
         "提出诊断假设和鉴别诊断",
         "最终提交诊断与推理依据",
     ]
+    assert case_payload["teaching_focus"]["learning_objectives"][0] == "围绕急腹症完成疼痛演变史采集"
+    assert case_payload["teaching_focus"]["common_error_patterns"][0] == {
+        "pattern_id": "appendicitis_001.pattern.history_migration_gap",
+        "title": "腹痛演变史采集不足",
+        "focus": "只问当前疼痛部位，漏掉起病部位、转移过程和诱发加重因素。",
+        "related_rubric_items": ["ht_onset", "ht_migration", "ht_character"],
+    }
+    assert case_payload["teaching_focus"]["recommended_training_path"][-1] == "最后提交诊断、支持证据、排除依据和下一步训练方向"
     assert case_payload["physical_exam_options"][0] == {"exam_code": "vital.temperature", "exam_name_cn": "体温"}
     assert case_payload["auxiliary_test_options"][0] == {"test_code": "lab.cbc", "test_name_cn": "血常规", "category": "实验室"}
     assert "hidden_facts" not in str(case_payload)

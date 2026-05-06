@@ -16,6 +16,19 @@ type OpeningTaskCard = Readonly<{
   tasks: readonly string[];
 }>;
 
+type CaseTeachingErrorPattern = Readonly<{
+  pattern_id: string;
+  title: string;
+  focus: string;
+  related_rubric_items: readonly string[];
+}>;
+
+type CaseTeachingFocus = Readonly<{
+  learning_objectives: readonly string[];
+  common_error_patterns: readonly CaseTeachingErrorPattern[];
+  recommended_training_path: readonly string[];
+}>;
+
 type PhysicalExamQuickOption = Readonly<{
   exam_code: string;
   exam_name_cn: string;
@@ -36,6 +49,7 @@ type CaseSummary = Readonly<{
   enabled: boolean;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
+  teaching_focus: CaseTeachingFocus;
   physical_exam_options: readonly PhysicalExamQuickOption[];
   auxiliary_test_options: readonly AuxiliaryTestQuickOption[];
 }>;
@@ -183,6 +197,31 @@ export default function CasesPage() {
                     {getDifficultyLabel(caseSummary.difficulty)}
                   </span>
                 </div>
+
+                {caseSummary.teaching_focus.learning_objectives.length > 0 ? (
+                  <div className="mt-4 border-t border-border pt-4">
+                    <p className="text-xs font-semibold text-brand">教学重点</p>
+                    <ul className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                      {caseSummary.teaching_focus.learning_objectives.map((objective) => (
+                        <li key={objective}>· {objective}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {caseSummary.teaching_focus.common_error_patterns.length > 0 ? (
+                  <div className="mt-4 rounded-lg border border-dashed border-brand/20 bg-brand/5 p-3">
+                    <p className="text-xs font-semibold text-brand">常见训练误区</p>
+                    <div className="mt-2 space-y-2">
+                      {caseSummary.teaching_focus.common_error_patterns.map((pattern) => (
+                        <div className="text-xs leading-5" key={pattern.pattern_id}>
+                          <p className="font-medium text-foreground">{pattern.title}</p>
+                          <p className="text-muted-foreground">{pattern.focus}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
                   {caseSummary.enabled ? (

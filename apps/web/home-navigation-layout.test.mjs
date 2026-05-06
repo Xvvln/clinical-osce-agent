@@ -492,6 +492,13 @@ test("home current case card can show student-visible patient profile modal", ()
 test("home workspace renders opening task card in the dialogue area and inquiry guidance in the sidebar", () => {
   assert.match(pageSource, /type OpeningTaskCard = Readonly<\{/);
   assert.match(pageSource, /opening_task_card: OpeningTaskCard;/);
+  assert.match(pageSource, /type CaseTeachingFocus = Readonly<\{/);
+  assert.match(pageSource, /teaching_focus: CaseTeachingFocus;/);
+  assert.match(pageSource, /const preparedTeachingFocus = session\?\.teaching_focus \?\? selectedCase\?\.teachingFocus \?\? null;/);
+  assert.match(pageSource, /<Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">/);
+  assert.match(pageSource, /preparedTeachingFocus\.learning_objectives\.map/);
+  assert.match(pageSource, /preparedTeachingFocus\.common_error_patterns\.map/);
+  assert.match(pageSource, /preparedTeachingFocus\.recommended_training_path\.map/);
   assert.match(pageSource, /type InquiryGuidance = Readonly<\{/);
   assert.match(pageSource, /inquiry_guidance: InquiryGuidance;/);
   assert.match(pageSource, /function OpeningTaskCardMessage\(/);
@@ -604,6 +611,12 @@ test("history page lists backend sessions as the only official records", () => {
 });
 
 test("cases page starts selected cases in a prepared workspace without creating sessions", () => {
+  assert.match(casesSource, /type CaseTeachingFocus = Readonly<\{/);
+  assert.match(casesSource, /teaching_focus: CaseTeachingFocus;/);
+  assert.match(casesSource, /caseSummary\.teaching_focus\.learning_objectives\.map/);
+  assert.match(casesSource, /caseSummary\.teaching_focus\.common_error_patterns\.map/);
+  assert.match(casesSource, />\s*教学重点\s*<\/p>/);
+  assert.match(casesSource, />\s*常见训练误区\s*<\/p>/);
   assert.match(casesSource, /href=\{`\/\?case_id=\$\{encodeURIComponent\(caseSummary\.case_id\)\}`\}/);
   assert.match(casesSource, />\s*选择并进入工作台\s*<\/Link>/);
   assert.doesNotMatch(casesSource, /创建新的本地 session/);

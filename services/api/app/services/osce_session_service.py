@@ -451,6 +451,7 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
         "enabled": True,
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
+        "teaching_focus": _serialize_teaching_focus(case),
         "physical_exam_options": [
             _serialize_physical_exam_quick_option(exam)
             for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
@@ -460,6 +461,10 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
             for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
         ],
     }
+
+
+def _serialize_teaching_focus(case: Case) -> dict[str, Any]:
+    return case.teaching_focus.model_dump(mode="json")
 
 
 def _serialize_physical_exam_quick_option(exam: PhysicalExamItem) -> dict[str, str]:
@@ -762,6 +767,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "chief_complaint": case.chief_complaint,
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
+        "teaching_focus": _serialize_teaching_focus(case),
         "inquiry_guidance": _serialize_inquiry_guidance(),
         "diagnosis_draft": _serialize_diagnosis_draft(case),
         "physical_exam_options": [

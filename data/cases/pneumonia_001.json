@@ -165,6 +165,11 @@
     "version": "v1"
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "teaching_focus": {
+    "learning_objectives": [],
+    "common_error_patterns": [],
+    "recommended_training_path": []
+  },
   "source_attribution": {
     "source_id": "fareez_osce_2022",
     "transformation": "基于公开对话病例结构改写并补充查体、检查与评分字段。",

@@ -117,6 +117,19 @@ type OpeningTaskCard = Readonly<{
   tasks: readonly string[];
 }>;
 
+type CaseTeachingErrorPattern = Readonly<{
+  pattern_id: string;
+  title: string;
+  focus: string;
+  related_rubric_items: readonly string[];
+}>;
+
+type CaseTeachingFocus = Readonly<{
+  learning_objectives: readonly string[];
+  common_error_patterns: readonly CaseTeachingErrorPattern[];
+  recommended_training_path: readonly string[];
+}>;
+
 type InquiryGuidance = Readonly<{
   priority: string;
   suggested_questions: readonly string[];
@@ -191,6 +204,7 @@ type OsceSession = Readonly<{
   chief_complaint: string;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
+  teaching_focus: CaseTeachingFocus;
   inquiry_guidance: InquiryGuidance;
   diagnosis_draft: DiagnosisDraft;
   physical_exam_options: readonly PhysicalExamOption[];
@@ -289,6 +303,7 @@ type CaseOption = Readonly<{
   enabled: boolean;
   patientProfile: StudentVisiblePatientProfile;
   openingTaskCard: OpeningTaskCard;
+  teachingFocus: CaseTeachingFocus;
   physicalExamOptions: readonly PhysicalExamQuickOption[];
   auxiliaryTestOptions: readonly AuxiliaryTestQuickOption[];
 }>;
@@ -302,6 +317,7 @@ type CaseSummary = Readonly<{
   enabled: boolean;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
+  teaching_focus: CaseTeachingFocus;
   physical_exam_options: readonly PhysicalExamQuickOption[];
   auxiliary_test_options: readonly AuxiliaryTestQuickOption[];
 }>;
@@ -363,6 +379,12 @@ const appendicitisOpeningTaskCard: OpeningTaskCard = {
   ],
 };
 
+const emptyTeachingFocus: CaseTeachingFocus = {
+  learning_objectives: [],
+  common_error_patterns: [],
+  recommended_training_path: [],
+};
+
 const defaultCaseOption: CaseOption = {
   id: DEFAULT_CASE_ID,
   title: "右下腹痛教学病例",
@@ -372,6 +394,7 @@ const defaultCaseOption: CaseOption = {
   enabled: true,
   patientProfile: appendicitisPatientProfile,
   openingTaskCard: appendicitisOpeningTaskCard,
+  teachingFocus: emptyTeachingFocus,
   physicalExamOptions: appendicitisPhysicalExamOptions,
   auxiliaryTestOptions: appendicitisAuxiliaryTestOptions,
 };
@@ -441,6 +464,7 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
+    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -453,6 +477,7 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
+    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -465,6 +490,7 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
+    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -477,6 +503,7 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
+    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -880,6 +907,7 @@ function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
     enabled: caseSummary.enabled,
     patientProfile: caseSummary.patient_profile,
     openingTaskCard: caseSummary.opening_task_card,
+    teachingFocus: caseSummary.teaching_focus,
     physicalExamOptions: caseSummary.physical_exam_options,
     auxiliaryTestOptions: caseSummary.auxiliary_test_options,
   };
@@ -1663,6 +1691,7 @@ function HomeContent() {
   const auxiliaryTestOptions = session?.auxiliary_test_options ?? selectedCase?.auxiliaryTestOptions ?? [];
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
+  const preparedTeachingFocus = session?.teaching_focus ?? selectedCase?.teachingFocus ?? null;
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
   const apiConfigBaseUrlLabel = isVertexGeminiAdcConfig ? "Project ID" : "Base URL";
@@ -2123,6 +2152,56 @@ function HomeContent() {
                 选择病例
               </Link>
             </div>
+          </Panel>
+        </div>
+
+        <div className="mt-4">
+          <Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">
+            {preparedTeachingFocus && (
+              preparedTeachingFocus.learning_objectives.length > 0
+              || preparedTeachingFocus.common_error_patterns.length > 0
+              || preparedTeachingFocus.recommended_training_path.length > 0
+            ) ? (
+              <div className="space-y-3 text-xs leading-5">
+                {preparedTeachingFocus.learning_objectives.length > 0 ? (
+                  <div>
+                    <p className="font-semibold text-brand">学习目标</p>
+                    <ul className="mt-1 space-y-1 text-muted-foreground">
+                      {preparedTeachingFocus.learning_objectives.map((objective) => (
+                        <li key={objective}>· {objective}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {preparedTeachingFocus.common_error_patterns.length > 0 ? (
+                  <div>
+                    <p className="font-semibold text-brand">常见误区</p>
+                    <div className="mt-2 space-y-2">
+                      {preparedTeachingFocus.common_error_patterns.map((pattern) => (
+                        <div className="rounded-lg border border-dashed border-brand/20 bg-brand/5 p-2" key={pattern.pattern_id}>
+                          <p className="font-medium text-foreground">{pattern.title}</p>
+                          <p className="mt-1 text-muted-foreground">{pattern.focus}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {preparedTeachingFocus.recommended_training_path.length > 0 ? (
+                  <div>
+                    <p className="font-semibold text-brand">训练路径</p>
+                    <ol className="mt-1 space-y-1 text-muted-foreground">
+                      {preparedTeachingFocus.recommended_training_path.map((step, index) => (
+                        <li key={step}>{index + 1}. {step}</li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                该病例暂未配置学生可见的训练重点；训练评分仍以病例事实和 Rubric 为准。
+              </p>
+            )}
           </Panel>
         </div>
 

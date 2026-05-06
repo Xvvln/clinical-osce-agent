@@ -67,6 +67,19 @@ class SourceAttribution(BaseModel):
     modified: bool = True
 
 
+class TeachingErrorPattern(BaseModel):
+    pattern_id: str = Field(..., pattern=r"^[a-z0-9_]+_\d{3}\.pattern\.[a-z0-9_]+$")
+    title: str
+    focus: str
+    related_rubric_items: list[str] = Field(default_factory=list)
+
+
+class CaseTeachingFocus(BaseModel):
+    learning_objectives: list[str] = Field(default_factory=list)
+    common_error_patterns: list[TeachingErrorPattern] = Field(default_factory=list)
+    recommended_training_path: list[str] = Field(default_factory=list)
+
+
 class PatientProfile(BaseModel):
     name_placeholder: str = "×××"
     age_value: int = Field(..., ge=0, le=120)
@@ -181,6 +194,7 @@ class Case(BaseModel):
     rubric_ref: RubricRef
     safety_notes: str = Field(..., min_length=1)
     source_attribution: SourceAttribution
+    teaching_focus: CaseTeachingFocus = Field(default_factory=CaseTeachingFocus)
     schema_version: SchemaVersion = "1.1"
     tags: list[str] = Field(default_factory=list)
 
@@ -201,6 +215,11 @@ class Case(BaseModel):
             answer = hidden_fact.canonical_answer.lower()
             if any(term in answer for term in normalized_terms):
                 raise ValueError("hidden fact leaks diagnosis term")
+
+        for teaching_text in _teaching_focus_texts(self.teaching_focus):
+            normalized_text = teaching_text.lower()
+            if any(term in normalized_text for term in normalized_terms):
+                raise ValueError("teaching focus leaks diagnosis term")
 
         reasoning_evidence = {
             evidence
@@ -234,10 +253,18 @@ class Case(BaseModel):
         return self
 
 
+def _teaching_focus_texts(teaching_focus: CaseTeachingFocus) -> list[str]:
+    texts = [*teaching_focus.learning_objectives, *teaching_focus.recommended_training_path]
+    for pattern in teaching_focus.common_error_patterns:
+        texts.extend([pattern.title, pattern.focus])
+    return texts
+
+
 __all__ = [
     "AuxiliaryTestBundle",
     "AuxiliaryTestItem",
     "BlockingRule",
+    "CaseTeachingFocus",
     "Case",
     "CourseModule",
     "DiagnosisSpec",
@@ -254,5 +281,6 @@ __all__ = [
     "RubricRef",
     "SchemaVersion",
     "SourceAttribution",
+    "TeachingErrorPattern",
     "TestCategory",
 ]

@@ -172,6 +172,11 @@
     "version": "v1"
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
+  "teaching_focus": {
+    "learning_objectives": [],
+    "common_error_patterns": [],
+    "recommended_training_path": []
+  },
   "source_attribution": {
     "source_id": "medcase_reasoning_2025",
     "transformation": "基于公开病例推理素材改写并补充问诊、查体、检查与评分字段。",

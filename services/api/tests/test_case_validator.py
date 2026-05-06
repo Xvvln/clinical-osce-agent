@@ -404,6 +404,26 @@ def test_hidden_fact_leaks_diagnosis_rejected() -> None:
         validate_case(payload)
 
 
+def test_teaching_focus_leaks_diagnosis_rejected() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    payload = build_valid_case_payload()
+    payload["teaching_focus"] = {
+        "learning_objectives": ["直接识别急性阑尾炎并提交标准诊断。"],
+        "common_error_patterns": [
+            {
+                "pattern_id": "appendicitis_001.pattern.leak",
+                "title": "诊断泄露",
+                "focus": "提醒学生本病例标准诊断是急性阑尾炎。",
+                "related_rubric_items": ["dx_main"],
+            }
+        ],
+        "recommended_training_path": ["先说出急性阑尾炎，再补问诊。"],
+    }
+
+    with pytest.raises(Exception, match="teaching focus leaks diagnosis term"):
+        validate_case(payload)
+
+
 def test_rubric_weight_sum_must_equal_100() -> None:
     _, _, _, validate_rubric, _ = _load_step2_contract()
     payload = build_valid_rubric_payload()
