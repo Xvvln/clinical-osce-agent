@@ -1101,6 +1101,8 @@ export default function AdminDashboardPage() {
   const currentCaseImportPayloadKey = getAdminCaseImportPayloadKey(caseImportJsonText, rubricImportJsonText);
   const canImportCasePayload = validatedCaseImport?.payloadKey === currentCaseImportPayloadKey && validatedCaseImport.result.valid && !isCaseImportBusy;
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
+  const agentDecisionEvents = trainingEvents.filter((event) => event.event_type === "agent_decision_traced");
+  const agentReflectionEvents = trainingEvents.filter((event) => event.event_type === "agent_reflection_recorded");
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
@@ -2270,6 +2272,41 @@ export default function AdminDashboardPage() {
                   ))
                 ) : (
                   <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">选择训练 Session 或输入 session_id 后读取训练日志。</p>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+              <h2 className="text-xl font-semibold">智能体决策轨迹</h2>
+              <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                {agentDecisionEvents.length > 0 ? (
+                  agentDecisionEvents.map((event) => (
+                    <div className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`agent-decision-${event.created_at}`}>
+                      <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
+                      <p className="mt-1 text-xs font-semibold text-[#141413]">{event.event_type}</p>
+                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
+                        {JSON.stringify(event.payload, null, 2)}
+                      </pre>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">当前 Session 暂无智能体决策轨迹。</p>
+                )}
+              </div>
+              <h3 className="mt-4 text-sm font-semibold">反思轨迹</h3>
+              <div className="mt-2 grid max-h-60 gap-2 overflow-y-auto pr-1">
+                {agentReflectionEvents.length > 0 ? (
+                  agentReflectionEvents.map((event) => (
+                    <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={`agent-reflection-${event.created_at}`}>
+                      <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
+                      <p className="mt-1 text-xs font-semibold text-[#141413]">{event.event_type}</p>
+                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
+                        {JSON.stringify(event.payload, null, 2)}
+                      </pre>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">生成报告后会记录反思轨迹。</p>
                 )}
               </div>
             </section>

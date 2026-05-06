@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import yaml
 
-from app.graph.osce_graph import build_osce_graph
+from app.graph.osce_graph import build_osce_graph, reflection_node, training_strategy_node
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.report_store import ReportStore, report_store
@@ -42,6 +42,9 @@ class OsceSession:
     feedback_report: dict[str, Any] | None = None
     safety_flags: list[str] = field(default_factory=list)
     evolution_candidates: list[str] = field(default_factory=list)
+    pedagogy_state: dict[str, Any] = field(default_factory=dict)
+    agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
+    reflection_summary: dict[str, Any] | None = None
 
 
 class OsceSessionService:
@@ -95,8 +98,10 @@ class OsceSessionService:
             stage=graph_state["stage"],
             evolution_candidates=_enabled_skill_prompts(enabled_skills),
         )
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         self._append_event(session, "session_created", {"stage": session.stage})
+        self._append_agent_update_event(session, agent_update)
         for skill in enabled_skills:
             self._append_event(
                 session,
@@ -121,6 +126,7 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, message))
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
@@ -135,6 +141,7 @@ class OsceSessionService:
                     "reply": graph_state["reply"],
                 },
             )
+            self._append_agent_update_event(session, agent_update)
             return payload
         if graph_state["current_intent"] == "answer_request_redirect":
             self._append_event(
@@ -145,12 +152,14 @@ class OsceSessionService:
                     "reply": graph_state["reply"],
                 },
             )
+            self._append_agent_update_event(session, agent_update)
             return payload
         self._append_event(
             session,
             "history_message",
             {"message": message, "current_intent": graph_state["current_intent"], "reply": graph_state["reply"]},
         )
+        self._append_agent_update_event(session, agent_update)
         return payload
 
     def request_physical_exam(self, session_id: str, exam_code: str) -> dict[str, Any] | None:
@@ -159,6 +168,7 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload.update(
@@ -173,6 +183,7 @@ class OsceSessionService:
             "physical_exam_requested",
             {"exam_code": graph_state["exam_code"], "result": graph_state["exam_result"]},
         )
+        self._append_agent_update_event(session, agent_update)
         return payload
 
     def request_auxiliary_test(self, session_id: str, test_code: str) -> dict[str, Any] | None:
@@ -181,6 +192,7 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload.update(
@@ -195,6 +207,7 @@ class OsceSessionService:
             "auxiliary_test_requested",
             {"test_code": graph_state["test_code"], "result": graph_state["test_result"]},
         )
+        self._append_agent_update_event(session, agent_update)
         return payload
 
     def record_hypothesis(self, session_id: str, hypothesis: str) -> dict[str, Any] | None:
@@ -202,8 +215,10 @@ class OsceSessionService:
         if session is None:
             return None
         session.student_hypotheses.append(hypothesis)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         self._append_event(session, "hypothesis_recorded", {"hypothesis": hypothesis})
+        self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
 
     def request_hint(self, session_id: str) -> dict[str, Any] | None:
@@ -212,10 +227,12 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, hint_requested=True))
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["hint"] = graph_state["hint"]
         self._append_event(session, "hint_requested", {"hint": graph_state["hint"]})
+        self._append_agent_update_event(session, agent_update)
         return payload
 
     def get_teaching_focus(self, session_id: str) -> dict[str, Any] | None:
@@ -238,8 +255,10 @@ class OsceSessionService:
             )
         )
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session)
         self._save_session(session)
         self._append_event(session, "diagnosis_submitted", {"diagnosis": diagnosis, "reasoning": reasoning})
+        self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
 
     def get_report(self, session_id: str) -> dict[str, Any] | None:
@@ -251,6 +270,7 @@ class OsceSessionService:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, report_requested=True))
         _apply_graph_state(session, graph_state)
+        agent_update = _refresh_agent_state(session, use_reflection=True)
         self._save_session(session)
         if session.feedback_report is not None:
             self.report_store.save_report(session.feedback_report)
@@ -266,6 +286,7 @@ class OsceSessionService:
                     "source_reference_items": session.feedback_report["source_reference_items"],
                 },
             )
+            self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
         return session.feedback_report
 
     def delete_session(self, session_id: str) -> bool:
@@ -295,6 +316,21 @@ class OsceSessionService:
             event_type=event_type,
             payload=payload,
         )
+
+    def _append_agent_update_event(
+        self,
+        session: OsceSession,
+        agent_update: dict[str, Any],
+        event_type: str = "agent_decision_traced",
+    ) -> None:
+        latest_decision = session.agent_decision_trace[-1] if session.agent_decision_trace else {}
+        payload = {
+            "latest_decision": latest_decision,
+            "pedagogy_state": agent_update.get("pedagogy_state", session.pedagogy_state),
+        }
+        if "reflection_summary" in agent_update:
+            payload["reflection_summary"] = agent_update["reflection_summary"]
+        self._append_event(session, event_type, payload)
 
 
 def load_case_node(case_id: str) -> Case:
@@ -405,6 +441,9 @@ def _graph_state_from_session(
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "pedagogy_state": session.pedagogy_state,
+        "agent_decision_trace": session.agent_decision_trace,
+        "reflection_summary": session.reflection_summary,
     }
 
 
@@ -424,6 +463,19 @@ def _apply_graph_state(session: OsceSession, graph_state: dict[str, Any]) -> Non
     session.feedback_report = graph_state["feedback_report"]
     session.safety_flags = graph_state["safety_flags"]
     session.evolution_candidates = graph_state["evolution_candidates"]
+    session.pedagogy_state = graph_state.get("pedagogy_state", session.pedagogy_state)
+    session.agent_decision_trace = graph_state.get("agent_decision_trace", session.agent_decision_trace)
+    session.reflection_summary = graph_state.get("reflection_summary", session.reflection_summary)
+
+
+def _refresh_agent_state(session: OsceSession, use_reflection: bool = False) -> dict[str, Any]:
+    graph_state = _graph_state_from_session(session)
+    agent_update = reflection_node(graph_state) if use_reflection else training_strategy_node(graph_state)
+    session.pedagogy_state = agent_update.get("pedagogy_state", session.pedagogy_state)
+    session.agent_decision_trace = agent_update.get("agent_decision_trace", session.agent_decision_trace)
+    if "reflection_summary" in agent_update:
+        session.reflection_summary = agent_update["reflection_summary"]
+    return agent_update
 
 
 def _initial_graph_state(case_id: str) -> dict[str, Any]:
@@ -446,6 +498,9 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "feedback_report": None,
         "safety_flags": [],
         "evolution_candidates": [],
+        "pedagogy_state": {},
+        "agent_decision_trace": [],
+        "reflection_summary": None,
     }
 
 
@@ -808,6 +863,9 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "pedagogy_state": session.pedagogy_state,
+        "agent_decision_trace": session.agent_decision_trace,
+        "reflection_summary": session.reflection_summary,
     }
 
 

@@ -219,6 +219,39 @@ type TrainingProgress = Readonly<{
   next_focus: string;
 }>;
 
+type PedagogyState = Readonly<{
+  training_phase: string;
+  active_learning_goal: string;
+  missing_rubric_items: readonly string[];
+  evidence_gap: string;
+  differential_gap: string;
+  next_best_action: string;
+  skill_context_ids: readonly string[];
+  coaching_mode: string;
+  safety_mode: string;
+  reflection_summary_id: string | null;
+}>;
+
+type AgentDecisionTraceItem = Readonly<{
+  trace_id: string;
+  node: string;
+  stage: string;
+  decision: string;
+  next_best_action: string;
+  skill_context_ids: readonly string[];
+  coaching_mode: string;
+  safety_mode: string;
+}>;
+
+type ReflectionSummary = Readonly<{
+  reflection_summary_id: string;
+  missed_item_count: number;
+  missed_item_ids: readonly string[];
+  summary: string;
+  next_focus: string;
+  safety_note: string;
+}>;
+
 type OsceSession = Readonly<{
   session_id: string;
   student_id: string;
@@ -249,6 +282,9 @@ type OsceSession = Readonly<{
   feedback_report: Readonly<Record<string, unknown>> | null;
   safety_flags: readonly string[];
   evolution_candidates: readonly string[];
+  pedagogy_state: PedagogyState;
+  agent_decision_trace: readonly AgentDecisionTraceItem[];
+  reflection_summary: ReflectionSummary | null;
   reply?: string;
   current_intent?: string;
 }>;
@@ -2178,6 +2214,48 @@ function HomeContent() {
                 选择病例
               </Link>
             </div>
+          </Panel>
+        </div>
+
+        <div className="mt-4">
+          <Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">
+            {session?.pedagogy_state ? (
+              <div className="space-y-3 text-xs leading-5">
+                <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Active Goal</p>
+                  <p className="mt-1 font-semibold text-foreground">{session.pedagogy_state.active_learning_goal}</p>
+                  <p className="mt-2 text-muted-foreground">{session.pedagogy_state.next_best_action}</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="text-muted-foreground">教学模式</p>
+                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.coaching_mode}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="text-muted-foreground">教学安全边界</p>
+                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.safety_mode}</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border bg-background p-3">
+                  <p className="font-semibold text-foreground">最近决策轨迹</p>
+                  <div className="mt-2 space-y-2">
+                    {session.agent_decision_trace.slice(-3).map((trace) => (
+                      <div className="rounded-md bg-muted px-2 py-1" key={trace.trace_id}>
+                        <p className="font-mono text-[11px] text-muted-foreground">{trace.node} · {trace.stage}</p>
+                        <p className="mt-1 text-foreground">{trace.decision}</p>
+                      </div>
+                    ))}
+                    {session.agent_decision_trace.length === 0 ? (
+                      <p className="text-muted-foreground">暂无决策轨迹。</p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                智能体还未形成可展示的教学状态。
+              </p>
+            )}
           </Panel>
         </div>
 

@@ -13,6 +13,7 @@ from app.services.training_skill_store import TrainingSkillStore
 
 
 client = TestClient(app)
+AGENT_EVENT_TYPES = {"agent_decision_traced", "agent_reflection_recorded"}
 
 
 def canonical_patient_responder(request: object) -> str:
@@ -25,6 +26,14 @@ def assert_training_progress_hides_diagnosis(progress: dict[str, object]) -> Non
     assert "阑尾炎" not in progress_text
     assert "Acute appendicitis" not in progress_text
     assert "appendicitis" not in progress_text
+
+
+def business_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [event for event in events if event["event_type"] not in AGENT_EVENT_TYPES]
+
+
+def find_event(events: list[dict[str, object]], event_type: str) -> dict[str, object]:
+    return next(event for event in events if event["event_type"] == event_type)
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +96,38 @@ def test_session_teaching_focus_returns_dynamic_runtime_patterns(authenticated_u
     assert "急性冠脉综合征" not in visible_text
     assert "ACS" not in visible_text
     assert "急性心肌梗死" not in visible_text
+
+
+def test_agent_decision_trace_is_persisted(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    before_reload = client.get(f"/api/sessions/{session_id}").json()
+    osce_session_service._sessions.clear()
+    after_reload = client.get(f"/api/sessions/{session_id}").json()
+
+    assert before_reload["agent_decision_trace"]
+    assert after_reload["agent_decision_trace"] == before_reload["agent_decision_trace"]
+    assert after_reload["agent_decision_trace"][0]["node"] == "training_strategy_node"
+
+
+def test_agent_state_recovers_with_session(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    expected_state = client.get(f"/api/sessions/{session_id}").json()["pedagogy_state"]
+    osce_session_service._sessions.clear()
+    loaded_state = client.get(f"/api/sessions/{session_id}").json()["pedagogy_state"]
+
+    assert loaded_state == expected_state
+    assert loaded_state["training_phase"] == "physical_exam"
+    assert loaded_state["next_best_action"]
 
 
 def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str, str] | None]]:
@@ -456,8 +497,8 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
     assert payload["safety_flags"] == ["real_medical_advice_request"]
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
-    assert [event["event_type"] for event in events] == ["session_created", "safety_boundary_triggered"]
-    assert events[1]["payload"] == {
+    assert [event["event_type"] for event in business_events(events)] == ["session_created", "safety_boundary_triggered"]
+    assert find_event(events, "safety_boundary_triggered")["payload"] == {
         "message": message,
         "safety_flag": "real_medical_advice_request",
         "reply": payload["reply"],
@@ -491,8 +532,8 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
     assert payload["safety_flags"] == []
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
-    assert [event["event_type"] for event in events] == ["session_created", "answer_request_redirected"]
-    assert events[1]["payload"] == {
+    assert [event["event_type"] for event in business_events(events)] == ["session_created", "answer_request_redirected"]
+    assert find_event(events, "answer_request_redirected")["payload"] == {
         "message": message,
         "reply": payload["reply"],
     }
@@ -970,12 +1011,12 @@ def test_osce_session_records_diagnosis_hypothesis_before_final_submission(tmp_p
     assert payload["rubric_scores"] == {}
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
-    assert [event["event_type"] for event in events] == [
+    assert [event["event_type"] for event in business_events(events)] == [
         "session_created",
         "history_message",
         "hypothesis_recorded",
     ]
-    assert events[2]["payload"] == {"hypothesis": "急性阑尾炎"}
+    assert find_event(events, "hypothesis_recorded")["payload"] == {"hypothesis": "急性阑尾炎"}
 
 
 def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path) -> None:
@@ -1003,12 +1044,12 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
         assert forbidden_term not in payload["hint"]
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
-    assert [event["event_type"] for event in events] == [
+    assert [event["event_type"] for event in business_events(events)] == [
         "session_created",
         "history_message",
         "hint_requested",
     ]
-    assert events[2]["payload"] == {"hint": payload["hint"]}
+    assert find_event(events, "hint_requested")["payload"] == {"hint": payload["hint"]}
 
 
 def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(tmp_path) -> None:
@@ -1047,13 +1088,13 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         assert forbidden_term not in payload["hint"]
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
-    assert [event["event_type"] for event in events] == [
+    assert [event["event_type"] for event in business_events(events)] == [
         "session_created",
         "training_skill_applied",
         "history_message",
         "hint_requested",
     ]
-    assert events[3]["payload"] == {"hint": payload["hint"]}
+    assert find_event(events, "hint_requested")["payload"] == {"hint": payload["hint"]}
 
 
 def test_session_report_can_be_read_after_session_memory_is_cleared(tmp_path) -> None:
@@ -1145,7 +1186,8 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
 
-    assert [event["event_type"] for event in events] == [
+    filtered_business_events = business_events(events)
+    assert [event["event_type"] for event in filtered_business_events] == [
         "session_created",
         "training_skill_applied",
         "history_message",
@@ -1154,25 +1196,25 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "diagnosis_submitted",
         "report_generated",
     ]
-    assert events[0]["case_id"] == "appendicitis_001"
-    assert events[0]["student_id"] == authenticated_user["user_id"]
-    assert events[1]["payload"] == {
+    assert filtered_business_events[0]["case_id"] == "appendicitis_001"
+    assert filtered_business_events[0]["student_id"] == authenticated_user["user_id"]
+    assert filtered_business_events[1]["payload"] == {
         "skill_id": "skill_reasoning_core",
         "title": "临床推理链纠偏提示",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
     }
-    assert events[2]["payload"] == {
+    assert filtered_business_events[2]["payload"] == {
         "message": "什么时候开始疼的？",
         "current_intent": "ask_onset",
         "reply": "24 小时前开始，最初是上腹部隐痛。",
     }
-    assert events[3]["payload"] == {"exam_code": "abd.palpation.rebound", "result": "右下腹反跳痛阳性。"}
-    assert events[4]["payload"] == {"test_code": "lab.cbc", "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。"}
-    assert events[5]["payload"] == {
+    assert filtered_business_events[3]["payload"] == {"exam_code": "abd.palpation.rebound", "result": "右下腹反跳痛阳性。"}
+    assert filtered_business_events[4]["payload"] == {"test_code": "lab.cbc", "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。"}
+    assert filtered_business_events[5]["payload"] == {
         "diagnosis": "急性阑尾炎",
         "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
     }
-    report_event_payload = events[6]["payload"]
+    report_event_payload = filtered_business_events[6]["payload"]
     assert {
         "report_id": report_event_payload["report_id"],
         "total_score": report_event_payload["total_score"],
@@ -1316,3 +1358,11 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "metadata": {},
     }
     assert report_event_payload["source_reference_items"][1]["metadata"]["license"] == "CC BY 4.0"
+    agent_event_types = [event["event_type"] for event in events if event["event_type"] in AGENT_EVENT_TYPES]
+    assert agent_event_types.count("agent_decision_traced") >= 5
+    assert "agent_reflection_recorded" in agent_event_types
+    agent_decision_payload = find_event(events, "agent_decision_traced")["payload"]
+    assert agent_decision_payload["latest_decision"]["node"] == "training_strategy_node"
+    assert agent_decision_payload["pedagogy_state"]["safety_mode"] == "teaching_only"
+    reflection_payload = find_event(events, "agent_reflection_recorded")["payload"]
+    assert reflection_payload["reflection_summary"]["reflection_summary_id"] == f"reflection:appendicitis_001:{len(report_event_payload['missed_items'])}"

@@ -2264,11 +2264,15 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         later_events_response = client.get(f"/api/admin/sessions/{later_session_id}/events")
         assert later_events_response.status_code == 200
         later_events = later_events_response.json()["events"]
-        assert [event["event_type"] for event in later_events][:2] == [
+        later_business_events = [
+            event for event in later_events if event["event_type"] not in {"agent_decision_traced", "agent_reflection_recorded"}
+        ]
+        assert [event["event_type"] for event in later_business_events][:2] == [
             "session_created",
             "training_skill_applied",
         ]
-        assert later_events[1]["payload"]["skill_id"] == skill_id
+        assert later_business_events[1]["payload"]["skill_id"] == skill_id
+        assert any(event["event_type"] == "agent_decision_traced" for event in later_events)
 
 
 def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, monkeypatch) -> None:

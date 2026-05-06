@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
+from app.services.agent_state_service import append_decision_trace, build_pedagogy_state, build_reflection_summary
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
@@ -58,6 +59,9 @@ class OsceGraphState(TypedDict, total=False):
     feedback_report: dict[str, Any] | None
     safety_flags: list[str]
     evolution_candidates: list[str]
+    pedagogy_state: dict[str, Any]
+    agent_decision_trace: list[dict[str, Any]]
+    reflection_summary: dict[str, Any] | None
 
 
 def load_case_node(state: OsceGraphState) -> dict[str, str]:
@@ -221,6 +225,44 @@ def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
         "stage": "diagnosis_submission",
         "final_submission": {"diagnosis": diagnosis, "reasoning": reasoning},
         "student_hypotheses": [*state.get("student_hypotheses", []), diagnosis],
+    }
+
+
+def training_strategy_node(state: OsceGraphState) -> dict[str, Any]:
+    pedagogy_state = build_pedagogy_state(dict(state))
+    return {
+        "pedagogy_state": pedagogy_state,
+        "agent_decision_trace": append_decision_trace(
+            state.get("agent_decision_trace", []),
+            "training_strategy_node",
+            pedagogy_state,
+        ),
+    }
+
+
+def skill_context_node(state: OsceGraphState) -> dict[str, Any]:
+    pedagogy_state = build_pedagogy_state(dict(state))
+    return {
+        "pedagogy_state": pedagogy_state,
+        "agent_decision_trace": append_decision_trace(
+            state.get("agent_decision_trace", []),
+            "skill_context_node",
+            pedagogy_state,
+        ),
+    }
+
+
+def reflection_node(state: OsceGraphState) -> dict[str, Any]:
+    reflection_summary = build_reflection_summary(dict(state))
+    pedagogy_state = build_pedagogy_state({**dict(state), "reflection_summary": reflection_summary})
+    return {
+        "reflection_summary": reflection_summary,
+        "pedagogy_state": pedagogy_state,
+        "agent_decision_trace": append_decision_trace(
+            state.get("agent_decision_trace", []),
+            "reflection_node",
+            pedagogy_state,
+        ),
     }
 
 

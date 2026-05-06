@@ -172,6 +172,24 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
 });
 
+test("home page exposes the agent pedagogy state card", () => {
+  assert.match(pageSource, /type PedagogyState = Readonly<\{/);
+  assert.match(pageSource, /type AgentDecisionTraceItem = Readonly<\{/);
+  assert.match(pageSource, /type ReflectionSummary = Readonly<\{/);
+  assert.match(pageSource, /pedagogy_state: PedagogyState;/);
+  assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
+  assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
+  assert.match(pageSource, /<Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">/);
+  assert.match(pageSource, /session\.pedagogy_state\.active_learning_goal/);
+  assert.match(pageSource, /session\.pedagogy_state\.next_best_action/);
+  assert.match(pageSource, /session\.pedagogy_state\.coaching_mode/);
+  assert.match(pageSource, /session\.pedagogy_state\.safety_mode/);
+  assert.match(pageSource, /session\.agent_decision_trace\.slice\(-3\)\.map/);
+  assert.match(pageSource, /智能体还未形成可展示的教学状态/);
+  assert.match(pageSource, /最近决策轨迹/);
+  assert.match(pageSource, /教学安全边界/);
+});
+
 test("home header uses a test account menu for profile actions", () => {
   const headerSource = getHeaderSource();
 

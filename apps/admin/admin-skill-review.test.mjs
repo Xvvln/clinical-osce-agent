@@ -86,6 +86,12 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /系统评测/);
   assert.match(adminPageSource, /训练日志/);
+  assert.match(adminPageSource, /智能体决策轨迹/);
+  assert.match(adminPageSource, /agentDecisionEvents/);
+  assert.match(adminPageSource, /event\.event_type === "agent_decision_traced"/);
+  assert.match(adminPageSource, /反思轨迹/);
+  assert.match(adminPageSource, /agentReflectionEvents/);
+  assert.match(adminPageSource, /event\.event_type === "agent_reflection_recorded"/);
   assert.match(adminPageSource, /候选 Skill 审核/);
   assert.match(adminPageSource, /Skill 效果统计/);
   assert.match(adminPageSource, /id="model-config"/);
