@@ -368,6 +368,35 @@ type AdminCaseImportReadyState = Readonly<{
   result: AdminCaseValidationResponse;
 }>;
 
+type AdminCaseFieldUpdatePayload = Readonly<{
+  case_title: string;
+  course_module: string;
+  difficulty: string;
+  chief_complaint: string;
+  safety_notes: string;
+}>;
+
+type AdminCaseUpdateResponse = Readonly<{
+  updated: boolean;
+  case_id: string | null;
+  rubric_id: string | null;
+  errors: readonly string[];
+  case?: AdminCaseRaw;
+}>;
+
+type AdminRubricItemUpdatePayload = Readonly<{
+  description: string;
+}>;
+
+type AdminRubricItemUpdateResponse = Readonly<{
+  updated: boolean;
+  rubric_id: string;
+  case_id: string | null;
+  item_id: string;
+  errors: readonly string[];
+  rubric?: AdminRubricDetail;
+}>;
+
 type AuthLoginResponse = Readonly<{
   user: AuthUser;
 }>;
@@ -436,6 +465,15 @@ const DEMO_ADMIN_EMAIL = "admin-demo@example.test";
 const DEMO_ADMIN_PASSWORD = "safe-admin-password";
 const ADMIN_LIST_PAGE_SIZE = 20;
 const EMPTY_ADMIN_PAGINATION: AdminPagination = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, total: 0 };
+const EMPTY_ADMIN_CASE_EDIT_FORM: AdminCaseFieldUpdatePayload = {
+  case_title: "",
+  course_module: "腹痛",
+  difficulty: "初级",
+  chief_complaint: "",
+  safety_notes: "",
+};
+const ADMIN_CASE_COURSE_MODULES = ["腹痛", "胸痛", "发热", "头痛", "咳嗽", "呼吸困难", "心悸", "消瘦", "黄疸", "水肿"];
+const ADMIN_CASE_DIFFICULTIES = ["初级", "中级", "高级"];
 
 class AdminApiError extends Error {
   readonly status: number;
@@ -507,6 +545,52 @@ async function getAdminRubric(rubricId: string): Promise<AdminRubricDetail> {
   await assertAdminResponseOk(response, "读取 Rubric 详情");
   const payload = (await response.json()) as AdminRubricResponse;
   return payload.rubric;
+}
+
+function buildAdminCaseEditForm(caseRaw: AdminCaseRaw): AdminCaseFieldUpdatePayload {
+  return {
+    case_title: caseRaw.case_title,
+    course_module: caseRaw.course_module,
+    difficulty: caseRaw.difficulty,
+    chief_complaint: caseRaw.chief_complaint,
+    safety_notes: caseRaw.safety_notes,
+  };
+}
+
+function buildAdminCaseFieldUpdatePayload(form: AdminCaseFieldUpdatePayload): AdminCaseFieldUpdatePayload {
+  return {
+    case_title: form.case_title.trim(),
+    course_module: form.course_module,
+    difficulty: form.difficulty,
+    chief_complaint: form.chief_complaint.trim(),
+    safety_notes: form.safety_notes.trim(),
+  };
+}
+
+function buildAdminRubricItemEditValues(rubric: AdminRubricDetail): Record<string, string> {
+  return Object.fromEntries(
+    rubric.dimensions.flatMap((dimension) => dimension.items.map((item) => [item.item_id, item.description])),
+  );
+}
+
+async function updateAdminCaseFields(caseId: string, payload: AdminCaseFieldUpdatePayload): Promise<AdminCaseUpdateResponse> {
+  const response = await fetch(`/api/admin/cases/${caseId}/raw`, {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+  await assertAdminResponseOk(response, "保存病例字段");
+  return (await response.json()) as AdminCaseUpdateResponse;
+}
+
+async function updateAdminRubricItemDescription(rubricId: string, itemId: string, payload: AdminRubricItemUpdatePayload): Promise<AdminRubricItemUpdateResponse> {
+  const response = await fetch(`/api/admin/rubrics/${rubricId}/items/${itemId}`, {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+  await assertAdminResponseOk(response, "保存 Rubric 评分项说明");
+  return (await response.json()) as AdminRubricItemUpdateResponse;
 }
 
 async function getAdminSources(): Promise<readonly AdminSourceRegistryEntry[]> {
@@ -878,6 +962,10 @@ export default function AdminDashboardPage() {
   const [cases, setCases] = useState<readonly AdminCaseSummary[]>([]);
   const [selectedCaseRaw, setSelectedCaseRaw] = useState<AdminCaseRaw | null>(null);
   const [selectedRubric, setSelectedRubric] = useState<AdminRubricDetail | null>(null);
+  const [caseEditForm, setCaseEditForm] = useState<AdminCaseFieldUpdatePayload>(EMPTY_ADMIN_CASE_EDIT_FORM);
+  const [rubricItemEditValues, setRubricItemEditValues] = useState<Record<string, string>>({});
+  const [isCaseEditBusy, setIsCaseEditBusy] = useState(false);
+  const [busyRubricItemId, setBusyRubricItemId] = useState<string | null>(null);
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
   const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
   const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>([]);
@@ -973,7 +1061,10 @@ export default function AdminDashboardPage() {
     if (nextCases[0]) {
       const firstCaseRaw = await getAdminCaseRaw(nextCases[0].case_id);
       setSelectedCaseRaw(firstCaseRaw);
-      setSelectedRubric(await getAdminRubric(firstCaseRaw.rubric_ref.rubric_id));
+      setCaseEditForm(buildAdminCaseEditForm(firstCaseRaw));
+      const firstRubric = await getAdminRubric(firstCaseRaw.rubric_ref.rubric_id);
+      setSelectedRubric(firstRubric);
+      setRubricItemEditValues(buildAdminRubricItemEditValues(firstRubric));
     }
     if (nextReportPage.reports[0]) {
       setSelectedReport(nextReportPage.reports[0]);
@@ -1078,7 +1169,10 @@ export default function AdminDashboardPage() {
         if (result.case_id) {
           const nextCaseRaw = await getAdminCaseRaw(result.case_id);
           setSelectedCaseRaw(nextCaseRaw);
-          setSelectedRubric(await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id));
+          setCaseEditForm(buildAdminCaseEditForm(nextCaseRaw));
+          const nextRubric = await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id);
+          setSelectedRubric(nextRubric);
+          setRubricItemEditValues(buildAdminRubricItemEditValues(nextRubric));
         }
       }
     } catch (error: unknown) {
@@ -1098,8 +1192,72 @@ export default function AdminDashboardPage() {
   async function handleSelectCase(caseId: string) {
     const nextCaseRaw = await getAdminCaseRaw(caseId);
     setSelectedCaseRaw(nextCaseRaw);
-    setSelectedRubric(await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id));
+    setCaseEditForm(buildAdminCaseEditForm(nextCaseRaw));
+    const nextRubric = await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id);
+    setSelectedRubric(nextRubric);
+    setRubricItemEditValues(buildAdminRubricItemEditValues(nextRubric));
     setStatusText("已选择病例来源台账。");
+  }
+
+  async function handleUpdateCaseFields(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCaseRaw) {
+      setStatusText("请先选择病例。");
+      return;
+    }
+    setIsCaseEditBusy(true);
+    try {
+      const result = await updateAdminCaseFields(selectedCaseRaw.case_id, buildAdminCaseFieldUpdatePayload(caseEditForm));
+      if (!result.updated || !result.case) {
+        setStatusText(`病例字段保存失败：${result.errors.length > 0 ? result.errors.join("；") : "后端未写入"}`);
+        return;
+      }
+      setSelectedCaseRaw(result.case);
+      setCaseEditForm(buildAdminCaseEditForm(result.case));
+      setCases(await getAdminCases());
+      setStatusText("病例字段已保存。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsCaseEditBusy(false);
+    }
+  }
+
+  async function handleUpdateRubricItemDescription(itemId: string) {
+    if (!selectedRubric) {
+      setStatusText("请先选择 Rubric。");
+      return;
+    }
+    const description = (rubricItemEditValues[itemId] ?? "").trim();
+    if (!description) {
+      setStatusText("评分项说明不能为空。");
+      return;
+    }
+    setBusyRubricItemId(itemId);
+    try {
+      const result = await updateAdminRubricItemDescription(selectedRubric.rubric_id, itemId, { description });
+      if (!result.updated || !result.rubric) {
+        setStatusText(`评分项说明保存失败：${result.errors.length > 0 ? result.errors.join("；") : "后端未写入"}`);
+        return;
+      }
+      setSelectedRubric(result.rubric);
+      setRubricItemEditValues(buildAdminRubricItemEditValues(result.rubric));
+      setStatusText(`评分项 ${itemId} 说明已保存。`);
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setBusyRubricItemId(null);
+    }
   }
 
   async function handleSelectSession(sessionId: string) {
@@ -1437,6 +1595,68 @@ export default function AdminDashboardPage() {
                     </button>
                   </div>
                 </div>
+                <form className="mt-4 grid gap-3 border-t border-[#E6DFD2] pt-4" onSubmit={(event) => void handleUpdateCaseFields(event)}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-[#AE5630]">编辑病例字段</p>
+                    <button
+                      className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isCaseEditBusy}
+                      type="submit"
+                    >
+                      {isCaseEditBusy ? "保存中" : "保存病例字段"}
+                    </button>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                      病例标题
+                      <input
+                        className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                        onChange={(event) => setCaseEditForm((current) => ({ ...current, case_title: event.target.value }))}
+                        value={caseEditForm.case_title}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                      主诉
+                      <input
+                        className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                        onChange={(event) => setCaseEditForm((current) => ({ ...current, chief_complaint: event.target.value }))}
+                        value={caseEditForm.chief_complaint}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                      课程模块
+                      <select
+                        className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                        onChange={(event) => setCaseEditForm((current) => ({ ...current, course_module: event.target.value }))}
+                        value={caseEditForm.course_module}
+                      >
+                        {ADMIN_CASE_COURSE_MODULES.map((courseModule) => (
+                          <option key={courseModule} value={courseModule}>{courseModule}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                      难度
+                      <select
+                        className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                        onChange={(event) => setCaseEditForm((current) => ({ ...current, difficulty: event.target.value }))}
+                        value={caseEditForm.difficulty}
+                      >
+                        {ADMIN_CASE_DIFFICULTIES.map((difficulty) => (
+                          <option key={difficulty} value={difficulty}>{difficulty}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                    安全说明
+                    <textarea
+                      className="min-h-20 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-normal leading-6 text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                      onChange={(event) => setCaseEditForm((current) => ({ ...current, safety_notes: event.target.value }))}
+                      value={caseEditForm.safety_notes}
+                    />
+                  </label>
+                </form>
                 <div className="mt-4 grid gap-3 md:grid-cols-4">
                   <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
                     <p className="text-xs text-[#8A7D6F]">hidden_facts</p>
@@ -1491,7 +1711,23 @@ export default function AdminDashboardPage() {
                             {dimension.items.map((item) => (
                               <div className="rounded-md border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={item.item_id}>
                                 <p className="font-semibold text-[#141413]">评分项：{item.item_id} · {item.max_score} 分</p>
-                                <p className="mt-1">{item.description}</p>
+                                <label className="mt-2 grid gap-2 font-semibold text-[#141413]">
+                                  评分项说明
+                                  <input
+                                    aria-label={`编辑评分项说明 ${item.item_id}`}
+                                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                                    onChange={(event) => setRubricItemEditValues((current) => ({ ...current, [item.item_id]: event.target.value }))}
+                                    value={rubricItemEditValues[item.item_id] ?? item.description}
+                                  />
+                                </label>
+                                <button
+                                  className="mt-2 rounded-md border border-[#AE5630] bg-white px-3 py-2 text-xs font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={busyRubricItemId === item.item_id}
+                                  onClick={() => void handleUpdateRubricItemDescription(item.item_id)}
+                                  type="button"
+                                >
+                                  {busyRubricItemId === item.item_id ? "保存中" : "保存评分项说明"}
+                                </button>
                                 <p className="mt-1">match_rule：{item.match_rule.kind}</p>
                                 <p className="mt-1">evidence_expected：{item.evidence_expected.length > 0 ? item.evidence_expected.join("、") : "无"}</p>
                               </div>

@@ -187,10 +187,14 @@ test("admin dashboard shows a read-only case rubric and source ledger", () => {
   assert.match(adminPageSource, /setSources\(nextSources\)/);
   assert.match(adminPageSource, /const firstCaseRaw = await getAdminCaseRaw\(nextCases\[0\]\.case_id\)/);
   assert.match(adminPageSource, /setSelectedCaseRaw\(firstCaseRaw\)/);
-  assert.match(adminPageSource, /setSelectedRubric\(await getAdminRubric\(firstCaseRaw\.rubric_ref\.rubric_id\)\)/);
+  assert.match(adminPageSource, /setCaseEditForm\(buildAdminCaseEditForm\(firstCaseRaw\)\)/);
+  assert.match(adminPageSource, /const firstRubric = await getAdminRubric\(firstCaseRaw\.rubric_ref\.rubric_id\)/);
+  assert.match(adminPageSource, /setRubricItemEditValues\(buildAdminRubricItemEditValues\(firstRubric\)\)/);
   assert.match(adminPageSource, /const nextCaseRaw = await getAdminCaseRaw\(caseId\)/);
   assert.match(adminPageSource, /setSelectedCaseRaw\(nextCaseRaw\)/);
-  assert.match(adminPageSource, /setSelectedRubric\(await getAdminRubric\(nextCaseRaw\.rubric_ref\.rubric_id\)\)/);
+  assert.match(adminPageSource, /setCaseEditForm\(buildAdminCaseEditForm\(nextCaseRaw\)\)/);
+  assert.match(adminPageSource, /const nextRubric = await getAdminRubric\(nextCaseRaw\.rubric_ref\.rubric_id\)/);
+  assert.match(adminPageSource, /setRubricItemEditValues\(buildAdminRubricItemEditValues\(nextRubric\)\)/);
   assert.match(adminPageSource, /病例与来源台账/);
   assert.match(adminPageSource, /Rubric 引用/);
   assert.match(adminPageSource, /Rubric 评分表详情/);
@@ -246,6 +250,28 @@ test("admin dashboard can validate and import case rubric payloads", () => {
   assert.match(adminPageSource, /正式导入/);
   assert.match(adminPageSource, /imported=false/);
   assert.match(adminPageSource, /valid=false/);
+});
+
+test("admin dashboard can edit case metadata and rubric item fields", () => {
+  assert.match(adminPageSource, /type AdminCaseFieldUpdatePayload = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminCaseUpdateResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRubricItemUpdatePayload = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRubricItemUpdateResponse = Readonly<\{/);
+  assert.match(adminPageSource, /function buildAdminCaseFieldUpdatePayload\(/);
+  assert.match(adminPageSource, /function buildAdminCaseEditForm\(caseRaw: AdminCaseRaw\): AdminCaseFieldUpdatePayload/);
+  assert.match(adminPageSource, /function buildAdminRubricItemEditValues\(rubric: AdminRubricDetail\): Record<string, string>/);
+  assert.match(adminPageSource, /async function updateAdminCaseFields\(caseId: string, payload: AdminCaseFieldUpdatePayload\): Promise<AdminCaseUpdateResponse>/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/cases\/\$\{caseId\}\/raw`, \{/);
+  assert.match(adminPageSource, /method: "PATCH"/);
+  assert.match(adminPageSource, /async function updateAdminRubricItemDescription\(rubricId: string, itemId: string, payload: AdminRubricItemUpdatePayload\): Promise<AdminRubricItemUpdateResponse>/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/rubrics\/\$\{rubricId\}\/items\/\$\{itemId\}`, \{/);
+  assert.match(adminPageSource, /const \[caseEditForm, setCaseEditForm\] = useState<AdminCaseFieldUpdatePayload>/);
+  assert.match(adminPageSource, /const \[rubricItemEditValues, setRubricItemEditValues\] = useState<Record<string, string>>/);
+  assert.match(adminPageSource, /async function handleUpdateCaseFields\(/);
+  assert.match(adminPageSource, /async function handleUpdateRubricItemDescription\(itemId: string\)/);
+  assert.match(adminPageSource, /编辑病例字段/);
+  assert.match(adminPageSource, /保存病例字段/);
+  assert.match(adminPageSource, /保存评分项说明/);
 });
 
 test("admin dashboard filters cases and candidates locally while sessions and reports use server pagination", () => {

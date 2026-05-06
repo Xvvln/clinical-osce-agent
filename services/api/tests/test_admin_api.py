@@ -76,9 +76,11 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             unauthenticated_client.get("/api/cases/appendicitis_001/raw"),
             unauthenticated_client.get("/api/admin/cases/appendicitis_001/raw"),
+            unauthenticated_client.patch("/api/admin/cases/appendicitis_001/raw", json={"case_title": "演示病例"}),
             unauthenticated_client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
             unauthenticated_client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             unauthenticated_client.get("/api/admin/rubrics/appendicitis_001_rubric"),
+            unauthenticated_client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             unauthenticated_client.get("/api/admin/sources"),
             unauthenticated_client.get("/api/admin/model-config"),
             unauthenticated_client.get("/api/admin/reports"),
@@ -117,9 +119,11 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             client.get("/api/cases/appendicitis_001/raw"),
             client.get("/api/admin/cases/appendicitis_001/raw"),
+            client.patch("/api/admin/cases/appendicitis_001/raw", json={"case_title": "演示病例"}),
             client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
             client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             client.get("/api/admin/rubrics/appendicitis_001_rubric"),
+            client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             client.get("/api/admin/sources"),
             client.get("/api/admin/model-config"),
             client.get("/api/admin/reports"),
@@ -475,6 +479,149 @@ def test_admin_case_import_rejects_path_traversal_ids(tmp_path, monkeypatch) -> 
     }
     assert list(cases_dir.iterdir()) == []
     assert list(rubrics_dir.iterdir()) == []
+
+
+def test_admin_can_update_case_metadata_fields(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/cases/appendicitis_001/raw",
+            json={
+                "case_title": "急性右下腹痛追问训练",
+                "chief_complaint": "转移性右下腹痛 12 小时",
+                "course_module": "腹痛",
+                "difficulty": "高级",
+                "safety_notes": "仅用于 OSCE 教学训练，不能替代真实医生诊疗。",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] is True
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert payload["errors"] == []
+    assert payload["case"]["case_title"] == "急性右下腹痛追问训练"
+    assert payload["case"]["chief_complaint"] == "转移性右下腹痛 12 小时"
+    assert payload["case"]["difficulty"] == "高级"
+    assert json.loads(case_path.read_text(encoding="utf-8"))["case_title"] == "急性右下腹痛追问训练"
+    assert yaml.safe_load(rubric_path.read_text(encoding="utf-8")) == rubric_payload
+
+
+def test_admin_case_update_rejects_invalid_metadata_without_writing(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/cases/appendicitis_001/raw",
+            json={"difficulty": "专家级"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] is False
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert "difficulty" in " ".join(payload["errors"])
+    assert json.loads(case_path.read_text(encoding="utf-8")) == case_payload
+
+
+def test_admin_case_update_rejects_non_whitelisted_fields_without_writing(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/cases/appendicitis_001/raw",
+            json={
+                "case_title": "不应写入",
+                "diagnosis": {"main_diagnosis": "不应允许在线改写"},
+            },
+        )
+
+    assert response.status_code == 422
+    assert json.loads(case_path.read_text(encoding="utf-8")) == case_payload
+
+
+def test_admin_can_update_rubric_item_description_field(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset",
+            json={"description": "追问腹痛起病时间与诱因"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] is True
+    assert payload["rubric_id"] == "appendicitis_001_rubric"
+    assert payload["case_id"] == "appendicitis_001"
+    assert payload["item_id"] == "ht_onset"
+    assert payload["errors"] == []
+    assert payload["rubric"]["dimensions"][0]["items"][0]["description"] == "追问腹痛起病时间与诱因"
+    assert json.loads(case_path.read_text(encoding="utf-8")) == case_payload
+    assert yaml.safe_load(rubric_path.read_text(encoding="utf-8"))["dimensions"][0]["items"][0]["description"] == "追问腹痛起病时间与诱因"
+
+
+def test_admin_rubric_item_update_rejects_non_whitelisted_fields_without_writing(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset",
+            json={
+                "description": "不应写入",
+                "match_rule": {"kind": "intent_keyword", "spec": {}},
+            },
+        )
+
+    assert response.status_code == 422
+    assert yaml.safe_load(rubric_path.read_text(encoding="utf-8")) == rubric_payload
+
+
+def test_admin_rubric_item_update_rejects_unknown_item_without_writing(tmp_path, monkeypatch) -> None:
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/admin/rubrics/appendicitis_001_rubric/items/missing_item",
+            json={"description": "不会写入"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "rubric item not found"}
+    assert yaml.safe_load(rubric_path.read_text(encoding="utf-8")) == rubric_payload
 
 
 

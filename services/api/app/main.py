@@ -1,12 +1,14 @@
 import json
 import os
+from copy import deepcopy
 from typing import Any
 
 import yaml
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.osce_graph import build_osce_graph
+from app.services import retrieval_index, source_retriever
 from app.services.auth_store import auth_store
 from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
@@ -184,6 +186,22 @@ class AdminCaseValidationRequest(BaseModel):
 class AdminCaseImportRequest(BaseModel):
     case: dict[str, Any]
     rubric: dict[str, Any]
+
+
+class AdminCaseFieldUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_title: str | None = None
+    course_module: str | None = None
+    difficulty: str | None = None
+    chief_complaint: str | None = None
+    safety_notes: str | None = None
+
+
+class AdminRubricItemUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(..., min_length=1)
 
 
 class AdminEvaluationRunRequest(BaseModel):
@@ -609,6 +627,147 @@ def _build_admin_case_import_response(request: AdminCaseImportRequest) -> dict[s
     return {"imported": True, "case_id": case_id, "rubric_id": rubric_id, "errors": []}
 
 
+def _clear_admin_case_asset_caches() -> None:
+    retrieval_index._retrieval_documents.cache_clear()
+    source_retriever._case_payload.cache_clear()
+    source_retriever._rubric_items.cache_clear()
+
+
+def _build_admin_case_update_response(case_id: str, request: AdminCaseFieldUpdateRequest) -> dict[str, object]:
+    if not _is_safe_admin_import_id(case_id):
+        raise HTTPException(status_code=404, detail="case not found")
+
+    case_path = CASES_DIR / f"{case_id}.json"
+    if not case_path.exists():
+        raise HTTPException(status_code=404, detail="case not found")
+
+    case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+    if not isinstance(case_payload, dict):
+        return {"updated": False, "case_id": case_id, "rubric_id": None, "errors": ["case payload is not an object"]}
+    if case_payload.get("case_id") != case_id:
+        return {
+            "updated": False,
+            "case_id": case_id,
+            "rubric_id": case_payload.get("rubric_ref", {}).get("rubric_id") if isinstance(case_payload.get("rubric_ref"), dict) else None,
+            "errors": [f"case_id mismatch: {case_payload.get('case_id')}"],
+        }
+
+    updates = request.model_dump(exclude_none=True)
+    if not updates:
+        return {
+            "updated": False,
+            "case_id": case_id,
+            "rubric_id": case_payload.get("rubric_ref", {}).get("rubric_id") if isinstance(case_payload.get("rubric_ref"), dict) else None,
+            "errors": ["no editable case fields provided"],
+            "case": case_payload,
+        }
+
+    next_case = {**case_payload, **updates}
+    rubric_id = next_case.get("rubric_ref", {}).get("rubric_id") if isinstance(next_case.get("rubric_ref"), dict) else None
+    errors: list[str] = []
+    case_model = None
+    rubric_model = None
+    try:
+        case_model = validate_case(next_case)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    if isinstance(rubric_id, str) and rubric_id:
+        rubric_payload = _load_admin_rubric(rubric_id)
+        if rubric_payload is None:
+            errors.append(f"rubric not found: {rubric_id}")
+        else:
+            try:
+                rubric_model = validate_rubric(rubric_payload)
+            except Exception as exc:
+                errors.append(str(exc))
+    else:
+        errors.append("rubric_id is required")
+
+    if case_model is not None and rubric_model is not None:
+        try:
+            validate_case_rubric_pair(case_model, rubric_model)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if errors:
+        return {"updated": False, "case_id": case_id, "rubric_id": rubric_id, "errors": errors, "case": case_payload}
+
+    case_path.write_text(json.dumps(next_case, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _clear_admin_case_asset_caches()
+    return {"updated": True, "case_id": case_id, "rubric_id": rubric_id, "errors": [], "case": next_case}
+
+
+def _build_admin_rubric_item_update_response(
+    rubric_id: str,
+    item_id: str,
+    request: AdminRubricItemUpdateRequest,
+) -> dict[str, object]:
+    if not _is_safe_admin_import_id(rubric_id):
+        raise HTTPException(status_code=404, detail="rubric not found")
+    if not _is_safe_admin_import_id(item_id):
+        raise HTTPException(status_code=404, detail="rubric item not found")
+
+    rubric_path = RUBRICS_DIR / f"{rubric_id}.yaml"
+    if not rubric_path.exists():
+        raise HTTPException(status_code=404, detail="rubric not found")
+
+    rubric_payload = yaml.safe_load(rubric_path.read_text(encoding="utf-8"))
+    if not isinstance(rubric_payload, dict):
+        return {"updated": False, "rubric_id": rubric_id, "case_id": None, "item_id": item_id, "errors": ["rubric payload is not an object"]}
+
+    next_rubric = deepcopy(rubric_payload)
+    item_found = False
+    for dimension in next_rubric.get("dimensions", []):
+        if not isinstance(dimension, dict):
+            continue
+        for item in dimension.get("items", []):
+            if isinstance(item, dict) and item.get("item_id") == item_id:
+                item["description"] = request.description
+                item_found = True
+                break
+        if item_found:
+            break
+
+    if not item_found:
+        raise HTTPException(status_code=404, detail="rubric item not found")
+
+    case_id = next_rubric.get("case_id")
+    errors: list[str] = []
+    rubric_model = None
+    case_model = None
+    try:
+        rubric_model = validate_rubric(next_rubric)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    if isinstance(case_id, str) and case_id:
+        case_path = CASES_DIR / f"{case_id}.json"
+        if not case_path.exists():
+            errors.append(f"case not found: {case_id}")
+        else:
+            try:
+                case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+                case_model = validate_case(case_payload)
+            except Exception as exc:
+                errors.append(str(exc))
+    else:
+        errors.append("case_id is required")
+
+    if case_model is not None and rubric_model is not None:
+        try:
+            validate_case_rubric_pair(case_model, rubric_model)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if errors:
+        return {"updated": False, "rubric_id": rubric_id, "case_id": case_id, "item_id": item_id, "errors": errors, "rubric": rubric_payload}
+
+    rubric_path.write_text(yaml.safe_dump(next_rubric, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    _clear_admin_case_asset_caches()
+    return {"updated": True, "rubric_id": rubric_id, "case_id": case_id, "item_id": item_id, "errors": [], "rubric": next_rubric}
+
+
 @app.get("/api/cases/{case_id}")
 def get_case_detail(case_id: str) -> dict[str, object]:
     return _get_case_detail_response(case_id)
@@ -630,6 +789,16 @@ def get_admin_case_raw(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return _get_case_raw_response(case_id)
+
+
+@app.patch("/api/admin/cases/{case_id}/raw")
+def update_admin_case_fields(
+    case_id: str,
+    request: AdminCaseFieldUpdateRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return _build_admin_case_update_response(case_id, request)
 
 
 @app.post("/api/admin/cases/validate")
@@ -660,6 +829,17 @@ def get_admin_rubric(
     if rubric is None:
         raise HTTPException(status_code=404, detail="rubric not found")
     return {"rubric": rubric}
+
+
+@app.patch("/api/admin/rubrics/{rubric_id}/items/{item_id}")
+def update_admin_rubric_item(
+    rubric_id: str,
+    item_id: str,
+    request: AdminRubricItemUpdateRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return _build_admin_rubric_item_update_response(rubric_id, item_id, request)
 
 
 @app.get("/api/admin/sources")
