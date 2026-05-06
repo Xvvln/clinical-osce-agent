@@ -134,6 +134,12 @@ OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview
 OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=false
 OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview
 OSCE_VERTEX_PROXY_URL=http://127.0.0.1:7897
+OSCE_VERTEX_EMBEDDING_ENABLED=false
+OSCE_VERTEX_EMBEDDING_PROJECT=
+OSCE_VERTEX_EMBEDDING_LOCATION=global
+OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
+OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY=3072
+OSCE_VERTEX_EMBEDDING_PROXY_URL=http://127.0.0.1:7897
 
 OSCE_OPENAI_ENABLED=false
 OSCE_OPENAI_API_KEY=
@@ -151,6 +157,7 @@ CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=safe-admin-password
 
 - Gemini Developer API 可用于学生端标准化病人表达层，密钥只从环境变量读取。
 - Vertex Gemini 可用于标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；通过 ADC（Application Default Credentials，应用默认凭证）认证，不在系统内保存凭据文件。学生端 API 配置弹窗可选择 `Vertex Gemini ADC`，填写 Project ID、模型和代理后应用到本次后端运行时。
+- Vertex embedding RAG 检索可通过 `OSCE_VERTEX_EMBEDDING_ENABLED=true` 和 `OSCE_VERTEX_EMBEDDING_PROJECT=<project_id>` 启用，默认模型为 `gemini-embedding-001`，只用于 RAG 来源片段召回、反馈解释和学习推荐；当前是 Vertex embedding API + 本地内存向量相似度排序，不是 ChromaDB / pgvector 持久向量库，也不参与评分或诊断。
 - OpenAI 兼容配置可通过 `OSCE_OPENAI_*` 环境变量，或学生端 `/api/model-config/runtime` 本次运行时内存配置，接入标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；底层按 Chat Completions 请求 `{base_url}/chat/completions`，可用 `OSCE_OPENAI_PROXY_URL=http://127.0.0.1:7897` 或 `direct` 控制代理。
 - 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不会把运行时密钥写入数据库或 `.env`。学生端弹窗配置会保存在浏览器 `localStorage`，后端运行时配置只保存在当前 FastAPI 进程内存；需要重启后仍生效时，请写入 `.env` / 环境变量。
 

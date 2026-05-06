@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
+
+from app.services.vertex_embedding_retriever import build_vertex_embedding_client_from_environment
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
+LOGGER = logging.getLogger(__name__)
+
+
+class EmbeddingClient(Protocol):
+    def embed_texts(self, texts: Sequence[str], *, task_type: str) -> list[list[float]]:
+        ...
 
 
 @dataclass(frozen=True)
@@ -19,13 +30,20 @@ class RetrievalDocument:
     source_type: str
     title: str
     snippet: str
-    score: int
+    score: float
 
 
 def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocument]:
     normalized_query = query.strip().lower()
     if not normalized_query or limit <= 0:
         return []
+
+    embedding_client = build_vertex_embedding_client_from_environment()
+    if embedding_client is not None:
+        try:
+            return search_retrieval_documents_with_embeddings(query, embedding_client=embedding_client, limit=limit)
+        except Exception as exc:
+            LOGGER.warning("Vertex embedding retrieval failed; falling back to deterministic search: %s", exc)
 
     scored_documents = [
         RetrievalDocument(
@@ -36,6 +54,45 @@ def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocu
             score=_score_document(normalized_query, document),
         )
         for document in _retrieval_documents()
+    ]
+    return [
+        document
+        for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
+        if document.score > 0
+    ][:limit]
+
+
+def search_retrieval_documents_with_embeddings(
+    query: str,
+    *,
+    embedding_client: EmbeddingClient,
+    limit: int = 5,
+) -> list[RetrievalDocument]:
+    normalized_query = query.strip()
+    if not normalized_query or limit <= 0:
+        return []
+
+    documents = list(_retrieval_documents())
+    query_vectors = embedding_client.embed_texts([normalized_query], task_type="RETRIEVAL_QUERY")
+    if len(query_vectors) != 1:
+        raise ValueError("embedding client must return one query vector")
+
+    document_vectors = embedding_client.embed_texts(
+        [_document_embedding_text(document) for document in documents],
+        task_type="RETRIEVAL_DOCUMENT",
+    )
+    if len(document_vectors) != len(documents):
+        raise ValueError("embedding client must return one vector for each retrieval document")
+
+    scored_documents = [
+        RetrievalDocument(
+            reference=document.reference,
+            source_type=document.source_type,
+            title=document.title,
+            snippet=document.snippet,
+            score=_cosine_similarity(query_vectors[0], document_vector),
+        )
+        for document, document_vector in zip(documents, document_vectors)
     ]
     return [
         document
@@ -126,6 +183,21 @@ def _score_document(query: str, document: RetrievalDocument) -> int:
         return len(query) * 10
 
     return sum(1 for token in _query_tokens(query) if token in haystack)
+
+
+def _document_embedding_text(document: RetrievalDocument) -> str:
+    return f"{document.source_type}\n{document.reference}\n{document.title}\n{document.snippet}"
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("embedding vectors must have the same dimensionality")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    dot_product = sum(left_value * right_value for left_value, right_value in zip(left, right))
+    return dot_product / (left_norm * right_norm)
 
 
 def _query_tokens(query: str) -> list[str]:

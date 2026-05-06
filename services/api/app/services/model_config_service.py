@@ -18,6 +18,7 @@ def build_admin_model_config() -> dict[str, Any]:
             _gemini_patient_vertex_config(),
             _vertex_rubric_scorer_config(),
             _vertex_skill_candidate_config(),
+            _vertex_embedding_retrieval_config(),
             _openai_compatible_config(),
         ],
     }
@@ -126,6 +127,32 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_PROJECT", project)]),
         integration_status="wired",
         notes="LLM 只生成标题、说明和教学策略；candidate_id、pattern_id 和漏项聚合仍由后端确定性生成。",
+    )
+
+
+def _vertex_embedding_retrieval_config() -> dict[str, Any]:
+    enabled = _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED")
+    project = _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    model = _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001")
+    location = _env("OSCE_VERTEX_EMBEDDING_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = _env("OSCE_VERTEX_EMBEDDING_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    configured = enabled and bool(project)
+    return _provider_config(
+        provider_id="vertex_embedding_retrieval",
+        label="Vertex Gemini RAG 向量检索",
+        capability="RAG 反馈解释、学习推荐和来源片段召回",
+        enabled=enabled,
+        configured=configured,
+        secret_configured=False,
+        auth_mode="vertex_adc",
+        model=model,
+        project=project,
+        location=location,
+        proxy_url=proxy_url,
+        required_env=["OSCE_VERTEX_EMBEDDING_ENABLED=true", "OSCE_VERTEX_EMBEDDING_PROJECT 或 OSCE_VERTEX_PROJECT"],
+        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_EMBEDDING_PROJECT 或 OSCE_VERTEX_PROJECT", project)]),
+        integration_status="wired_optional",
+        notes="只用于 RAG 来源片段相似度召回；不参与标准诊断、rubric、评分裁判或病例隐藏信息决策。",
     )
 
 

@@ -178,6 +178,8 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
     monkeypatch.setenv("OSCE_VERTEX_MODEL", "gemini-rubric-model")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "openai-secret-value")
     monkeypatch.setenv("OSCE_OPENAI_MODEL", "openai-demo-model")
@@ -203,6 +205,11 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["vertex_rubric_scorer"]["enabled"] is True
     assert providers["vertex_rubric_scorer"]["configured"] is True
     assert providers["vertex_rubric_scorer"]["missing_env"] == []
+    assert providers["vertex_embedding_retrieval"]["enabled"] is True
+    assert providers["vertex_embedding_retrieval"]["configured"] is True
+    assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
+    assert providers["vertex_embedding_retrieval"]["project"] == "demo-project"
+    assert providers["vertex_embedding_retrieval"]["integration_status"] == "wired_optional"
     assert providers["openai_compatible"]["enabled"] is True
     assert providers["openai_compatible"]["configured"] is True
     assert providers["openai_compatible"]["model"] == "openai-demo-model"
@@ -237,6 +244,8 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
     assert providers["vertex_rubric_scorer"]["project"] == "demo-project"
     assert providers["vertex_skill_candidate"]["configured"] is True
     assert providers["vertex_skill_candidate"]["project"] == "demo-project"
+    assert providers["vertex_embedding_retrieval"]["configured"] is False
+    assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:
