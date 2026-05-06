@@ -860,18 +860,36 @@ def get_admin_model_config(
 
 @app.get("/api/admin/evolution/candidates")
 def list_admin_training_skill_candidates(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"candidates": training_skill_candidate_store.list_candidate_summaries()}
+    return _build_paginated_admin_payload(
+        "candidates",
+        training_skill_candidate_store.list_candidate_summaries(),
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.get("/api/admin/evolution/events")
 def list_admin_training_skill_review_events(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"events": _list_admin_skill_candidate_review_events()}
+    return _build_paginated_admin_payload(
+        "events",
+        _list_admin_skill_candidate_review_events(),
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.post("/api/admin/evolution/candidates/generate")
@@ -1011,10 +1029,19 @@ def get_admin_training_skill_effects(
 
 @app.get("/api/admin/evaluations")
 def list_admin_evaluations(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"evaluations": evaluation_result_store.list_batch_summaries()}
+    return _build_paginated_admin_payload(
+        "evaluations",
+        evaluation_result_store.list_batch_summaries(),
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.post("/api/admin/evals/run")

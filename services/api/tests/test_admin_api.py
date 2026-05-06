@@ -663,8 +663,51 @@ def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch
                 "source_report_count": 3,
                 "support_count": 2,
             }
-        ]
+        ],
+        "pagination": {"limit": 1, "offset": 0, "total": 1},
     }
+
+
+def test_admin_can_paginate_and_filter_training_skill_candidate_summaries(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    for candidate_id, title, support_count in [
+        ("skill_candidate_history_gap", "问诊漏项提醒", 1),
+        ("skill_candidate_reasoning_core", "临床推理链纠偏提示", 2),
+    ]:
+        candidate_store.save_candidate(
+            {
+                "candidate_id": candidate_id,
+                "trigger_item_id": candidate_id.replace("skill_candidate_", ""),
+                "title": title,
+                "status": "draft",
+                "source_report_count": 3,
+                "support_count": support_count,
+            },
+            {
+                "candidate_id": candidate_id,
+                "status": "ready_for_review",
+                "regression_passed": True,
+                "evaluation_total_cases": 2,
+                "evaluation_passed_cases": 2,
+                "evaluation_failed_cases": 0,
+                "blocking_failures": [],
+            },
+        )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        paged_response = client.get("/api/admin/evolution/candidates?limit=1&offset=1")
+        filtered_response = client.get("/api/admin/evolution/candidates", params={"q": "推理链", "limit": 5})
+
+    assert paged_response.status_code == 200
+    paged_payload = paged_response.json()
+    assert [candidate["candidate_id"] for candidate in paged_payload["candidates"]] == ["skill_candidate_reasoning_core"]
+    assert paged_payload["pagination"] == {"limit": 1, "offset": 1, "total": 2}
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert [candidate["candidate_id"] for candidate in filtered_payload["candidates"]] == ["skill_candidate_reasoning_core"]
+    assert filtered_payload["pagination"] == {"limit": 5, "offset": 0, "total": 1}
 
 
 def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> None:
@@ -1103,8 +1146,36 @@ def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> Non
         "evaluations": [
             {"batch_id": "batch_smoke", "total_cases": 2, "passed_cases": 2, "failed_cases": 0, "passed": True},
             {"batch_id": "batch_regression", "total_cases": 3, "passed_cases": 2, "failed_cases": 1, "passed": False},
-        ]
+        ],
+        "pagination": {"limit": 2, "offset": 0, "total": 2},
     }
+
+
+def test_admin_can_paginate_and_filter_evaluation_batch_summaries(tmp_path, monkeypatch) -> None:
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    evaluation_store.save_batch_result(
+        "batch_smoke",
+        EvaluationBatchResult(total_cases=2, passed_cases=2, failed_cases=0, results=[], passed=True, total_duration_ms=120),
+    )
+    evaluation_store.save_batch_result(
+        "batch_regression",
+        EvaluationBatchResult(total_cases=3, passed_cases=2, failed_cases=1, results=[], passed=False, total_duration_ms=300),
+    )
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        paged_response = client.get("/api/admin/evaluations?limit=1&offset=1")
+        filtered_response = client.get("/api/admin/evaluations", params={"q": "regression", "limit": 5})
+
+    assert paged_response.status_code == 200
+    paged_payload = paged_response.json()
+    assert [evaluation["batch_id"] for evaluation in paged_payload["evaluations"]] == ["batch_regression"]
+    assert paged_payload["pagination"] == {"limit": 1, "offset": 1, "total": 2}
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert [evaluation["batch_id"] for evaluation in filtered_payload["evaluations"]] == ["batch_regression"]
+    assert filtered_payload["pagination"] == {"limit": 5, "offset": 0, "total": 1}
 
 
 
@@ -1429,9 +1500,13 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         "candidates": [expected_candidate_summary],
     }
     assert candidates_response.status_code == 200
-    assert candidates_response.json() == {"candidates": [expected_candidate_summary]}
+    assert candidates_response.json() == {
+        "candidates": [expected_candidate_summary],
+        "pagination": {"limit": 1, "offset": 0, "total": 1},
+    }
     assert evaluation_store.get_batch_result("admin_skill_candidate_generation_smoke")["passed"] is True
     assert audit_response.status_code == 200
+    assert audit_response.json()["pagination"] == {"limit": 1, "offset": 0, "total": 1}
     assert len(audit_response.json()["events"]) == 1
     assert audit_response.json()["events"][0]["event_type"] == "admin_skill_candidate_generated"
     assert audit_response.json()["events"][0]["payload"] == {
@@ -1857,6 +1932,65 @@ def test_admin_can_list_training_skill_review_audit_events(tmp_path, monkeypatch
     }
     assert all(event["student_id"] == "admin@example.test" for event in events)
     assert all(event["payload"]["reviewer_email"] == "admin@example.test" for event in events)
+    assert response.json()["pagination"] == {"limit": 2, "offset": 0, "total": 2}
+
+
+def test_admin_can_paginate_and_filter_training_skill_review_audit_events(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    for candidate_id, trigger_item_id, title in [
+        ("skill_candidate_reasoning_core", "reasoning_core", "临床推理链纠偏提示"),
+        ("skill_candidate_history_gap", "history_gap", "问诊漏项提醒"),
+    ]:
+        candidate_store.save_candidate(
+            {
+                "candidate_id": candidate_id,
+                "trigger_item_id": trigger_item_id,
+                "title": title,
+                "status": "draft",
+                "source_report_count": 2,
+                "support_count": 2,
+            },
+            {
+                "candidate_id": candidate_id,
+                "status": "ready_for_review",
+                "regression_passed": True,
+                "evaluation_total_cases": 2,
+                "evaluation_passed_cases": 2,
+                "evaluation_failed_cases": 0,
+                "blocking_failures": [],
+            },
+        )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    event_store.append_event(
+        session_id="skill_candidate_reasoning_core",
+        case_id="reasoning_core",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_approved",
+        payload={"candidate_id": "skill_candidate_reasoning_core", "reviewer_email": "admin@example.test"},
+    )
+    event_store.append_event(
+        session_id="skill_candidate_history_gap",
+        case_id="history_gap",
+        student_id="admin@example.test",
+        event_type="admin_skill_candidate_rejected",
+        payload={"candidate_id": "skill_candidate_history_gap", "reviewer_email": "admin@example.test"},
+    )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        paged_response = client.get("/api/admin/evolution/events?limit=1&offset=1")
+        filtered_response = client.get("/api/admin/evolution/events", params={"q": "reasoning_core", "limit": 5})
+
+    assert paged_response.status_code == 200
+    paged_payload = paged_response.json()
+    assert len(paged_payload["events"]) == 1
+    assert paged_payload["pagination"] == {"limit": 1, "offset": 1, "total": 2}
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert [event["session_id"] for event in filtered_payload["events"]] == ["skill_candidate_reasoning_core"]
+    assert filtered_payload["pagination"] == {"limit": 5, "offset": 0, "total": 1}
 
 
 def test_admin_can_list_training_skill_candidate_audit_events(tmp_path, monkeypatch) -> None:

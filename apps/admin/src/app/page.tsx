@@ -412,6 +412,7 @@ type AdminReportsResponse = Readonly<{
 
 type EvaluationListResponse = Readonly<{
   evaluations: readonly EvaluationBatchSummary[];
+  pagination: AdminPagination;
 }>;
 
 type EvaluationDetailResponse = Readonly<{
@@ -432,6 +433,7 @@ type AdminSkillEffectsResponse = Readonly<{
 
 type CandidateListResponse = Readonly<{
   candidates: readonly TrainingSkillCandidateSummary[];
+  pagination: AdminPagination;
 }>;
 
 type TrainingSkillCandidateGenerationResponse = Readonly<{
@@ -456,6 +458,7 @@ type CandidateAuditEventsResponse = Readonly<{
 
 type AdminAuditEventsResponse = Readonly<{
   events: readonly TrainingEventRecord[];
+  pagination: AdminPagination;
 }>;
 
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
@@ -700,11 +703,11 @@ async function getTrainingSkillEffects(): Promise<TrainingSkillEffectSummary> {
   return payload.skill_effects;
 }
 
-async function getAdminEvaluations(): Promise<readonly EvaluationBatchSummary[]> {
-  const response = await fetch("/api/admin/evaluations", { method: "GET" });
+async function getAdminEvaluations(query: AdminListQuery): Promise<EvaluationListResponse> {
+  const response = await fetch(`/api/admin/evaluations?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取系统评测");
   const payload = (await response.json()) as EvaluationListResponse;
-  return payload.evaluations;
+  return payload;
 }
 
 async function getAdminEvaluation(batchId: string): Promise<EvaluationBatchDetail> {
@@ -725,11 +728,11 @@ async function runAdminEvaluation(batchId: string): Promise<EvaluationBatchDetai
   return payload.evaluation;
 }
 
-async function getTrainingSkillCandidates(): Promise<readonly TrainingSkillCandidateSummary[]> {
-  const response = await fetch("/api/admin/evolution/candidates", { method: "GET" });
+async function getTrainingSkillCandidates(query: AdminListQuery): Promise<CandidateListResponse> {
+  const response = await fetch(`/api/admin/evolution/candidates?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取候选 Skill");
   const payload = (await response.json()) as CandidateListResponse;
-  return payload.candidates;
+  return payload;
 }
 
 async function generateTrainingSkillCandidates(): Promise<TrainingSkillCandidateGenerationResponse> {
@@ -752,11 +755,11 @@ async function getTrainingSkillCandidateEvents(candidateId: string): Promise<rea
   return payload.events;
 }
 
-async function getAdminAuditEvents(): Promise<readonly TrainingEventRecord[]> {
-  const response = await fetch("/api/admin/evolution/events", { method: "GET" });
+async function getAdminAuditEvents(query: AdminListQuery): Promise<AdminAuditEventsResponse> {
+  const response = await fetch(`/api/admin/evolution/events?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取独立审核审计日志");
   const payload = (await response.json()) as AdminAuditEventsResponse;
-  return payload.events;
+  return payload;
 }
 
 async function approveTrainingSkillCandidate(candidateId: string): Promise<void> {
@@ -977,10 +980,12 @@ export default function AdminDashboardPage() {
   const [insights, setInsights] = useState<AdminTrainingInsights | null>(null);
   const [skillEffects, setSkillEffects] = useState<TrainingSkillEffectSummary | null>(null);
   const [evaluations, setEvaluations] = useState<readonly EvaluationBatchSummary[]>([]);
+  const [evaluationPagination, setEvaluationPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedEvaluation, setSelectedEvaluation] = useState<EvaluationBatchDetail | null>(null);
   const [isRunningEvaluation, setIsRunningEvaluation] = useState(false);
   const [isGeneratingCandidates, setIsGeneratingCandidates] = useState(false);
   const [candidates, setCandidates] = useState<readonly TrainingSkillCandidateSummary[]>([]);
+  const [candidatePagination, setCandidatePagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedCandidate, setSelectedCandidate] = useState<TrainingSkillCandidateDetail | null>(null);
   const [caseSearchText, setCaseSearchText] = useState("");
   const [caseImportJsonText, setCaseImportJsonText] = useState("");
@@ -990,9 +995,12 @@ export default function AdminDashboardPage() {
   const [isCaseImportBusy, setIsCaseImportBusy] = useState(false);
   const [sessionSearchText, setSessionSearchText] = useState("");
   const [reportSearchText, setReportSearchText] = useState("");
+  const [evaluationSearchText, setEvaluationSearchText] = useState("");
   const [candidateSearchText, setCandidateSearchText] = useState("");
+  const [auditSearchText, setAuditSearchText] = useState("");
   const [candidateAuditEvents, setCandidateAuditEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [auditEvents, setAuditEvents] = useState<readonly TrainingEventRecord[]>([]);
+  const [auditPagination, setAuditPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [sessionIdInput, setSessionIdInput] = useState("");
   const [trainingEvents, setTrainingEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [statusText, setStatusText] = useState("正在读取管理后台数据...");
@@ -1015,25 +1023,13 @@ export default function AdminDashboardPage() {
       caseSearchText,
     ),
   );
-  const filteredCandidates = candidates.filter((candidate) =>
-    includesSearchText(
-      [
-        candidate.candidate_id,
-        candidate.trigger_item_id,
-        candidate.title,
-        candidate.status,
-        candidate.regression_passed ? "回归通过" : "回归阻塞",
-      ].join(" "),
-      candidateSearchText,
-    ),
-  );
   const currentCaseImportPayloadKey = getAdminCaseImportPayloadKey(caseImportJsonText, rubricImportJsonText);
   const canImportCasePayload = validatedCaseImport?.payloadKey === currentCaseImportPayloadKey && validatedCaseImport.result.valid && !isCaseImportBusy;
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
+    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminModelConfig(),
@@ -1041,9 +1037,9 @@ export default function AdminDashboardPage() {
       getAdminReports(initialListQuery),
       getAdminInsights(),
       getTrainingSkillEffects(),
-      getAdminEvaluations(),
-      getTrainingSkillCandidates(),
-      getAdminAuditEvents(),
+      getAdminEvaluations(initialListQuery),
+      getTrainingSkillCandidates(initialListQuery),
+      getAdminAuditEvents(initialListQuery),
     ]);
     setCases(nextCases);
     setSources(nextSources);
@@ -1054,9 +1050,12 @@ export default function AdminDashboardPage() {
     setReportPagination(nextReportPage.pagination);
     setInsights(nextInsights);
     setSkillEffects(nextSkillEffects);
-    setEvaluations(nextEvaluations);
-    setCandidates(nextCandidates);
-    setAuditEvents(nextAuditEvents);
+    setEvaluations(nextEvaluationPage.evaluations);
+    setEvaluationPagination(nextEvaluationPage.pagination);
+    setCandidates(nextCandidatePage.candidates);
+    setCandidatePagination(nextCandidatePage.pagination);
+    setAuditEvents(nextAuditPage.events);
+    setAuditPagination(nextAuditPage.pagination);
     setStatusText("已读取管理后台数据。");
     if (nextCases[0]) {
       const firstCaseRaw = await getAdminCaseRaw(nextCases[0].case_id);
@@ -1074,11 +1073,11 @@ export default function AdminDashboardPage() {
       setSelectedSessionId(nextSessionPage.sessions[0].session_id);
       setSessionIdInput(nextSessionPage.sessions[0].session_id);
     }
-    if (nextEvaluations[0]) {
-      setSelectedEvaluation(await getAdminEvaluation(nextEvaluations[0].batch_id));
+    if (nextEvaluationPage.evaluations[0]) {
+      setSelectedEvaluation(await getAdminEvaluation(nextEvaluationPage.evaluations[0].batch_id));
     }
-    if (nextCandidates[0]) {
-      const candidateId = nextCandidates[0].candidate_id;
+    if (nextCandidatePage.candidates[0]) {
+      const candidateId = nextCandidatePage.candidates[0].candidate_id;
       setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
       setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
     }
@@ -1321,6 +1320,74 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function refreshAdminEvaluations(offset: number) {
+    try {
+      const nextEvaluationPage = await getAdminEvaluations({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: evaluationSearchText,
+      });
+      setEvaluations(nextEvaluationPage.evaluations);
+      setEvaluationPagination(nextEvaluationPage.pagination);
+      if (nextEvaluationPage.evaluations.length > 0 && !nextEvaluationPage.evaluations.some((evaluation) => evaluation.batch_id === selectedEvaluation?.batch_id)) {
+        setSelectedEvaluation(await getAdminEvaluation(nextEvaluationPage.evaluations[0].batch_id));
+      }
+      setStatusText("已按服务端筛选刷新系统评测。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
+  }
+
+  async function refreshAdminCandidates(offset: number) {
+    try {
+      const nextCandidatePage = await getTrainingSkillCandidates({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: candidateSearchText,
+      });
+      setCandidates(nextCandidatePage.candidates);
+      setCandidatePagination(nextCandidatePage.pagination);
+      if (nextCandidatePage.candidates.length > 0 && !nextCandidatePage.candidates.some((candidate) => candidate.candidate_id === selectedCandidate?.candidate_id)) {
+        const candidateId = nextCandidatePage.candidates[0].candidate_id;
+        setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
+        setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
+      }
+      setStatusText("已按服务端筛选刷新候选 Skill。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
+  }
+
+  async function refreshAdminAuditEvents(offset: number) {
+    try {
+      const nextAuditPage = await getAdminAuditEvents({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: auditSearchText,
+      });
+      setAuditEvents(nextAuditPage.events);
+      setAuditPagination(nextAuditPage.pagination);
+      setStatusText("已按服务端筛选刷新审核审计日志。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
+  }
+
   async function handleLoadSessionEvents() {
     const sessionId = sessionIdInput.trim();
     if (!sessionId) {
@@ -1353,7 +1420,9 @@ export default function AdminDashboardPage() {
     setStatusText("正在运行系统评测...");
     try {
       const evaluation = await runAdminEvaluation(batchId);
-      setEvaluations(await getAdminEvaluations());
+      const nextEvaluationPage = await getAdminEvaluations({ limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: evaluationSearchText });
+      setEvaluations(nextEvaluationPage.evaluations);
+      setEvaluationPagination(nextEvaluationPage.pagination);
       setSelectedEvaluation(evaluation);
       setStatusText(`系统评测已完成：${evaluation.passed_cases}/${evaluation.total_cases} 通过。`);
     } catch (error: unknown) {
@@ -1373,20 +1442,24 @@ export default function AdminDashboardPage() {
     setStatusText("正在从训练日志生成候选 Skill...");
     try {
       const result = await generateTrainingSkillCandidates();
-      const [nextInsights, nextSkillEffects, nextCandidates, nextEvaluations, nextAuditEvents] = await Promise.all([
+      const listQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
+      const [nextInsights, nextSkillEffects, nextCandidatePage, nextEvaluationPage, nextAuditPage] = await Promise.all([
         getAdminInsights(),
         getTrainingSkillEffects(),
-        getTrainingSkillCandidates(),
-        getAdminEvaluations(),
-        getAdminAuditEvents(),
+        getTrainingSkillCandidates({ ...listQuery, q: candidateSearchText }),
+        getAdminEvaluations({ ...listQuery, q: evaluationSearchText }),
+        getAdminAuditEvents({ ...listQuery, q: auditSearchText }),
       ]);
       setInsights(nextInsights);
       setSkillEffects(nextSkillEffects);
-      setCandidates(nextCandidates);
-      setEvaluations(nextEvaluations);
-      setAuditEvents(nextAuditEvents);
-      if (nextCandidates[0]) {
-        const candidateId = nextCandidates[0].candidate_id;
+      setCandidates(nextCandidatePage.candidates);
+      setCandidatePagination(nextCandidatePage.pagination);
+      setEvaluations(nextEvaluationPage.evaluations);
+      setEvaluationPagination(nextEvaluationPage.pagination);
+      setAuditEvents(nextAuditPage.events);
+      setAuditPagination(nextAuditPage.pagination);
+      if (nextCandidatePage.candidates[0]) {
+        const candidateId = nextCandidatePage.candidates[0].candidate_id;
         setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
         setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
       } else {
@@ -1424,13 +1497,15 @@ export default function AdminDashboardPage() {
     } else {
       await rejectTrainingSkillCandidate(selectedCandidate.candidate_id);
     }
-    const [nextCandidates, nextAuditEvents, nextSkillEffects] = await Promise.all([
-      getTrainingSkillCandidates(),
-      getAdminAuditEvents(),
+    const [nextCandidatePage, nextAuditPage, nextSkillEffects] = await Promise.all([
+      getTrainingSkillCandidates({ limit: ADMIN_LIST_PAGE_SIZE, offset: candidatePagination.offset, q: candidateSearchText }),
+      getAdminAuditEvents({ limit: ADMIN_LIST_PAGE_SIZE, offset: auditPagination.offset, q: auditSearchText }),
       getTrainingSkillEffects(),
     ]);
-    setCandidates(nextCandidates);
-    setAuditEvents(nextAuditEvents);
+    setCandidates(nextCandidatePage.candidates);
+    setCandidatePagination(nextCandidatePage.pagination);
+    setAuditEvents(nextAuditPage.events);
+    setAuditPagination(nextAuditPage.pagination);
     setSkillEffects(nextSkillEffects);
     setSelectedCandidate(await getTrainingSkillCandidate(selectedCandidate.candidate_id));
     setCandidateAuditEvents(await getTrainingSkillCandidateEvents(selectedCandidate.candidate_id));
@@ -2239,6 +2314,44 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
               </article>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label="筛选评测批次"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setEvaluationSearchText(event.target.value)}
+                  placeholder="筛选评测批次"
+                  type="search"
+                  value={evaluationSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                  onClick={() => void refreshAdminEvaluations(0)}
+                  type="button"
+                >
+                  评测筛选
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6F6257]">
+                <span>{formatAdminPaginationRange(evaluationPagination, evaluations.length)}</span>
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={evaluationPagination.offset <= 0}
+                    onClick={() => void refreshAdminEvaluations(getPreviousAdminPageOffset(evaluationPagination))}
+                    type="button"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasNextAdminPage(evaluationPagination, evaluations.length)}
+                    onClick={() => void refreshAdminEvaluations(getNextAdminPageOffset(evaluationPagination))}
+                    type="button"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
               <div className="mt-4 grid gap-2">
                 {evaluations.length > 0 ? (
                   evaluations.map((evaluation) => (
@@ -2255,7 +2368,7 @@ export default function AdminDashboardPage() {
                     </button>
                   ))
                 ) : (
-                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">暂无系统评测批次。</p>
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">没有匹配的系统评测。请调整服务端筛选条件。</p>
                 )}
               </div>
               {selectedEvaluation ? (
@@ -2314,8 +2427,46 @@ export default function AdminDashboardPage() {
                   <h2 className="mt-1 text-xl font-semibold">独立审核审计日志</h2>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
-                  {auditEvents.length} 条事件
+                  {formatAdminPaginationRange(auditPagination, auditEvents.length)} 条事件
                 </p>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label="筛选审计事件"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setAuditSearchText(event.target.value)}
+                  placeholder="筛选审计事件"
+                  type="search"
+                  value={auditSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                  onClick={() => void refreshAdminAuditEvents(0)}
+                  type="button"
+                >
+                  审计筛选
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6F6257]">
+                <span>{formatAdminPaginationRange(auditPagination, auditEvents.length)}</span>
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={auditPagination.offset <= 0}
+                    onClick={() => void refreshAdminAuditEvents(getPreviousAdminPageOffset(auditPagination))}
+                    type="button"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasNextAdminPage(auditPagination, auditEvents.length)}
+                    onClick={() => void refreshAdminAuditEvents(getNextAdminPageOffset(auditPagination))}
+                    type="button"
+                  >
+                    下一页
+                  </button>
+                </div>
               </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {auditEvents.length > 0 ? (
@@ -2332,7 +2483,7 @@ export default function AdminDashboardPage() {
                     </article>
                   ))
                 ) : (
-                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">暂无独立审核审计日志。</p>
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">没有匹配的审计事件。请调整服务端筛选条件。</p>
                 )}
               </div>
             </section>
@@ -2391,21 +2542,51 @@ export default function AdminDashboardPage() {
                     {isGeneratingCandidates ? "生成中" : "从训练日志生成候选 Skill"}
                   </button>
                   <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
-                    {filteredCandidates.length}/{candidates.length} 个候选
+                    {formatAdminPaginationRange(candidatePagination, candidates.length)} 个候选
                   </p>
                 </div>
               </div>
-              <input
-                aria-label="筛选候选 Skill"
-                className="mt-4 w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
-                onChange={(event) => setCandidateSearchText(event.target.value)}
-                placeholder="筛选候选 Skill"
-                type="search"
-                value={candidateSearchText}
-              />
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label="筛选候选 Skill"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setCandidateSearchText(event.target.value)}
+                  placeholder="筛选候选 Skill"
+                  type="search"
+                  value={candidateSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                  onClick={() => void refreshAdminCandidates(0)}
+                  type="button"
+                >
+                  候选筛选
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6F6257]">
+                <span>{formatAdminPaginationRange(candidatePagination, candidates.length)}</span>
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={candidatePagination.offset <= 0}
+                    onClick={() => void refreshAdminCandidates(getPreviousAdminPageOffset(candidatePagination))}
+                    type="button"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 font-medium whitespace-nowrap transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasNextAdminPage(candidatePagination, candidates.length)}
+                    onClick={() => void refreshAdminCandidates(getNextAdminPageOffset(candidatePagination))}
+                    type="button"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
               <div className="mt-4 grid gap-2">
-                {filteredCandidates.length > 0 ? (
-                  filteredCandidates.map((candidate) => (
+                {candidates.length > 0 ? (
+                  candidates.map((candidate) => (
                     <button
                       className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-left transition hover:border-[#AE5630]"
                       key={candidate.candidate_id}
@@ -2422,7 +2603,7 @@ export default function AdminDashboardPage() {
                     </button>
                   ))
                 ) : (
-                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{candidates.length > 0 ? "没有匹配的候选 Skill。" : "暂无候选 Skill。"}</p>
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">没有匹配的候选 Skill。请调整服务端筛选条件。</p>
                 )}
               </div>
               {selectedCandidate ? (
