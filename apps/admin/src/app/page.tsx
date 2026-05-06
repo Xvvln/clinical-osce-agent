@@ -293,8 +293,21 @@ type AuthUser = Readonly<{
   created_at: string;
 }>;
 
+type AdminPagination = Readonly<{
+  limit: number;
+  offset: number;
+  total: number;
+}>;
+
+type AdminListQuery = Readonly<{
+  limit: number;
+  offset: number;
+  q: string;
+}>;
+
 type AdminSessionsResponse = Readonly<{
   sessions: readonly AdminSessionSummary[];
+  pagination: AdminPagination;
 }>;
 
 type AdminCasesResponse = Readonly<{
@@ -354,6 +367,7 @@ type AdminSessionReportResponse = Readonly<{
 
 type AdminReportsResponse = Readonly<{
   reports: readonly AdminSessionReport[];
+  pagination: AdminPagination;
 }>;
 
 type EvaluationListResponse = Readonly<{
@@ -409,6 +423,8 @@ const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使�
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
 const DEMO_ADMIN_EMAIL = "admin-demo@example.test";
 const DEMO_ADMIN_PASSWORD = "safe-admin-password";
+const ADMIN_LIST_PAGE_SIZE = 20;
+const EMPTY_ADMIN_PAGINATION: AdminPagination = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, total: 0 };
 
 class AdminApiError extends Error {
   readonly status: number;
@@ -536,11 +552,22 @@ async function importAdminCasePayload(payload: AdminCaseImportPayload): Promise<
   return (await response.json()) as AdminCaseImportResponse;
 }
 
-async function getAdminSessions(): Promise<readonly AdminSessionSummary[]> {
-  const response = await fetch("/api/admin/sessions", { method: "GET" });
+function buildAdminListSearchParams(query: AdminListQuery): string {
+  const searchParams = new URLSearchParams();
+  searchParams.set("limit", String(query.limit));
+  searchParams.set("offset", String(query.offset));
+  const trimmedQuery = query.q.trim();
+  if (trimmedQuery) {
+    searchParams.set("q", trimmedQuery);
+  }
+  return searchParams.toString();
+}
+
+async function getAdminSessions(query: AdminListQuery): Promise<AdminSessionsResponse> {
+  const response = await fetch(`/api/admin/sessions?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取训练 Session");
   const payload = (await response.json()) as AdminSessionsResponse;
-  return payload.sessions;
+  return payload;
 }
 
 async function getAdminSessionReport(sessionId: string): Promise<AdminSessionReport> {
@@ -550,11 +577,11 @@ async function getAdminSessionReport(sessionId: string): Promise<AdminSessionRep
   return payload.report;
 }
 
-async function getAdminReports(): Promise<readonly AdminSessionReport[]> {
-  const response = await fetch("/api/admin/reports", { method: "GET" });
+async function getAdminReports(query: AdminListQuery): Promise<AdminReportsResponse> {
+  const response = await fetch(`/api/admin/reports?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取跨 Session 报告列表");
   const payload = (await response.json()) as AdminReportsResponse;
-  return payload.reports;
+  return payload;
 }
 
 async function getAdminSessionEvents(sessionId: string): Promise<readonly TrainingEventRecord[]> {
@@ -770,6 +797,27 @@ function includesSearchText(searchSource: string, searchText: string): boolean {
   return !normalizedSearchText || searchSource.toLowerCase().includes(normalizedSearchText);
 }
 
+function formatAdminPaginationRange(pagination: AdminPagination, itemCount: number): string {
+  if (pagination.total <= 0 || itemCount <= 0) {
+    return `0 / ${pagination.total}`;
+  }
+  const start = pagination.offset + 1;
+  const end = Math.min(pagination.offset + itemCount, pagination.total);
+  return `${start}-${end} / ${pagination.total}`;
+}
+
+function getPreviousAdminPageOffset(pagination: AdminPagination): number {
+  return Math.max(pagination.offset - pagination.limit, 0);
+}
+
+function getNextAdminPageOffset(pagination: AdminPagination): number {
+  return pagination.offset + pagination.limit;
+}
+
+function hasNextAdminPage(pagination: AdminPagination, itemCount: number): boolean {
+  return pagination.offset + itemCount < pagination.total;
+}
+
 export default function AdminDashboardPage() {
   const [cases, setCases] = useState<readonly AdminCaseSummary[]>([]);
   const [selectedCaseRaw, setSelectedCaseRaw] = useState<AdminCaseRaw | null>(null);
@@ -777,9 +825,11 @@ export default function AdminDashboardPage() {
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
   const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
   const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>([]);
+  const [sessionPagination, setSessionPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedReport, setSelectedReport] = useState<AdminSessionReport | null>(null);
   const [reports, setReports] = useState<readonly AdminSessionReport[]>([]);
+  const [reportPagination, setReportPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [insights, setInsights] = useState<AdminTrainingInsights | null>(null);
   const [skillEffects, setSkillEffects] = useState<TrainingSkillEffectSummary | null>(null);
   const [evaluations, setEvaluations] = useState<readonly EvaluationBatchSummary[]>([]);
@@ -821,27 +871,6 @@ export default function AdminDashboardPage() {
       caseSearchText,
     ),
   );
-  const filteredSessions = sessions.filter((session) =>
-    includesSearchText(
-      [session.session_id, session.student_id, session.case_id, session.stage, session.updated_at].join(" "),
-      sessionSearchText,
-    ),
-  );
-  const filteredReports = reports.filter((report) =>
-    includesSearchText(
-      [
-        report.report_id,
-        report.session_id,
-        report.case_id,
-        report.student_id,
-        String(report.total_score),
-        ...report.missed_items,
-        ...report.knowledge_recommendations.map((recommendation) => recommendation.title),
-        ...getReportSourceReferenceItems(report).flatMap((item) => [item.title, item.reference]),
-      ].join(" "),
-      reportSearchText,
-    ),
-  );
   const filteredCandidates = candidates.filter((candidate) =>
     includesSearchText(
       [
@@ -859,12 +888,13 @@ export default function AdminDashboardPage() {
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
 
   async function loadDashboard() {
-    const [nextCases, nextSources, nextModelConfig, nextSessions, nextReports, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
+    const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
+    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextSkillEffects, nextEvaluations, nextCandidates, nextAuditEvents] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminModelConfig(),
-      getAdminSessions(),
-      getAdminReports(),
+      getAdminSessions(initialListQuery),
+      getAdminReports(initialListQuery),
       getAdminInsights(),
       getTrainingSkillEffects(),
       getAdminEvaluations(),
@@ -874,8 +904,10 @@ export default function AdminDashboardPage() {
     setCases(nextCases);
     setSources(nextSources);
     setModelConfig(nextModelConfig);
-    setSessions(nextSessions);
-    setReports(nextReports);
+    setSessions(nextSessionPage.sessions);
+    setSessionPagination(nextSessionPage.pagination);
+    setReports(nextReportPage.reports);
+    setReportPagination(nextReportPage.pagination);
     setInsights(nextInsights);
     setSkillEffects(nextSkillEffects);
     setEvaluations(nextEvaluations);
@@ -887,13 +919,13 @@ export default function AdminDashboardPage() {
       setSelectedCaseRaw(firstCaseRaw);
       setSelectedRubric(await getAdminRubric(firstCaseRaw.rubric_ref.rubric_id));
     }
-    if (nextReports[0]) {
-      setSelectedReport(nextReports[0]);
-      setSelectedSessionId(nextReports[0].session_id);
-      setSessionIdInput(nextReports[0].session_id);
-    } else if (nextSessions[0]) {
-      setSelectedSessionId(nextSessions[0].session_id);
-      setSessionIdInput(nextSessions[0].session_id);
+    if (nextReportPage.reports[0]) {
+      setSelectedReport(nextReportPage.reports[0]);
+      setSelectedSessionId(nextReportPage.reports[0].session_id);
+      setSessionIdInput(nextReportPage.reports[0].session_id);
+    } else if (nextSessionPage.sessions[0]) {
+      setSelectedSessionId(nextSessionPage.sessions[0].session_id);
+      setSessionIdInput(nextSessionPage.sessions[0].session_id);
     }
     if (nextEvaluations[0]) {
       setSelectedEvaluation(await getAdminEvaluation(nextEvaluations[0].batch_id));
@@ -1030,6 +1062,49 @@ export default function AdminDashboardPage() {
     setSelectedSessionId(report.session_id);
     setSessionIdInput(report.session_id);
     setStatusText("已选择跨 Session 评分报告。");
+  }
+
+  async function refreshAdminSessions(offset: number) {
+    try {
+      const nextSessionPage = await getAdminSessions({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: sessionSearchText,
+      });
+      setSessions(nextSessionPage.sessions);
+      setSessionPagination(nextSessionPage.pagination);
+      setStatusText("已按服务端筛选刷新训练 Session。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
+  }
+
+  async function refreshAdminReports(offset: number) {
+    try {
+      const nextReportPage = await getAdminReports({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: reportSearchText,
+      });
+      setReports(nextReportPage.reports);
+      setReportPagination(nextReportPage.pagination);
+      if (nextReportPage.reports.length > 0 && !nextReportPage.reports.some((report) => report.report_id === selectedReport?.report_id)) {
+        handleSelectReport(nextReportPage.reports[0]);
+      }
+      setStatusText("已按服务端筛选刷新评分报告。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
   }
 
   async function handleLoadSessionEvents() {
@@ -1495,17 +1570,47 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
               </div>
-              <input
-                aria-label="筛选训练 Session"
-                className="mt-4 w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
-                onChange={(event) => setSessionSearchText(event.target.value)}
-                placeholder="筛选 session / 用户 / 状态"
-                type="search"
-                value={sessionSearchText}
-              />
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <input
+                  aria-label="筛选训练 Session"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setSessionSearchText(event.target.value)}
+                  placeholder="筛选 session / 用户 / 状态"
+                  type="search"
+                  value={sessionSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
+                  onClick={() => void refreshAdminSessions(0)}
+                  type="button"
+                >
+                  Session 筛选
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#8A7D6F]">
+                <p>服务端分页：{formatAdminPaginationRange(sessionPagination, sessions.length)}</p>
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={sessionPagination.offset <= 0}
+                    onClick={() => void refreshAdminSessions(getPreviousAdminPageOffset(sessionPagination))}
+                    type="button"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasNextAdminPage(sessionPagination, sessions.length)}
+                    onClick={() => void refreshAdminSessions(getNextAdminPageOffset(sessionPagination))}
+                    type="button"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
-                {filteredSessions.length > 0 ? (
-                  filteredSessions.map((session) => (
+                {sessions.length > 0 ? (
+                  sessions.map((session) => (
                     <button
                       className={`rounded-xl border p-3 text-left transition ${
                         selectedSessionId === session.session_id
@@ -1524,7 +1629,7 @@ export default function AdminDashboardPage() {
                     </button>
                   ))
                 ) : (
-                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{sessions.length > 0 ? "没有匹配的训练 Session。" : "暂无训练 Session。"}</p>
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{sessionSearchText.trim() ? "没有匹配的训练 Session。请调整服务端筛选条件。" : "暂无训练 Session。"}</p>
                 )}
               </div>
             </section>
@@ -1536,20 +1641,47 @@ export default function AdminDashboardPage() {
                   <h2 className="mt-1 text-xl font-semibold">跨 Session 报告列表</h2>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
-                  {filteredReports.length}/{reports.length} 份报告
+                  {formatAdminPaginationRange(reportPagination, reports.length)} 份报告
                 </p>
               </div>
-              <input
-                aria-label="筛选评分报告"
-                className="mt-4 w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
-                onChange={(event) => setReportSearchText(event.target.value)}
-                placeholder="筛选报告 / 病例 / 学员"
-                type="search"
-                value={reportSearchText}
-              />
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <input
+                  aria-label="筛选评分报告"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setReportSearchText(event.target.value)}
+                  placeholder="筛选报告 / 病例 / 学员"
+                  type="search"
+                  value={reportSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
+                  onClick={() => void refreshAdminReports(0)}
+                  type="button"
+                >
+                  报告筛选
+                </button>
+              </div>
+              <div className="mt-3 flex justify-end gap-2 text-xs">
+                <button
+                  className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={reportPagination.offset <= 0}
+                  onClick={() => void refreshAdminReports(getPreviousAdminPageOffset(reportPagination))}
+                  type="button"
+                >
+                  上一页
+                </button>
+                <button
+                  className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!hasNextAdminPage(reportPagination, reports.length)}
+                  onClick={() => void refreshAdminReports(getNextAdminPageOffset(reportPagination))}
+                  type="button"
+                >
+                  下一页
+                </button>
+              </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
-                {filteredReports.length > 0 ? (
-                  filteredReports.map((report) => (
+                {reports.length > 0 ? (
+                  reports.map((report) => (
                     <button
                       className={`rounded-xl border p-3 text-left transition ${
                         selectedReport?.report_id === report.report_id
@@ -1568,7 +1700,7 @@ export default function AdminDashboardPage() {
                     </button>
                   ))
                 ) : (
-                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{reports.length > 0 ? "没有匹配的评分报告。" : "暂无评分报告。"}</p>
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{reportSearchText.trim() ? "没有匹配的评分报告。请调整服务端筛选条件。" : "暂无评分报告。"}</p>
                 )}
               </div>
             </section>

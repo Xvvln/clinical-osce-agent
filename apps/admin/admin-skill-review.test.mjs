@@ -50,8 +50,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingEventRecord = Readonly<\{/);
-  assert.match(adminPageSource, /fetch\("\/api\/admin\/sessions"/);
-  assert.match(adminPageSource, /fetch\("\/api\/admin\/reports"/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\?\$\{buildAdminListSearchParams\(query\)\}`/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/reports\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/report`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/events`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/insights"/);
@@ -71,7 +71,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /评分报告/);
   assert.match(adminPageSource, /跨 Session 报告列表/);
   assert.match(adminPageSource, /reports\.length > 0/);
-  assert.match(adminPageSource, /setReports\(nextReports\)/);
+  assert.match(adminPageSource, /setReports\(nextReportPage\.reports\)/);
   assert.match(adminPageSource, /错误模式统计/);
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /学习建议/);
@@ -248,30 +248,47 @@ test("admin dashboard can validate and import case rubric payloads", () => {
   assert.match(adminPageSource, /valid=false/);
 });
 
-test("admin dashboard filters long management lists locally", () => {
+test("admin dashboard filters cases and candidates locally while sessions and reports use server pagination", () => {
+  assert.match(adminPageSource, /type AdminPagination = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminListQuery = Readonly<\{/);
+  assert.match(adminPageSource, /const ADMIN_LIST_PAGE_SIZE = 20/);
+  assert.match(adminPageSource, /function buildAdminListSearchParams\(query: AdminListQuery\): string/);
+  assert.match(adminPageSource, /async function getAdminSessions\(query: AdminListQuery\): Promise<AdminSessionsResponse>/);
+  assert.match(adminPageSource, /async function getAdminReports\(query: AdminListQuery\): Promise<AdminReportsResponse>/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\?\$\{buildAdminListSearchParams\(query\)\}`/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/reports\?\$\{buildAdminListSearchParams\(query\)\}`/);
+  assert.match(adminPageSource, /pagination: AdminPagination/);
+  assert.match(adminPageSource, /const \[sessionPagination, setSessionPagination\] = useState<AdminPagination>/);
+  assert.match(adminPageSource, /const \[reportPagination, setReportPagination\] = useState<AdminPagination>/);
   assert.match(adminPageSource, /const \[caseSearchText, setCaseSearchText\] = useState\(""\)/);
   assert.match(adminPageSource, /const \[sessionSearchText, setSessionSearchText\] = useState\(""\)/);
   assert.match(adminPageSource, /const \[reportSearchText, setReportSearchText\] = useState\(""\)/);
   assert.match(adminPageSource, /const \[candidateSearchText, setCandidateSearchText\] = useState\(""\)/);
   assert.match(adminPageSource, /const filteredCases = cases\.filter/);
-  assert.match(adminPageSource, /const filteredSessions = sessions\.filter/);
-  assert.match(adminPageSource, /const filteredReports = reports\.filter/);
   assert.match(adminPageSource, /const filteredCandidates = candidates\.filter/);
+  assert.doesNotMatch(adminPageSource, /const filteredSessions = sessions\.filter/);
+  assert.doesNotMatch(adminPageSource, /const filteredReports = reports\.filter/);
+  assert.match(adminPageSource, /async function refreshAdminSessions\(offset: number\)/);
+  assert.match(adminPageSource, /async function refreshAdminReports\(offset: number\)/);
+  assert.match(adminPageSource, /onClick=\{\(\) => void refreshAdminSessions\(0\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => void refreshAdminReports\(0\)\}/);
+  assert.match(adminPageSource, /上一页/);
+  assert.match(adminPageSource, /下一页/);
+  assert.match(adminPageSource, /Session 筛选/);
+  assert.match(adminPageSource, /报告筛选/);
   assert.match(adminPageSource, /placeholder="筛选病例 \/ 主诉"/);
   assert.match(adminPageSource, /placeholder="筛选 session \/ 用户 \/ 状态"/);
   assert.match(adminPageSource, /placeholder="筛选报告 \/ 病例 \/ 学员"/);
   assert.match(adminPageSource, /placeholder="筛选候选 Skill"/);
   assert.match(adminPageSource, /filteredCases\.length > 0/);
-  assert.match(adminPageSource, /filteredSessions\.length > 0/);
-  assert.match(adminPageSource, /filteredReports\.length > 0/);
   assert.match(adminPageSource, /filteredCandidates\.length > 0/);
   assert.match(adminPageSource, /filteredCases\.map\(\(caseItem\) =>/);
-  assert.match(adminPageSource, /filteredSessions\.map\(\(session\) =>/);
-  assert.match(adminPageSource, /filteredReports\.map\(\(report\) =>/);
+  assert.match(adminPageSource, /sessions\.map\(\(session\) =>/);
+  assert.match(adminPageSource, /reports\.map\(\(report\) =>/);
   assert.match(adminPageSource, /filteredCandidates\.map\(\(candidate\) =>/);
   assert.match(adminPageSource, /没有匹配的病例台账。/);
-  assert.match(adminPageSource, /没有匹配的训练 Session。/);
-  assert.match(adminPageSource, /没有匹配的评分报告。/);
+  assert.match(adminPageSource, /没有匹配的训练 Session。请调整服务端筛选条件。/);
+  assert.match(adminPageSource, /没有匹配的评分报告。请调整服务端筛选条件。/);
   assert.match(adminPageSource, /没有匹配的候选 Skill。/);
 });
 
