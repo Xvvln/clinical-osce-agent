@@ -320,6 +320,7 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
                 "trigger_item_id": "reasoning_core",
                 "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
                 "support_count": 2,
+                "effect_status": "insufficient_samples",
             }
         ],
     }
@@ -594,6 +595,45 @@ def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_cas
 
     assert create_response.status_code == 200
     assert create_response.json()["evolution_candidates"] == []
+
+
+def test_create_session_respects_enabled_training_skill_stage_scope(tmp_path) -> None:
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = event_store
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_feedback_review",
+            "trigger_item_id": "training_pattern_reasoning_core",
+            "trigger_item_ids": ["reasoning_core"],
+            "case_ids": ["appendicitis_001"],
+            "title": "报告复盘阶段提示",
+            "description": "仅在报告复盘阶段提示学生复盘推理链。",
+            "suggested_strategy": "报告生成后再复盘推理链，不在开局直接注入。",
+            "source_report_count": 2,
+            "support_count": 2,
+            "stage_scope": ["feedback_review"],
+            "applies_when": {
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["feedback_review"],
+                "trigger_item_ids": ["reasoning_core"],
+                "current_missing_evidence": ["reasoning_core"],
+                "min_support_count": 2,
+            },
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    assert create_response.status_code == 200
+    assert create_response.json()["evolution_candidates"] == []
+    assert [event["event_type"] for event in business_events(event_store.list_session_events(session_id))] == [
+        "session_created"
+    ]
 
 
 def test_osce_session_returns_training_progress_map() -> None:
@@ -1202,6 +1242,9 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "skill_id": "skill_reasoning_core",
         "title": "临床推理链纠偏提示",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro"],
+        "effect_status": "insufficient_samples",
     }
     assert filtered_business_events[2]["payload"] == {
         "message": "什么时候开始疼的？",

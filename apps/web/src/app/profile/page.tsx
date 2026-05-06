@@ -23,6 +23,7 @@ type EnabledSkillSummary = Readonly<{
   trigger_item_id: string;
   suggested_strategy: string;
   support_count: number;
+  effect_status: string;
 }>;
 
 type SkillAccumulation = Readonly<{
@@ -270,11 +271,12 @@ export default function ProfilePage() {
                 <div className="mt-3 grid gap-2">
                   {profile.skillAccumulation.enabled_skills.map((skill) => (
                     <article className="rounded-xl border border-border bg-background p-3" key={skill.skill_id}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-semibold">{skill.title}</h3>
-                          <p className="mt-1 text-[11px] text-muted-foreground">触发项：{skill.trigger_item_id}</p>
-                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-semibold">{skill.title}</h3>
+                            <p className="mt-1 text-[11px] text-muted-foreground">触发项：{skill.trigger_item_id}</p>
+                            <p className="mt-1 text-[11px] text-muted-foreground">效果状态：{skill.effect_status}</p>
+                          </div>
                         <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
                           支持次数 {skill.support_count}
                         </span>

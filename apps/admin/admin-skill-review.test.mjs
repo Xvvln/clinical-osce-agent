@@ -45,6 +45,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
+  assert.match(adminPageSource, /skill_type: string;/);
+  assert.match(adminPageSource, /stage_scope: readonly string\[];/);
+  assert.match(adminPageSource, /applies_when: Readonly<Record<string, unknown>>;/);
+  assert.match(adminPageSource, /effect_status: string;/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTeachingFocusPattern = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
@@ -97,6 +101,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /event\.event_type === "agent_reflection_recorded"/);
   assert.match(adminPageSource, /候选 Skill 审核/);
   assert.match(adminPageSource, /Skill 效果统计/);
+  assert.match(adminPageSource, /模式类型/);
+  assert.match(adminPageSource, /适用阶段/);
+  assert.match(adminPageSource, /应用条件/);
+  assert.match(adminPageSource, /效果状态/);
+  assert.match(adminPageSource, /相关来源引用/);
   assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /模型 \/ API 配置/);
   assert.match(adminPageSource, /RAG 召回评测/);

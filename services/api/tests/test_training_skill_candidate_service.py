@@ -101,6 +101,16 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
         "trigger_item_id": "training_pattern_reasoning_core_rs_exclude",
         "trigger_item_ids": ["reasoning_core", "rs_exclude"],
         "case_ids": ["appendicitis_001", "pneumonia_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro", "diagnosis_submission"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
+            "case_ids": ["appendicitis_001", "pneumonia_001"],
+            "stage_scope": ["case_intro", "diagnosis_submission"],
+            "trigger_item_ids": ["reasoning_core", "rs_exclude"],
+            "current_missing_evidence": ["reasoning_core", "rs_exclude"],
+            "min_support_count": 2,
+        },
         "title": "LLM 生成的训练模式 Skill",
         "description": "基于多项高频漏项生成的训练级教学 Skill。",
         "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
@@ -422,6 +432,16 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
             "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
             "trigger_item_ids": ["rs_exclude", "reasoning_core"],
             "case_ids": ["appendicitis_001", "pneumonia_001"],
+            "skill_type": "reasoning_bridge",
+            "stage_scope": ["case_intro", "diagnosis_submission"],
+            "effect_status": "insufficient_samples",
+            "applies_when": {
+                "case_ids": ["appendicitis_001", "pneumonia_001"],
+                "stage_scope": ["case_intro", "diagnosis_submission"],
+                "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+                "current_missing_evidence": ["rs_exclude", "reasoning_core"],
+                "min_support_count": 3,
+            },
             "title": "OSCE 训练模式纠偏提示",
             "description": "3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。",
             "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
@@ -434,6 +454,46 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
             ],
         }
     ]
+
+
+def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_metadata(monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    candidates = TrainingSkillCandidateService().propose_candidates(
+        {
+            "session_count": 3,
+            "report_count": 3,
+            "frequent_missed_items": [
+                {"item_id": "reasoning_core", "count": 2, "case_ids": ["appendicitis_001"]},
+                {"item_id": "dxd_crohn", "count": 2, "case_ids": ["appendicitis_001"]},
+                {"item_id": "ht_location", "count": 1, "case_ids": ["appendicitis_001"]},
+            ],
+            "frequent_learning_recommendations": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                    "title": "推理链覆盖关键证据并能自圆其说",
+                    "count": 2,
+                }
+            ],
+        },
+        min_count=2,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["trigger_item_id"] == "training_pattern_dxd_crohn_reasoning_core"
+    assert candidate["trigger_item_ids"] == ["dxd_crohn", "reasoning_core"]
+    assert candidate["skill_type"] == "differential_broadening"
+    assert candidate["stage_scope"] == ["case_intro", "diagnosis_submission"]
+    assert candidate["effect_status"] == "insufficient_samples"
+    assert candidate["applies_when"] == {
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro", "diagnosis_submission"],
+        "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+        "current_missing_evidence": ["dxd_crohn", "reasoning_core"],
+        "min_support_count": 2,
+    }
 
 
 def test_training_skill_candidate_service_skips_when_no_repeated_training_pattern(monkeypatch) -> None:

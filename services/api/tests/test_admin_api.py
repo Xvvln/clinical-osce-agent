@@ -2161,6 +2161,16 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "trigger_item_id": "reasoning_core",
         "trigger_item_ids": [],
         "case_ids": [],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
+            "case_ids": [],
+            "stage_scope": ["case_intro"],
+            "trigger_item_ids": [],
+            "current_missing_evidence": [],
+            "min_support_count": 2,
+        },
         "title": "临床推理链纠偏提示",
         "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
@@ -2274,6 +2284,7 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         assert profile_response.status_code == 200
         assert profile_response.json()["profile"]["skill_accumulation"]["enabled_skill_count"] == 1
         assert profile_response.json()["profile"]["skill_accumulation"]["applied_skill_count"] == 1
+        assert profile_response.json()["profile"]["skill_accumulation"]["enabled_skills"][0]["effect_status"] == "insufficient_samples"
 
         admin_login = client.post(
             "/api/auth/login",

@@ -376,6 +376,7 @@ def _get_enabled_skill_summaries() -> list[dict[str, object]]:
             "trigger_item_id": skill["trigger_item_id"],
             "suggested_strategy": skill["suggested_strategy"],
             "support_count": skill["support_count"],
+            "effect_status": skill.get("effect_status", "insufficient_samples"),
         }
         for skill in osce_session_service.training_skill_store.list_enabled_skills()
     ]

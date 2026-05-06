@@ -282,6 +282,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /薄弱项/);
   assert.match(profileSource, /Skill 积累/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
+  assert.match(profileSource, /effect_status: string;/);
   assert.match(profileSource, /enabled_skill_count: number;/);
   assert.match(profileSource, /applied_skill_count: number;/);
   assert.match(profileSource, /enabled_skills: readonly EnabledSkillSummary\[];/);
@@ -291,6 +292,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /已启用 Skill/);
   assert.match(profileSource, /应用次数/);
   assert.match(profileSource, /支持次数/);
+  assert.match(profileSource, /效果状态/);
   assert.match(profileSource, /暂无已启用 Skill/);
 });
 

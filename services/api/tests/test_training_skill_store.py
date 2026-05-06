@@ -8,6 +8,16 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         "trigger_item_id": "reasoning_core",
         "trigger_item_ids": ["reasoning_core", "rs_exclude"],
         "case_ids": ["appendicitis_001", "pneumonia_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
+            "case_ids": ["appendicitis_001", "pneumonia_001"],
+            "stage_scope": ["case_intro"],
+            "trigger_item_ids": ["reasoning_core", "rs_exclude"],
+            "current_missing_evidence": [],
+            "min_support_count": 2,
+        },
         "title": "临床推理链纠偏提示",
         "description": "3 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001、pneumonia_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
@@ -32,6 +42,16 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         "trigger_item_id": "reasoning_core",
         "trigger_item_ids": ["reasoning_core", "rs_exclude"],
         "case_ids": ["appendicitis_001", "pneumonia_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
+            "case_ids": ["appendicitis_001", "pneumonia_001"],
+            "stage_scope": ["case_intro"],
+            "trigger_item_ids": ["reasoning_core", "rs_exclude"],
+            "current_missing_evidence": [],
+            "min_support_count": 2,
+        },
         "title": "临床推理链纠偏提示",
         "description": "3 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001、pneumonia_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
@@ -39,6 +59,49 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         "source_report_count": 3,
         "support_count": 2,
         "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
+    }
+
+
+def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    candidate = {
+        "candidate_id": "skill_candidate_training_pattern_dxd_crohn_reasoning_core",
+        "trigger_item_id": "training_pattern_dxd_crohn_reasoning_core",
+        "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "differential_broadening",
+        "stage_scope": ["case_intro", "diagnosis_submission"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro", "diagnosis_submission"],
+            "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+            "current_missing_evidence": ["dxd_crohn", "reasoning_core"],
+            "min_support_count": 2,
+        },
+        "title": "鉴别诊断拓展提示",
+        "description": "多份报告中反复出现鉴别诊断与推理链漏项。",
+        "suggested_strategy": "提交诊断前，提醒学生先复盘支持与排除证据，不透露标准答案。",
+        "source_report_count": 3,
+        "support_count": 2,
+        "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
+        "review": {"status": "approved", "regression_passed": True},
+    }
+
+    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+    loaded_skill = TrainingSkillStore(database_path).get_skill("skill_training_pattern_dxd_crohn_reasoning_core")
+
+    assert enabled is True
+    assert loaded_skill is not None
+    assert loaded_skill["skill_type"] == "differential_broadening"
+    assert loaded_skill["stage_scope"] == ["case_intro", "diagnosis_submission"]
+    assert loaded_skill["effect_status"] == "insufficient_samples"
+    assert loaded_skill["applies_when"] == {
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro", "diagnosis_submission"],
+        "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+        "current_missing_evidence": ["dxd_crohn", "reasoning_core"],
+        "min_support_count": 2,
     }
 
 
@@ -102,6 +165,16 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "trigger_item_id": "reasoning_core",
             "trigger_item_ids": [],
             "case_ids": [],
+            "skill_type": "reasoning_bridge",
+            "stage_scope": ["case_intro"],
+            "effect_status": "insufficient_samples",
+            "applies_when": {
+                "case_ids": [],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": [],
+                "current_missing_evidence": [],
+                "min_support_count": 2,
+            },
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
             "suggested_strategy": "提醒学生组织证据链，但不透露标准诊断或隐藏事实。",
@@ -116,6 +189,16 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "trigger_item_id": "ht_location",
             "trigger_item_ids": [],
             "case_ids": [],
+            "skill_type": "reasoning_bridge",
+            "stage_scope": ["case_intro"],
+            "effect_status": "insufficient_samples",
+            "applies_when": {
+                "case_ids": [],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": [],
+                "current_missing_evidence": [],
+                "min_support_count": 2,
+            },
             "title": "疼痛部位追问提示",
             "description": "问诊部位反复遗漏。",
             "suggested_strategy": "提醒学生补充疼痛部位与转移问题。",

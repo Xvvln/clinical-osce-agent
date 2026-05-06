@@ -90,6 +90,7 @@ class OsceSessionService:
         enabled_skills = _enabled_skills_for_case(
             self.training_skill_store.list_enabled_skills(),
             graph_state["case_id"],
+            graph_state["stage"],
         )
         session = OsceSession(
             session_id=str(uuid4()),
@@ -110,6 +111,9 @@ class OsceSessionService:
                     "skill_id": skill["skill_id"],
                     "title": skill["title"],
                     "suggested_strategy": skill["suggested_strategy"],
+                    "skill_type": skill.get("skill_type", "reasoning_bridge"),
+                    "stage_scope": list(skill.get("stage_scope", [])),
+                    "effect_status": skill.get("effect_status", "insufficient_samples"),
                 },
             )
         return _serialize_session(session, case)
@@ -787,9 +791,15 @@ def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
 
 
-def _enabled_skills_for_case(skills: list[dict[str, Any]], case_id: str) -> list[dict[str, Any]]:
+def _enabled_skills_for_case(skills: list[dict[str, Any]], case_id: str, stage: str = "case_intro") -> list[dict[str, Any]]:
     rubric_item_ids = _rubric_item_ids(case_id)
-    return [skill for skill in skills if _enabled_skill_applies_to_case(skill, case_id, rubric_item_ids)]
+    return [
+        skill
+        for skill in skills
+        if _enabled_skill_applies_to_case(skill, case_id, rubric_item_ids)
+        and _enabled_skill_applies_to_stage(skill, stage)
+        and _enabled_skill_matches_current_missing_evidence(skill, rubric_item_ids)
+    ]
 
 
 def _enabled_skill_applies_to_case(skill: dict[str, Any], case_id: str, rubric_item_ids: set[str]) -> bool:
@@ -812,6 +822,27 @@ def _enabled_skill_applies_to_case(skill: dict[str, Any], case_id: str, rubric_i
     if trigger_item_id.startswith("training_pattern_"):
         return any(item_id in trigger_item_id for item_id in rubric_item_ids)
     return False
+
+
+def _enabled_skill_applies_to_stage(skill: dict[str, Any], stage: str) -> bool:
+    applies_when = skill.get("applies_when", {})
+    if not isinstance(applies_when, dict):
+        applies_when = {}
+    stage_scope = [str(stage_name) for stage_name in skill.get("stage_scope") or applies_when.get("stage_scope", [])]
+    return not stage_scope or "any" in stage_scope or stage in stage_scope
+
+
+def _enabled_skill_matches_current_missing_evidence(skill: dict[str, Any], rubric_item_ids: set[str]) -> bool:
+    applies_when = skill.get("applies_when", {})
+    if not isinstance(applies_when, dict):
+        applies_when = {}
+    current_missing_evidence = [
+        str(item_id)
+        for item_id in applies_when.get("current_missing_evidence", skill.get("trigger_item_ids", []))
+    ]
+    if not current_missing_evidence:
+        return True
+    return bool(set(current_missing_evidence) & rubric_item_ids)
 
 
 def _rubric_item_ids(case_id: str) -> set[str]:

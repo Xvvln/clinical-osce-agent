@@ -31,6 +31,9 @@ class TrainingSkillCandidateContext:
     related_recommendations: list[str]
 
 
+SkillCandidateType = str
+
+
 class TrainingSkillCandidateGenerator(Protocol):
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         ...
@@ -234,11 +237,17 @@ def _candidate_from_content(
     context: TrainingSkillCandidateContext,
     content: GeneratedTrainingSkillCandidateContent,
 ) -> dict[str, Any]:
+    skill_type = _skill_type(context.missed_items)
+    stage_scope = _stage_scope(skill_type)
     return {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": [item.item_id for item in context.missed_items],
         "case_ids": list(context.case_ids),
+        "skill_type": skill_type,
+        "stage_scope": stage_scope,
+        "effect_status": "insufficient_samples",
+        "applies_when": _applies_when(context, stage_scope),
         "title": content.title,
         "description": content.description,
         "suggested_strategy": content.suggested_strategy,
@@ -250,11 +259,17 @@ def _candidate_from_content(
 
 
 def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
+    skill_type = _skill_type(context.missed_items)
+    stage_scope = _stage_scope(skill_type)
     return {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": [item.item_id for item in context.missed_items],
         "case_ids": list(context.case_ids),
+        "skill_type": skill_type,
+        "stage_scope": stage_scope,
+        "effect_status": "insufficient_samples",
+        "applies_when": _applies_when(context, stage_scope),
         "title": "OSCE 训练模式纠偏提示",
         "description": _candidate_description(context),
         "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
@@ -271,6 +286,48 @@ def _candidate_description(context: TrainingSkillCandidateContext) -> str:
         for item in context.missed_items
     )
     return f"{context.source_report_count} 份报告中反复出现 {len(context.missed_items)} 类训练漏项：{missed_item_summaries}。"
+
+
+def _skill_type(missed_items: list[TrainingSkillCandidateMissedItem]) -> SkillCandidateType:
+    item_ids = [item.item_id for item in missed_items]
+    if any("safety" in item_id or "forbidden" in item_id for item_id in item_ids):
+        return "safety_boundary"
+    if any(item_id.startswith(("dxd_", "diff_")) for item_id in item_ids):
+        return "differential_broadening"
+    if any("reasoning" in item_id or item_id.startswith("rp_") for item_id in item_ids):
+        return "reasoning_bridge"
+    if any(item_id.startswith("ht_") for item_id in item_ids):
+        return "history_bundle"
+    if any(item_id.startswith(("pe_", "exam_")) for item_id in item_ids):
+        return "exam_bundle"
+    if any(item_id.startswith(("at_", "lab_", "img_", "test_")) for item_id in item_ids):
+        return "test_strategy"
+    return "reasoning_bridge"
+
+
+def _stage_scope(skill_type: SkillCandidateType) -> list[str]:
+    if skill_type == "history_bundle":
+        return ["case_intro", "history_taking"]
+    if skill_type == "exam_bundle":
+        return ["case_intro", "physical_exam"]
+    if skill_type == "test_strategy":
+        return ["case_intro", "auxiliary_testing"]
+    if skill_type in {"reasoning_bridge", "differential_broadening"}:
+        return ["case_intro", "diagnosis_submission"]
+    if skill_type == "safety_boundary":
+        return ["case_intro", "history_taking", "physical_exam", "auxiliary_testing", "diagnosis_submission"]
+    return ["case_intro"]
+
+
+def _applies_when(context: TrainingSkillCandidateContext, stage_scope: list[str]) -> dict[str, Any]:
+    trigger_item_ids = [item.item_id for item in context.missed_items]
+    return {
+        "case_ids": list(context.case_ids),
+        "stage_scope": list(stage_scope),
+        "trigger_item_ids": trigger_item_ids,
+        "current_missing_evidence": trigger_item_ids,
+        "min_support_count": context.support_count,
+    }
 
 
 def _apply_process_proxy(proxy_url: str) -> None:

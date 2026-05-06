@@ -61,12 +61,32 @@ class TrainingSkillStore:
 
 
 def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    trigger_item_ids = list(candidate.get("trigger_item_ids", []))
+    case_ids = list(candidate.get("case_ids", []))
+    stage_scope = list(candidate.get("stage_scope", []))
+    if not stage_scope:
+        stage_scope = list(candidate.get("applies_when", {}).get("stage_scope", []))
+    if not stage_scope:
+        stage_scope = ["case_intro"]
+    applies_when = candidate.get("applies_when")
+    if not isinstance(applies_when, dict):
+        applies_when = {
+            "case_ids": case_ids,
+            "stage_scope": stage_scope,
+            "trigger_item_ids": trigger_item_ids,
+            "current_missing_evidence": [],
+            "min_support_count": candidate.get("support_count", 0),
+        }
     return {
         "skill_id": f"skill_{candidate['trigger_item_id']}",
         "source_candidate_id": candidate["candidate_id"],
         "trigger_item_id": candidate["trigger_item_id"],
-        "trigger_item_ids": list(candidate.get("trigger_item_ids", [])),
-        "case_ids": list(candidate.get("case_ids", [])),
+        "trigger_item_ids": trigger_item_ids,
+        "case_ids": case_ids,
+        "skill_type": str(candidate.get("skill_type", "reasoning_bridge")),
+        "stage_scope": stage_scope,
+        "effect_status": str(candidate.get("effect_status", "insufficient_samples")),
+        "applies_when": applies_when,
         "title": candidate["title"],
         "description": candidate["description"],
         "suggested_strategy": candidate["suggested_strategy"],

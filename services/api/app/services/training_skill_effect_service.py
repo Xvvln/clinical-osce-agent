@@ -22,8 +22,8 @@ class TrainingSkillEffectService:
         if has_sufficient_samples:
             score_delta = round(with_skill["average_total_score"] - without_skill["average_total_score"], 2)
         return {
-            "status": "ready" if has_sufficient_samples else "insufficient_samples",
-            "label": "可描述性对比" if has_sufficient_samples else "样本不足",
+            "status": "descriptive_only" if has_sufficient_samples else "insufficient_samples",
+            "label": "描述性对比" if has_sufficient_samples else "样本不足",
             "min_sessions_per_group": min_sessions_per_group,
             "score_delta": score_delta,
             **comparison,

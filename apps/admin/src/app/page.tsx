@@ -197,6 +197,12 @@ type TrainingSkillCandidateReview = Readonly<{
 type TrainingSkillCandidateDetail = Readonly<{
   candidate_id: string;
   trigger_item_id: string;
+  trigger_item_ids: readonly string[];
+  case_ids: readonly string[];
+  skill_type: string;
+  stage_scope: readonly string[];
+  applies_when: Readonly<Record<string, unknown>>;
+  effect_status: string;
   title: string;
   description: string;
   suggested_strategy: string;
@@ -215,7 +221,7 @@ type TrainingSkillEffectGroup = Readonly<{
 }>;
 
 type TrainingSkillEffectSummary = Readonly<{
-  status: "ready" | "insufficient_samples";
+  status: "descriptive_only" | "insufficient_samples";
   label: string;
   min_sessions_per_group: number;
   score_delta: number | null;
@@ -2965,6 +2971,36 @@ export default function AdminDashboardPage() {
                     )}
                   </div>
                   <div className="mt-4 grid gap-3">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <p className="text-xs text-[#8A7D6F]">模式类型</p>
+                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.skill_type}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <p className="text-xs text-[#8A7D6F]">效果状态</p>
+                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.effect_status}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <p className="text-xs text-[#8A7D6F]">适用阶段</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{(selectedCandidate.stage_scope ?? []).join("、") || "未限定"}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <p className="text-xs text-[#8A7D6F]">触发漏项</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{(selectedCandidate.trigger_item_ids ?? []).join("、") || selectedCandidate.trigger_item_id}</p>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">应用条件</h4>
+                      <pre className="mt-2 whitespace-pre-wrap rounded-md border border-[#E6DFD2] bg-white p-3 text-[11px] leading-5 text-[#6F6257]">
+                        {JSON.stringify(selectedCandidate.applies_when ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">相关来源引用</h4>
+                      <p className="mt-2 break-words text-sm leading-6 text-[#6F6257]">
+                        {selectedCandidate.related_recommendations.length > 0 ? selectedCandidate.related_recommendations.join("、") : "暂无关联学习建议引用"}
+                      </p>
+                    </div>
                     <div>
                       <h4 className="text-sm font-semibold">候选说明</h4>
                       <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.description}</p>
