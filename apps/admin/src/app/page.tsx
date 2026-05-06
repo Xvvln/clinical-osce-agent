@@ -292,6 +292,8 @@ type AdminModelProviderConfig = Readonly<{
   project: string;
   location: string;
   proxy_url: string;
+  persist_directory: string;
+  collection: string;
   required_env: readonly string[];
   missing_env: readonly string[];
   integration_status: string;
@@ -1629,6 +1631,8 @@ export default function AdminDashboardPage() {
                     {provider.project ? <p className="break-words">Project：{provider.project}</p> : null}
                     {provider.location ? <p>Location：{provider.location}</p> : null}
                     {provider.proxy_url ? <p className="break-words">Proxy：{provider.proxy_url}</p> : null}
+                    {provider.persist_directory ? <p className="break-words">Persist：{provider.persist_directory}</p> : null}
+                    {provider.collection ? <p className="break-words">Collection：{provider.collection}</p> : null}
                   </div>
                   <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
                   {provider.missing_env.length > 0 ? (

@@ -184,6 +184,9 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     monkeypatch.setenv("OSCE_VERTEX_MODEL", "gemini-rubric-model")
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "osce_demo_retrieval")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "openai-secret-value")
     monkeypatch.setenv("OSCE_OPENAI_MODEL", "openai-demo-model")
@@ -214,6 +217,11 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
     assert providers["vertex_embedding_retrieval"]["project"] == "demo-project"
     assert providers["vertex_embedding_retrieval"]["integration_status"] == "wired_optional"
+    assert providers["chroma_retrieval"]["enabled"] is True
+    assert providers["chroma_retrieval"]["configured"] is True
+    assert providers["chroma_retrieval"]["persist_directory"] == str(tmp_path / "chroma-index")
+    assert providers["chroma_retrieval"]["collection"] == "osce_demo_retrieval"
+    assert providers["chroma_retrieval"]["integration_status"] == "wired_optional"
     assert providers["openai_compatible"]["enabled"] is True
     assert providers["openai_compatible"]["configured"] is True
     assert providers["openai_compatible"]["model"] == "openai-demo-model"
@@ -250,6 +258,8 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
     assert providers["vertex_skill_candidate"]["project"] == "demo-project"
     assert providers["vertex_embedding_retrieval"]["configured"] is False
     assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
+    assert providers["chroma_retrieval"]["enabled"] is False
+    assert providers["chroma_retrieval"]["configured"] is False
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

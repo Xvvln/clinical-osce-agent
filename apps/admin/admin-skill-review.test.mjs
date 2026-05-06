@@ -85,6 +85,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /Gemini、Vertex 和 OpenAI 兼容模型/);
   assert.match(adminPageSource, /provider\.label/);
   assert.match(adminPageSource, /provider\.integration_status/);
+  assert.match(adminPageSource, /provider\.persist_directory/);
+  assert.match(adminPageSource, /provider\.collection/);
   assert.match(adminPageSource, /密钥不落库/);
   assert.match(adminPageSource, /样本不足/);
   assert.match(adminPageSource, /skillEffects\.status === "insufficient_samples"/);

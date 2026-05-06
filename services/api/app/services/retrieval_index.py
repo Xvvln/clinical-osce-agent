@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 import yaml
 
+from app.services.chroma_retriever import ChromaSourceDocument, build_chroma_retrieval_index_from_environment
 from app.services.vertex_embedding_retriever import build_vertex_embedding_client_from_environment
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -40,6 +41,34 @@ def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocu
 
     embedding_client = build_vertex_embedding_client_from_environment()
     if embedding_client is not None:
+        try:
+            chroma_index = build_chroma_retrieval_index_from_environment(
+                embedding_client=embedding_client,
+                documents=[
+                    ChromaSourceDocument(
+                        reference=document.reference,
+                        source_type=document.source_type,
+                        title=document.title,
+                        snippet=document.snippet,
+                    )
+                    for document in _retrieval_documents()
+                ],
+                root_dir=ROOT_DIR,
+            )
+            if chroma_index is not None:
+                return [
+                    RetrievalDocument(
+                        reference=result.reference,
+                        source_type=result.source_type,
+                        title=result.title,
+                        snippet=result.snippet,
+                        score=result.score,
+                    )
+                    for result in chroma_index.search(query, limit=limit)
+                ]
+        except Exception as exc:
+            LOGGER.warning("ChromaDB retrieval failed; falling back to embedding search: %s", exc)
+
         try:
             return search_retrieval_documents_with_embeddings(query, embedding_client=embedding_client, limit=limit)
         except Exception as exc:

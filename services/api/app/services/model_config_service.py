@@ -19,6 +19,7 @@ def build_admin_model_config() -> dict[str, Any]:
             _vertex_rubric_scorer_config(),
             _vertex_skill_candidate_config(),
             _vertex_embedding_retrieval_config(),
+            _chroma_retrieval_config(),
             _openai_compatible_config(),
         ],
     }
@@ -156,6 +157,31 @@ def _vertex_embedding_retrieval_config() -> dict[str, Any]:
     )
 
 
+def _chroma_retrieval_config() -> dict[str, Any]:
+    enabled = _truthy_env("OSCE_CHROMA_ENABLED")
+    persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
+    collection = _env("OSCE_CHROMA_COLLECTION", "clinical_osce_retrieval")
+    configured = enabled and bool(persist_directory) and bool(collection)
+    return _provider_config(
+        provider_id="chroma_retrieval",
+        label="ChromaDB RAG 持久向量库",
+        capability="RAG 来源片段持久向量索引和相似度召回",
+        enabled=enabled,
+        configured=configured,
+        secret_configured=False,
+        auth_mode="local_persistent_vector_store",
+        persist_directory=persist_directory,
+        collection=collection,
+        required_env=["OSCE_CHROMA_ENABLED=true", "CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [("CHROMA_PERSIST_DIRECTORY", persist_directory), ("OSCE_CHROMA_COLLECTION", collection)],
+        ),
+        integration_status="wired_optional",
+        notes="通过本地 ChromaDB PersistentClient 持久化 RAG 来源片段向量；当前搭配 Vertex embedding 使用，只用于反馈解释、学习推荐和引用展示，不参与诊断或评分裁判。",
+    )
+
+
 def _openai_compatible_config() -> dict[str, Any]:
     runtime_config = runtime_model_config_store.get_active_config()
     runtime_active = runtime_config is not None and runtime_config.provider == "openai_compatible"
@@ -197,6 +223,8 @@ def _provider_config(**kwargs: Any) -> dict[str, Any]:
         "project": kwargs.get("project", ""),
         "location": kwargs.get("location", ""),
         "proxy_url": kwargs.get("proxy_url", ""),
+        "persist_directory": kwargs.get("persist_directory", ""),
+        "collection": kwargs.get("collection", ""),
         "required_env": kwargs["required_env"],
         "missing_env": kwargs["missing_env"],
         "integration_status": kwargs["integration_status"],

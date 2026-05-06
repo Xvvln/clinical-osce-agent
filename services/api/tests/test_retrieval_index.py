@@ -1,4 +1,23 @@
+from app.services import retrieval_index as retrieval_index_module
+from app.services.chroma_retriever import ChromaRetrievalIndex, ChromaRetrievalSettings, ChromaSourceDocument
 from app.services.retrieval_index import search_retrieval_documents, search_retrieval_documents_with_embeddings
+
+
+class FakeEmbeddingClient:
+    def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+        if task_type == "RETRIEVAL_QUERY":
+            return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+        if task_type == "RETRIEVAL_DOCUMENT":
+            vectors: list[list[float]] = []
+            for index, text in enumerate(texts):
+                if "白细胞升高" in text:
+                    vectors.append([1.0, 0.0, 0.0, 0.0])
+                else:
+                    vectors.append(
+                        [0.0, 1.0, float((index % 7) + 1) / 10.0, float((index % 11) + 1) / 10.0]
+                    )
+            return vectors
+        raise AssertionError(f"unexpected task_type: {task_type}")
 
 
 def test_search_retrieval_documents_returns_case_for_clinical_query() -> None:
@@ -41,22 +60,80 @@ def test_search_retrieval_documents_returns_knowledge_item_for_reasoning_query()
 
 
 def test_search_retrieval_documents_with_embeddings_can_recall_semantic_source_without_keyword_overlap() -> None:
-    class FakeEmbeddingClient:
-        def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
-            if task_type == "RETRIEVAL_QUERY":
-                return [[1.0, 0.0] for _ in texts]
-            if task_type == "RETRIEVAL_DOCUMENT":
-                return [
-                    [1.0, 0.0] if "白细胞升高" in text else [0.0, 1.0]
-                    for text in texts
-                ]
-            raise AssertionError(f"unexpected task_type: {task_type}")
-
     results = search_retrieval_documents_with_embeddings(
         "炎症实验室证据",
         embedding_client=FakeEmbeddingClient(),
         limit=3,
     )
+
+    assert results
+    assert results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert results[0].source_type == "knowledge"
+    assert results[0].score > 0.99
+
+
+def test_chroma_retrieval_index_persists_vectors_between_clients(tmp_path) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference="knowledge:appendicitis_001.rp_03",
+            source_type="knowledge",
+            title="急性阑尾炎诊断依据",
+            snippet="白细胞升高提示炎症反应。",
+        ),
+        ChromaSourceDocument(
+            reference="case:appendicitis_001",
+            source_type="case",
+            title="右下腹痛教学病例",
+            snippet="转移性右下腹痛。",
+        ),
+    ]
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+    )
+
+    first_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    first_results = first_index.search("炎症实验室证据", limit=2)
+    second_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    second_results = second_index.search("炎症实验室证据", limit=2)
+
+    assert first_results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert second_results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert second_results[0].source_type == "knowledge"
+    assert second_results[0].score > 0.99
+    assert any(settings.persist_directory.iterdir())
+
+
+def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: FakeEmbeddingClient(),
+    )
+
+    def fail_in_memory_embedding_search(*args, **kwargs):
+        raise AssertionError("in-memory embedding fallback should not run when ChromaDB is enabled")
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "search_retrieval_documents_with_embeddings",
+        fail_in_memory_embedding_search,
+    )
+
+    results = search_retrieval_documents("炎症实验室证据", limit=3)
 
     assert results
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
