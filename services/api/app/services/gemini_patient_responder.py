@@ -53,7 +53,7 @@ class GeminiPatientSettings(BaseSettings):
     use_vertex: bool = False
     project: str = ""
     location: str = "global"
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.1-pro-preview"
     proxy_url: str = "http://127.0.0.1:7897"
     temperature: float = 0.4
 

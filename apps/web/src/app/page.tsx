@@ -397,14 +397,14 @@ const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
     id: "gemini",
     label: "Gemini Developer API",
-    defaultModel: "gemini-3.1-flash-lite-preview",
+    defaultModel: "gemini-3.1-pro-preview",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     defaultProxyUrl: "http://127.0.0.1:7897",
   },
   {
     id: "vertex_gemini_adc",
     label: "Vertex Gemini ADC",
-    defaultModel: "gemini-3.1-flash-lite-preview",
+    defaultModel: "gemini-3.1-pro-preview",
     defaultBaseUrl: "",
     defaultProxyUrl: "http://127.0.0.1:7897",
   },

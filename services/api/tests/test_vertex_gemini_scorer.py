@@ -31,7 +31,7 @@ class FakeClient:
 def test_vertex_gemini_scorer_uses_adc_vertex_settings_and_response_schema() -> None:
     fake_client = FakeClient()
     scorer = VertexGeminiRubricScorer(
-        settings=VertexGeminiSettings(project="demo-project"),
+        settings=VertexGeminiSettings(project="demo-project", _env_file=None),
         client=fake_client,
     )
 
@@ -53,19 +53,19 @@ def test_vertex_gemini_scorer_uses_adc_vertex_settings_and_response_schema() -> 
         rationale="覆盖核心病史，缺少检查证据。",
     )
     call = fake_client.models.calls[0]
-    assert call["model"] == "gemini-3.1-flash-lite-preview"
+    assert call["model"] == "gemini-3.1-pro-preview"
     assert "reasoning_core" in str(call["contents"])
     assert call["config"].response_mime_type == "application/json"
     assert call["config"].response_schema is LlmRubricResponse
     assert "不得引入输入之外的医学事实" in call["config"].system_instruction
 
 
-def test_vertex_gemini_settings_defaults_to_global_gemini_31_flash_lite() -> None:
-    settings = VertexGeminiSettings(project="demo-project")
+def test_vertex_gemini_settings_defaults_to_global_gemini_31_pro_preview() -> None:
+    settings = VertexGeminiSettings(project="demo-project", _env_file=None)
 
     assert settings.project == "demo-project"
     assert settings.location == "global"
-    assert settings.model == "gemini-3.1-flash-lite-preview"
+    assert settings.model == "gemini-3.1-pro-preview"
     assert settings.proxy_url == "http://127.0.0.1:7897"
 
 
@@ -204,7 +204,7 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
         {
             "provider": "vertex_gemini_adc",
             "api_key": "",
-            "model": "gemini-3.1-flash-lite-preview",
+            "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
             "proxy_url": "http://127.0.0.1:7897",
         }
@@ -222,6 +222,6 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
     assert isinstance(scorer, VertexGeminiRubricScorer)
     assert scorer._settings.project == "demo-project"
     assert scorer._settings.location == "global"
-    assert scorer._settings.model == "gemini-3.1-flash-lite-preview"
+    assert scorer._settings.model == "gemini-3.1-pro-preview"
     assert created_clients == [{"vertexai": True, "project": "demo-project", "location": "global"}]
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"

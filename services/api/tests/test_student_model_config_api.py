@@ -104,7 +104,7 @@ def test_student_model_config_test_rejects_remote_provider_without_api_key() -> 
             json={
                 "provider": "gemini",
                 "api_key": "",
-                "model": "gemini-3.1-flash-lite-preview",
+                "model": "gemini-3.1-pro-preview",
                 "base_url": "https://generativelanguage.googleapis.com",
                 "proxy_url": "http://127.0.0.1:7897",
             },
@@ -158,7 +158,7 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(mo
             json={
                 "provider": "vertex_gemini_adc",
                 "api_key": "",
-                "model": "gemini-3.1-flash-lite-preview",
+                "model": "gemini-3.1-pro-preview",
                 "base_url": "demo-project",
                 "proxy_url": "http://127.0.0.1:7897",
             },
@@ -168,9 +168,9 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(mo
     payload = response.json()
     assert payload["ok"] is True
     assert payload["provider"] == "vertex_gemini_adc"
-    assert payload["checked_url"] == "vertex://demo-project/global/gemini-3.1-flash-lite-preview"
+    assert payload["checked_url"] == "vertex://demo-project/global/gemini-3.1-pro-preview"
     assert _FakeVertexGeminiClient.created == [{"vertexai": True, "project": "demo-project", "location": "global"}]
-    assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-flash-lite-preview"
+    assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
 
 
@@ -215,7 +215,7 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key()
             json={
                 "provider": "vertex_gemini_adc",
                 "api_key": "",
-                "model": "gemini-3.1-flash-lite-preview",
+                "model": "gemini-3.1-pro-preview",
                 "base_url": "demo-project",
                 "proxy_url": "http://127.0.0.1:7897",
             },
@@ -227,7 +227,7 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key()
     assert response.json() == {
         "active": True,
         "provider": "vertex_gemini_adc",
-        "model": "gemini-3.1-flash-lite-preview",
+        "model": "gemini-3.1-pro-preview",
         "base_url": "demo-project",
         "proxy_url": "http://127.0.0.1:7897",
         "project": "demo-project",

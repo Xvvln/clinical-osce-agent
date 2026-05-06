@@ -52,7 +52,7 @@ class VertexGeminiSkillCandidateSettings(BaseSettings):
     skill_candidate_enabled: bool = False
     project: str = ""
     location: str = "global"
-    skill_candidate_model: str = "gemini-3.1-flash-lite-preview"
+    skill_candidate_model: str = "gemini-3.1-pro-preview"
     proxy_url: str = "http://127.0.0.1:7897"
 
 

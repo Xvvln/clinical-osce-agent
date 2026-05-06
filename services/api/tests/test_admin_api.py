@@ -227,7 +227,7 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
         {
             "provider": "vertex_gemini_adc",
             "api_key": "",
-            "model": "gemini-3.1-flash-lite-preview",
+            "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
             "proxy_url": "http://127.0.0.1:7897",
         }
@@ -243,7 +243,7 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
     providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
     assert providers["gemini_patient_vertex"]["configured"] is True
     assert providers["gemini_patient_vertex"]["project"] == "demo-project"
-    assert providers["gemini_patient_vertex"]["model"] == "gemini-3.1-flash-lite-preview"
+    assert providers["gemini_patient_vertex"]["model"] == "gemini-3.1-pro-preview"
     assert providers["vertex_rubric_scorer"]["configured"] is True
     assert providers["vertex_rubric_scorer"]["project"] == "demo-project"
     assert providers["vertex_skill_candidate"]["configured"] is True

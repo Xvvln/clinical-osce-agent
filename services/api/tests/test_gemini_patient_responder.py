@@ -16,6 +16,14 @@ class FakeVertexClient:
         self.models = FakeModels()
 
 
+def test_gemini_patient_settings_defaults_to_gemini_31_pro_preview() -> None:
+    settings = module.GeminiPatientSettings(_env_file=None)
+
+    assert settings.location == "global"
+    assert settings.model == "gemini-3.1-pro-preview"
+    assert settings.proxy_url == "http://127.0.0.1:7897"
+
+
 def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(monkeypatch) -> None:
     captured_clients: list[FakeVertexClient] = []
 
@@ -28,7 +36,7 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "true")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_PROJECT", "demo-project")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_LOCATION", "global")
-    monkeypatch.setenv("OSCE_GEMINI_PATIENT_MODEL", "gemini-3.1-flash-lite-preview")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_MODEL", "gemini-3.1-pro-preview")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_API_KEY", "")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("GOOGLE_API_KEY", "")
@@ -42,7 +50,7 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     assert responder._settings.use_vertex is True
     assert responder._settings.project == "demo-project"
     assert responder._settings.location == "global"
-    assert responder._settings.model == "gemini-3.1-flash-lite-preview"
+    assert responder._settings.model == "gemini-3.1-pro-preview"
     assert captured_clients[0].kwargs == {
         "vertexai": True,
         "project": "demo-project",
@@ -141,7 +149,7 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_conf
         {
             "provider": "vertex_gemini_adc",
             "api_key": "",
-            "model": "gemini-3.1-flash-lite-preview",
+            "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
             "proxy_url": "http://127.0.0.1:7897",
         }
@@ -161,7 +169,7 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_conf
     assert responder._settings.use_vertex is True
     assert responder._settings.project == "demo-project"
     assert responder._settings.location == "global"
-    assert responder._settings.model == "gemini-3.1-flash-lite-preview"
+    assert responder._settings.model == "gemini-3.1-pro-preview"
     assert captured_clients[0].kwargs == {
         "vertexai": True,
         "project": "demo-project",

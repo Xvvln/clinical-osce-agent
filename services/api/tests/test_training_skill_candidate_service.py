@@ -89,6 +89,7 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
         settings=VertexGeminiSkillCandidateSettings(
             project="demo-project",
             skill_candidate_enabled=True,
+            _env_file=None,
         ),
         client=fake_client,
     )
@@ -112,7 +113,7 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
         ],
     }
     call = fake_client.models.calls[0]
-    assert call["model"] == "gemini-3.1-flash-lite-preview"
+    assert call["model"] == "gemini-3.1-pro-preview"
     assert '"pattern_id": "training_pattern_reasoning_core_rs_exclude"' in str(call["contents"])
     assert '"missed_items"' in str(call["contents"])
     assert "reasoning_core" in str(call["contents"])
@@ -252,7 +253,7 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
         {
             "provider": "vertex_gemini_adc",
             "api_key": "",
-            "model": "gemini-3.1-flash-lite-preview",
+            "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
             "proxy_url": "http://127.0.0.1:7897",
         }
@@ -268,7 +269,7 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
     assert isinstance(generator, VertexGeminiTrainingSkillCandidateGenerator)
     assert generator._settings.project == "demo-project"
     assert generator._settings.location == "global"
-    assert generator._settings.skill_candidate_model == "gemini-3.1-flash-lite-preview"
+    assert generator._settings.skill_candidate_model == "gemini-3.1-pro-preview"
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
 

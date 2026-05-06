@@ -146,6 +146,8 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, /function saveStudentApiConfig\(config: StudentApiConfig\): void/);
   assert.match(pageSource, /function testStudentApiConfigConnection\(config: StudentApiConfig\): Promise<StudentApiConfigTestResponse>/);
   assert.match(pageSource, /\/api\/model-config\/test/);
+  assert.match(pageSource, /defaultModel: "gemini-3.1-pro-preview"/);
+  assert.doesNotMatch(pageSource, /gemini-3\.1-flash-lite-preview/);
   assert.match(pageSource, /defaultProxyUrl: ""/);
   assert.match(pageSource, /defaultProxyUrl: "http:\/\/127\.0\.0\.1:7897"/);
   assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);

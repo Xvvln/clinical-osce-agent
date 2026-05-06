@@ -29,7 +29,7 @@ class VertexGeminiSettings(BaseSettings):
     enabled: bool = False
     project: str = ""
     location: str = "global"
-    model: str = "gemini-3.1-flash-lite-preview"
+    model: str = "gemini-3.1-pro-preview"
     proxy_url: str = "http://127.0.0.1:7897"
 
 
