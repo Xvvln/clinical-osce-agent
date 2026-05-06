@@ -108,6 +108,11 @@ test("admin action buttons keep Chinese labels on one line", () => {
     "批准并启用",
     "拒绝候选",
     "登录中",
+    "导出当前 Session 页 JSON",
+    "导出当前报告页 JSON",
+    "导出当前评测页 JSON",
+    "导出当前审计页 JSON",
+    "导出当前候选页 JSON",
   ]);
 });
 
@@ -402,6 +407,25 @@ test("admin dashboard can export selected case ledger and session report as JSON
   assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminReportJson\(selectedReport\)\}/);
   assert.match(adminPageSource, /导出病例台账 JSON/);
   assert.match(adminPageSource, /导出评分报告 JSON/);
+});
+
+test("admin dashboard can export current paginated list pages as JSON", () => {
+  assert.match(adminPageSource, /type AdminListExportPayload<T> = Readonly<\{/);
+  assert.match(adminPageSource, /function buildAdminListExportPayload<T>\(/);
+  assert.match(adminPageSource, /function downloadAdminListJson<T>\(/);
+  assert.match(adminPageSource, /items: readonly T\[\]/);
+  assert.match(adminPageSource, /pagination: AdminPagination/);
+  assert.match(adminPageSource, /link\.download = `clinical-osce-\$\{listName\}-\$\{timestamp\}\.json`/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminListJson\("sessions", sessions, sessionPagination\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminListJson\("reports", reports, reportPagination\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminListJson\("evaluations", evaluations, evaluationPagination\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminListJson\("audit-events", auditEvents, auditPagination\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminListJson\("skill-candidates", candidates, candidatePagination\)\}/);
+  assert.match(adminPageSource, /导出当前 Session 页 JSON/);
+  assert.match(adminPageSource, /导出当前报告页 JSON/);
+  assert.match(adminPageSource, /导出当前评测页 JSON/);
+  assert.match(adminPageSource, /导出当前审计页 JSON/);
+  assert.match(adminPageSource, /导出当前候选页 JSON/);
 });
 
 test("admin dashboard can generate candidate skills from training logs", () => {

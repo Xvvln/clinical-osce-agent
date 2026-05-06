@@ -95,6 +95,13 @@ type AdminReportExportPayload = Readonly<{
   source_reference_items: readonly AdminSourceReferenceItem[];
 }>;
 
+type AdminListExportPayload<T> = Readonly<{
+  exported_at: string;
+  list_name: string;
+  pagination: AdminPagination;
+  items: readonly T[];
+}>;
+
 type EvaluationChartSummary = Readonly<{
   batchCount: number;
   totalCases: number;
@@ -868,6 +875,19 @@ function buildAdminReportExportPayload(report: AdminSessionReport): AdminReportE
   };
 }
 
+function buildAdminListExportPayload<T>(
+  listName: string,
+  items: readonly T[],
+  pagination: AdminPagination,
+): AdminListExportPayload<T> {
+  return {
+    exported_at: new Date().toISOString(),
+    items,
+    list_name: listName,
+    pagination,
+  };
+}
+
 function buildEvaluationExportPayload(evaluation: EvaluationBatchDetail): EvaluationExportPayload {
   return {
     batch_id: evaluation.batch_id,
@@ -931,6 +951,18 @@ function downloadEvaluationBatchJson(evaluation: EvaluationBatchDetail): void {
   const link = document.createElement("a");
   link.href = url;
   link.download = `clinical-osce-evaluation-${evaluation.batch_id}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadAdminListJson<T>(listName: string, items: readonly T[], pagination: AdminPagination): void {
+  const payload = buildAdminListExportPayload(listName, items, pagination);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = payload.exported_at.replace(/[:.]/g, "-");
+  link.href = url;
+  link.download = `clinical-osce-${listName}-${timestamp}.json`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -1982,6 +2014,13 @@ export default function AdminDashboardPage() {
                   >
                     下一页
                   </button>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminListJson("sessions", sessions, sessionPagination)}
+                    type="button"
+                  >
+                    导出当前 Session 页 JSON
+                  </button>
                 </div>
               </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
@@ -2053,6 +2092,13 @@ export default function AdminDashboardPage() {
                   type="button"
                 >
                   下一页
+                </button>
+                <button
+                  className="rounded-md border border-[#AE5630] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                  onClick={() => downloadAdminListJson("reports", reports, reportPagination)}
+                  type="button"
+                >
+                  导出当前报告页 JSON
                 </button>
               </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
@@ -2350,6 +2396,13 @@ export default function AdminDashboardPage() {
                   >
                     下一页
                   </button>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-3 py-2 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminListJson("evaluations", evaluations, evaluationPagination)}
+                    type="button"
+                  >
+                    导出当前评测页 JSON
+                  </button>
                 </div>
               </div>
               <div className="mt-4 grid gap-2">
@@ -2466,6 +2519,13 @@ export default function AdminDashboardPage() {
                   >
                     下一页
                   </button>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-3 py-2 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminListJson("audit-events", auditEvents, auditPagination)}
+                    type="button"
+                  >
+                    导出当前审计页 JSON
+                  </button>
                 </div>
               </div>
               <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
@@ -2581,6 +2641,13 @@ export default function AdminDashboardPage() {
                     type="button"
                   >
                     下一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-3 py-2 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminListJson("skill-candidates", candidates, candidatePagination)}
+                    type="button"
+                  >
+                    导出当前候选页 JSON
                   </button>
                 </div>
               </div>
