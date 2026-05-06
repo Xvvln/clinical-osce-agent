@@ -5,6 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Clinical OSCE 管理后台",
   description: "Teacher-facing review dashboard for Clinical OSCE Agent",
+  icons: { icon: "/admin-icon.svg" },
 };
 
 type RootLayoutProps = Readonly<{

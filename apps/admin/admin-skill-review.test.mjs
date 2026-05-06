@@ -9,6 +9,7 @@ const adminLayoutUrl = new URL("./src/app/layout.tsx", import.meta.url);
 const adminGlobalsUrl = new URL("./src/app/globals.css", import.meta.url);
 const adminNextConfigUrl = new URL("./next.config.mjs", import.meta.url);
 const adminPostcssConfigUrl = new URL("./postcss.config.mjs", import.meta.url);
+const adminIconUrl = new URL("./public/admin-icon.svg", import.meta.url);
 const adminPageSource = existsSync(adminPageUrl) ? readFileSync(adminPageUrl, "utf8") : "";
 const adminPackageSource = existsSync(adminPackageUrl) ? readFileSync(adminPackageUrl, "utf8") : "";
 const adminTsconfigSource = existsSync(adminTsconfigUrl) ? readFileSync(adminTsconfigUrl, "utf8") : "";
@@ -478,9 +479,11 @@ test("admin app has standalone Next.js package and TypeScript config", () => {
 test("admin app has Next.js root layout and global styles", () => {
   assert.ok(existsSync(adminLayoutUrl), "admin root layout should exist");
   assert.ok(existsSync(adminGlobalsUrl), "admin globals stylesheet should exist");
+  assert.ok(existsSync(adminIconUrl), "admin browser icon should exist to avoid favicon 404s");
   assert.match(adminLayoutSource, /import type \{ Metadata \} from "next"/);
   assert.match(adminLayoutSource, /import "\.\/globals\.css"/);
   assert.match(adminLayoutSource, /title: "Clinical OSCE 管理后台"/);
+  assert.match(adminLayoutSource, /icons: \{ icon: "\/admin-icon\.svg" \}/);
   assert.match(adminLayoutSource, /<html lang="zh-CN">/);
   assert.match(adminGlobalsSource, /@import "tailwindcss";/);
   assert.match(adminGlobalsSource, /--admin-paper: #faf9f5;/);

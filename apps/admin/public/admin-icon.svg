@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Clinical OSCE Admin">
+  <rect width="64" height="64" rx="14" fill="#171412" />
+  <path d="M18 18h28v28H18z" fill="#FAF9F5" />
+  <path d="M25 30h14v4H25z" fill="#AE5630" />
+  <path d="M30 25h4v14h-4z" fill="#AE5630" />
+  <path d="M14 48h36" stroke="#FAF9F5" stroke-width="4" stroke-linecap="round" />
+</svg>
