@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.graph.osce_graph import build_osce_graph
 from app.services import retrieval_index, source_retriever
 from app.services.auth_store import auth_store
+from app.services.derived_teaching_focus_service import (
+    build_admin_teaching_focus_patterns,
+    get_admin_teaching_focus_pattern,
+)
 from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.model_config_service import build_admin_model_config
@@ -850,6 +854,26 @@ def list_admin_sources(
     return {"sources": _load_admin_sources()}
 
 
+@app.get("/api/admin/teaching-focus/patterns")
+def list_admin_teaching_focus_patterns(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"patterns": build_admin_teaching_focus_patterns()}
+
+
+@app.get("/api/admin/teaching-focus/patterns/{focus_id}")
+def get_admin_teaching_focus_pattern_detail(
+    focus_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    pattern = get_admin_teaching_focus_pattern(focus_id)
+    if pattern is None:
+        raise HTTPException(status_code=404, detail="teaching focus pattern not found")
+    return {"pattern": pattern}
+
+
 @app.get("/api/admin/model-config")
 def get_admin_model_config(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -1250,6 +1274,18 @@ def request_hint(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+@app.get("/api/sessions/{session_id}/teaching-focus")
+def get_session_teaching_focus(
+    session_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_owned_session(session_id, auth_token)
+    teaching_focus = osce_session_service.get_teaching_focus(session_id)
+    if teaching_focus is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return teaching_focus
 
 
 @app.post("/api/sessions/{session_id}/submit-diagnosis")

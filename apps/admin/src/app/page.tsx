@@ -188,6 +188,23 @@ type TrainingSkillEffectSummary = Readonly<{
   without_skill: TrainingSkillEffectGroup;
 }>;
 
+type AdminTeachingFocusPattern = Readonly<{
+  focus_id: string;
+  scope: string;
+  pattern: string;
+  title: string;
+  description: string;
+  training_suggestion: string;
+  trigger_item_ids: readonly string[];
+  case_ids: readonly string[];
+  support_count: number;
+  source_report_count: number;
+  source_reference_ids: readonly string[];
+  severity: string;
+  visibility_level: string;
+  why_now: string;
+}>;
+
 type TrainingEventRecord = Readonly<{
   session_id: string;
   case_id: string;
@@ -438,6 +455,14 @@ type AdminInsightsResponse = Readonly<{
 
 type AdminSkillEffectsResponse = Readonly<{
   skill_effects: TrainingSkillEffectSummary;
+}>;
+
+type AdminTeachingFocusPatternsResponse = Readonly<{
+  patterns: readonly AdminTeachingFocusPattern[];
+}>;
+
+type AdminTeachingFocusPatternDetailResponse = Readonly<{
+  pattern: AdminTeachingFocusPattern;
 }>;
 
 type CandidateListResponse = Readonly<{
@@ -710,6 +735,20 @@ async function getTrainingSkillEffects(): Promise<TrainingSkillEffectSummary> {
   await assertAdminResponseOk(response, "读取 Skill 效果统计");
   const payload = (await response.json()) as AdminSkillEffectsResponse;
   return payload.skill_effects;
+}
+
+async function getAdminTeachingFocusPatterns(): Promise<readonly AdminTeachingFocusPattern[]> {
+  const response = await fetch("/api/admin/teaching-focus/patterns", { method: "GET" });
+  await assertAdminResponseOk(response, "读取动态教学重点模式");
+  const payload = (await response.json()) as AdminTeachingFocusPatternsResponse;
+  return payload.patterns;
+}
+
+async function getAdminTeachingFocusPattern(focusId: string): Promise<AdminTeachingFocusPattern> {
+  const response = await fetch(`/api/admin/teaching-focus/patterns/${encodeURIComponent(focusId)}`, { method: "GET" });
+  await assertAdminResponseOk(response, "读取动态教学重点详情");
+  const payload = (await response.json()) as AdminTeachingFocusPatternDetailResponse;
+  return payload.pattern;
 }
 
 async function getAdminEvaluations(query: AdminListQuery): Promise<EvaluationListResponse> {
@@ -1012,6 +1051,8 @@ export default function AdminDashboardPage() {
   const [reports, setReports] = useState<readonly AdminSessionReport[]>([]);
   const [reportPagination, setReportPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [insights, setInsights] = useState<AdminTrainingInsights | null>(null);
+  const [teachingFocusPatterns, setTeachingFocusPatterns] = useState<readonly AdminTeachingFocusPattern[]>([]);
+  const [selectedTeachingFocusPattern, setSelectedTeachingFocusPattern] = useState<AdminTeachingFocusPattern | null>(null);
   const [skillEffects, setSkillEffects] = useState<TrainingSkillEffectSummary | null>(null);
   const [evaluations, setEvaluations] = useState<readonly EvaluationBatchSummary[]>([]);
   const [evaluationPagination, setEvaluationPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
@@ -1063,13 +1104,14 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
+    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminModelConfig(),
       getAdminSessions(initialListQuery),
       getAdminReports(initialListQuery),
       getAdminInsights(),
+      getAdminTeachingFocusPatterns(),
       getTrainingSkillEffects(),
       getAdminEvaluations(initialListQuery),
       getTrainingSkillCandidates(initialListQuery),
@@ -1083,6 +1125,8 @@ export default function AdminDashboardPage() {
     setReports(nextReportPage.reports);
     setReportPagination(nextReportPage.pagination);
     setInsights(nextInsights);
+    setTeachingFocusPatterns(nextTeachingFocusPatterns);
+    setSelectedTeachingFocusPattern(nextTeachingFocusPatterns[0] ?? null);
     setSkillEffects(nextSkillEffects);
     setEvaluations(nextEvaluationPage.evaluations);
     setEvaluationPagination(nextEvaluationPage.pagination);
@@ -1516,6 +1560,10 @@ export default function AdminDashboardPage() {
   async function handleSelectCandidate(candidateId: string) {
     setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
     setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
+  }
+
+  async function handleSelectTeachingFocusPattern(focusId: string) {
+    setSelectedTeachingFocusPattern(await getAdminTeachingFocusPattern(focusId));
   }
 
   async function handleReview(action: "approve" | "reject") {
@@ -2301,6 +2349,58 @@ export default function AdminDashboardPage() {
               ) : (
                 <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取错误模式统计。</p>
               )}
+            </section>
+
+            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Teaching Focus</p>
+                  <h2 className="mt-1 text-xl font-semibold">动态教学重点模式</h2>
+                  <p className="mt-2 text-sm leading-6 text-[#6F6257]">由病例结构、Rubric 和当前会话进度派生，避免把演示文案写死到单个病例。</p>
+                </div>
+                <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{teachingFocusPatterns.length} 个模式</p>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                <div className="grid max-h-80 gap-2 overflow-y-auto pr-1">
+                  {teachingFocusPatterns.length > 0 ? (
+                    teachingFocusPatterns.map((pattern) => (
+                      <button
+                        className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-left transition hover:border-[#AE5630]"
+                        key={pattern.focus_id}
+                        onClick={() => void handleSelectTeachingFocusPattern(pattern.focus_id)}
+                        type="button"
+                      >
+                        <span className="text-sm font-semibold">{pattern.title}</span>
+                        <span className="mt-1 block font-mono text-[11px] text-[#AE5630]">{pattern.focus_id}</span>
+                        <span className="mt-1 block text-xs text-[#6F6257]">触发项 {pattern.trigger_item_ids.length} 个 · {pattern.severity}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">暂无动态教学重点模式。</p>
+                  )}
+                </div>
+                {selectedTeachingFocusPattern ? (
+                  <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                    <p className="text-xs font-medium text-[#AE5630]">{selectedTeachingFocusPattern.scope}</p>
+                    <h3 className="mt-1 text-lg font-semibold">{selectedTeachingFocusPattern.title}</h3>
+                    <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedTeachingFocusPattern.description}</p>
+                    <p className="mt-3 rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]">{selectedTeachingFocusPattern.training_suggestion}</p>
+                    <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <dt className="font-semibold text-[#141413]">触发 Rubric 项</dt>
+                        <dd className="mt-2 break-words font-mono text-[#6F6257]">{selectedTeachingFocusPattern.trigger_item_ids.join("、")}</dd>
+                      </div>
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <dt className="font-semibold text-[#141413]">来源引用</dt>
+                        <dd className="mt-2 break-words font-mono text-[#6F6257]">{selectedTeachingFocusPattern.source_reference_ids.join("、")}</dd>
+                      </div>
+                    </dl>
+                    <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">生成依据：{selectedTeachingFocusPattern.why_now}</p>
+                  </article>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个动态教学重点模式。</p>
+                )}
+              </div>
             </section>
 
             <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">

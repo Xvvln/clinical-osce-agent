@@ -130,6 +130,30 @@ type CaseTeachingFocus = Readonly<{
   recommended_training_path: readonly string[];
 }>;
 
+type DerivedTeachingFocusPattern = Readonly<{
+  focus_id: string;
+  scope: string;
+  pattern: string;
+  title: string;
+  description: string;
+  training_suggestion: string;
+  trigger_item_ids: readonly string[];
+  case_ids: readonly string[];
+  support_count: number;
+  source_report_count: number;
+  source_reference_ids: readonly string[];
+  severity: string;
+  visibility_level: string;
+  why_now: string;
+}>;
+
+type DerivedTeachingFocus = Readonly<{
+  case_id: string;
+  session_id?: string;
+  scope: string;
+  patterns: readonly DerivedTeachingFocusPattern[];
+}>;
+
 type InquiryGuidance = Readonly<{
   priority: string;
   suggested_questions: readonly string[];
@@ -205,6 +229,7 @@ type OsceSession = Readonly<{
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
   teaching_focus: CaseTeachingFocus;
+  dynamic_teaching_focus: DerivedTeachingFocus;
   inquiry_guidance: InquiryGuidance;
   diagnosis_draft: DiagnosisDraft;
   physical_exam_options: readonly PhysicalExamOption[];
@@ -1692,6 +1717,7 @@ function HomeContent() {
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
   const preparedTeachingFocus = session?.teaching_focus ?? selectedCase?.teachingFocus ?? null;
+  const preparedDynamicTeachingFocus = session?.dynamic_teaching_focus ?? null;
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
   const apiConfigBaseUrlLabel = isVertexGeminiAdcConfig ? "Project ID" : "Base URL";
@@ -2152,6 +2178,32 @@ function HomeContent() {
                 选择病例
               </Link>
             </div>
+          </Panel>
+        </div>
+
+        <div className="mt-4">
+          <Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">
+            {preparedDynamicTeachingFocus && preparedDynamicTeachingFocus.patterns.length > 0 ? (
+              <div className="space-y-2 text-xs leading-5">
+                {preparedDynamicTeachingFocus.patterns.map((pattern) => (
+                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3" key={pattern.focus_id}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-foreground">{pattern.title}</p>
+                      <span className="rounded-full border border-brand/20 bg-background px-2 py-0.5 text-[11px] text-brand">
+                        {pattern.severity}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-muted-foreground">{pattern.description}</p>
+                    <p className="mt-2 text-brand">{pattern.training_suggestion}</p>
+                    <p className="mt-2 text-[11px] text-muted-foreground">生成依据：{pattern.why_now}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                开始训练后，系统会根据当前会话进度动态派生下一步训练重点。
+              </p>
+            )}
           </Panel>
         </div>
 

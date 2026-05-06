@@ -494,7 +494,13 @@ test("home workspace renders opening task card in the dialogue area and inquiry 
   assert.match(pageSource, /opening_task_card: OpeningTaskCard;/);
   assert.match(pageSource, /type CaseTeachingFocus = Readonly<\{/);
   assert.match(pageSource, /teaching_focus: CaseTeachingFocus;/);
+  assert.match(pageSource, /type DerivedTeachingFocusPattern = Readonly<\{/);
+  assert.match(pageSource, /dynamic_teaching_focus: DerivedTeachingFocus;/);
   assert.match(pageSource, /const preparedTeachingFocus = session\?\.teaching_focus \?\? selectedCase\?\.teachingFocus \?\? null;/);
+  assert.match(pageSource, /const preparedDynamicTeachingFocus = session\?\.dynamic_teaching_focus \?\? null;/);
+  assert.match(pageSource, /<Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">/);
+  assert.match(pageSource, /preparedDynamicTeachingFocus\.patterns\.map/);
+  assert.match(pageSource, /pattern\.why_now/);
   assert.match(pageSource, /<Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">/);
   assert.match(pageSource, /preparedTeachingFocus\.learning_objectives\.map/);
   assert.match(pageSource, /preparedTeachingFocus\.common_error_patterns\.map/);

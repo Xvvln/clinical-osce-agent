@@ -46,6 +46,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminTeachingFocusPattern = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
@@ -63,6 +65,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}\/events`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/events\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/skill-effects"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/teaching-focus\/patterns"/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/teaching-focus\/patterns\/\$\{encodeURIComponent\(focusId\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
@@ -74,6 +78,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /reports\.length > 0/);
   assert.match(adminPageSource, /setReports\(nextReportPage\.reports\)/);
   assert.match(adminPageSource, /错误模式统计/);
+  assert.match(adminPageSource, /动态教学重点模式/);
+  assert.match(adminPageSource, /由病例结构、Rubric 和当前会话进度派生/);
+  assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_ids/);
+  assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_ids/);
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /系统评测/);

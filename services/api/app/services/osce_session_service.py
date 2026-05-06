@@ -218,6 +218,14 @@ class OsceSessionService:
         self._append_event(session, "hint_requested", {"hint": graph_state["hint"]})
         return payload
 
+    def get_teaching_focus(self, session_id: str) -> dict[str, Any] | None:
+        session = self._get_session(session_id)
+        if session is None:
+            return None
+        from app.services.derived_teaching_focus_service import build_session_teaching_focus
+
+        return build_session_teaching_focus(session)
+
     def submit_diagnosis(self, session_id: str, diagnosis: str, reasoning: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
@@ -465,6 +473,12 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
 
 def _serialize_teaching_focus(case: Case) -> dict[str, Any]:
     return case.teaching_focus.model_dump(mode="json")
+
+
+def _serialize_dynamic_teaching_focus(session: OsceSession) -> dict[str, Any]:
+    from app.services.derived_teaching_focus_service import build_session_teaching_focus
+
+    return build_session_teaching_focus(session)
 
 
 def _serialize_physical_exam_quick_option(exam: PhysicalExamItem) -> dict[str, str]:
@@ -768,6 +782,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
         "teaching_focus": _serialize_teaching_focus(case),
+        "dynamic_teaching_focus": _serialize_dynamic_teaching_focus(session),
         "inquiry_guidance": _serialize_inquiry_guidance(),
         "diagnosis_draft": _serialize_diagnosis_draft(case),
         "physical_exam_options": [

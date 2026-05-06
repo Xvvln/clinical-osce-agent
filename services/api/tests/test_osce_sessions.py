@@ -63,6 +63,32 @@ def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str,
     assert create_response.json()["student_id"] == authenticated_user["user_id"]
 
 
+def test_session_teaching_focus_returns_dynamic_runtime_patterns(authenticated_user: dict[str, str]) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "acs_001"})
+    session_id = create_response.json()["session_id"]
+
+    response = client.get(f"/api/sessions/{session_id}/teaching-focus")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["case_id"] == "acs_001"
+    assert payload["session_id"] == session_id
+    assert payload["scope"] == "session_runtime"
+    assert payload["patterns"][0]["focus_id"] == "session_runtime:acs_001:history_taking"
+    assert payload["patterns"][0]["trigger_item_ids"] == ["ht_onset", "ht_character", "ht_radiation"]
+    visible_text = "\n".join(
+        [
+            payload["patterns"][0]["title"],
+            payload["patterns"][0]["description"],
+            payload["patterns"][0]["training_suggestion"],
+            payload["patterns"][0]["why_now"],
+        ]
+    )
+    assert "急性冠脉综合征" not in visible_text
+    assert "ACS" not in visible_text
+    assert "急性心肌梗死" not in visible_text
+
+
 def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str, str] | None]]:
     return [
         ("GET", f"/api/sessions/{session_id}", None),
@@ -71,6 +97,7 @@ def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str
         ("POST", f"/api/sessions/{session_id}/auxiliary-test", {"test_code": "lab.cbc"}),
         ("POST", f"/api/sessions/{session_id}/hypotheses", {"hypothesis": "急性阑尾炎"}),
         ("POST", f"/api/sessions/{session_id}/hint", None),
+        ("GET", f"/api/sessions/{session_id}/teaching-focus", None),
         (
             "POST",
             f"/api/sessions/{session_id}/submit-diagnosis",

@@ -87,6 +87,8 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/sessions"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/events"),
+            unauthenticated_client.get("/api/admin/teaching-focus/patterns"),
+            unauthenticated_client.get("/api/admin/teaching-focus/patterns/case_baseline:appendicitis_001:history_taking"),
         ]
 
     assert [response.status_code for response in responses] == [401] * len(responses)
@@ -130,6 +132,8 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/sessions"),
             client.get("/api/admin/sessions/missing_session/report"),
             client.get("/api/admin/sessions/missing_session/events"),
+            client.get("/api/admin/teaching-focus/patterns"),
+            client.get("/api/admin/teaching-focus/patterns/case_baseline:appendicitis_001:history_taking"),
         ]
 
     assert [response.status_code for response in responses] == [403] * len(responses)
@@ -143,6 +147,42 @@ def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
 
     assert schema["required"] == ["candidate_id"]
     assert list(schema["properties"]) == ["candidate_id"]
+
+
+def test_admin_can_list_dynamic_teaching_focus_patterns(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/teaching-focus/patterns")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "patterns" in payload
+    pattern_ids = [pattern["focus_id"] for pattern in payload["patterns"]]
+    assert "case_baseline:appendicitis_001:history_taking" in pattern_ids
+    assert "case_baseline:acs_001:auxiliary_test" in pattern_ids
+    acs_pattern = next(pattern for pattern in payload["patterns"] if pattern["focus_id"] == "case_baseline:acs_001:auxiliary_test")
+    assert acs_pattern["trigger_item_ids"] == ["at_ecg", "at_troponin"]
+    assert acs_pattern["source_report_count"] == 0
+    assert acs_pattern["visibility_level"] == "student_safe"
+    visible_text = "\n".join(
+        [
+            acs_pattern["title"],
+            acs_pattern["description"],
+            acs_pattern["training_suggestion"],
+            acs_pattern["why_now"],
+        ]
+    )
+    assert "急性冠脉综合征" not in visible_text
+    assert "ACS" not in visible_text
+
+
+def test_admin_can_read_dynamic_teaching_focus_pattern_detail(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/teaching-focus/patterns/case_baseline:appendicitis_001:history_taking")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pattern"]["focus_id"] == "case_baseline:appendicitis_001:history_taking"
+    assert payload["pattern"]["trigger_item_ids"][:2] == ["ht_onset", "ht_migration"]
 
 
 def test_demo_admin_can_login_with_hardcoded_credentials_without_env(tmp_path, monkeypatch) -> None:
