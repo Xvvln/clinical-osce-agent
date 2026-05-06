@@ -12,6 +12,10 @@
 
 这个项目的智能体特性是受控医学教学智能体，而不是开放式自主行动代理。它通过 LangGraph 管理多阶段训练状态，通过工具化节点处理问诊、查体、辅助检查、提示、评分、反馈和 Skill 注入，通过结构化日志形成可复盘轨迹，并通过自动化评测防止 RAG 来源覆盖、报告 JSON 兼容、Skill 审核闭环和管理端页面结构回退。医学事实、标准诊断、rubric、病例隐藏信息和真实诊疗建议始终保持受控边界，模型只在允许范围内承担语言表达、语义评分、学习建议和教学策略生成。
 
+## 参赛定位
+
+本项目面向“临床技能训练智能体”赛道。系统侧重临床实践能力的模拟与训练，以 OSCE 问诊、查体选择、辅助检查申请、诊断推理、评分反馈和可重复复盘为核心，突出交互式训练环境、过程证据留痕和教学改进闭环。它也具备医学教与学辅助能力，但答辩主线应放在“临床技能训练”而不是普通课程问答或教务管理。
+
 ## 目标核心能力
 
 - **结构化病例与来源台账**：病例以 JSON（JavaScript Object Notation，结构化数据格式）保存，覆盖主诉、隐藏病史、查体、辅助检查、诊断、鉴别诊断、推理点和来源归属；病例、rubric 和公开数据来源应能被管理端审计。
@@ -77,24 +81,6 @@ clinical-osce-agent/
 7. 后端按 rubric 生成评分报告、漏项、推理反馈、知识推荐和来源引用。
 8. 前端展示报告摘要和独立报告页，用于教学复盘。
 
-## 后端 API
-
-| API | 方法 | 说明 |
-| --- | --- | --- |
-| `/health` | GET | 健康检查 |
-| `/api/cases` | GET | 获取病例摘要列表 |
-| `/api/cases/{case_id}/raw` | GET | 兼容保留：管理员鉴权后获取单个病例完整结构 |
-| `/api/admin/cases/{case_id}/raw` | GET | 管理端读取单个病例完整结构 |
-| `/api/sessions` | POST | 创建训练 session |
-| `/api/sessions/{session_id}` | GET | 查询训练状态 |
-| `/api/sessions/{session_id}/message` | POST | 发送问诊问题 |
-| `/api/sessions/{session_id}/physical-exam` | POST | 申请查体 |
-| `/api/sessions/{session_id}/auxiliary-test` | POST | 申请辅助检查 |
-| `/api/sessions/{session_id}/hypotheses` | POST | 记录训练中的诊断假设 |
-| `/api/sessions/{session_id}/hint` | POST | 请求苏格拉底过程提示 |
-| `/api/sessions/{session_id}/submit-diagnosis` | POST | 提交最终诊断 |
-| `/api/sessions/{session_id}/report` | GET | 生成或读取评分报告 |
-
 ## 数据策略
 
 - `data/cases/` 和 `data/rubrics/` 是运行时直接读取的教学数据。
@@ -102,6 +88,22 @@ clinical-osce-agent/
 - `data/attribution/source_registry/sources.json` 是数据来源登记清单。
 - `data/raw/`、`references/`、`data/runtime/*.sqlite3` 和受限数据默认不提交到 Git。
 - 需要额外许可的数据，例如 UMLS canonicalized dataset，不自动下载，也不应直接提交。
+
+## 数据来源与使用边界
+
+本项目采用“公开来源登记 + 本地结构化加工 + 教学边界声明”的数据策略。系统不直接接入真实医院 HIS/EMR（医院信息系统 / 电子病历系统），不使用真实患者隐私数据，也不把外部原始大体积数据提交到 GitHub。病例、rubric、反馈引用和 RAG 来源均通过 `data/attribution/source_registry/sources.json` 维护来源台账，管理端可展示来源、许可、用途和风险说明。
+
+已登记的数据 / 参考源包括：
+
+| 来源 | 用途 | 许可与边界 |
+| --- | --- | --- |
+| Fareez OSCE 数据集 | 问诊语料风格、话轮结构、症状采集模式参考 | CC BY 4.0；偏呼吸系统问诊，不直接覆盖完整病例闭环 |
+| MediTOD | 意图识别、槽位抽取、医学对话标注结构参考 | 公共仓库；canonicalized 数据需要 UMLS 许可，不自动下载 |
+| MedCaseReasoning | 诊断推理依据、鉴别诊断 reasoning point 提炼参考 | 以数据集卡说明为准；复杂病例报告需二次教学化加工 |
+| CaseReportCollective | 后续扩展病例筛选与结构化参考 | CC BY 4.0；当前只作为扩展来源，不直接进入 MVP 主数据 |
+| EasyMED | 标准化病人、意图识别和评测模块设计参考 | 仅做架构参考，不直接照搬产品形态 |
+
+当前仓库中的教学病例是面向 OSCE 训练目标进行结构化加工后的演示病例，用于医学教育模拟和系统评测，不代表正式临床指南或真实诊疗建议。若后续引入新的公开数据或教师审核病例，应同步更新来源台账、许可说明、风险说明和项目开发文档。
 
 ## 快速开始
 
