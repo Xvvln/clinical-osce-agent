@@ -575,8 +575,8 @@ def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_cas
     osce_session_service.training_skill_store.enable_candidate(
         {
             "candidate_id": "skill_candidate_abdominal_pattern",
-            "trigger_item_id": "training_pattern_dxd_crohn_dxd_ectopic",
-            "trigger_item_ids": ["dxd_crohn", "dxd_ectopic"],
+            "trigger_item_id": "training_pattern_dxd_crohn_dxd_gastroenteritis",
+            "trigger_item_ids": ["dxd_crohn", "dxd_gastroenteritis"],
             "case_ids": ["appendicitis_001"],
             "title": "急腹症鉴别诊断与全面评估逻辑训练",
             "description": "急腹症鉴别诊断反复遗漏。",
@@ -709,7 +709,7 @@ def test_osce_session_returns_training_progress_map() -> None:
             "img.abd_us",
             "img.abd_ct",
             "lab.urinalysis",
-            "hf_08",
+            "hf_05",
             "vital.temperature",
             "abd.inspection",
         ],
@@ -966,7 +966,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     assert report_payload["reasoning_errors"] == [
         "提出输尿管结石并说明排除依据：评分轨迹未找到足够证据。",
         "提出克罗恩病并说明排除依据：评分轨迹未找到足够证据。",
-        "考虑异位妊娠并正确排除：评分轨迹未找到足够证据。",
+        "提出急性胃肠炎并说明排除依据：评分轨迹未找到足够证据。",
         "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）：评分轨迹未找到足够证据。",
         "推理表达覆盖关键排除依据：评分轨迹未找到足够证据。",
     ]
@@ -987,7 +987,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         "下一轮训练重点：合理申请尿常规排除输尿管结石。",
         "下一轮训练重点：提出输尿管结石并说明排除依据。",
         "下一轮训练重点：提出克罗恩病并说明排除依据。",
-        "下一轮训练重点：考虑异位妊娠并正确排除。",
+        "下一轮训练重点：提出急性胃肠炎并说明排除依据。",
         "下一轮训练重点：推理表达覆盖关键排除依据。",
     ]
     assert report_payload["source_references"] == [
@@ -1009,7 +1009,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         "rubric:appendicitis_001_rubric.item.ax_ua",
         "rubric:appendicitis_001_rubric.item.dxd_urolith",
         "rubric:appendicitis_001_rubric.item.dxd_crohn",
-        "rubric:appendicitis_001_rubric.item.dxd_ectopic",
+        "rubric:appendicitis_001_rubric.item.dxd_gastroenteritis",
         "rubric:appendicitis_001_rubric.item.rs_exclude",
         "rubric:appendicitis_001_rubric.item.ht_onset",
         "rubric:appendicitis_001_rubric.item.pe_rebound",
@@ -1283,7 +1283,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
             "ax_ua",
             "dxd_urolith",
             "dxd_crohn",
-            "dxd_ectopic",
+            "dxd_gastroenteritis",
             "rs_exclude",
         ],
         "knowledge_recommendations": [
@@ -1368,8 +1368,8 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
                 "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
             },
             {
-                "reference": "rubric:appendicitis_001_rubric.item.dxd_ectopic",
-                "title": "考虑异位妊娠并正确排除",
+                "reference": "rubric:appendicitis_001_rubric.item.dxd_gastroenteritis",
+                "title": "提出急性胃肠炎并说明排除依据",
                 "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
             },
             {

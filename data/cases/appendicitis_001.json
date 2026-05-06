@@ -262,10 +262,10 @@
         "key_distinction": "病程多为数月慢性过程，常伴体重下降及腹泻，本例为急性起病。"
       },
       {
-        "disease_name": "异位妊娠破裂",
-        "icd10_hint": "O00",
+        "disease_name": "急性胃肠炎",
+        "icd10_hint": "K52.9",
         "expected_action": "排除",
-        "key_distinction": "本例为男性患者，可直接排除。"
+        "key_distinction": "常以呕吐、腹泻或弥漫性腹痛为主，本例疼痛转移并固定右下腹，且无明显腹泻。"
       }
     ],
     "reasoning_points": [
@@ -306,9 +306,9 @@
       },
       {
         "point_id": "appendicitis_001.rp_06",
-        "statement": "男性患者可直接排除异位妊娠。",
+        "statement": "无明显腹泻且疼痛转移固定右下腹，不支持单纯急性胃肠炎。",
         "kind": "排除",
-        "required_evidence": ["appendicitis_001.hf_08"],
+        "required_evidence": ["appendicitis_001.hf_02", "appendicitis_001.hf_05"],
         "weight": 3
       },
       {

@@ -220,16 +220,16 @@ dimensions:
             synonyms: [克罗恩, Crohn]
             icd10_hint: K50
         evidence_expected: []
-      - item_id: dxd_ectopic
-        description: 考虑异位妊娠并正确排除
+      - item_id: dxd_gastroenteritis
+        description: 提出急性胃肠炎并说明排除依据
         max_score: 5
         match_rule:
           kind: diagnosis_concept
           spec:
-            target: 异位妊娠破裂
-            synonyms: [异位妊娠, 宫外孕]
-            icd10_hint: O00
-        evidence_expected: []
+            target: 急性胃肠炎
+            synonyms: [胃肠炎, 肠胃炎, 急性肠胃炎]
+            icd10_hint: K52.9
+        evidence_expected: [appendicitis_001.rp_06]
   - dimension_id: reasoning
     weight: 15
     scoring_mode: llm

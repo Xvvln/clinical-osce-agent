@@ -1,6 +1,31 @@
+import json
+from pathlib import Path
+
+import yaml
+
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse, ScoreTrace
 from app.services.osce_session_service import OsceSession
 from app.services.rule_evaluator import evaluate_session_rules, score_rubric_item
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_appendicitis_male_case_uses_sex_appropriate_differential_items() -> None:
+    case_payload = json.loads((PROJECT_ROOT / "data/cases/appendicitis_001.json").read_text(encoding="utf-8"))
+    rubric_payload = yaml.safe_load(
+        (PROJECT_ROOT / "data/rubrics/appendicitis_001_rubric.yaml").read_text(encoding="utf-8")
+    )
+    searchable_content = "\n".join(
+        [
+            json.dumps(case_payload["diagnosis"], ensure_ascii=False),
+            yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=True),
+        ]
+    ).lower()
+
+    assert case_payload["patient_profile"]["gender"] == "男"
+    for forbidden_term in ["异位妊娠", "宫外孕", "ectopic", "pregnancy"]:
+        assert forbidden_term not in searchable_content
 
 
 def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
@@ -52,8 +77,8 @@ def test_diagnosis_concept_scores_differential_concepts_from_structured_reasonin
             "diagnosis": "急性阑尾炎",
             "reasoning": "\n".join(
                 [
-                    "鉴别诊断：右侧输尿管结石、克罗恩病回盲部受累、异位妊娠破裂。",
-                    "排除依据：无尿痛、尿频、肉眼血尿，尿常规阴性；无慢性腹泻或体重下降；患者为男性，因此可排除异位妊娠。",
+                    "鉴别诊断：右侧输尿管结石、克罗恩病回盲部受累、急性胃肠炎。",
+                    "排除依据：无尿痛、尿频、肉眼血尿，尿常规阴性；无慢性腹泻或体重下降；没有明显腹泻，不像急性胃肠炎。",
                 ]
             ),
         },
@@ -64,10 +89,10 @@ def test_diagnosis_concept_scores_differential_concepts_from_structured_reasonin
     assert report["dimension_scores"]["differential_diagnosis"] == 15
     assert report["rubric_scores"]["dxd_urolith"]["score"] == 5
     assert report["rubric_scores"]["dxd_crohn"]["score"] == 5
-    assert report["rubric_scores"]["dxd_ectopic"]["score"] == 5
+    assert report["rubric_scores"]["dxd_gastroenteritis"]["score"] == 5
     assert "dxd_urolith" not in report["missed_items"]
     assert "dxd_crohn" not in report["missed_items"]
-    assert "dxd_ectopic" not in report["missed_items"]
+    assert "dxd_gastroenteritis" not in report["missed_items"]
 
 
 def test_reasoning_coverage_scores_full_score_when_evidence_coverage_meets_threshold() -> None:
