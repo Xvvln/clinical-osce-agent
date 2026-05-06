@@ -18,6 +18,7 @@ from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
+from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
@@ -880,6 +881,14 @@ def get_admin_model_config(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return build_admin_model_config()
+
+
+@app.get("/api/admin/retrieval-eval")
+def get_admin_retrieval_eval(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"retrieval_eval": run_retrieval_eval()}
 
 
 @app.get("/api/admin/evolution/candidates")

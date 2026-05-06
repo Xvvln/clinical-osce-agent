@@ -83,6 +83,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             unauthenticated_client.get("/api/admin/sources"),
             unauthenticated_client.get("/api/admin/model-config"),
+            unauthenticated_client.get("/api/admin/retrieval-eval"),
             unauthenticated_client.get("/api/admin/reports"),
             unauthenticated_client.get("/api/admin/sessions"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
@@ -128,6 +129,7 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             client.get("/api/admin/sources"),
             client.get("/api/admin/model-config"),
+            client.get("/api/admin/retrieval-eval"),
             client.get("/api/admin/reports"),
             client.get("/api/admin/sessions"),
             client.get("/api/admin/sessions/missing_session/report"),
@@ -183,6 +185,23 @@ def test_admin_can_read_dynamic_teaching_focus_pattern_detail(tmp_path, monkeypa
     payload = response.json()
     assert payload["pattern"]["focus_id"] == "case_baseline:appendicitis_001:history_taking"
     assert payload["pattern"]["trigger_item_ids"][:2] == ["ht_onset", "ht_migration"]
+
+
+def test_admin_can_read_retrieval_eval_metrics(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/retrieval-eval")
+
+    assert response.status_code == 200
+    payload = response.json()["retrieval_eval"]
+    assert payload["gold_set"]["path"].endswith("services/api/evals/retrieval/gold_queries.json")
+    assert payload["metrics"]["query_count"] >= 3
+    assert "recall_at_3" in payload["metrics"]
+    assert "recall_at_5" in payload["metrics"]
+    assert "mrr_at_5" in payload["metrics"]
+    assert "ndcg_at_5" in payload["metrics"]
+    assert "source_coverage" in payload["metrics"]
+    assert payload["boundary"]["rag_usage"] == "feedback_explanation_learning_recommendation_traceability_only"
+    assert "ChromaDB 是本地可选持久向量检索" in payload["boundary"]["chroma_scope"]
 
 
 def test_demo_admin_can_login_with_hardcoded_credentials_without_env(tmp_path, monkeypatch) -> None:

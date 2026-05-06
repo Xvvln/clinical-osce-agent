@@ -50,6 +50,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRetrievalEvalResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRetrievalEvalMetrics = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminAuditEventsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingEventRecord = Readonly<\{/);
@@ -68,6 +70,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\("\/api\/admin\/teaching-focus\/patterns"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/teaching-focus\/patterns\/\$\{encodeURIComponent\(focusId\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/retrieval-eval"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /Clinical OSCE 管理后台/);
@@ -96,6 +99,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /Skill 效果统计/);
   assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /模型 \/ API 配置/);
+  assert.match(adminPageSource, /RAG 召回评测/);
+  assert.match(adminPageSource, /Recall@3/);
+  assert.match(adminPageSource, /MRR@5/);
+  assert.match(adminPageSource, /nDCG@5/);
+  assert.match(adminPageSource, /ChromaDB 是本地可选持久向量检索/);
   assert.match(adminPageSource, /Gemini、Vertex 和 OpenAI 兼容模型/);
   assert.match(adminPageSource, /provider\.label/);
   assert.match(adminPageSource, /provider\.integration_status/);

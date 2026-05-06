@@ -1,0 +1,22 @@
+[
+  {
+    "query_id": "appendicitis_case_script",
+    "query": "右下腹痛 教学病例",
+    "expected_references": ["case:appendicitis_001"]
+  },
+  {
+    "query_id": "appendicitis_rebound_rubric",
+    "query": "反跳痛 查体 rubric",
+    "expected_references": ["rubric:appendicitis_001_rubric.item.pe_rebound"]
+  },
+  {
+    "query_id": "acs_ecg_rubric",
+    "query": "胸痛 心电图 检查",
+    "expected_references": ["rubric:acs_001_rubric.item.at_ecg"]
+  },
+  {
+    "query_id": "public_osce_source",
+    "query": "Fareez OSCE 公开数据 来源",
+    "expected_references": ["source:fareez_osce_2022"]
+  }
+]

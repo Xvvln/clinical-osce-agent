@@ -112,6 +112,41 @@ type EvaluationChartSummary = Readonly<{
   latestDurationMs: number;
 }>;
 
+type AdminRetrievalEvalMetrics = Readonly<{
+  query_count: number;
+  recall_at_3: number;
+  recall_at_5: number;
+  mrr_at_5: number;
+  ndcg_at_5: number;
+  source_coverage: number;
+}>;
+
+type AdminRetrievalEvalResult = Readonly<{
+  query_id: string;
+  query: string;
+  expected_references: readonly string[];
+  retrieved_references: readonly string[];
+  hits_at_5: readonly string[];
+}>;
+
+type AdminRetrievalEval = Readonly<{
+  gold_set: Readonly<{
+    path: string;
+    query_count: number;
+  }>;
+  metrics: AdminRetrievalEvalMetrics;
+  results: readonly AdminRetrievalEvalResult[];
+  boundary: Readonly<{
+    rag_usage: string;
+    chroma_scope: string;
+    scoring_boundary: string;
+  }>;
+}>;
+
+type AdminRetrievalEvalResponse = Readonly<{
+  retrieval_eval: AdminRetrievalEval;
+}>;
+
 type FrequentMissedItem = Readonly<{
   item_id: string;
   count: number;
@@ -643,6 +678,13 @@ async function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
   return (await response.json()) as AdminModelConfigResponse;
 }
 
+async function getAdminRetrievalEval(): Promise<AdminRetrievalEval> {
+  const response = await fetch("/api/admin/retrieval-eval", { method: "GET" });
+  await assertAdminResponseOk(response, "读取 RAG 召回评测");
+  const payload = (await response.json()) as AdminRetrievalEvalResponse;
+  return payload.retrieval_eval;
+}
+
 function getAdminCaseImportPayloadKey(caseText: string, rubricText: string): string {
   return `${caseText}\n---rubric---\n${rubricText}`;
 }
@@ -830,6 +872,10 @@ async function rejectTrainingSkillCandidate(candidateId: string): Promise<void> 
 
 function getPassLabel(passed: boolean): string {
   return passed ? "通过" : "未通过";
+}
+
+function formatRetrievalMetric(value: number): string {
+  return value.toFixed(4);
 }
 
 function getPercent(part: number, total: number): string {
@@ -1044,6 +1090,7 @@ export default function AdminDashboardPage() {
   const [busyRubricItemId, setBusyRubricItemId] = useState<string | null>(null);
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
   const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
+  const [retrievalEval, setRetrievalEval] = useState<AdminRetrievalEval | null>(null);
   const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>([]);
   const [sessionPagination, setSessionPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedSessionId, setSelectedSessionId] = useState("");
@@ -1106,10 +1153,11 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
+    const [nextCases, nextSources, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminModelConfig(),
+      getAdminRetrievalEval(),
       getAdminSessions(initialListQuery),
       getAdminReports(initialListQuery),
       getAdminInsights(),
@@ -1122,6 +1170,7 @@ export default function AdminDashboardPage() {
     setCases(nextCases);
     setSources(nextSources);
     setModelConfig(nextModelConfig);
+    setRetrievalEval(nextRetrievalEval);
     setSessions(nextSessionPage.sessions);
     setSessionPagination(nextSessionPage.pagination);
     setReports(nextReportPage.reports);
@@ -1694,6 +1743,77 @@ export default function AdminDashboardPage() {
             </div>
           ) : (
             <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取模型 / API 配置。</p>
+          )}
+        </section>
+
+        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Retrieval Evaluation</p>
+              <h2 className="mt-1 text-xl font-semibold">RAG 召回评测</h2>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">
+                用标注查询验证反馈解释来源覆盖；RAG 只服务于反馈解释、学习推荐、引用展示和可追溯性。
+              </p>
+            </div>
+            <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
+              {retrievalEval ? `${retrievalEval.gold_set.query_count} 条 gold query` : "读取中"}
+            </p>
+          </div>
+          {retrievalEval ? (
+            <>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">Recall@3</p>
+                  <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.recall_at_3)}</p>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">Recall@5</p>
+                  <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.recall_at_5)}</p>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">MRR@5</p>
+                  <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.mrr_at_5)}</p>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">nDCG@5</p>
+                  <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.ndcg_at_5)}</p>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">Source Coverage</p>
+                  <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.source_coverage)}</p>
+                </article>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">标注查询与 Top5 命中</h3>
+                    <p className="break-all text-xs text-[#8A7D6F]">{retrievalEval.gold_set.path}</p>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {retrievalEval.results.map((result) => (
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={result.query_id}>
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                          <p className="text-sm font-medium">{result.query}</p>
+                          <p className="font-mono text-[11px] text-[#AE5630]">{result.query_id}</p>
+                        </div>
+                        <p className="mt-2 break-words text-xs text-[#6F6257]">期望：{result.expected_references.join("、")}</p>
+                        <p className="mt-1 break-words text-xs text-[#6F6257]">召回：{result.retrieved_references.join("、") || "无"}</p>
+                        <p className="mt-1 break-words text-xs text-[#8A7D6F]">命中：{result.hits_at_5.join("、") || "无"}</p>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                  <h3 className="text-sm font-semibold">边界说明</h3>
+                  <p className="mt-3 text-xs leading-6 text-[#6F6257]">ChromaDB 是本地可选持久向量检索；具体启用状态以服务端配置为准。</p>
+                  <p className="mt-3 text-xs leading-6 text-[#6F6257]">{retrievalEval.boundary.chroma_scope}</p>
+                  <p className="mt-2 text-xs leading-6 text-[#6F6257]">{retrievalEval.boundary.scoring_boundary}</p>
+                  <p className="mt-2 text-xs leading-6 text-[#8A7D6F]">用途：{retrievalEval.boundary.rag_usage}</p>
+                </article>
+              </div>
+            </>
+          ) : (
+            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 RAG 召回评测。</p>
           )}
         </section>
 

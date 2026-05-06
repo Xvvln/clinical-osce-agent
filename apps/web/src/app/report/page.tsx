@@ -198,17 +198,17 @@ function getSourceReferenceGroupMeta(key: string): Omit<SourceReferenceGroup, "r
   const meta: Readonly<Record<string, Omit<SourceReferenceGroup, "references">>> = {
     case: {
       key: "case",
-      title: "病例来源",
+      title: "病例脚本",
       description: "指向当前训练使用的结构化病例。",
     },
     source: {
       key: "source",
-      title: "公开数据来源",
+      title: "公开来源",
       description: "指向病例加工时登记的公开数据或参考工程。",
     },
     rubric: {
       key: "rubric",
-      title: "评分依据",
+      title: "rubric 条目",
       description: "指向本次扣分、得分或反馈对应的 rubric 条目。",
     },
     evidence: {
@@ -230,7 +230,7 @@ function groupSourceReferences(
   items: readonly SourceReferenceItem[],
   fallbackReferences: readonly string[],
 ): readonly SourceReferenceGroup[] {
-  const groupOrder = ["case", "source", "rubric", "evidence", "other"];
+  const groupOrder = ["case", "rubric", "source", "evidence", "other"];
   const displayItems = items.length > 0
     ? items.map((item) => ({
         reference: item.reference,

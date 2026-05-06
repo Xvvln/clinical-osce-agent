@@ -17,6 +17,7 @@ from app.services.vertex_embedding_retriever import build_vertex_embedding_clien
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
+SOURCE_REGISTRY_PATH = ROOT_DIR / "data" / "attribution" / "source_registry" / "sources.json"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -134,6 +135,7 @@ def search_retrieval_documents_with_embeddings(
 def _retrieval_documents() -> tuple[RetrievalDocument, ...]:
     documents: list[RetrievalDocument] = []
     documents.extend(_case_documents())
+    documents.extend(_source_documents())
     documents.extend(_knowledge_documents())
     documents.extend(_rubric_documents())
     return tuple(documents)
@@ -181,6 +183,35 @@ def _knowledge_documents() -> list[RetrievalDocument]:
             )
     return documents
 
+
+def _source_documents() -> list[RetrievalDocument]:
+    if not SOURCE_REGISTRY_PATH.exists():
+        return []
+    payload = json.loads(SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    documents: list[RetrievalDocument] = []
+    for item in payload if isinstance(payload, list) else []:
+        source_id = str(item.get("source_id", ""))
+        if not source_id:
+            continue
+        snippet_parts = [
+            item.get("source_name", ""),
+            item.get("source_url", ""),
+            item.get("license", ""),
+            item.get("data_type", ""),
+            " ".join(str(usage) for usage in item.get("allowed_usage", [])),
+            item.get("transformation", ""),
+            item.get("risk_note", ""),
+        ]
+        documents.append(
+            RetrievalDocument(
+                reference=f"source:{source_id}",
+                source_type="source",
+                title=str(item.get("source_name", source_id)),
+                snippet="；".join(str(part) for part in snippet_parts if part),
+                score=0,
+            )
+        )
+    return documents
 
 
 def _rubric_documents() -> list[RetrievalDocument]:

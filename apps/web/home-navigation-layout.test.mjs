@@ -249,6 +249,18 @@ test("report page uses Claude-like brand tokens without legacy teal hardcoding",
   assert.match(reportSource, /fill=\{REPORT_BRAND_COLOR\}/);
 });
 
+test("report source chips are grouped by case rubric public source and evidence", () => {
+  for (const source of [pageSource, reportSource]) {
+    assert.match(source, /function getSourceReferenceGroupKey\(reference: string\): string/);
+    assert.match(source, /title: "病例脚本"/);
+    assert.match(source, /title: "rubric 条目"/);
+    assert.match(source, /title: "公开来源"/);
+    assert.match(source, /title: "训练证据"/);
+    assert.match(source, /const groupOrder = \["case", "rubric", "source", "evidence", "other"\];/);
+  }
+  assert.match(reportSource, /<SourceReferenceGroups groups=\{sourceReferenceGroups\} \/>/);
+});
+
 test("home header links to the learning profile page", () => {
   const headerSource = getHeaderSource();
 
