@@ -336,6 +336,21 @@ test("admin dashboard can export selected system evaluation batch as JSON", () =
   assert.match(adminPageSource, /selectedEvaluation \? \(/);
 });
 
+test("admin dashboard can export selected case ledger and session report as JSON", () => {
+  assert.match(adminPageSource, /type AdminCaseLedgerExportPayload = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminReportExportPayload = Readonly<\{/);
+  assert.match(adminPageSource, /function buildAdminCaseLedgerExportPayload\(/);
+  assert.match(adminPageSource, /function buildAdminReportExportPayload\(report: AdminSessionReport\): AdminReportExportPayload/);
+  assert.match(adminPageSource, /function downloadAdminCaseLedgerJson\(/);
+  assert.match(adminPageSource, /function downloadAdminReportJson\(report: AdminSessionReport\): void/);
+  assert.match(adminPageSource, /link\.download = `clinical-osce-case-ledger-\$\{caseRaw\.case_id\}\.json`/);
+  assert.match(adminPageSource, /link\.download = `clinical-osce-report-\$\{report\.report_id\}\.json`/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminCaseLedgerJson\(selectedCaseRaw, selectedRubric, sources\)\}/);
+  assert.match(adminPageSource, /onClick=\{\(\) => downloadAdminReportJson\(selectedReport\)\}/);
+  assert.match(adminPageSource, /导出病例台账 JSON/);
+  assert.match(adminPageSource, /导出评分报告 JSON/);
+});
+
 test("admin dashboard can generate candidate skills from training logs", () => {
   assert.match(adminPageSource, /type TrainingSkillCandidateGenerationResponse = Readonly<\{/);
   assert.match(adminPageSource, /async function generateTrainingSkillCandidates\(\): Promise<TrainingSkillCandidateGenerationResponse>/);

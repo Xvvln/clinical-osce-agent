@@ -84,6 +84,17 @@ type EvaluationExportPayload = Readonly<{
   results: readonly EvaluationCaseResult[];
 }>;
 
+type AdminCaseLedgerExportPayload = Readonly<{
+  case: AdminCaseRaw;
+  rubric: AdminRubricDetail | null;
+  sources: readonly AdminSourceRegistryEntry[];
+}>;
+
+type AdminReportExportPayload = Readonly<{
+  report: AdminSessionReport;
+  source_reference_items: readonly AdminSourceReferenceItem[];
+}>;
+
 type EvaluationChartSummary = Readonly<{
   batchCount: number;
   totalCases: number;
@@ -751,6 +762,25 @@ function getAdminCaseImportStatusText(result: AdminCaseImportStatus): string {
   return `${label} · case_id=${result.case_id ?? "—"} · rubric_id=${result.rubric_id ?? "—"}${errors}`;
 }
 
+function buildAdminCaseLedgerExportPayload(
+  caseRaw: AdminCaseRaw,
+  rubric: AdminRubricDetail | null,
+  sources: readonly AdminSourceRegistryEntry[],
+): AdminCaseLedgerExportPayload {
+  return {
+    case: caseRaw,
+    rubric,
+    sources,
+  };
+}
+
+function buildAdminReportExportPayload(report: AdminSessionReport): AdminReportExportPayload {
+  return {
+    report,
+    source_reference_items: getReportSourceReferenceItems(report),
+  };
+}
+
 function buildEvaluationExportPayload(evaluation: EvaluationBatchDetail): EvaluationExportPayload {
   return {
     batch_id: evaluation.batch_id,
@@ -779,6 +809,32 @@ function buildEvaluationExportPayload(evaluation: EvaluationBatchDetail): Evalua
     total_cases: evaluation.total_cases,
     total_duration_ms: evaluation.total_duration_ms,
   };
+}
+
+function downloadAdminCaseLedgerJson(
+  caseRaw: AdminCaseRaw,
+  rubric: AdminRubricDetail | null,
+  sources: readonly AdminSourceRegistryEntry[],
+): void {
+  const payload = buildAdminCaseLedgerExportPayload(caseRaw, rubric, sources);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `clinical-osce-case-ledger-${caseRaw.case_id}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadAdminReportJson(report: AdminSessionReport): void {
+  const payload = buildAdminReportExportPayload(report);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `clinical-osce-report-${report.report_id}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function downloadEvaluationBatchJson(evaluation: EvaluationBatchDetail): void {
@@ -1370,7 +1426,16 @@ export default function AdminDashboardPage() {
                     <h3 className="mt-1 text-lg font-semibold">{selectedCaseRaw.case_title}</h3>
                     <p className="mt-1 text-sm leading-6 text-[#6F6257]">{selectedCaseRaw.chief_complaint}</p>
                   </div>
-                  <span className="rounded-full border border-[#E6DFD2] bg-white px-3 py-1 text-xs text-[#6F6257]">{selectedCaseRaw.course_module} · {selectedCaseRaw.difficulty}</span>
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                    <span className="rounded-full border border-[#E6DFD2] bg-white px-3 py-1 text-xs text-[#6F6257]">{selectedCaseRaw.course_module} · {selectedCaseRaw.difficulty}</span>
+                    <button
+                      className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                      onClick={() => downloadAdminCaseLedgerJson(selectedCaseRaw, selectedRubric, sources)}
+                      type="button"
+                    >
+                      导出病例台账 JSON
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-4">
                   <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
@@ -1706,7 +1771,18 @@ export default function AdminDashboardPage() {
             </section>
 
             <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
-              <h2 className="text-xl font-semibold">评分报告</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xl font-semibold">评分报告</h2>
+                {selectedReport ? (
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminReportJson(selectedReport)}
+                    type="button"
+                  >
+                    导出评分报告 JSON
+                  </button>
+                ) : null}
+              </div>
               {selectedReport ? (
                 <div className="mt-4 grid gap-4">
                   <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
