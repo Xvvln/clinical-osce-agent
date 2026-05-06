@@ -362,6 +362,7 @@ type AdminModelConfigPolicy = Readonly<{
   secrets_persisted: boolean;
   runtime_write_supported: boolean;
   configuration_source: string;
+  deployment_mode: string;
 }>;
 
 type AuthUser = Readonly<{
@@ -1715,38 +1716,56 @@ export default function AdminDashboardPage() {
             </p>
           </div>
           {modelConfig ? (
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {modelConfig.providers.map((provider) => (
-                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={provider.provider_id}>
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold">{provider.label}</p>
-                      <p className="mt-1 text-xs leading-5 text-[#6F6257]">{provider.capability}</p>
-                    </div>
-                    <span className={`rounded-full border px-2 py-1 text-[11px] ${provider.configured ? "border-green-200 bg-green-50 text-green-700" : "border-[#E6DFD2] bg-white text-[#6F6257]"}`}>
-                      {provider.configured ? "已配置" : provider.enabled ? "缺少配置" : "未启用"}
-                    </span>
-                  </div>
-                  <div className="mt-3 grid gap-2 text-xs text-[#6F6257] sm:grid-cols-2">
-                    <p>模型：{provider.model || "未设置"}</p>
-                    <p>认证：{provider.auth_mode}</p>
-                    <p>密钥：{provider.secret_configured ? "已配置" : "未配置 / 使用 ADC"}</p>
-                    <p>状态：{provider.integration_status}</p>
-                    {provider.base_url ? <p className="break-words">Base URL：{provider.base_url}</p> : null}
-                    {provider.project ? <p className="break-words">Project：{provider.project}</p> : null}
-                    {provider.location ? <p>Location：{provider.location}</p> : null}
-                    {provider.proxy_url ? <p className="break-words">Proxy：{provider.proxy_url}</p> : null}
-                    {provider.persist_directory ? <p className="break-words">Persist：{provider.persist_directory}</p> : null}
-                    {provider.collection ? <p className="break-words">Collection：{provider.collection}</p> : null}
-                  </div>
-                  <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
-                  {provider.missing_env.length > 0 ? (
-                    <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">缺少：{provider.missing_env.join("、")}</p>
-                  ) : null}
-                  <p className="mt-2 text-[11px] leading-5 text-[#8A7D6F]">环境变量：{provider.required_env.join("、")}</p>
+            <>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">部署模式</p>
+                  <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.deployment_mode}</p>
                 </article>
-              ))}
-            </div>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">Runtime 写入</p>
+                  <p className="mt-1 break-words text-sm font-semibold">
+                    {modelConfig.policy.runtime_write_supported ? "允许本次运行时配置" : "仅环境变量配置"}
+                  </p>
+                </article>
+                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">密钥持久化</p>
+                  <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.secrets_persisted ? "持久化" : "不落库"}</p>
+                </article>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {modelConfig.providers.map((provider) => (
+                  <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={provider.provider_id}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">{provider.label}</p>
+                        <p className="mt-1 text-xs leading-5 text-[#6F6257]">{provider.capability}</p>
+                      </div>
+                      <span className={`rounded-full border px-2 py-1 text-[11px] ${provider.configured ? "border-green-200 bg-green-50 text-green-700" : "border-[#E6DFD2] bg-white text-[#6F6257]"}`}>
+                        {provider.configured ? "已配置" : provider.enabled ? "缺少配置" : "未启用"}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-[#6F6257] sm:grid-cols-2">
+                      <p>模型：{provider.model || "未设置"}</p>
+                      <p>认证：{provider.auth_mode}</p>
+                      <p>密钥：{provider.secret_configured ? "已配置" : "未配置 / 使用 ADC"}</p>
+                      <p>状态：{provider.integration_status}</p>
+                      {provider.base_url ? <p className="break-words">Base URL：{provider.base_url}</p> : null}
+                      {provider.project ? <p className="break-words">Project：{provider.project}</p> : null}
+                      {provider.location ? <p>Location：{provider.location}</p> : null}
+                      {provider.proxy_url ? <p className="break-words">Proxy：{provider.proxy_url}</p> : null}
+                      {provider.persist_directory ? <p className="break-words">Persist：{provider.persist_directory}</p> : null}
+                      {provider.collection ? <p className="break-words">Collection：{provider.collection}</p> : null}
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
+                    {provider.missing_env.length > 0 ? (
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">缺少：{provider.missing_env.join("、")}</p>
+                    ) : null}
+                    <p className="mt-2 text-[11px] leading-5 text-[#8A7D6F]">环境变量：{provider.required_env.join("、")}</p>
+                  </article>
+                ))}
+              </div>
+            </>
           ) : (
             <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取模型 / API 配置。</p>
           )}

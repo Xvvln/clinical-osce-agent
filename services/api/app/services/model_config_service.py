@@ -3,15 +3,19 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 
 def build_admin_model_config() -> dict[str, Any]:
+    deployment_mode = get_deployment_mode()
+    runtime_write_supported = is_runtime_model_config_write_supported(deployment_mode)
     return {
         "policy": {
             "secrets_persisted": False,
-            "runtime_write_supported": True,
-            "configuration_source": "environment_or_runtime_memory",
+            "runtime_write_supported": runtime_write_supported,
+            "configuration_source": "environment_or_runtime_memory" if runtime_write_supported else "environment_only",
+            "deployment_mode": deployment_mode,
         },
         "providers": [
             _gemini_patient_api_config(),

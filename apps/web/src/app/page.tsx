@@ -464,6 +464,9 @@ const DEFAULT_AUTH_EMAIL = "1@1.test";
 const DEFAULT_AUTH_PASSWORD = "1";
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
 const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
+const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
+const PRODUCTION_DEPLOYMENT_MODES = new Set(["single-node-prod", "vertex-prod"]);
+const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES.has(DEPLOYMENT_MODE);
 const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
 const OSCE_DOCK_MARGIN = 20;
@@ -2961,9 +2964,11 @@ function HomeContent() {
                 ) : null}
                 {osceDockMenuGroup === "system" ? (
                   <div className="grid gap-2">
-                    <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
-                      API 配置
-                    </button>
+                    {isStudentRuntimeApiConfigEnabled ? (
+                      <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
+                        API 配置
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -3052,7 +3057,7 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
-      {isApiConfigHelpOpen ? (
+      {isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">

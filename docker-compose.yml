@@ -6,7 +6,9 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment:
+      CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
       CLINICAL_OSCE_ADMIN_EMAILS: admin-demo@example.test
+      CLINICAL_OSCE_DEMO_ADMIN_ENABLED: "true"
       OSCE_GEMINI_PATIENT_USE_VERTEX: "false"
       OSCE_VERTEX_ENABLED: "false"
       OSCE_VERTEX_SKILL_CANDIDATE_ENABLED: "false"
@@ -27,8 +29,10 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         CLINICAL_OSCE_WEB_API_URL: http://api:8000
+        NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
     environment:
       CLINICAL_OSCE_WEB_API_URL: http://api:8000
+      NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
     ports:
       - "3000:3000"
     depends_on:

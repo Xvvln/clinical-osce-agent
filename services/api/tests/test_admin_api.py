@@ -263,6 +263,7 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
         "secrets_persisted": False,
         "runtime_write_supported": True,
         "configuration_source": "environment_or_runtime_memory",
+        "deployment_mode": "local-dev",
     }
     providers = {provider["provider_id"]: provider for provider in payload["providers"]}
     assert providers["gemini_patient_api"]["configured"] is True

@@ -54,6 +54,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
+  assert.match(adminPageSource, /deployment_mode: string;/);
   assert.match(adminPageSource, /type AdminRetrievalEvalResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRetrievalEvalMetrics = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
@@ -108,6 +109,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /相关来源引用/);
   assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /模型 \/ API 配置/);
+  assert.match(adminPageSource, /部署模式/);
+  assert.match(adminPageSource, /modelConfig\.policy\.deployment_mode/);
+  assert.match(adminPageSource, /Runtime 写入/);
+  assert.match(adminPageSource, /modelConfig\.policy\.runtime_write_supported \? "允许本次运行时配置" : "仅环境变量配置"/);
   assert.match(adminPageSource, /RAG 召回评测/);
   assert.match(adminPageSource, /Recall@3/);
   assert.match(adminPageSource, /MRR@5/);

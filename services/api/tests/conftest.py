@@ -7,6 +7,7 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_model_config_store.clear()
     for env_name in [
+        "CLINICAL_OSCE_DEPLOYMENT_MODE",
         "OSCE_OPENAI_ENABLED",
         "OSCE_OPENAI_API_KEY",
         "OSCE_OPENAI_BASE_URL",

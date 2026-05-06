@@ -15,6 +15,7 @@ const sourcesSource = readFileSync(new URL("./src/app/sources/page.tsx", import.
 const globalsSource = readFileSync(new URL("./src/app/globals.css", import.meta.url), "utf8");
 const layoutSource = readFileSync(new URL("./src/app/layout.tsx", import.meta.url), "utf8");
 const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl, "utf8") : "";
+const webDockerfileSource = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
 
 function getHeaderSource() {
   const headerMatch = pageSource.match(/<header[\s\S]*?<\/header>/);
@@ -150,7 +151,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.doesNotMatch(pageSource, /gemini-3\.1-flash-lite-preview/);
   assert.match(pageSource, /defaultProxyUrl: ""/);
   assert.match(pageSource, /defaultProxyUrl: "http:\/\/127\.0\.0\.1:7897"/);
-  assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);
+  assert.match(pageSource, /\{isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled \? \(/);
   assert.match(pageSource, /aria-label="关闭 API 配置说明"/);
   assert.match(pageSource, />\s*API 配置\s*</);
   assert.match(pageSource, />\s*服务端\s*</);
@@ -170,6 +171,16 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\{isTestingStudentApiConfig \? "测试中" : "测试连通性"\}<\/button>/);
   assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
+});
+
+test("home production deployment hides student runtime API config entry", () => {
+  assert.match(pageSource, /const DEPLOYMENT_MODE = process\.env\.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE \?\? "local-dev";/);
+  assert.match(pageSource, /const PRODUCTION_DEPLOYMENT_MODES = new Set\(\["single-node-prod", "vertex-prod"\]\);/);
+  assert.match(pageSource, /const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES\.has\(DEPLOYMENT_MODE\);/);
+  assert.match(pageSource, /\{isStudentRuntimeApiConfigEnabled \? \([\s\S]*?>\s*API 配置\s*<\/button>[\s\S]*?\) : null\}/);
+  assert.match(pageSource, /\{isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled \? \(/);
+  assert.match(webDockerfileSource, /ARG NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo/);
+  assert.match(webDockerfileSource, /NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=\$\{NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE\}/);
 });
 
 test("home page exposes the agent pedagogy state card", () => {

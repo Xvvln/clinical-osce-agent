@@ -16,10 +16,16 @@ from app.services.derived_teaching_focus_service import (
 )
 from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
+from app.services.deployment_config import (
+    get_deployment_mode,
+    is_demo_admin_effectively_enabled,
+    is_runtime_model_config_write_supported,
+)
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.training_insight_service import TrainingInsightService
@@ -252,7 +258,7 @@ def _get_admin_email_set() -> set[str]:
 
 
 def _is_demo_admin_enabled() -> bool:
-    return os.environ.get(DEMO_ADMIN_ENABLED_ENV_NAME, "true").strip().lower() not in {"0", "false", "no", "off"}
+    return is_demo_admin_effectively_enabled()
 
 
 def _get_demo_admin_email() -> str:
@@ -490,6 +496,11 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/health/config")
+def startup_config_health_check() -> dict[str, object]:
+    return build_startup_config_self_check()
+
+
 @app.post("/api/model-config/test")
 def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, object]:
     try:
@@ -508,6 +519,11 @@ def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, objec
 
 @app.post("/api/model-config/runtime")
 def apply_model_config_runtime(request: StudentModelConfigTestRequest) -> dict[str, object]:
+    if not is_runtime_model_config_write_supported():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="runtime model config is disabled in production deployment mode",
+        )
     try:
         runtime_config = runtime_model_config_store.apply_config(
             {
@@ -525,7 +541,10 @@ def apply_model_config_runtime(request: StudentModelConfigTestRequest) -> dict[s
 
 @app.get("/api/model-config/runtime")
 def get_model_config_runtime() -> dict[str, object]:
-    return runtime_model_config_store.public_status()
+    payload = runtime_model_config_store.public_status()
+    payload["runtime_write_supported"] = is_runtime_model_config_write_supported()
+    payload["deployment_mode"] = get_deployment_mode()
+    return payload
 
 
 @app.get("/api/cases")
