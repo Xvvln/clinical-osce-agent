@@ -1,0 +1,50 @@
+name: clinical-osce-agent
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      CLINICAL_OSCE_ADMIN_EMAILS: admin-demo@example.test
+      OSCE_GEMINI_PATIENT_USE_VERTEX: "false"
+      OSCE_VERTEX_ENABLED: "false"
+      OSCE_VERTEX_SKILL_CANDIDATE_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/runtime:/app/data/runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        CLINICAL_OSCE_WEB_API_URL: http://api:8000
+    environment:
+      CLINICAL_OSCE_WEB_API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
+    environment:
+      CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
+    ports:
+      - "3001:3000"
+    depends_on:
+      api:
+        condition: service_healthy

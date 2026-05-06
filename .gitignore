@@ -30,7 +30,9 @@ Thumbs.db
 
 # Local assistant and private correspondence
 .claude/
+.playwright-mcp/
 CLAUDE.md
+goal.md
 *.eml
 
 # Local references and raw datasets
