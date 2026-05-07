@@ -161,6 +161,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\s*Vertex Gemini API Key\s*</);
   assert.match(pageSource, />\s*OpenAI 兼容\s*</);
   assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
+  assert.match(pageSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时/);
   assert.match(pageSource, /id="student-api-key-input"/);
   assert.match(pageSource, /disabled=\{studentApiConfig\.provider === "vertex_gemini_adc"\}/);
   assert.match(pageSource, /studentApiConfig\.provider !== "vertex_gemini_api_key"/);

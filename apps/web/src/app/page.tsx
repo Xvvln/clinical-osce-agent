@@ -1357,7 +1357,7 @@ function HomeContent() {
   const [osceDockMenuGroup, setOsceDockMenuGroup] = useState<OsceDockMenuGroup | null>(null);
   const [isApiConfigHelpOpen, setIsApiConfigHelpOpen] = useState(false);
   const [studentApiConfig, setStudentApiConfig] = useState<StudentApiConfig>(createDefaultStudentApiConfig());
-  const [apiConfigStatusText, setApiConfigStatusText] = useState("OpenAI 兼容配置可保存并应用到本次后端运行时。");
+  const [apiConfigStatusText, setApiConfigStatusText] = useState("OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时。");
   const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
@@ -3080,7 +3080,7 @@ function HomeContent() {
               <div>
                 <p className="text-xs font-medium text-brand">系统与配置</p>
                 <h2 className="mt-1 text-base font-semibold">API 配置</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；OpenAI 兼容配置会同步应用到本次后端运行时。</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时。</p>
               </div>
               <button
                 aria-label="关闭 API 配置说明"
