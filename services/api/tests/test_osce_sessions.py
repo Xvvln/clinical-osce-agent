@@ -317,8 +317,7 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             {
                 "skill_id": "skill_reasoning_core",
                 "title": "临床推理链纠偏提示",
-                "trigger_item_id": "reasoning_core",
-                "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+                "student_visible_summary": "已启用教学策略，后续训练会在适用病例、阶段和当前缺口匹配时生效。",
                 "support_count": 2,
                 "effect_status": "insufficient_samples",
             }

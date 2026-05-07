@@ -379,8 +379,7 @@ def _get_enabled_skill_summaries() -> list[dict[str, object]]:
         {
             "skill_id": skill["skill_id"],
             "title": skill["title"],
-            "trigger_item_id": skill["trigger_item_id"],
-            "suggested_strategy": skill["suggested_strategy"],
+            "student_visible_summary": "已启用教学策略，后续训练会在适用病例、阶段和当前缺口匹配时生效。",
             "support_count": skill["support_count"],
             "effect_status": skill.get("effect_status", "insufficient_samples"),
         }

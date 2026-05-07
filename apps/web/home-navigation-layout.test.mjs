@@ -341,6 +341,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /薄弱项/);
   assert.match(profileSource, /Skill 积累/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
+  assert.match(profileSource, /student_visible_summary: string;/);
   assert.match(profileSource, /effect_status: string;/);
   assert.match(profileSource, /enabled_skill_count: number;/);
   assert.match(profileSource, /applied_skill_count: number;/);
@@ -353,6 +354,13 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /支持次数/);
   assert.match(profileSource, /效果状态/);
   assert.match(profileSource, /暂无已启用 Skill/);
+});
+
+test("profile page hides raw enabled skill strategy text from students", () => {
+  assert.doesNotMatch(profileSource, /触发项：\{skill\.trigger_item_id\}/);
+  assert.doesNotMatch(profileSource, /\{skill\.suggested_strategy\}/);
+  assert.match(profileSource, /\{skill\.student_visible_summary\}/);
+  assert.match(profileSource, /已启用教学策略/);
 });
 
 test("home workspace exposes OSCE workflow navigation and next-step guidance", () => {
