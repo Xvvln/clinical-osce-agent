@@ -89,7 +89,7 @@ class OsceSessionService:
         case = load_case_node(graph_state["case_id"])
         enabled_skills = _enabled_skills_for_case(
             self.training_skill_store.list_enabled_skills(),
-            graph_state["case_id"],
+            case,
             graph_state["stage"],
         )
         session = OsceSession(
@@ -791,7 +791,8 @@ def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
 
 
-def _enabled_skills_for_case(skills: list[dict[str, Any]], case_id: str, stage: str = "case_intro") -> list[dict[str, Any]]:
+def _enabled_skills_for_case(skills: list[dict[str, Any]], case: Case, stage: str = "case_intro") -> list[dict[str, Any]]:
+    case_id = case.case_id
     rubric_item_ids = _rubric_item_ids(case_id)
     return [
         skill
@@ -799,6 +800,7 @@ def _enabled_skills_for_case(skills: list[dict[str, Any]], case_id: str, stage: 
         if _enabled_skill_applies_to_case(skill, case_id, rubric_item_ids)
         and _enabled_skill_applies_to_stage(skill, stage)
         and _enabled_skill_matches_current_missing_evidence(skill, rubric_item_ids)
+        and _enabled_skill_context_matches_case(skill, case)
     ]
 
 
@@ -843,6 +845,45 @@ def _enabled_skill_matches_current_missing_evidence(skill: dict[str, Any], rubri
     if not current_missing_evidence:
         return True
     return bool(set(current_missing_evidence) & rubric_item_ids)
+
+
+def _enabled_skill_context_matches_case(skill: dict[str, Any], case: Case) -> bool:
+    if case.patient_profile.gender == "男" and _skill_contains_any_term(skill, _FEMALE_REPRODUCTIVE_TERMS):
+        return False
+    return True
+
+
+_FEMALE_REPRODUCTIVE_TERMS = [
+    "妇科",
+    "妊娠",
+    "怀孕",
+    "宫外孕",
+    "异位妊娠",
+    "孕产",
+    "月经",
+    "停经",
+    "阴道",
+    "ectopic",
+    "pregnancy",
+    "pregnant",
+    "gynecologic",
+    "gynecology",
+    "obstetric",
+]
+
+
+def _skill_contains_any_term(value: Any, terms: list[str]) -> bool:
+    if isinstance(value, str):
+        normalized = value.lower()
+        return any(term.lower() in normalized for term in terms)
+    if isinstance(value, dict):
+        return any(
+            _skill_contains_any_term(key, terms) or _skill_contains_any_term(item, terms)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_skill_contains_any_term(item, terms) for item in value)
+    return False
 
 
 def _rubric_item_ids(case_id: str) -> set[str]:

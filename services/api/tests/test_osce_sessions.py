@@ -597,6 +597,46 @@ def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_cas
     assert create_response.json()["evolution_candidates"] == []
 
 
+def test_create_session_filters_enabled_skill_with_case_incompatible_teaching_content(tmp_path) -> None:
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = event_store
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_training_pattern_dxd_crohn_dxd_ectopic_dxd_urolith",
+            "trigger_item_id": "training_pattern_dxd_crohn_dxd_ectopic_dxd_urolith",
+            "trigger_item_ids": ["dxd_crohn", "dxd_ectopic", "dxd_urolith", "rs_exclude"],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro"],
+            "applies_when": {
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["dxd_crohn", "dxd_ectopic", "dxd_urolith", "rs_exclude"],
+                "current_missing_evidence": ["dxd_crohn", "dxd_urolith", "rs_exclude"],
+                "min_support_count": 3,
+            },
+            "title": "急腹症鉴别诊断与全面评估逻辑训练",
+            "description": "急腹症鉴别诊断反复遗漏，需补充妇科、泌尿及肠道系统排除。",
+            "suggested_strategy": "面对急性腹痛患者时，请系统排除妇科、异位妊娠、泌尿科及肠道相关疾病。",
+            "source_report_count": 7,
+            "support_count": 7,
+            "related_recommendations": ["rubric:appendicitis_001_rubric.item.rs_exclude"],
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    assert create_response.status_code == 200
+    assert create_response.json()["evolution_candidates"] == []
+    assert [event["event_type"] for event in business_events(event_store.list_session_events(session_id))] == [
+        "session_created"
+    ]
+
+
 def test_create_session_respects_enabled_training_skill_stage_scope(tmp_path) -> None:
     event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
