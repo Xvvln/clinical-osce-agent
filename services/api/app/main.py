@@ -21,6 +21,7 @@ from app.services.deployment_config import (
     is_demo_admin_effectively_enabled,
     is_runtime_model_config_write_supported,
 )
+from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.retrieval_eval_service import run_retrieval_eval
@@ -1014,6 +1015,21 @@ def get_admin_retrieval_eval(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return {"retrieval_eval": run_retrieval_eval()}
+
+
+@app.post("/api/admin/demo/seed")
+def seed_admin_demo_data(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    return seed_demo_data(
+        auth_store=auth_store,
+        osce_service=osce_session_service,
+        candidate_store=training_skill_candidate_store,
+        reviewer_email=reviewer["email"],
+        admin_email=_get_demo_admin_email(),
+        admin_password=_get_demo_admin_password(),
+    )
 
 
 @app.get("/api/admin/evolution/candidates")

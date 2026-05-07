@@ -128,6 +128,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/sessions/missing_session/events"),
             unauthenticated_client.get("/api/admin/teaching-focus/patterns"),
             unauthenticated_client.get("/api/admin/teaching-focus/patterns/case_baseline:appendicitis_001:history_taking"),
+            unauthenticated_client.post("/api/admin/demo/seed"),
         ]
 
     assert [response.status_code for response in responses] == [401] * len(responses)
@@ -174,10 +175,50 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/sessions/missing_session/events"),
             client.get("/api/admin/teaching-focus/patterns"),
             client.get("/api/admin/teaching-focus/patterns/case_baseline:appendicitis_001:history_taking"),
+            client.post("/api/admin/demo/seed"),
         ]
 
     assert [response.status_code for response in responses] == [403] * len(responses)
     assert all(response.json() == {"detail": "admin access required"} for response in responses)
+
+
+def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "seed_demo_data.py"
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/demo/seed")
+
+    assert script_path.exists()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["student"] == {
+        "email": "student-demo@example.test",
+        "password": "safe-student-password",
+        "display_name": "演示学生",
+    }
+    assert payload["admin"]["email"] == "admin-demo@example.test"
+    assert payload["admin"]["password"] == "safe-admin-password"
+    assert payload["session_count"] == 3
+    assert payload["report_count"] == 2
+    assert len(payload["sessions"]) == 3
+    assert payload["candidate"]["candidate_id"] == "demo_skill_candidate_abdominal_pain_history_bundle"
+    assert payload["candidate"]["status"] == "approved"
+    assert payload["enabled_skill"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
+    assert payload["enabled_skill"]["status"] == "enabled"
+    applied_events = [
+        event
+        for event in osce_session_service.training_event_store.list_session_events(payload["sessions"][-1]["session_id"])
+        if event["event_type"] == "training_skill_applied"
+    ]
+    assert applied_events
+    assert applied_events[0]["payload"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
 
 
 def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
