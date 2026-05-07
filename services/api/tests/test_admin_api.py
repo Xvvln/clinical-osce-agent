@@ -830,6 +830,47 @@ def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch
     }
 
 
+def test_admin_candidate_summary_marks_case_incompatible_approved_candidate_blocked(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_training_pattern_dxd_ectopic",
+            "trigger_item_id": "training_pattern_dxd_ectopic",
+            "trigger_item_ids": ["dxd_ectopic", "dxd_urolith"],
+            "case_ids": ["appendicitis_001"],
+            "title": "急腹症鉴别诊断与全面评估逻辑训练",
+            "description": "急腹症鉴别诊断反复遗漏，需补充妇科和泌尿系统排除。",
+            "suggested_strategy": "面对急性腹痛患者时，请系统排除妇科、异位妊娠、泌尿科及肠道相关疾病。",
+            "status": "draft",
+            "source_report_count": 7,
+            "support_count": 7,
+        },
+        {
+            "candidate_id": "skill_candidate_training_pattern_dxd_ectopic",
+            "status": "approved",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/evolution/candidates")
+        detail_response = client.get("/api/admin/evolution/candidates/skill_candidate_training_pattern_dxd_ectopic")
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["status"] == "blocked_by_regression"
+    assert response.json()["candidates"][0]["regression_passed"] is False
+    assert detail_response.status_code == 200
+    review = detail_response.json()["candidate"]["review"]
+    assert review["status"] == "blocked_by_regression"
+    assert review["regression_passed"] is False
+    assert review["candidate_context_violations"][0]["case_id"] == "appendicitis_001"
+
+
 def test_admin_can_paginate_and_filter_training_skill_candidate_summaries(tmp_path, monkeypatch) -> None:
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     for candidate_id, title, support_count in [

@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.services.training_skill_context_safety import candidate_with_context_safety_review
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skill_candidates.sqlite3"
 
@@ -50,7 +52,7 @@ class TrainingSkillCandidateStore:
             rows = connection.execute(
                 "SELECT candidate_json FROM training_skill_candidates ORDER BY id",
             ).fetchall()
-        return [_candidate_summary(json.loads(row[0])) for row in rows]
+        return [_candidate_summary(candidate_with_context_safety_review(json.loads(row[0]))) for row in rows]
 
     def approve_candidate(self, candidate_id: str, reviewer_id: str) -> bool:
         return self._set_review_status(candidate_id, reviewer_id, "approved")
@@ -61,6 +63,15 @@ class TrainingSkillCandidateStore:
     def _set_review_status(self, candidate_id: str, reviewer_id: str, status: str) -> bool:
         candidate = self.get_candidate(candidate_id)
         if candidate is None or candidate["review"]["status"] != "ready_for_review":
+            return False
+        normalized_candidate = candidate_with_context_safety_review(candidate)
+        if normalized_candidate["review"]["status"] != "ready_for_review":
+            candidate = normalized_candidate
+            with sqlite3.connect(self.database_path) as connection:
+                connection.execute(
+                    "UPDATE training_skill_candidates SET candidate_json = ? WHERE candidate_id = ?",
+                    (json.dumps(candidate, ensure_ascii=False), candidate_id),
+                )
             return False
         candidate["review"] = {**candidate["review"], "status": status, "reviewer_id": reviewer_id}
         with sqlite3.connect(self.database_path) as connection:

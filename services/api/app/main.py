@@ -31,6 +31,7 @@ from app.services.student_model_config_service import test_student_model_config_
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
+from app.services.training_skill_context_safety import candidate_with_context_safety_review
 from app.services.training_skill_effect_service import TrainingSkillEffectService
 from app.services.training_skill_regression_gate import training_skill_regression_gate
 from app.validators.case_validator import validate_case, validate_case_rubric_pair, validate_rubric
@@ -308,6 +309,7 @@ def _append_admin_skill_candidate_review_event(
 
 
 def _summarize_training_skill_candidate(candidate: dict[str, Any]) -> dict[str, object]:
+    candidate = candidate_with_context_safety_review(candidate)
     review = candidate["review"]
     return {
         "candidate_id": candidate["candidate_id"],
@@ -999,7 +1001,7 @@ def get_admin_training_skill_candidate(
     candidate = training_skill_candidate_store.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="candidate not found")
-    return {"candidate": candidate}
+    return {"candidate": candidate_with_context_safety_review(candidate)}
 
 
 @app.get("/api/admin/evolution/candidates/{candidate_id}/events")

@@ -194,6 +194,27 @@ def test_training_skill_store_does_not_enable_unapproved_candidate(tmp_path) -> 
     assert TrainingSkillStore(database_path).get_skill("skill_reasoning_core") is None
 
 
+def test_training_skill_store_does_not_enable_case_incompatible_approved_candidate(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    candidate = {
+        "candidate_id": "skill_candidate_training_pattern_dxd_ectopic",
+        "trigger_item_id": "training_pattern_dxd_ectopic",
+        "trigger_item_ids": ["dxd_ectopic", "dxd_urolith"],
+        "case_ids": ["appendicitis_001"],
+        "title": "急腹症鉴别诊断与全面评估逻辑训练",
+        "description": "急腹症鉴别诊断反复遗漏，需补充妇科和泌尿系统排除。",
+        "suggested_strategy": "面对急性腹痛患者时，请系统排除妇科、异位妊娠、泌尿科及肠道相关疾病。",
+        "source_report_count": 7,
+        "support_count": 7,
+        "review": {"status": "approved", "regression_passed": True},
+    }
+
+    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+
+    assert enabled is False
+    assert TrainingSkillStore(database_path).list_enabled_skills() == []
+
+
 def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> None:
     database_path = tmp_path / "training_skills.sqlite3"
     store = TrainingSkillStore(database_path)

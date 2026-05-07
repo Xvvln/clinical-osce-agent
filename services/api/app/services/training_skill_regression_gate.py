@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
+from app.services.training_skill_context_safety import candidate_context_safety_violations
 
 FORBIDDEN_CANDIDATE_TERMS = [
     "治疗方案",
@@ -16,7 +17,8 @@ FORBIDDEN_CANDIDATE_TERMS = [
 class TrainingSkillRegressionGate:
     def review_candidate(self, candidate: dict[str, Any], batch_result: EvaluationBatchResult) -> dict[str, Any]:
         safety_violations = _candidate_safety_violations(candidate)
-        regression_passed = batch_result.passed and not safety_violations
+        context_violations = candidate_context_safety_violations(candidate)
+        regression_passed = batch_result.passed and not safety_violations and not context_violations
         review: dict[str, Any] = {
             "candidate_id": candidate["candidate_id"],
             "status": "ready_for_review" if regression_passed else "blocked_by_regression",
@@ -32,6 +34,8 @@ class TrainingSkillRegressionGate:
         }
         if safety_violations:
             review["candidate_safety_violations"] = safety_violations
+        if context_violations:
+            review["candidate_context_violations"] = context_violations
         return review
 
 

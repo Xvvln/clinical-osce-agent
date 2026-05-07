@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.services.training_skill_context_safety import candidate_context_safety_violations
 from app.services.training_skill_policy import (
     build_prohibited_content_policy,
     build_success_metrics,
@@ -21,6 +22,8 @@ class TrainingSkillStore:
 
     def enable_candidate(self, candidate: dict[str, Any]) -> bool:
         if candidate.get("review", {}).get("status") != "approved":
+            return False
+        if candidate_context_safety_violations(candidate):
             return False
         self._initialize()
         skill = _skill_from_candidate(candidate)
