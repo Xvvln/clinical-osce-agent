@@ -197,6 +197,10 @@
     ],
     "suggested_next_steps": "建议结合内分泌专科评估进一步完善病因学检查，教学模拟不涉及具体药物剂量。"
   },
+  "evidence_graph": {
+    "evidence_nodes": [],
+    "evidence_edges": []
+  },
   "rubric_ref": {
     "rubric_id": "hyperthyroid_001_rubric",
     "version": "v1"

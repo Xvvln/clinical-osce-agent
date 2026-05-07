@@ -190,6 +190,90 @@
       "title": "DifferentialDiagnosis",
       "type": "object"
     },
+    "EvidenceGraph": {
+      "properties": {
+        "evidence_nodes": {
+          "items": {
+            "$ref": "#/$defs/EvidenceGraphNode"
+          },
+          "title": "Evidence Nodes",
+          "type": "array"
+        },
+        "evidence_edges": {
+          "items": {
+            "$ref": "#/$defs/EvidenceGraphEdge"
+          },
+          "title": "Evidence Edges",
+          "type": "array"
+        }
+      },
+      "title": "EvidenceGraph",
+      "type": "object"
+    },
+    "EvidenceGraphEdge": {
+      "properties": {
+        "from_node": {
+          "title": "From Node",
+          "type": "string"
+        },
+        "to_node": {
+          "title": "To Node",
+          "type": "string"
+        },
+        "relation": {
+          "enum": [
+            "supports",
+            "refutes",
+            "explains",
+            "requires"
+          ],
+          "title": "Relation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_node",
+        "to_node",
+        "relation"
+      ],
+      "title": "EvidenceGraphEdge",
+      "type": "object"
+    },
+    "EvidenceGraphNode": {
+      "properties": {
+        "node_id": {
+          "pattern": "^[a-z0-9_]+$",
+          "title": "Node Id",
+          "type": "string"
+        },
+        "node_type": {
+          "enum": [
+            "history_fact",
+            "physical_exam",
+            "auxiliary_test",
+            "reasoning_point"
+          ],
+          "title": "Node Type",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "node_type",
+        "source_id",
+        "label"
+      ],
+      "title": "EvidenceGraphNode",
+      "type": "object"
+    },
     "HiddenFact": {
       "properties": {
         "fact_id": {
@@ -735,6 +819,9 @@
     },
     "diagnosis": {
       "$ref": "#/$defs/DiagnosisSpec"
+    },
+    "evidence_graph": {
+      "$ref": "#/$defs/EvidenceGraph"
     },
     "rubric_ref": {
       "$ref": "#/$defs/RubricRef"

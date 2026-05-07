@@ -167,6 +167,10 @@
     ],
     "suggested_next_steps": "建议结合心内科评估进一步判断心衰分型与诱因，教学模拟不涉及具体剂量方案。"
   },
+  "evidence_graph": {
+    "evidence_nodes": [],
+    "evidence_edges": []
+  },
   "rubric_ref": {
     "rubric_id": "heart_failure_001_rubric",
     "version": "v1"

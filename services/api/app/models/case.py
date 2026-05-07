@@ -53,6 +53,13 @@ BlockingRule = Literal[
 ]
 TestCategory = Literal["实验室", "影像", "心电", "内镜", "病理", "其他"]
 ReasoningKind = Literal["支持", "排除", "鉴别"]
+EvidenceGraphNodeType = Literal[
+    "history_fact",
+    "physical_exam",
+    "auxiliary_test",
+    "reasoning_point",
+]
+EvidenceGraphRelation = Literal["supports", "refutes", "explains", "requires"]
 
 
 class RubricRef(BaseModel):
@@ -164,6 +171,24 @@ class ReasoningPoint(BaseModel):
     weight: int = Field(..., ge=1, le=10)
 
 
+class EvidenceGraphNode(BaseModel):
+    node_id: str = Field(..., pattern=r"^[a-z0-9_]+$")
+    node_type: EvidenceGraphNodeType
+    source_id: str
+    label: str
+
+
+class EvidenceGraphEdge(BaseModel):
+    from_node: str
+    to_node: str
+    relation: EvidenceGraphRelation
+
+
+class EvidenceGraph(BaseModel):
+    evidence_nodes: list[EvidenceGraphNode] = Field(default_factory=list)
+    evidence_edges: list[EvidenceGraphEdge] = Field(default_factory=list)
+
+
 class DifferentialDiagnosis(BaseModel):
     disease_name: str
     icd10_hint: str | None = None
@@ -191,6 +216,7 @@ class Case(BaseModel):
     physical_exam: PhysicalExamBundle
     auxiliary_tests: AuxiliaryTestBundle
     diagnosis: DiagnosisSpec
+    evidence_graph: EvidenceGraph = Field(default_factory=EvidenceGraph)
     rubric_ref: RubricRef
     safety_notes: str = Field(..., min_length=1)
     source_attribution: SourceAttribution
@@ -240,6 +266,8 @@ class Case(BaseModel):
         if missing_abnormal:
             raise ValueError(f"abnormal findings missing from reasoning evidence: {missing_abnormal}")
 
+        _validate_evidence_graph(self)
+
         banned_phrases = [
             "替代医生诊断",
             "替代医生作出诊断",
@@ -251,6 +279,50 @@ class Case(BaseModel):
             raise ValueError("safety notes contain banned medical claim")
 
         return self
+
+
+def _validate_evidence_graph(case: Case) -> None:
+    nodes = case.evidence_graph.evidence_nodes
+    edges = case.evidence_graph.evidence_edges
+    if not nodes and not edges:
+        return
+
+    node_ids: set[str] = set()
+    duplicate_node_ids: list[str] = []
+    for node in nodes:
+        if node.node_id in node_ids:
+            duplicate_node_ids.append(node.node_id)
+        node_ids.add(node.node_id)
+    if duplicate_node_ids:
+        raise ValueError(f"duplicate evidence graph node_id: {duplicate_node_ids}")
+
+    source_ids_by_type: dict[str, set[str]] = {
+        "history_fact": {hidden_fact.fact_id for hidden_fact in case.history.hidden_facts},
+        "physical_exam": {
+            exam.exam_code
+            for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+        },
+        "auxiliary_test": {
+            test.test_code
+            for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+        },
+        "reasoning_point": {point.point_id for point in case.diagnosis.reasoning_points},
+    }
+    missing_sources = [
+        (node.node_id, node.node_type, node.source_id)
+        for node in nodes
+        if node.source_id not in source_ids_by_type[node.node_type]
+    ]
+    if missing_sources:
+        raise ValueError(f"evidence graph node source missing from case: {missing_sources}")
+
+    missing_edge_endpoints = [
+        (edge.from_node, edge.to_node)
+        for edge in edges
+        if edge.from_node not in node_ids or edge.to_node not in node_ids
+    ]
+    if missing_edge_endpoints:
+        raise ValueError(f"evidence graph edge endpoint missing: {missing_edge_endpoints}")
 
 
 def _teaching_focus_texts(teaching_focus: CaseTeachingFocus) -> list[str]:
@@ -269,6 +341,11 @@ __all__ = [
     "CourseModule",
     "DiagnosisSpec",
     "DifferentialDiagnosis",
+    "EvidenceGraph",
+    "EvidenceGraphEdge",
+    "EvidenceGraphNode",
+    "EvidenceGraphNodeType",
+    "EvidenceGraphRelation",
     "HiddenFact",
     "HistorySlot",
     "HistoryTaking",

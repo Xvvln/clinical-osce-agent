@@ -160,6 +160,10 @@
     ],
     "suggested_next_steps": "建议立即结合心内科评估完善急诊处置流程，教学模拟不涉及具体抢救用药。"
   },
+  "evidence_graph": {
+    "evidence_nodes": [],
+    "evidence_edges": []
+  },
   "rubric_ref": {
     "rubric_id": "acs_001_rubric",
     "version": "v1"

@@ -18,7 +18,7 @@
 
 ## 目标核心能力
 
-- **结构化病例与来源台账**：病例以 JSON（JavaScript Object Notation，结构化数据格式）保存，覆盖主诉、隐藏病史、查体、辅助检查、诊断、鉴别诊断、推理点和来源归属；病例、rubric 和公开数据来源应能被管理端审计。
+- **结构化病例与来源台账**：病例以 JSON（JavaScript Object Notation，结构化数据格式）保存，覆盖主诉、隐藏病史、查体、辅助检查、诊断、鉴别诊断、推理点、EvidenceGraph 证据图谱和来源归属；病例、rubric 和公开数据来源应能被管理端审计。
 - **受控标准化病人训练**：虚拟病人只根据病例 `hidden_facts` 披露学生问到的信息，避免提前泄露标准答案、隐藏事实或诊断结论。
 - **完整 OSCE 训练工作流**：学生可自然语言问诊、申请查体和辅助检查、记录诊断假设、请求过程提示、提交最终诊断和推理依据。
 - **可追溯评分与 RAG 反馈**：按病例 rubric 生成分项得分、漏项、推理问题、知识推荐和来源引用；报告稳定包含 `source_references`、`source_reference_items` 和 `explanation_source_items`。
@@ -88,6 +88,8 @@ clinical-osce-agent/
 - `data/attribution/source_registry/sources.json` 是数据来源登记清单。
 - `data/raw/`、`references/`、`data/runtime/*.sqlite3` 和受限数据默认不提交到 Git。
 - 需要额外许可的数据，例如 UMLS canonicalized dataset，不自动下载，也不应直接提交。
+
+当前病例 Schema 已包含 `EvidenceGraph`：节点可引用隐藏病史、查体、辅助检查和 reasoning point，后端会校验节点来源和边端点是否存在。`appendicitis_001` 已补充首个非空证据图谱，其他病例保留空图以维持统一契约；证据图谱目前是结构化数据底座，尚未做完整前端图形化覆盖率展示。
 
 ## 数据来源与使用边界
 

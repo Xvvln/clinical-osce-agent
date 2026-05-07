@@ -217,6 +217,51 @@ def build_valid_case_payload() -> dict[str, Any]:
             ],
             "suggested_next_steps": "建议进一步外科评估并结合病情决定后续处理。",
         },
+        "evidence_graph": {
+            "evidence_nodes": [
+                {
+                    "node_id": "ev_migratory_rlq_pain",
+                    "node_type": "history_fact",
+                    "source_id": f"{case_id}.hf_02",
+                    "label": "转移并固定的右下腹痛",
+                },
+                {
+                    "node_id": "ev_rebound_positive",
+                    "node_type": "physical_exam",
+                    "source_id": "abd.palpation.rebound",
+                    "label": "右下腹反跳痛阳性",
+                },
+                {
+                    "node_id": "ev_wbc_elevated",
+                    "node_type": "auxiliary_test",
+                    "source_id": "lab.cbc",
+                    "label": "白细胞升高",
+                },
+                {
+                    "node_id": "rp_appendicitis_support",
+                    "node_type": "reasoning_point",
+                    "source_id": f"{case_id}.rp_01",
+                    "label": "支持急性阑尾炎的核心推理点",
+                },
+            ],
+            "evidence_edges": [
+                {
+                    "from_node": "ev_migratory_rlq_pain",
+                    "to_node": "rp_appendicitis_support",
+                    "relation": "supports",
+                },
+                {
+                    "from_node": "ev_rebound_positive",
+                    "to_node": "rp_appendicitis_support",
+                    "relation": "supports",
+                },
+                {
+                    "from_node": "ev_wbc_elevated",
+                    "to_node": "rp_appendicitis_support",
+                    "relation": "supports",
+                },
+            ],
+        },
         "rubric_ref": {
             "rubric_id": f"{case_id}_rubric",
             "version": "v1",
@@ -444,6 +489,44 @@ def test_rubric_evidence_must_exist_in_case() -> None:
 
     with pytest.raises(Exception):
         validate_case_rubric_pair(case_model, rubric_model)
+
+
+def test_evidence_graph_node_source_must_exist_in_case() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    payload = build_valid_case_payload()
+    payload["evidence_graph"]["evidence_nodes"][0]["source_id"] = "missing.hidden_fact"
+
+    with pytest.raises(Exception, match="evidence graph node source missing from case"):
+        validate_case(payload)
+
+
+def test_evidence_graph_edge_endpoint_must_exist() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    payload = build_valid_case_payload()
+    payload["evidence_graph"]["evidence_edges"][0]["to_node"] = "missing_node"
+
+    with pytest.raises(Exception, match="evidence graph edge endpoint missing"):
+        validate_case(payload)
+
+
+def test_appendicitis_001_evidence_graph_references_existing_case_items() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    repo_root = Path(__file__).resolve().parents[3]
+    case_path = repo_root / "data" / "cases" / "appendicitis_001.json"
+    case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+
+    case_model = validate_case(case_payload)
+
+    node_ids = {node.node_id for node in case_model.evidence_graph.evidence_nodes}
+    assert {
+        "ev_migratory_rlq_pain",
+        "ev_peritoneal_signs",
+        "ev_wbc_crp_elevated",
+        "nf_urinalysis_negative",
+    }.issubset(node_ids)
+    assert case_model.evidence_graph.evidence_edges
+    assert all(edge.from_node in node_ids for edge in case_model.evidence_graph.evidence_edges)
+    assert all(edge.to_node in node_ids for edge in case_model.evidence_graph.evidence_edges)
 
 
 def _assert_case_rubric_roundtrip(case_name: str) -> None:

@@ -321,6 +321,97 @@
     ],
     "suggested_next_steps": "建议外科会诊评估后续处理，教学模拟不涉及真实用药剂量或处置方案。"
   },
+  "evidence_graph": {
+    "evidence_nodes": [
+      {
+        "node_id": "ev_migratory_rlq_pain",
+        "node_type": "history_fact",
+        "source_id": "appendicitis_001.hf_02",
+        "label": "转移并固定的右下腹痛"
+      },
+      {
+        "node_id": "ev_peritoneal_signs",
+        "node_type": "physical_exam",
+        "source_id": "abd.palpation.rebound",
+        "label": "右下腹腹膜刺激征"
+      },
+      {
+        "node_id": "ev_wbc_crp_elevated",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.cbc",
+        "label": "白细胞升高伴炎症指标升高"
+      },
+      {
+        "node_id": "ev_ultrasound_appendix",
+        "node_type": "auxiliary_test",
+        "source_id": "img.abd_us",
+        "label": "右下腹管状低回声结构"
+      },
+      {
+        "node_id": "nf_urinalysis_negative",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.urinalysis",
+        "label": "尿常规阴性"
+      },
+      {
+        "node_id": "rp_migration_support",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_01",
+        "label": "迁移痛推理点"
+      },
+      {
+        "node_id": "rp_peritoneal_support",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_02",
+        "label": "右下腹体征推理点"
+      },
+      {
+        "node_id": "rp_inflammation_support",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_03",
+        "label": "炎症指标推理点"
+      },
+      {
+        "node_id": "rp_imaging_support",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_04",
+        "label": "影像异常推理点"
+      },
+      {
+        "node_id": "rp_urolithiasis_exclusion",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_05",
+        "label": "泌尿系鉴别排除推理点"
+      }
+    ],
+    "evidence_edges": [
+      {
+        "from_node": "ev_migratory_rlq_pain",
+        "to_node": "rp_migration_support",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_peritoneal_signs",
+        "to_node": "rp_peritoneal_support",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_wbc_crp_elevated",
+        "to_node": "rp_inflammation_support",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_ultrasound_appendix",
+        "to_node": "rp_imaging_support",
+        "relation": "supports"
+      },
+      {
+        "from_node": "nf_urinalysis_negative",
+        "to_node": "rp_urolithiasis_exclusion",
+        "relation": "supports"
+      }
+    ]
+  },
   "rubric_ref": {
     "rubric_id": "appendicitis_001_rubric",
     "version": "v1"
