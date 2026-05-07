@@ -295,6 +295,11 @@ type TrainingEventRecord = Readonly<{
   created_at: string;
 }>;
 
+type AgentDecisionPayload = Readonly<{
+  latestDecision: Record<string, unknown> | null;
+  pedagogyState: Record<string, unknown> | null;
+}>;
+
 type AdminCaseSummary = Readonly<{
   case_id: string;
   case_title: string;
@@ -644,6 +649,37 @@ function getAdminErrorMessage(error: unknown): string {
 
 function shouldOpenAdminLoginDialog(error: unknown): boolean {
   return error instanceof AdminApiError && (error.status === 401 || error.status === 403);
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getRecordValue(value: unknown): Record<string, unknown> | null {
+  return isRecordValue(value) ? value : null;
+}
+
+function formatAgentDecisionValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.map((item) => formatAgentDecisionValue(item)).join("、") : "暂无";
+  }
+  if (typeof value === "string") {
+    return value || "暂无";
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value === null || value === undefined) {
+    return "暂无";
+  }
+  return JSON.stringify(value);
+}
+
+function getAgentDecisionPayload(event: TrainingEventRecord): AgentDecisionPayload {
+  return {
+    latestDecision: getRecordValue(event.payload.latest_decision),
+    pedagogyState: getRecordValue(event.payload.pedagogy_state),
+  };
 }
 
 async function loginAdminUser(email: string, password: string): Promise<AuthUser> {
@@ -2566,15 +2602,45 @@ export default function AdminDashboardPage() {
               <h2 className="text-xl font-semibold">智能体决策轨迹</h2>
               <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
                 {agentDecisionEvents.length > 0 ? (
-                  agentDecisionEvents.map((event) => (
-                    <div className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`agent-decision-${event.created_at}`}>
-                      <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
-                      <p className="mt-1 text-xs font-semibold text-[#141413]">{event.event_type}</p>
-                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
-                        {JSON.stringify(event.payload, null, 2)}
-                      </pre>
-                    </div>
-                  ))
+                  agentDecisionEvents.map((event) => {
+                    const decisionPayload = getAgentDecisionPayload(event);
+                    const latestDecision = decisionPayload.latestDecision;
+                    const observe = latestDecision ? getRecordValue(latestDecision.observe) : null;
+                    const decide = latestDecision ? getRecordValue(latestDecision.decide) : null;
+                    const act = latestDecision ? getRecordValue(latestDecision.act) : null;
+                    const reflect = latestDecision ? getRecordValue(latestDecision.reflect) : null;
+                    return (
+                      <div className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`agent-decision-${event.created_at}`}>
+                        <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
+                        <p className="mt-1 text-xs font-semibold text-[#141413]">{event.event_type}</p>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">观察</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">阶段：{formatAgentDecisionValue(observe?.stage)}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">检查点：{formatAgentDecisionValue(observe?.checkpoint_status)}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">决策</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">策略：{formatAgentDecisionValue(decide?.selected_strategy)}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">原因：{formatAgentDecisionValue(decide?.strategy_reason)}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">动作</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">下一步：{formatAgentDecisionValue(act?.next_best_action)}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">Hint：{formatAgentDecisionValue(act?.hint_ladder_levels)}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">反思</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">安全边界：{formatAgentDecisionValue(reflect?.safety_mode)}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">摘要：{formatAgentDecisionValue(reflect?.reflection_summary_id)}</p>
+                          </div>
+                        </div>
+                        <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
+                          {JSON.stringify(event.payload, null, 2)}
+                        </pre>
+                      </div>
+                    );
+                  })
                 ) : (
                   <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">当前 Session 暂无智能体决策轨迹。</p>
                 )}

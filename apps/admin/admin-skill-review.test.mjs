@@ -108,6 +108,16 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /智能体决策轨迹/);
   assert.match(adminPageSource, /agentDecisionEvents/);
   assert.match(adminPageSource, /event\.event_type === "agent_decision_traced"/);
+  assert.match(adminPageSource, /function getAgentDecisionPayload/);
+  assert.match(adminPageSource, /decisionPayload\.latestDecision/);
+  assert.match(adminPageSource, /latestDecision\.observe/);
+  assert.match(adminPageSource, /latestDecision\.decide/);
+  assert.match(adminPageSource, /latestDecision\.act/);
+  assert.match(adminPageSource, /latestDecision\.reflect/);
+  assert.match(adminPageSource, /观察/);
+  assert.match(adminPageSource, /决策/);
+  assert.match(adminPageSource, /动作/);
+  assert.match(adminPageSource, /反思/);
   assert.match(adminPageSource, /反思轨迹/);
   assert.match(adminPageSource, /agentReflectionEvents/);
   assert.match(adminPageSource, /event\.event_type === "agent_reflection_recorded"/);

@@ -219,6 +219,44 @@ type TrainingProgress = Readonly<{
   next_focus: string;
 }>;
 
+type TeachingPlan = Readonly<{
+  plan_id: string;
+  case_id: string;
+  session_id?: string | null;
+  stage: string;
+  observed_gap_ids: readonly string[];
+  active_focus_ids: readonly string[];
+  selected_strategy: string;
+  strategy_reason: string;
+  learning_goal: string;
+  next_best_action: string;
+  allowed_actions: readonly string[];
+  blocked_actions: readonly string[];
+  source_references: readonly string[];
+  skill_ids: readonly string[];
+  safety_boundary: string;
+}>;
+
+type StageCheckpoint = Readonly<{
+  checkpoint_id: string;
+  case_id: string;
+  session_id?: string | null;
+  stage: string;
+  status: string;
+  readiness: string;
+  covered_signal_ids: readonly string[];
+  pending_signal_ids: readonly string[];
+  safety_note: string;
+}>;
+
+type HintLadderStep = Readonly<{
+  action_type: string;
+  level: number;
+  message_template: string;
+  trigger_item_ids: readonly string[];
+  disclosure_policy: string;
+}>;
+
 type PedagogyState = Readonly<{
   training_phase: string;
   active_learning_goal: string;
@@ -230,6 +268,35 @@ type PedagogyState = Readonly<{
   coaching_mode: string;
   safety_mode: string;
   reflection_summary_id: string | null;
+  teaching_plan: TeachingPlan;
+  stage_checkpoint: StageCheckpoint;
+  hint_ladder: readonly HintLadderStep[];
+}>;
+
+type AgentTraceObserve = Readonly<{
+  stage: string;
+  observed_gap_ids: readonly string[];
+  checkpoint_status: string;
+  covered_signal_ids: readonly string[];
+  pending_signal_ids: readonly string[];
+}>;
+
+type AgentTraceDecide = Readonly<{
+  active_learning_goal: string;
+  selected_strategy: string;
+  strategy_reason: string;
+}>;
+
+type AgentTraceAct = Readonly<{
+  next_best_action: string;
+  allowed_actions: readonly string[];
+  blocked_actions: readonly string[];
+  hint_ladder_levels: readonly number[];
+}>;
+
+type AgentTraceReflect = Readonly<{
+  reflection_summary_id: string | null;
+  safety_mode: string;
 }>;
 
 type AgentDecisionTraceItem = Readonly<{
@@ -241,6 +308,16 @@ type AgentDecisionTraceItem = Readonly<{
   skill_context_ids: readonly string[];
   coaching_mode: string;
   safety_mode: string;
+  observe: AgentTraceObserve;
+  decide: AgentTraceDecide;
+  act: AgentTraceAct;
+  reflect: AgentTraceReflect;
+}>;
+
+type ReflectionPrompt = Readonly<{
+  prompt_id: string;
+  question: string;
+  related_item_ids: readonly string[];
 }>;
 
 type ReflectionSummary = Readonly<{
@@ -249,6 +326,7 @@ type ReflectionSummary = Readonly<{
   missed_item_ids: readonly string[];
   summary: string;
   next_focus: string;
+  reflection_prompts: readonly ReflectionPrompt[];
   safety_note: string;
 }>;
 
@@ -2256,12 +2334,53 @@ function HomeContent() {
                   </div>
                 </div>
                 <div className="rounded-lg border border-border bg-background p-3">
+                  <p className="font-semibold text-foreground">阶段检查点</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <p className="text-muted-foreground">状态</p>
+                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.status}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">准备度</p>
+                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.readiness}</p>
+                    </div>
+                  </div>
+                  <p className="mt-2 break-words text-[11px] text-muted-foreground">
+                    待补证据：{session.pedagogy_state.stage_checkpoint.pending_signal_ids.join("、") || "暂无"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-background p-3">
+                  <p className="font-semibold text-foreground">教学计划</p>
+                  <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.teaching_plan.selected_strategy}</p>
+                  <p className="mt-2 text-muted-foreground">{session.pedagogy_state.teaching_plan.strategy_reason}</p>
+                  <p className="mt-2 break-words text-[11px] text-muted-foreground">
+                    来源：{session.pedagogy_state.teaching_plan.source_references.join("、") || "当前阶段规则"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-background p-3">
+                  <p className="font-semibold text-foreground">Hint Ladder</p>
+                  <div className="mt-2 space-y-2">
+                    {session.pedagogy_state.hint_ladder.map((hint) => (
+                      <div className="rounded-md bg-muted px-2 py-1" key={`${hint.action_type}-${hint.level}`}>
+                        <p className="font-mono text-[11px] text-muted-foreground">Level {hint.level} · {hint.disclosure_policy}</p>
+                        <p className="mt-1 text-foreground">{hint.message_template}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border bg-background p-3">
                   <p className="font-semibold text-foreground">最近决策轨迹</p>
                   <div className="mt-2 space-y-2">
                     {session.agent_decision_trace.slice(-3).map((trace) => (
                       <div className="rounded-md bg-muted px-2 py-1" key={trace.trace_id}>
                         <p className="font-mono text-[11px] text-muted-foreground">{trace.node} · {trace.stage}</p>
                         <p className="mt-1 text-foreground">{trace.decision}</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          observe: {trace.observe.checkpoint_status} · decide: {trace.decide.selected_strategy}
+                        </p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          act: Level {trace.act.hint_ladder_levels.join("/")} · reflect: {trace.reflect.safety_mode}
+                        </p>
                       </div>
                     ))}
                     {session.agent_decision_trace.length === 0 ? (

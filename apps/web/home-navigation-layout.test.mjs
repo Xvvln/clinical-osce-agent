@@ -197,9 +197,15 @@ test("home production deployment hides student runtime API config entry", () => 
 });
 
 test("home page exposes the agent pedagogy state card", () => {
+  assert.match(pageSource, /type TeachingPlan = Readonly<\{/);
+  assert.match(pageSource, /type StageCheckpoint = Readonly<\{/);
+  assert.match(pageSource, /type HintLadderStep = Readonly<\{/);
   assert.match(pageSource, /type PedagogyState = Readonly<\{/);
   assert.match(pageSource, /type AgentDecisionTraceItem = Readonly<\{/);
   assert.match(pageSource, /type ReflectionSummary = Readonly<\{/);
+  assert.match(pageSource, /teaching_plan: TeachingPlan;/);
+  assert.match(pageSource, /stage_checkpoint: StageCheckpoint;/);
+  assert.match(pageSource, /hint_ladder: readonly HintLadderStep\[];/);
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
   assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
@@ -208,9 +214,18 @@ test("home page exposes the agent pedagogy state card", () => {
   assert.match(pageSource, /session\.pedagogy_state\.next_best_action/);
   assert.match(pageSource, /session\.pedagogy_state\.coaching_mode/);
   assert.match(pageSource, /session\.pedagogy_state\.safety_mode/);
+  assert.match(pageSource, /session\.pedagogy_state\.teaching_plan\.selected_strategy/);
+  assert.match(pageSource, /session\.pedagogy_state\.stage_checkpoint\.status/);
+  assert.match(pageSource, /session\.pedagogy_state\.hint_ladder\.map/);
+  assert.match(pageSource, /trace\.observe\.checkpoint_status/);
+  assert.match(pageSource, /trace\.decide\.selected_strategy/);
+  assert.match(pageSource, /trace\.act\.hint_ladder_levels/);
+  assert.match(pageSource, /trace\.reflect\.safety_mode/);
   assert.match(pageSource, /session\.agent_decision_trace\.slice\(-3\)\.map/);
   assert.match(pageSource, /智能体还未形成可展示的教学状态/);
   assert.match(pageSource, /最近决策轨迹/);
+  assert.match(pageSource, /阶段检查点/);
+  assert.match(pageSource, /Hint Ladder/);
   assert.match(pageSource, /教学安全边界/);
 });
 

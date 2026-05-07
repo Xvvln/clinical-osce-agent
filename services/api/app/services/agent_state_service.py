@@ -8,6 +8,22 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
     missed_items = _string_list(state.get("missed_items", []))
     skill_context_ids = _skill_context_ids(state.get("evolution_candidates", []))
     active_goal, next_best_action, evidence_gap, differential_gap = _phase_plan(state)
+    teaching_plan = _build_teaching_plan(
+        state=state,
+        stage=stage,
+        missed_items=missed_items,
+        skill_context_ids=skill_context_ids,
+        active_goal=active_goal,
+        next_best_action=next_best_action,
+        evidence_gap=evidence_gap,
+    )
+    stage_checkpoint = _build_stage_checkpoint(state=state, stage=stage)
+    hint_ladder = _build_hint_ladder(
+        next_best_action=next_best_action,
+        evidence_gap=evidence_gap,
+        differential_gap=differential_gap,
+        missed_items=missed_items,
+    )
     return {
         "training_phase": stage,
         "active_learning_goal": active_goal,
@@ -19,6 +35,9 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
         "coaching_mode": _coaching_mode(state),
         "safety_mode": "teaching_only",
         "reflection_summary_id": _reflection_summary_id(state),
+        "teaching_plan": teaching_plan,
+        "stage_checkpoint": stage_checkpoint,
+        "hint_ladder": hint_ladder,
     }
 
 
@@ -38,6 +57,28 @@ def append_decision_trace(
             "skill_context_ids": list(pedagogy_state.get("skill_context_ids", [])),
             "coaching_mode": pedagogy_state["coaching_mode"],
             "safety_mode": pedagogy_state["safety_mode"],
+            "observe": {
+                "stage": pedagogy_state["training_phase"],
+                "observed_gap_ids": list(pedagogy_state.get("teaching_plan", {}).get("observed_gap_ids", [])),
+                "checkpoint_status": pedagogy_state.get("stage_checkpoint", {}).get("status", ""),
+                "covered_signal_ids": list(pedagogy_state.get("stage_checkpoint", {}).get("covered_signal_ids", [])),
+                "pending_signal_ids": list(pedagogy_state.get("stage_checkpoint", {}).get("pending_signal_ids", [])),
+            },
+            "decide": {
+                "active_learning_goal": pedagogy_state["active_learning_goal"],
+                "selected_strategy": pedagogy_state.get("teaching_plan", {}).get("selected_strategy", ""),
+                "strategy_reason": pedagogy_state.get("teaching_plan", {}).get("strategy_reason", ""),
+            },
+            "act": {
+                "next_best_action": pedagogy_state["next_best_action"],
+                "allowed_actions": list(pedagogy_state.get("teaching_plan", {}).get("allowed_actions", [])),
+                "blocked_actions": list(pedagogy_state.get("teaching_plan", {}).get("blocked_actions", [])),
+                "hint_ladder_levels": [item.get("level") for item in pedagogy_state.get("hint_ladder", [])],
+            },
+            "reflect": {
+                "reflection_summary_id": pedagogy_state.get("reflection_summary_id"),
+                "safety_mode": pedagogy_state["safety_mode"],
+            },
         }
     )
     return trace
@@ -58,8 +99,152 @@ def build_reflection_summary(state: dict[str, Any]) -> dict[str, Any]:
         "missed_item_ids": missed_items,
         "summary": summary,
         "next_focus": next_focus,
+        "reflection_prompts": _build_reflection_prompts(str(state.get("case_id") or "unknown"), missed_items),
         "safety_note": "反思摘要仅用于 OSCE 教学训练，不改变病例标准答案、rubric 或评分规则。",
     }
+
+
+def _build_teaching_plan(
+    *,
+    state: dict[str, Any],
+    stage: str,
+    missed_items: list[str],
+    skill_context_ids: list[str],
+    active_goal: str,
+    next_best_action: str,
+    evidence_gap: str,
+) -> dict[str, Any]:
+    case_id = str(state.get("case_id") or "unknown")
+    session_ref = str(state.get("session_id") or case_id)
+    return {
+        "plan_id": f"teaching_plan:{session_ref}:{stage}",
+        "case_id": case_id,
+        "session_id": state.get("session_id"),
+        "stage": stage,
+        "observed_gap_ids": list(missed_items),
+        "active_focus_ids": [f"focus:{stage}"],
+        "selected_strategy": "hint_ladder_level_1",
+        "strategy_reason": evidence_gap,
+        "learning_goal": active_goal,
+        "next_best_action": next_best_action,
+        "allowed_actions": [
+            "ask_open_question",
+            "suggest_history_category",
+            "suggest_next_stage_category",
+            "ask_reflection_question",
+        ],
+        "blocked_actions": [
+            "reveal_main_diagnosis",
+            "reveal_hidden_fact_without_question",
+            "reveal_test_result_without_request",
+            "provide_treatment_or_dose",
+        ],
+        "source_references": [f"rubric:{case_id}_rubric.item.{item_id}" for item_id in missed_items],
+        "skill_ids": list(skill_context_ids),
+        "safety_boundary": "教学计划只决定训练引导方式，不修改病例事实、标准诊断、rubric 或评分规则。",
+    }
+
+
+def _build_stage_checkpoint(*, state: dict[str, Any], stage: str) -> dict[str, Any]:
+    case_id = str(state.get("case_id") or "unknown")
+    session_ref = str(state.get("session_id") or case_id)
+    revealed_facts = _string_list(state.get("revealed_facts", []))
+    requested_exams = _string_list(state.get("requested_exams", []))
+    requested_tests = _string_list(state.get("requested_tests", []))
+    student_hypotheses = _string_list(state.get("student_hypotheses", []))
+    covered_signal_ids = [
+        *[f"history:{fact_id}" for fact_id in revealed_facts],
+        *[f"physical_exam:{exam_code}" for exam_code in requested_exams],
+        *[f"auxiliary_test:{test_code}" for test_code in requested_tests],
+        *[f"hypothesis:{index + 1}" for index, _hypothesis in enumerate(student_hypotheses)],
+    ]
+    status, pending_signal_ids, readiness = _checkpoint_status(
+        state=state,
+        revealed_facts=revealed_facts,
+        requested_exams=requested_exams,
+        requested_tests=requested_tests,
+        student_hypotheses=student_hypotheses,
+    )
+    return {
+        "checkpoint_id": f"stage_checkpoint:{session_ref}:{stage}",
+        "case_id": case_id,
+        "session_id": state.get("session_id"),
+        "stage": stage,
+        "status": status,
+        "readiness": readiness,
+        "covered_signal_ids": covered_signal_ids,
+        "pending_signal_ids": pending_signal_ids,
+        "safety_note": "阶段检查点只提示证据类别缺口，不泄露标准诊断或隐藏事实。",
+    }
+
+
+def _checkpoint_status(
+    *,
+    state: dict[str, Any],
+    revealed_facts: list[str],
+    requested_exams: list[str],
+    requested_tests: list[str],
+    student_hypotheses: list[str],
+) -> tuple[str, list[str], str]:
+    if state.get("final_submission") is not None:
+        return "ready_for_reflection", [], "report_review"
+    if not revealed_facts:
+        return "needs_history", ["history:*"], "continue_training"
+    if not requested_exams:
+        return "needs_physical_exam", ["physical_exam:*"], "continue_training"
+    if not requested_tests:
+        return "needs_auxiliary_test", ["auxiliary_test:*"], "continue_training"
+    if not student_hypotheses:
+        return "needs_reasoning", ["diagnostic_reasoning:*"], "continue_training"
+    return "ready_for_diagnosis", [], "ready_for_submission"
+
+
+def _build_hint_ladder(
+    *,
+    next_best_action: str,
+    evidence_gap: str,
+    differential_gap: str,
+    missed_items: list[str],
+) -> list[dict[str, Any]]:
+    trigger_item_ids = list(missed_items)
+    return [
+        {
+            "action_type": "hint_ladder",
+            "level": 1,
+            "message_template": next_best_action,
+            "trigger_item_ids": trigger_item_ids,
+            "disclosure_policy": "category_only_no_answer",
+        },
+        {
+            "action_type": "hint_ladder",
+            "level": 2,
+            "message_template": evidence_gap,
+            "trigger_item_ids": trigger_item_ids,
+            "disclosure_policy": "category_only_no_answer",
+        },
+        {
+            "action_type": "hint_ladder",
+            "level": 3,
+            "message_template": differential_gap,
+            "trigger_item_ids": trigger_item_ids,
+            "disclosure_policy": "category_only_no_answer",
+        },
+    ]
+
+
+def _build_reflection_prompts(case_id: str, missed_items: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "prompt_id": f"reflection_prompt:{case_id}:missed_items",
+            "question": "本轮哪些证据收集步骤最容易被你跳过？请按问诊、查体、辅助检查和推理表达分组复盘。",
+            "related_item_ids": list(missed_items),
+        },
+        {
+            "prompt_id": f"reflection_prompt:{case_id}:evidence_chain",
+            "question": "下次训练前，你会先补齐哪些证据类别，再组织诊断假设？",
+            "related_item_ids": list(missed_items),
+        },
+    ]
 
 
 def _phase_plan(state: dict[str, Any]) -> tuple[str, str, str, str]:
