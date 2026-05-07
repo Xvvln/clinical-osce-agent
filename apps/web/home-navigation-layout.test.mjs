@@ -16,6 +16,7 @@ const globalsSource = readFileSync(new URL("./src/app/globals.css", import.meta.
 const layoutSource = readFileSync(new URL("./src/app/layout.tsx", import.meta.url), "utf8");
 const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl, "utf8") : "";
 const webDockerfileSource = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
+const webReadmeSource = readFileSync(new URL("./README.md", import.meta.url), "utf8");
 
 function getHeaderSource() {
   const headerMatch = pageSource.match(/<header[\s\S]*?<\/header>/);
@@ -175,6 +176,14 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
   assert.match(pageSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置可用于标准化病人、llm_rubric 和 Skill 候选文案/);
+});
+
+test("student README documents blank diagnosis drafts and all runtime model providers", () => {
+  assert.doesNotMatch(webReadmeSource, /初始化默认诊断与推理依据/);
+  assert.match(webReadmeSource, /诊断提交表单保持空白结构化草稿/);
+  assert.match(webReadmeSource, /后端不得下发标准诊断作为默认值/);
+  assert.match(webReadmeSource, /Vertex Gemini API Key/);
+  assert.match(webReadmeSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置保存时会调用 `\/api\/model-config\/runtime`/);
 });
 
 test("home production deployment hides student runtime API config entry", () => {

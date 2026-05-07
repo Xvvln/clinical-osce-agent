@@ -109,3 +109,17 @@ def test_compose_health_path_remains_valid() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_documented_gemini_defaults_match_current_code_defaults() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    readme_source = (repo_root / "README.md").read_text(encoding="utf-8")
+    env_example_source = (repo_root / ".env.example").read_text(encoding="utf-8")
+
+    for source in [readme_source, env_example_source]:
+        assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-pro-preview" in source
+        assert "OSCE_VERTEX_MODEL=gemini-3.1-pro-preview" in source
+        assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-pro-preview" in source
+        assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in source
+        assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in source
+        assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview" not in source
