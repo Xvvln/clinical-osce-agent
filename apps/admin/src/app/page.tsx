@@ -337,6 +337,20 @@ type AdminSourceRegistryEntry = Readonly<{
   risk_note: string;
 }>;
 
+type ChromaIndexManifestStatus = Readonly<{
+  status: string;
+  rebuild_required: boolean;
+  manifest_path: string;
+  collection: string;
+  embedding_model: string;
+  source_count: number;
+  case_ids: readonly string[];
+  content_hash: string;
+  built_at: string;
+  stored_source_count: number;
+  stored_content_hash: string;
+}>;
+
 type AdminModelProviderConfig = Readonly<{
   provider_id: string;
   label: string;
@@ -352,6 +366,7 @@ type AdminModelProviderConfig = Readonly<{
   proxy_url: string;
   persist_directory: string;
   collection: string;
+  index_manifest?: ChromaIndexManifestStatus;
   required_env: readonly string[];
   missing_env: readonly string[];
   integration_status: string;
@@ -883,6 +898,22 @@ function getPassLabel(passed: boolean): string {
 
 function formatRetrievalMetric(value: number): string {
   return value.toFixed(4);
+}
+
+function formatChromaIndexStatus(status: string): string {
+  if (status === "built") {
+    return "已构建";
+  }
+  if (status === "stale") {
+    return "已过期";
+  }
+  if (status === "missing") {
+    return "未构建";
+  }
+  if (status === "invalid") {
+    return "清单异常";
+  }
+  return status || "未知";
 }
 
 function getPercent(part: number, total: number): string {
@@ -1757,6 +1788,17 @@ export default function AdminDashboardPage() {
                       {provider.persist_directory ? <p className="break-words">Persist：{provider.persist_directory}</p> : null}
                       {provider.collection ? <p className="break-words">Collection：{provider.collection}</p> : null}
                     </div>
+                    {provider.index_manifest?.status ? (
+                      <div className="mt-3 border-t border-[#E6DFD2] pt-3 text-xs leading-5 text-[#6F6257]">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <p>索引状态：{formatChromaIndexStatus(provider.index_manifest.status)}</p>
+                          <p>需重建：{provider.index_manifest.rebuild_required ? "是" : "否"}</p>
+                          <p>文档数：{provider.index_manifest.source_count}</p>
+                          <p>覆盖病例：{provider.index_manifest.case_ids.join("、") || "暂无"}</p>
+                        </div>
+                        <p className="mt-2 break-all text-[11px] text-[#8A7D6F]">Manifest：{provider.index_manifest.manifest_path}</p>
+                      </div>
+                    ) : null}
                     <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
                     {provider.missing_env.length > 0 ? (
                       <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">缺少：{provider.missing_env.join("、")}</p>

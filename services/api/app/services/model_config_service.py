@@ -3,8 +3,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.services.chroma_retriever import (
+    ChromaRetrievalSettings,
+    build_chroma_manifest_status,
+    resolve_chroma_persist_directory,
+)
 from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
+from app.services.retrieval_index import ROOT_DIR, get_chroma_source_documents
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.vertex_embedding_retriever import DEFAULT_VERTEX_EMBEDDING_MODEL
 
 
 def build_admin_model_config() -> dict[str, Any]:
@@ -201,6 +208,10 @@ def _chroma_retrieval_config() -> dict[str, Any]:
     persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
     collection = _env("OSCE_CHROMA_COLLECTION", "clinical_osce_retrieval")
     configured = enabled and bool(persist_directory) and bool(collection)
+    index_manifest = _chroma_index_manifest_status(
+        persist_directory=persist_directory,
+        collection=collection,
+    )
     return _provider_config(
         provider_id="chroma_retrieval",
         label="ChromaDB RAG 持久向量库",
@@ -211,6 +222,7 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         auth_mode="local_persistent_vector_store",
         persist_directory=persist_directory,
         collection=collection,
+        index_manifest=index_manifest,
         required_env=["OSCE_CHROMA_ENABLED=true", "CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
@@ -219,6 +231,15 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         integration_status="wired_optional",
         notes="通过本地 ChromaDB PersistentClient 持久化 RAG 来源片段向量；当前搭配 Vertex embedding 使用，只用于反馈解释、学习推荐和引用展示，不参与诊断或评分裁判。",
     )
+
+
+def _chroma_index_manifest_status(*, persist_directory: str, collection: str) -> dict[str, Any]:
+    settings = ChromaRetrievalSettings(
+        persist_directory=resolve_chroma_persist_directory(persist_directory, root_dir=ROOT_DIR),
+        collection_name=collection,
+        embedding_model=_env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL),
+    )
+    return build_chroma_manifest_status(settings=settings, documents=get_chroma_source_documents())
 
 
 def _openai_compatible_config() -> dict[str, Any]:
@@ -264,6 +285,7 @@ def _provider_config(**kwargs: Any) -> dict[str, Any]:
         "proxy_url": kwargs.get("proxy_url", ""),
         "persist_directory": kwargs.get("persist_directory", ""),
         "collection": kwargs.get("collection", ""),
+        "index_manifest": kwargs.get("index_manifest", {}),
         "required_env": kwargs["required_env"],
         "missing_env": kwargs["missing_env"],
         "integration_status": kwargs["integration_status"],

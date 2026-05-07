@@ -45,15 +45,7 @@ def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocu
         try:
             chroma_index = build_chroma_retrieval_index_from_environment(
                 embedding_client=embedding_client,
-                documents=[
-                    ChromaSourceDocument(
-                        reference=document.reference,
-                        source_type=document.source_type,
-                        title=document.title,
-                        snippet=document.snippet,
-                    )
-                    for document in _retrieval_documents()
-                ],
+                documents=get_chroma_source_documents(),
                 root_dir=ROOT_DIR,
             )
             if chroma_index is not None:
@@ -129,6 +121,18 @@ def search_retrieval_documents_with_embeddings(
         for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
         if document.score > 0
     ][:limit]
+
+
+def get_chroma_source_documents() -> tuple[ChromaSourceDocument, ...]:
+    return tuple(
+        ChromaSourceDocument(
+            reference=document.reference,
+            source_type=document.source_type,
+            title=document.title,
+            snippet=document.snippet,
+        )
+        for document in _retrieval_documents()
+    )
 
 
 @lru_cache(maxsize=1)

@@ -289,6 +289,28 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["openai_compatible"]["integration_status"] == "wired"
 
 
+def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "osce_demo_retrieval")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/model-config")
+
+    assert response.status_code == 200
+    providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
+    manifest = providers["chroma_retrieval"]["index_manifest"]
+    assert manifest["status"] == "missing"
+    assert manifest["rebuild_required"] is True
+    assert manifest["collection"] == "osce_demo_retrieval"
+    assert manifest["embedding_model"] == "gemini-embedding-001"
+    assert manifest["source_count"] >= 5
+    assert "appendicitis_001" in manifest["case_ids"]
+    assert manifest["manifest_path"].endswith("retrieval_index_manifest.json")
+
+
 def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
     runtime_model_config_store.clear()
     runtime_model_config_store.apply_config(

@@ -123,6 +123,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /provider\.integration_status/);
   assert.match(adminPageSource, /provider\.persist_directory/);
   assert.match(adminPageSource, /provider\.collection/);
+  assert.match(adminPageSource, /provider\.index_manifest/);
+  assert.match(adminPageSource, /索引状态/);
+  assert.match(adminPageSource, /需重建/);
+  assert.match(adminPageSource, /文档数/);
+  assert.match(adminPageSource, /覆盖病例/);
   assert.match(adminPageSource, /密钥不落库/);
   assert.match(adminPageSource, /样本不足/);
   assert.match(adminPageSource, /skillEffects\.status === "insufficient_samples"/);
