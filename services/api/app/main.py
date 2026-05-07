@@ -361,6 +361,109 @@ def _get_dimension_averages(reports: list[dict[str, Any]]) -> list[dict[str, obj
     )
 
 
+def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[str, object] | None) -> list[dict[str, object]]:
+    if not reports:
+        return [
+            {
+                "task_type": "start_first_case",
+                "case_id": "appendicitis_001",
+                "objective": "先完成一次右下腹痛教学病例的完整 OSCE 训练，形成可评分报告后再生成个性化路径。",
+                "target_rubric_items": [],
+                "source_report_count": 0,
+                "source_references": ["case:appendicitis_001"],
+            }
+        ]
+
+    latest_report = reports[0]
+    latest_case_id = str(latest_report.get("case_id") or "appendicitis_001")
+    target_items = _get_top_missed_profile_items(reports)
+    target_item_ids = [item["item_id"] for item in target_items]
+    weakest_label = str(weakest_dimension.get("label")) if weakest_dimension else "当前薄弱维度"
+    source_report_count = len(reports)
+
+    learning_path: list[dict[str, object]] = [
+        {
+            "task_type": "redo_same_case",
+            "case_id": latest_case_id,
+            "objective": f"复训{_get_case_title(latest_case_id)}，优先补强{weakest_label}并补齐本轮反复缺失的评分项。",
+            "target_rubric_items": target_item_ids,
+            "source_report_count": source_report_count,
+            "source_references": [
+                f"rubric:{item['case_id']}_rubric.item.{item['item_id']}"
+                for item in target_items
+            ],
+        }
+    ]
+    contrast_task = _build_contrast_learning_task(reports, latest_case_id, target_item_ids, source_report_count)
+    if contrast_task is not None:
+        learning_path.append(contrast_task)
+    return learning_path
+
+
+def _get_top_missed_profile_items(reports: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
+    ranked_items: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for report in reports:
+        case_id = str(report.get("case_id") or "unknown")
+        for item_id in report.get("missed_items", []):
+            if not isinstance(item_id, str):
+                continue
+            key = (case_id, item_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            ranked_items.append({"case_id": case_id, "item_id": item_id})
+            if len(ranked_items) >= limit:
+                return ranked_items
+    return ranked_items
+
+
+def _build_contrast_learning_task(
+    reports: list[dict[str, Any]],
+    latest_case_id: str,
+    target_item_ids: list[str],
+    source_report_count: int,
+) -> dict[str, object] | None:
+    contrast_case_id = _find_recommended_contrast_case_id(reports, latest_case_id)
+    if contrast_case_id is None:
+        return None
+    return {
+        "task_type": "contrast_case",
+        "case_id": contrast_case_id,
+        "objective": f"对照{_get_case_title(contrast_case_id)}，迁移本轮薄弱维度的问诊、检查选择和证据链表达。",
+        "target_rubric_items": target_item_ids,
+        "source_report_count": source_report_count,
+        "source_references": [f"case:{contrast_case_id}"],
+    }
+
+
+def _find_recommended_contrast_case_id(reports: list[dict[str, Any]], latest_case_id: str) -> str | None:
+    for report in reports:
+        for recommendation in report.get("knowledge_recommendations", []):
+            if not isinstance(recommendation, dict):
+                continue
+            reference = recommendation.get("reference")
+            if not isinstance(reference, str) or not reference.startswith("case:"):
+                continue
+            case_id = reference.removeprefix("case:")
+            if case_id and case_id != latest_case_id:
+                return case_id
+    for case_path in sorted(CASES_DIR.glob("*.json")):
+        case_id = case_path.stem
+        if case_id != latest_case_id:
+            return case_id
+    return None
+
+
+def _get_case_title(case_id: str) -> str:
+    case_path = CASES_DIR / f"{case_id}.json"
+    if not case_path.exists():
+        return case_id
+    payload = json.loads(case_path.read_text(encoding="utf-8"))
+    title = payload.get("case_title")
+    return str(title) if isinstance(title, str) and title else case_id
+
+
 def _load_admin_rubric(rubric_id: str) -> dict[str, Any] | None:
     if "/" in rubric_id or "\\" in rubric_id or ".." in rubric_id:
         return None
@@ -440,6 +543,7 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
         "strongest_dimension": dimension_averages[0] if dimension_averages else None,
         "weakest_dimension": weakest_dimension,
         "next_focus": f"下一轮优先补强{weakest_dimension['label']}，并在训练记录中对比改进趋势。" if weakest_dimension else "先完成一次完整训练并生成评分报告。",
+        "learning_path": _build_learning_path(reports, weakest_dimension),
         "recent_sessions": sessions[:5],
         "skill_accumulation": _build_skill_accumulation(user["user_id"], sessions),
     }

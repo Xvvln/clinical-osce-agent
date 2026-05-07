@@ -354,6 +354,13 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /训练次数/);
   assert.match(profileSource, /平均分/);
   assert.match(profileSource, /薄弱项/);
+  assert.match(profileSource, /type LearningPathItem = Readonly<\{/);
+  assert.match(profileSource, /learning_path: readonly LearningPathItem\[];/);
+  assert.match(profileSource, /learningPath: readonly LearningPathItem\[];/);
+  assert.match(profileSource, /profile\.learningPath\.map/);
+  assert.match(profileSource, /个性化学习路径/);
+  assert.match(profileSource, /target_rubric_items/);
+  assert.match(profileSource, /source_references/);
   assert.match(profileSource, /Skill 积累/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
   assert.match(profileSource, /student_visible_summary: string;/);

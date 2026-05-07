@@ -33,6 +33,15 @@ type SkillAccumulation = Readonly<{
   enabled_skills: readonly EnabledSkillSummary[];
 }>;
 
+type LearningPathItem = Readonly<{
+  task_type: string;
+  case_id: string;
+  objective: string;
+  target_rubric_items: readonly string[];
+  source_report_count: number;
+  source_references: readonly string[];
+}>;
+
 type CurrentUserProfilePayload = Readonly<{
   student_id: string;
   total_sessions: number;
@@ -42,6 +51,7 @@ type CurrentUserProfilePayload = Readonly<{
   strongest_dimension: DimensionAverage | null;
   weakest_dimension: DimensionAverage | null;
   next_focus: string;
+  learning_path: readonly LearningPathItem[];
   recent_sessions: readonly PersistedSessionSummary[];
   skill_accumulation: SkillAccumulation;
 }>;
@@ -58,6 +68,7 @@ type LearningProfile = Readonly<{
   strongestDimension: DimensionAverage | null;
   weakestDimension: DimensionAverage | null;
   nextFocus: string;
+  learningPath: readonly LearningPathItem[];
   recentSessions: readonly PersistedSessionSummary[];
   skillAccumulation: SkillAccumulation;
 }>;
@@ -70,6 +81,7 @@ const EMPTY_LEARNING_PROFILE: LearningProfile = {
   strongestDimension: null,
   weakestDimension: null,
   nextFocus: "先完成一次完整训练并生成评分报告。",
+  learningPath: [],
   recentSessions: [],
   skillAccumulation: {
     status: "planned",
@@ -101,6 +113,7 @@ function toLearningProfile(payload: CurrentUserProfilePayload): LearningProfile 
     strongestDimension: payload.strongest_dimension,
     weakestDimension: payload.weakest_dimension,
     nextFocus: payload.next_focus,
+    learningPath: payload.learning_path,
     recentSessions: payload.recent_sessions,
     skillAccumulation: payload.skill_accumulation,
   };
@@ -205,6 +218,56 @@ export default function ProfilePage() {
             <p className="mt-3 text-3xl font-semibold text-brand">{profile.reportCount > 0 ? profile.averageScore : "--"}</p>
             <p className="mt-2 text-sm text-muted-foreground">基于已有评分报告计算。</p>
           </article>
+        </section>
+
+        <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">个性化学习路径</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                由评分报告、薄弱维度、漏项和相似病例推荐确定性生成，用于安排下一轮训练。
+              </p>
+            </div>
+            <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+              {profile.learningPath.length} 项
+            </span>
+          </div>
+          {profile.learningPath.length > 0 ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {profile.learningPath.map((task) => (
+                <article className="rounded-xl border border-border bg-muted/30 p-4" key={`${task.task_type}-${task.case_id}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] text-muted-foreground">{task.task_type}</p>
+                      <h3 className="mt-1 text-sm font-semibold">病例：{task.case_id}</h3>
+                    </div>
+                    <span className="rounded-full border border-brand/20 bg-background px-2 py-1 text-[11px] font-medium text-brand">
+                      {task.source_report_count} 份报告
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">{task.objective}</p>
+                  {task.target_rubric_items.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {task.target_rubric_items.map((itemId) => (
+                        <span className="rounded-full border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground" key={`${task.case_id}-${itemId}`}>
+                          {itemId}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {task.source_references.length > 0 ? (
+                    <p className="mt-3 break-words font-mono text-[11px] leading-5 text-muted-foreground">
+                      来源：{task.source_references.join(" · ")}
+                    </p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
+              暂无学习路径。完成一次评分报告后，系统会从本轮漏项和病例推荐生成下一步训练任务。
+            </p>
+          )}
         </section>
 
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">

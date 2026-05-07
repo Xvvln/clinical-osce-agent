@@ -271,6 +271,40 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         "applied_skill_count": 0,
         "enabled_skills": [],
     }
+    assert profile["learning_path"][0] == {
+        "task_type": "redo_same_case",
+        "case_id": "appendicitis_001",
+        "objective": "复训右下腹痛教学病例，优先补强鉴别诊断并补齐本轮反复缺失的评分项。",
+        "target_rubric_items": [
+            "ht_migration",
+            "ht_character",
+            "ht_severity",
+            "ht_associated_gi",
+            "ht_associated_fever",
+        ],
+        "source_report_count": 1,
+        "source_references": [
+            "rubric:appendicitis_001_rubric.item.ht_migration",
+            "rubric:appendicitis_001_rubric.item.ht_character",
+            "rubric:appendicitis_001_rubric.item.ht_severity",
+            "rubric:appendicitis_001_rubric.item.ht_associated_gi",
+            "rubric:appendicitis_001_rubric.item.ht_associated_fever",
+        ],
+    }
+    assert profile["learning_path"][1] == {
+        "task_type": "contrast_case",
+        "case_id": "acs_001",
+        "objective": "对照胸痛伴出汗教学病例，迁移本轮薄弱维度的问诊、检查选择和证据链表达。",
+        "target_rubric_items": [
+            "ht_migration",
+            "ht_character",
+            "ht_severity",
+            "ht_associated_gi",
+            "ht_associated_fever",
+        ],
+        "source_report_count": 1,
+        "source_references": ["case:acs_001"],
+    }
 
 
 def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_path) -> None:
