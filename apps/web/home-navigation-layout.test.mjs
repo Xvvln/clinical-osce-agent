@@ -300,6 +300,21 @@ test("report source chips are grouped by case rubric public source and evidence"
   assert.match(reportSource, /<SourceReferenceGroups groups=\{sourceReferenceGroups\} \/>/);
 });
 
+test("report page renders a defense evidence chain from explanation source items", () => {
+  assert.match(reportModelSource, /export type ExplanationSourceItem = Readonly<\{/);
+  assert.match(reportModelSource, /explanation_source_items\?: readonly ExplanationSourceItem\[];/);
+  assert.match(reportModelSource, /explanation_source_items: readonly ExplanationSourceItem\[];/);
+  assert.match(reportSource, /type ExplanationChainDisplayItem = Readonly<\{/);
+  assert.match(reportSource, /function getExplanationKindLabel\(kind: string\): string/);
+  assert.match(reportSource, /function getExplanationSourceDisplayItems/);
+  assert.match(reportSource, /function DefenseEvidenceChainSection/);
+  assert.match(reportSource, /<DefenseEvidenceChainSection explanationItems=\{report\.explanation_source_items\} sourceReferenceItems=\{report\.source_reference_items\} \/>/);
+  assert.match(reportSource, /评分项 → 证据 → 来源/);
+  assert.match(reportSource, /item\.source_references\.filter\(\(reference\) => reference\.startsWith\("rubric:"\)\)/);
+  assert.match(reportSource, /item\.source_references\.filter\(\(reference\) => reference\.startsWith\("evidence:"\)\)/);
+  assert.match(reportSource, /不参与评分裁判/);
+});
+
 test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportModelSource, /export type EvidenceGraphNodeItem = Readonly<\{/);
   assert.match(reportModelSource, /export type EvidenceGraphEdgeItem = Readonly<\{/);

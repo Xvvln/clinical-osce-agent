@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   normalizeFeedbackReport,
   type EvidenceGraphSummary,
+  type ExplanationSourceItem,
   type FeedbackReport,
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
@@ -39,6 +40,12 @@ type SourceReferenceGroup = Readonly<{
   title: string;
   description: string;
   references: readonly SourceReferenceDisplayItem[];
+}>;
+
+type ExplanationChainDisplayItem = Readonly<{
+  reference: string;
+  title: string;
+  sourceType: string;
 }>;
 
 type BackendMessage = Readonly<{
@@ -259,6 +266,33 @@ function groupSourceReferences(
       ...getSourceReferenceGroupMeta(key),
       references: groupedReferences[key] ?? [],
     }));
+}
+
+function getExplanationKindLabel(kind: string): string {
+  if (kind === "strength") {
+    return "优势项";
+  }
+  if (kind === "reasoning_error") {
+    return "推理问题";
+  }
+  if (kind === "llm_reasoning_feedback") {
+    return "语义评分解释";
+  }
+  return "反馈解释";
+}
+
+function getExplanationSourceDisplayItems(
+  sourceReferenceItems: readonly SourceReferenceItem[],
+  sourceReferences: readonly string[],
+): readonly ExplanationChainDisplayItem[] {
+  return sourceReferences.map((reference) => {
+    const sourceItem = sourceReferenceItems.find((item) => item.reference === reference);
+    return {
+      reference,
+      title: sourceItem?.title ?? getSourceReferenceLabel(reference),
+      sourceType: sourceItem?.source_type ?? getSourceReferenceGroupKey(reference),
+    };
+  });
 }
 
 function getBackendMessageLabel(message: BackendMessage): string {
@@ -649,6 +683,7 @@ export default function ReportPage() {
                 <ReportList title="下一轮训练重点" items={report.next_recommendations} />
                 <KnowledgeRecommendations items={report.knowledge_recommendations} />
                 <LlmReasoningFeedback items={report.llm_reasoning_feedback} />
+                <DefenseEvidenceChainSection explanationItems={report.explanation_source_items} sourceReferenceItems={report.source_reference_items} />
                 <EvidenceGraphSummarySection summary={report.evidence_graph_summary} />
                 <SourceReferenceGroups groups={sourceReferenceGroups} />
               </div>
@@ -784,6 +819,89 @@ function LlmReasoningFeedback({ items }: Readonly<{ items: readonly LlmReasoning
         </p>
       )}
     </section>
+  );
+}
+
+function DefenseEvidenceChainSection({
+  explanationItems,
+  sourceReferenceItems,
+}: Readonly<{
+  explanationItems: readonly ExplanationSourceItem[];
+  sourceReferenceItems: readonly SourceReferenceItem[];
+}>) {
+  return (
+    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">评分项 → 证据 → 来源</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            将优势项、推理问题和语义评分解释绑定回 rubric 与本轮证据，只用于答辩复盘和可追溯展示，不参与评分裁判。
+          </p>
+        </div>
+        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {explanationItems.length} 条链路
+        </span>
+      </div>
+      {explanationItems.length > 0 ? (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {explanationItems.map((item, index) => {
+            const rubricReferences = item.source_references.filter((reference) => reference.startsWith("rubric:"));
+            const evidenceReferences = item.source_references.filter((reference) => reference.startsWith("evidence:"));
+            const sourceItems = getExplanationSourceDisplayItems(sourceReferenceItems, item.source_references);
+            return (
+              <article className="rounded-xl border border-border bg-muted/35 p-4" key={`${item.kind}-${item.rubric_item_id}-${index}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="rounded-full bg-background px-2.5 py-1 text-xs font-medium text-brand">
+                    {getExplanationKindLabel(item.kind)}
+                  </span>
+                  <span className="break-all font-mono text-[11px] text-muted-foreground">{item.rubric_item_id}</span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-foreground">{item.text}</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <TraceColumn title="评分项" items={rubricReferences} emptyText="未绑定 rubric 来源" />
+                  <TraceColumn title="训练证据" items={evidenceReferences} emptyText="暂无直接证据引用" />
+                  <div>
+                    <h3 className="text-xs font-semibold text-foreground">来源</h3>
+                    <ul className="mt-2 space-y-1">
+                      {sourceItems.map((sourceItem) => (
+                        <li className="rounded-md bg-background px-2 py-1 text-[11px] leading-5 text-muted-foreground" key={`${item.kind}-${sourceItem.reference}`}>
+                          <span className="font-medium text-foreground">{sourceItem.title}</span>
+                          <span className="mt-1 block break-all font-mono">{sourceItem.reference}</span>
+                          <span className="mt-1 block">类型：{sourceItem.sourceType}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
+          当前报告暂无逐条解释来源链。旧报告仍可通过来源引用分组查看基本依据。
+        </p>
+      )}
+    </section>
+  );
+}
+
+function TraceColumn({ title, items, emptyText }: Readonly<{ title: string; items: readonly string[]; emptyText: string }>) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      {items.length > 0 ? (
+        <ul className="mt-2 space-y-1">
+          {items.map((item) => (
+            <li className="rounded-md bg-background px-2 py-1 font-mono text-[11px] leading-5 break-all text-muted-foreground" key={item}>
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{emptyText}</p>
+      )}
+    </div>
   );
 }
 

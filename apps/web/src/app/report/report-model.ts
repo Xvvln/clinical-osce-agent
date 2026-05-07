@@ -21,6 +21,13 @@ export type SourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+export type ExplanationSourceItem = Readonly<{
+  kind: string;
+  text: string;
+  rubric_item_id: string;
+  source_references: readonly string[];
+}>;
+
 export type EvidenceGraphNodeItem = Readonly<{
   node_id: string;
   node_type: string;
@@ -68,6 +75,7 @@ export type FeedbackReportPayload = Readonly<{
   next_recommendations: readonly string[];
   source_references: readonly string[];
   source_reference_items?: readonly SourceReferenceItem[];
+  explanation_source_items?: readonly ExplanationSourceItem[];
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
   evidence_graph_summary?: EvidenceGraphSummary | null;
@@ -77,6 +85,7 @@ export type FeedbackReportPayload = Readonly<{
 export type FeedbackReport = FeedbackReportPayload &
   Readonly<{
     source_reference_items: readonly SourceReferenceItem[];
+    explanation_source_items: readonly ExplanationSourceItem[];
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
     evidence_graph_summary: EvidenceGraphSummary | null;
@@ -86,6 +95,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
   return {
     ...report,
     source_reference_items: report.source_reference_items ?? [],
+    explanation_source_items: report.explanation_source_items ?? [],
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,

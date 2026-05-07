@@ -37,6 +37,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.ok(existsSync(adminPageUrl), "admin dashboard page should exist");
   assert.match(adminPageSource, /type AdminSessionSummary = Readonly<\{/);
   assert.match(adminPageSource, /type AdminSessionReport = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminExplanationSourceItem = Readonly<\{/);
+  assert.match(adminPageSource, /explanation_source_items\?: readonly AdminExplanationSourceItem\[];/);
   assert.match(adminPageSource, /type AdminEvidenceGraphSummary = Readonly<\{/);
   assert.match(adminPageSource, /evidence_graph_summary\?: AdminEvidenceGraphSummary \| null;/);
   assert.match(adminPageSource, /type AdminReportsResponse = Readonly<\{/);
@@ -98,6 +100,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /证据图谱覆盖/);
+  assert.match(adminPageSource, /答辩证据链/);
+  assert.match(adminPageSource, /评分项 → 证据 → 来源/);
+  assert.match(adminPageSource, /getReportExplanationSourceItems\(selectedReport\)/);
+  assert.match(adminPageSource, /explanationItem\.source_references\.filter\(\(reference\) => reference\.startsWith\("rubric:"\)\)/);
+  assert.match(adminPageSource, /explanationItem\.source_references\.filter\(\(reference\) => reference\.startsWith\("evidence:"\)\)/);
   assert.match(adminPageSource, /selectedReport\.evidence_graph_summary/);
   assert.match(adminPageSource, /covered_evidence_nodes\.map/);
   assert.match(adminPageSource, /missing_evidence_nodes\.map/);

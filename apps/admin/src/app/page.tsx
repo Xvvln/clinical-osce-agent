@@ -23,6 +23,13 @@ type AdminSourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+type AdminExplanationSourceItem = Readonly<{
+  kind: string;
+  text: string;
+  rubric_item_id: string;
+  source_references: readonly string[];
+}>;
+
 type AdminEvidenceGraphNodeItem = Readonly<{
   node_id: string;
   node_type: string;
@@ -61,6 +68,7 @@ type AdminSessionReport = Readonly<{
   missed_items: readonly string[];
   source_references?: readonly string[];
   source_reference_items?: readonly AdminSourceReferenceItem[];
+  explanation_source_items?: readonly AdminExplanationSourceItem[];
   evidence_graph_summary?: AdminEvidenceGraphSummary | null;
   knowledge_recommendations: readonly ReportRecommendation[];
 }>;
@@ -1042,6 +1050,10 @@ function getReportSourceReferenceItems(report: AdminSessionReport): readonly Adm
     title: getSourceReferenceLabel(reference),
     metadata: {},
   }));
+}
+
+function getReportExplanationSourceItems(report: AdminSessionReport): readonly AdminExplanationSourceItem[] {
+  return report.explanation_source_items ?? [];
 }
 
 function getAdminCaseImportStatusLabel(result: AdminCaseImportStatus): string {
@@ -2550,6 +2562,46 @@ export default function AdminDashboardPage() {
                   </div>
                   <div>
                     <h3 className="text-sm font-semibold">RAG 来源引用</h3>
+                    <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3">
+                      <h4 className="text-sm font-semibold text-[#141413]">答辩证据链</h4>
+                      <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">
+                        评分项 → 证据 → 来源；用于展示反馈解释如何回到 rubric 和本轮证据，不参与评分裁判。
+                      </p>
+                      <div className="mt-3 grid gap-2">
+                        {getReportExplanationSourceItems(selectedReport).length > 0 ? (
+                          getReportExplanationSourceItems(selectedReport).map((explanationItem, index) => {
+                            const rubricReferences = explanationItem.source_references.filter((reference) => reference.startsWith("rubric:"));
+                            const evidenceReferences = explanationItem.source_references.filter((reference) => reference.startsWith("evidence:"));
+                            return (
+                              <article className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm leading-6 text-[#6F6257]" key={`${explanationItem.kind}-${explanationItem.rubric_item_id}-${index}`}>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="font-semibold text-[#141413]">{explanationItem.text}</p>
+                                  <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{explanationItem.kind}</span>
+                                </div>
+                                <div className="mt-3 grid gap-2 lg:grid-cols-3">
+                                  <div>
+                                    <p className="text-xs font-semibold text-[#141413]">评分项</p>
+                                    <p className="mt-1 break-all font-mono text-[11px]">{rubricReferences.join("、") || explanationItem.rubric_item_id}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-semibold text-[#141413]">训练证据</p>
+                                    <p className="mt-1 break-all font-mono text-[11px]">{evidenceReferences.join("、") || "暂无直接证据引用"}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-semibold text-[#141413]">来源</p>
+                                    <p className="mt-1 break-all font-mono text-[11px]">{explanationItem.source_references.join("、")}</p>
+                                  </div>
+                                </div>
+                              </article>
+                            );
+                          })
+                        ) : (
+                          <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">
+                            当前报告暂无逐条解释来源链。
+                          </p>
+                        )}
+                      </div>
+                    </div>
                     <div className="mt-2 grid gap-2">
                       {getReportSourceReferenceItems(selectedReport).length > 0 ? (
                         getReportSourceReferenceItems(selectedReport).map((item) => {
