@@ -194,6 +194,14 @@ type TrainingSkillCandidateReview = Readonly<{
   reviewer_id?: string;
 }>;
 
+type TrainingSkillTeachingAction = Readonly<{
+  action_type: string;
+  level: number;
+  stage_scope: readonly string[];
+  trigger_item_ids: readonly string[];
+  message_template: string;
+}>;
+
 type TrainingSkillCandidateDetail = Readonly<{
   candidate_id: string;
   trigger_item_id: string;
@@ -206,6 +214,9 @@ type TrainingSkillCandidateDetail = Readonly<{
   title: string;
   description: string;
   suggested_strategy: string;
+  teaching_action_plan: readonly TrainingSkillTeachingAction[];
+  prohibited_content_policy: Readonly<Record<string, unknown>>;
+  success_metrics: readonly string[];
   status: string;
   source_report_count: number;
   support_count: number;
@@ -3069,6 +3080,34 @@ export default function AdminDashboardPage() {
                     <div>
                       <h4 className="text-sm font-semibold">教学策略</h4>
                       <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.suggested_strategy}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">教学动作计划</h4>
+                      <div className="mt-2 grid gap-2">
+                        {(selectedCandidate.teaching_action_plan ?? []).length > 0 ? (
+                          selectedCandidate.teaching_action_plan.map((action, index) => (
+                            <div className="border-t border-[#E6DFD2] pt-2 text-xs leading-5 text-[#6F6257]" key={`${action.action_type}-${index}`}>
+                              <p className="font-medium text-[#141413]">
+                                {action.action_type} · Level {action.level}
+                              </p>
+                              <p>阶段：{action.stage_scope.join("、") || "未限定"}</p>
+                              <p>触发项：{action.trigger_item_ids.join("、") || "未限定"}</p>
+                              <p className="mt-1">{action.message_template}</p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm leading-6 text-[#6F6257]">暂无结构化教学动作计划。</p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">禁止内容策略</h4>
+                      <pre className="mt-2 whitespace-pre-wrap rounded-md border border-[#E6DFD2] bg-white p-3 text-[11px] leading-5 text-[#6F6257]">
+                        {JSON.stringify(selectedCandidate.prohibited_content_policy ?? {}, null, 2)}
+                      </pre>
+                      <p className="mt-2 break-words text-xs leading-5 text-[#8A7D6F]">
+                        观察指标：{(selectedCandidate.success_metrics ?? []).join("、") || "未设置"}
+                      </p>
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">回归结果</h4>

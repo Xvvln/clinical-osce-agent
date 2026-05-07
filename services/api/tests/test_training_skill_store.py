@@ -1,6 +1,44 @@
 from app.services.training_skill_store import TrainingSkillStore
 
 
+def _expected_action_plan(stage_scope: list[str], trigger_item_ids: list[str], suggested_strategy: str) -> list[dict[str, object]]:
+    return [
+        {
+            "action_type": "hint_ladder",
+            "level": 1,
+            "stage_scope": stage_scope,
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": suggested_strategy,
+        },
+        {
+            "action_type": "reflection_prompt",
+            "level": 1,
+            "stage_scope": ["diagnosis_submission"],
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": "训练结束后，请对照本轮反复漏掉的评分项复盘证据链，不补写标准答案或隐藏事实。",
+        },
+    ]
+
+
+def _expected_policy() -> dict[str, object]:
+    return {
+        "forbid_main_diagnosis": True,
+        "forbid_hidden_facts": True,
+        "forbid_test_results": True,
+        "forbid_treatment_plan": True,
+        "forbid_dose": True,
+        "allowed_scope": "teaching_strategy_only",
+    }
+
+
+def _expected_success_metrics() -> list[str]:
+    return [
+        "target_rubric_item_recovery_rate",
+        "stage_completion_rate",
+        "hint_after_skill_usage",
+    ]
+
+
 def test_training_skill_store_enables_approved_candidate_across_instances(tmp_path) -> None:
     database_path = tmp_path / "training_skills.sqlite3"
     candidate = {
@@ -55,6 +93,13 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         "title": "临床推理链纠偏提示",
         "description": "3 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001、pneumonia_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "teaching_action_plan": _expected_action_plan(
+            ["case_intro"],
+            ["reasoning_core", "rs_exclude"],
+            "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        ),
+        "prohibited_content_policy": _expected_policy(),
+        "success_metrics": _expected_success_metrics(),
         "status": "enabled",
         "source_report_count": 3,
         "support_count": 2,
@@ -82,6 +127,24 @@ def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
         "title": "鉴别诊断拓展提示",
         "description": "多份报告中反复出现鉴别诊断与推理链漏项。",
         "suggested_strategy": "提交诊断前，提醒学生先复盘支持与排除证据，不透露标准答案。",
+        "teaching_action_plan": [
+            {
+                "action_type": "hint_ladder",
+                "level": 1,
+                "stage_scope": ["case_intro", "diagnosis_submission"],
+                "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+                "message_template": "提交诊断前，提醒学生先复盘支持与排除证据，不透露标准答案。",
+            }
+        ],
+        "prohibited_content_policy": {
+            "forbid_main_diagnosis": True,
+            "forbid_hidden_facts": True,
+            "forbid_test_results": True,
+            "forbid_treatment_plan": True,
+            "forbid_dose": True,
+            "allowed_scope": "teaching_strategy_only",
+        },
+        "success_metrics": ["target_rubric_item_recovery_rate"],
         "source_report_count": 3,
         "support_count": 2,
         "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
@@ -103,6 +166,9 @@ def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
         "current_missing_evidence": ["dxd_crohn", "reasoning_core"],
         "min_support_count": 2,
     }
+    assert loaded_skill["teaching_action_plan"] == candidate["teaching_action_plan"]
+    assert loaded_skill["prohibited_content_policy"] == candidate["prohibited_content_policy"]
+    assert loaded_skill["success_metrics"] == candidate["success_metrics"]
 
 
 def test_training_skill_store_does_not_enable_unapproved_candidate(tmp_path) -> None:
@@ -178,6 +244,13 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
             "suggested_strategy": "提醒学生组织证据链，但不透露标准诊断或隐藏事实。",
+            "teaching_action_plan": _expected_action_plan(
+                ["case_intro"],
+                [],
+                "提醒学生组织证据链，但不透露标准诊断或隐藏事实。",
+            ),
+            "prohibited_content_policy": _expected_policy(),
+            "success_metrics": _expected_success_metrics(),
             "status": "enabled",
             "source_report_count": 3,
             "support_count": 2,
@@ -202,6 +275,13 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "title": "疼痛部位追问提示",
             "description": "问诊部位反复遗漏。",
             "suggested_strategy": "提醒学生补充疼痛部位与转移问题。",
+            "teaching_action_plan": _expected_action_plan(
+                ["case_intro"],
+                [],
+                "提醒学生补充疼痛部位与转移问题。",
+            ),
+            "prohibited_content_policy": _expected_policy(),
+            "success_metrics": _expected_success_metrics(),
             "status": "enabled",
             "source_report_count": 4,
             "support_count": 2,

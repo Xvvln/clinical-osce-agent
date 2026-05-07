@@ -83,6 +83,44 @@ def _training_pattern_candidate_context() -> TrainingSkillCandidateContext:
     )
 
 
+def _expected_action_plan(stage_scope: list[str], trigger_item_ids: list[str], suggested_strategy: str) -> list[dict[str, object]]:
+    return [
+        {
+            "action_type": "hint_ladder",
+            "level": 1,
+            "stage_scope": stage_scope,
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": suggested_strategy,
+        },
+        {
+            "action_type": "reflection_prompt",
+            "level": 1,
+            "stage_scope": ["diagnosis_submission"],
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": "训练结束后，请对照本轮反复漏掉的评分项复盘证据链，不补写标准答案或隐藏事实。",
+        },
+    ]
+
+
+def _expected_policy() -> dict[str, object]:
+    return {
+        "forbid_main_diagnosis": True,
+        "forbid_hidden_facts": True,
+        "forbid_test_results": True,
+        "forbid_treatment_plan": True,
+        "forbid_dose": True,
+        "allowed_scope": "teaching_strategy_only",
+    }
+
+
+def _expected_success_metrics() -> list[str]:
+    return [
+        "target_rubric_item_recovery_rate",
+        "stage_completion_rate",
+        "hint_after_skill_usage",
+    ]
+
+
 def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_context_and_response_schema() -> None:
     fake_client = FakeSkillCandidateClient()
     generator = VertexGeminiTrainingSkillCandidateGenerator(
@@ -114,6 +152,13 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
         "title": "LLM 生成的训练模式 Skill",
         "description": "基于多项高频漏项生成的训练级教学 Skill。",
         "suggested_strategy": "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
+        "teaching_action_plan": _expected_action_plan(
+            ["case_intro", "diagnosis_submission"],
+            ["reasoning_core", "rs_exclude"],
+            "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。",
+        ),
+        "prohibited_content_policy": _expected_policy(),
+        "success_metrics": _expected_success_metrics(),
         "status": "draft",
         "source_report_count": 3,
         "support_count": 2,
@@ -481,6 +526,13 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
             "title": "OSCE 训练模式纠偏提示",
             "description": "3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。",
             "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
+            "teaching_action_plan": _expected_action_plan(
+                ["case_intro", "diagnosis_submission"],
+                ["rs_exclude", "reasoning_core"],
+                "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
+            ),
+            "prohibited_content_policy": _expected_policy(),
+            "success_metrics": _expected_success_metrics(),
             "status": "draft",
             "source_report_count": 3,
             "support_count": 3,
@@ -530,6 +582,13 @@ def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_me
         "current_missing_evidence": ["dxd_crohn", "reasoning_core"],
         "min_support_count": 2,
     }
+    assert candidate["teaching_action_plan"] == _expected_action_plan(
+        ["case_intro", "diagnosis_submission"],
+        ["dxd_crohn", "reasoning_core"],
+        candidate["suggested_strategy"],
+    )
+    assert candidate["prohibited_content_policy"] == _expected_policy()
+    assert candidate["success_metrics"] == _expected_success_metrics()
 
 
 def test_training_skill_candidate_service_skips_when_no_repeated_training_pattern(monkeypatch) -> None:

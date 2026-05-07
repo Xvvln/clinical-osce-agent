@@ -5,6 +5,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.services.training_skill_policy import (
+    build_prohibited_content_policy,
+    build_success_metrics,
+    build_teaching_action_plan,
+)
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skills.sqlite3"
 
@@ -77,6 +83,19 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
             "current_missing_evidence": [],
             "min_support_count": candidate.get("support_count", 0),
         }
+    teaching_action_plan = candidate.get("teaching_action_plan")
+    if not isinstance(teaching_action_plan, list) or not teaching_action_plan:
+        teaching_action_plan = build_teaching_action_plan(
+            stage_scope=stage_scope,
+            trigger_item_ids=trigger_item_ids,
+            suggested_strategy=str(candidate["suggested_strategy"]),
+        )
+    prohibited_content_policy = candidate.get("prohibited_content_policy")
+    if not isinstance(prohibited_content_policy, dict):
+        prohibited_content_policy = build_prohibited_content_policy()
+    success_metrics = candidate.get("success_metrics")
+    if not isinstance(success_metrics, list) or not success_metrics:
+        success_metrics = build_success_metrics()
     return {
         "skill_id": f"skill_{candidate['trigger_item_id']}",
         "source_candidate_id": candidate["candidate_id"],
@@ -90,6 +109,9 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "title": candidate["title"],
         "description": candidate["description"],
         "suggested_strategy": candidate["suggested_strategy"],
+        "teaching_action_plan": teaching_action_plan,
+        "prohibited_content_policy": prohibited_content_policy,
+        "success_metrics": success_metrics,
         "status": "enabled",
         "source_report_count": candidate["source_report_count"],
         "support_count": candidate["support_count"],

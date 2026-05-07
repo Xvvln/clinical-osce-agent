@@ -57,6 +57,44 @@ def configure_case_import_directories(tmp_path, monkeypatch) -> tuple[Path, Path
     return cases_dir, rubrics_dir
 
 
+def expected_training_skill_action_plan(stage_scope: list[str], trigger_item_ids: list[str], suggested_strategy: str) -> list[dict[str, object]]:
+    return [
+        {
+            "action_type": "hint_ladder",
+            "level": 1,
+            "stage_scope": stage_scope,
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": suggested_strategy,
+        },
+        {
+            "action_type": "reflection_prompt",
+            "level": 1,
+            "stage_scope": ["diagnosis_submission"],
+            "trigger_item_ids": trigger_item_ids,
+            "message_template": "训练结束后，请对照本轮反复漏掉的评分项复盘证据链，不补写标准答案或隐藏事实。",
+        },
+    ]
+
+
+def expected_training_skill_policy() -> dict[str, object]:
+    return {
+        "forbid_main_diagnosis": True,
+        "forbid_hidden_facts": True,
+        "forbid_test_results": True,
+        "forbid_treatment_plan": True,
+        "forbid_dose": True,
+        "allowed_scope": "teaching_strategy_only",
+    }
+
+
+def expected_training_skill_success_metrics() -> list[str]:
+    return [
+        "target_rubric_item_recovery_rate",
+        "stage_completion_rate",
+        "hint_after_skill_usage",
+    ]
+
+
 def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 
@@ -2229,6 +2267,13 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "title": "临床推理链纠偏提示",
         "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "teaching_action_plan": expected_training_skill_action_plan(
+            ["case_intro"],
+            [],
+            "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        ),
+        "prohibited_content_policy": expected_training_skill_policy(),
+        "success_metrics": expected_training_skill_success_metrics(),
         "status": "enabled",
         "source_report_count": 2,
         "support_count": 2,

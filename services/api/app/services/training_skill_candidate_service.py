@@ -12,6 +12,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.training_skill_policy import (
+    build_prohibited_content_policy,
+    build_success_metrics,
+    build_teaching_action_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -260,10 +265,11 @@ def _candidate_from_content(
 ) -> dict[str, Any]:
     skill_type = _skill_type(context.missed_items)
     stage_scope = _stage_scope(skill_type)
+    trigger_item_ids = [item.item_id for item in context.missed_items]
     return {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
-        "trigger_item_ids": [item.item_id for item in context.missed_items],
+        "trigger_item_ids": trigger_item_ids,
         "case_ids": list(context.case_ids),
         "skill_type": skill_type,
         "stage_scope": stage_scope,
@@ -272,6 +278,13 @@ def _candidate_from_content(
         "title": content.title,
         "description": content.description,
         "suggested_strategy": content.suggested_strategy,
+        "teaching_action_plan": build_teaching_action_plan(
+            stage_scope=stage_scope,
+            trigger_item_ids=trigger_item_ids,
+            suggested_strategy=content.suggested_strategy,
+        ),
+        "prohibited_content_policy": build_prohibited_content_policy(),
+        "success_metrics": build_success_metrics(),
         "status": "draft",
         "source_report_count": context.source_report_count,
         "support_count": context.support_count,
@@ -282,10 +295,12 @@ def _candidate_from_content(
 def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
     skill_type = _skill_type(context.missed_items)
     stage_scope = _stage_scope(skill_type)
+    trigger_item_ids = [item.item_id for item in context.missed_items]
+    suggested_strategy = "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。"
     return {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
-        "trigger_item_ids": [item.item_id for item in context.missed_items],
+        "trigger_item_ids": trigger_item_ids,
         "case_ids": list(context.case_ids),
         "skill_type": skill_type,
         "stage_scope": stage_scope,
@@ -293,7 +308,14 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
         "applies_when": _applies_when(context, stage_scope),
         "title": "OSCE 训练模式纠偏提示",
         "description": _candidate_description(context),
-        "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
+        "suggested_strategy": suggested_strategy,
+        "teaching_action_plan": build_teaching_action_plan(
+            stage_scope=stage_scope,
+            trigger_item_ids=trigger_item_ids,
+            suggested_strategy=suggested_strategy,
+        ),
+        "prohibited_content_policy": build_prohibited_content_policy(),
+        "success_metrics": build_success_metrics(),
         "status": "draft",
         "source_report_count": context.source_report_count,
         "support_count": context.support_count,

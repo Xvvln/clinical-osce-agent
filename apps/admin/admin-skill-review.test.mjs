@@ -49,6 +49,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /stage_scope: readonly string\[];/);
   assert.match(adminPageSource, /applies_when: Readonly<Record<string, unknown>>;/);
   assert.match(adminPageSource, /effect_status: string;/);
+  assert.match(adminPageSource, /teaching_action_plan: readonly TrainingSkillTeachingAction\[];/);
+  assert.match(adminPageSource, /prohibited_content_policy: Readonly<Record<string, unknown>>;/);
+  assert.match(adminPageSource, /success_metrics: readonly string\[];/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTeachingFocusPattern = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
@@ -137,6 +140,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /批准并启用/);
   assert.match(adminPageSource, /拒绝候选/);
   assert.match(adminPageSource, /教学策略/);
+  assert.match(adminPageSource, /教学动作计划/);
+  assert.match(adminPageSource, /禁止内容策略/);
+  assert.match(adminPageSource, /selectedCandidate\.teaching_action_plan/);
+  assert.match(adminPageSource, /selectedCandidate\.prohibited_content_policy/);
   assert.match(adminPageSource, /独立审核审计日志/);
   assert.match(adminPageSource, /审核审计事件/);
   assert.match(adminPageSource, /auditEvents\.length > 0/);
