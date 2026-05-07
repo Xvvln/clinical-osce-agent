@@ -5,18 +5,71 @@
     "expected_references": ["case:appendicitis_001"]
   },
   {
-    "query_id": "appendicitis_rebound_rubric",
-    "query": "反跳痛 查体 rubric",
-    "expected_references": ["rubric:appendicitis_001_rubric.item.pe_rebound"]
+    "query_id": "appendicitis_public_source",
+    "query": "Fareez OSCE 公开数据 来源",
+    "expected_references": ["source:fareez_osce_2022"]
+  },
+  {
+    "query_id": "appendicitis_migration_history",
+    "query": "转移 右下腹痛 问诊 部位",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.ht_migration",
+      "knowledge:appendicitis_001.rp_01"
+    ]
+  },
+  {
+    "query_id": "appendicitis_rebound_exam",
+    "query": "反跳痛 查体 腹膜刺激征",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.pe_rebound",
+      "knowledge:appendicitis_001.rp_02"
+    ]
+  },
+  {
+    "query_id": "appendicitis_cbc_inflammation",
+    "query": "白细胞 升高 炎症 实验室",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.ax_cbc",
+      "knowledge:appendicitis_001.rp_03"
+    ]
+  },
+  {
+    "query_id": "appendicitis_ultrasound_imaging",
+    "query": "腹部超声 管状低回声 影像",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.ax_us",
+      "knowledge:appendicitis_001.rp_04"
+    ]
+  },
+  {
+    "query_id": "appendicitis_urinalysis_rule_out",
+    "query": "尿常规 阴性 排除 输尿管结石",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.ax_ua",
+      "knowledge:appendicitis_001.rp_05"
+    ]
+  },
+  {
+    "query_id": "appendicitis_gastroenteritis_exclusion",
+    "query": "无明显腹泻 急性胃肠炎 排除",
+    "expected_references": [
+      "rubric:appendicitis_001_rubric.item.dxd_gastroenteritis",
+      "knowledge:appendicitis_001.rp_06"
+    ]
+  },
+  {
+    "query_id": "appendicitis_reasoning_exclusion",
+    "query": "鉴别 排除 依据 推理",
+    "expected_references": ["rubric:appendicitis_001_rubric.item.rs_exclude"]
+  },
+  {
+    "query_id": "appendicitis_reasoning_support",
+    "query": "阳性证据 支持依据 推理链",
+    "expected_references": ["rubric:appendicitis_001_rubric.item.rs_support"]
   },
   {
     "query_id": "acs_ecg_rubric",
     "query": "胸痛 心电图 检查",
     "expected_references": ["rubric:acs_001_rubric.item.at_ecg"]
-  },
-  {
-    "query_id": "public_osce_source",
-    "query": "Fareez OSCE 公开数据 来源",
-    "expected_references": ["source:fareez_osce_2022"]
   }
 ]

@@ -1,7 +1,7 @@
 import pytest
 
 from app.graph.osce_graph import evaluation_node
-from app.services.retrieval_eval_service import RetrievalGoldQuery, compute_retrieval_metrics
+from app.services.retrieval_eval_service import RetrievalGoldQuery, compute_retrieval_metrics, load_retrieval_gold_queries
 
 
 def test_retrieval_eval_metrics_compute_correctly() -> None:
@@ -34,6 +34,35 @@ def test_retrieval_eval_metrics_compute_correctly() -> None:
     assert metrics["mrr_at_5"] == 0.75
     assert metrics["ndcg_at_5"] == pytest.approx(0.7753, abs=0.0001)
     assert metrics["source_coverage"] == 1.0
+
+
+def test_default_gold_queries_deepen_appendicitis_flagship_case() -> None:
+    gold_queries = load_retrieval_gold_queries()
+    appendicitis_queries = [
+        gold_query for gold_query in gold_queries if gold_query.query_id.startswith("appendicitis_")
+    ]
+    expected_references = {
+        reference
+        for gold_query in appendicitis_queries
+        for reference in gold_query.expected_references
+    }
+
+    assert 8 <= len(appendicitis_queries) <= 12
+    assert {
+        "case:appendicitis_001",
+        "source:fareez_osce_2022",
+        "rubric:appendicitis_001_rubric.item.ht_migration",
+        "rubric:appendicitis_001_rubric.item.pe_rebound",
+        "rubric:appendicitis_001_rubric.item.ax_cbc",
+        "rubric:appendicitis_001_rubric.item.ax_ua",
+        "rubric:appendicitis_001_rubric.item.rs_exclude",
+        "knowledge:appendicitis_001.rp_05",
+        "knowledge:appendicitis_001.rp_06",
+    }.issubset(expected_references)
+    assert all(
+        not reference.startswith(("case:acs_", "rubric:acs_", "knowledge:acs_"))
+        for reference in expected_references
+    )
 
 
 def test_rag_never_enters_scoring_judgement(monkeypatch: pytest.MonkeyPatch) -> None:
