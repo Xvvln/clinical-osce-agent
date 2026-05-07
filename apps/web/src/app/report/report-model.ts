@@ -21,6 +21,34 @@ export type SourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+export type EvidenceGraphNodeItem = Readonly<{
+  node_id: string;
+  node_type: string;
+  source_id: string;
+  label: string;
+}>;
+
+export type EvidenceGraphEdgeItem = Readonly<{
+  from_node: string;
+  to_node: string;
+  relation: string;
+  from_label: string;
+  to_label: string;
+}>;
+
+export type EvidenceGraphSummary = Readonly<{
+  case_id: string;
+  total_evidence_node_count: number;
+  covered_evidence_node_count: number;
+  missing_evidence_node_count: number;
+  coverage_ratio: number;
+  covered_evidence_nodes: readonly EvidenceGraphNodeItem[];
+  missing_evidence_nodes: readonly EvidenceGraphNodeItem[];
+  covered_edges: readonly EvidenceGraphEdgeItem[];
+  missing_edges: readonly EvidenceGraphEdgeItem[];
+  scoring_boundary: string;
+}>;
+
 export type RubricScoreItem = Readonly<{
   score: number;
   max_score: number;
@@ -42,6 +70,7 @@ export type FeedbackReportPayload = Readonly<{
   source_reference_items?: readonly SourceReferenceItem[];
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
+  evidence_graph_summary?: EvidenceGraphSummary | null;
   feedback_summary: string;
 }>;
 
@@ -50,6 +79,7 @@ export type FeedbackReport = FeedbackReportPayload &
     source_reference_items: readonly SourceReferenceItem[];
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
+    evidence_graph_summary: EvidenceGraphSummary | null;
   }>;
 
 export function normalizeFeedbackReport(report: FeedbackReportPayload): FeedbackReport {
@@ -58,5 +88,6 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     source_reference_items: report.source_reference_items ?? [],
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
+    evidence_graph_summary: report.evidence_graph_summary ?? null,
   };
 }

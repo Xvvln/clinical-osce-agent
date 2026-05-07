@@ -37,6 +37,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.ok(existsSync(adminPageUrl), "admin dashboard page should exist");
   assert.match(adminPageSource, /type AdminSessionSummary = Readonly<\{/);
   assert.match(adminPageSource, /type AdminSessionReport = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminEvidenceGraphSummary = Readonly<\{/);
+  assert.match(adminPageSource, /evidence_graph_summary\?: AdminEvidenceGraphSummary \| null;/);
   assert.match(adminPageSource, /type AdminReportsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type EvaluationBatchSummary = Readonly<\{/);
   assert.match(adminPageSource, /type EvaluationBatchDetail = Readonly<\{/);
@@ -95,6 +97,12 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_ids/);
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /学习建议/);
+  assert.match(adminPageSource, /证据图谱覆盖/);
+  assert.match(adminPageSource, /selectedReport\.evidence_graph_summary/);
+  assert.match(adminPageSource, /covered_evidence_nodes\.map/);
+  assert.match(adminPageSource, /missing_evidence_nodes\.map/);
+  assert.match(adminPageSource, /covered_edges\.map/);
+  assert.match(adminPageSource, /missing_edges\.map/);
   assert.match(adminPageSource, /系统评测/);
   assert.match(adminPageSource, /训练日志/);
   assert.match(adminPageSource, /智能体决策轨迹/);

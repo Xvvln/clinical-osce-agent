@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   normalizeFeedbackReport,
+  type EvidenceGraphSummary,
   type FeedbackReport,
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
@@ -648,6 +649,7 @@ export default function ReportPage() {
                 <ReportList title="下一轮训练重点" items={report.next_recommendations} />
                 <KnowledgeRecommendations items={report.knowledge_recommendations} />
                 <LlmReasoningFeedback items={report.llm_reasoning_feedback} />
+                <EvidenceGraphSummarySection summary={report.evidence_graph_summary} />
                 <SourceReferenceGroups groups={sourceReferenceGroups} />
               </div>
             ) : null}
@@ -799,6 +801,90 @@ function EvidenceList({ title, items }: Readonly<{ title: string; items: readonl
         </ul>
       ) : (
         <p className="mt-2 text-xs leading-5 text-muted-foreground">无。</p>
+      )}
+    </div>
+  );
+}
+
+function EvidenceGraphSummarySection({ summary }: Readonly<{ summary: EvidenceGraphSummary | null }>) {
+  const coveragePercent = summary ? Math.round(summary.coverage_ratio * 100) : 0;
+
+  return (
+    <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs xl:col-span-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">证据图谱覆盖</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            证据图谱仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。
+          </p>
+        </div>
+        <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+          {summary ? `${summary.covered_evidence_node_count} / ${summary.total_evidence_node_count} · ${coveragePercent}%` : "暂无"}
+        </span>
+      </div>
+      {summary && summary.total_evidence_node_count > 0 ? (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <EvidenceGraphNodeList title="已收集证据节点" nodes={summary.covered_evidence_nodes} />
+          <EvidenceGraphNodeList title="缺失证据节点" nodes={summary.missing_evidence_nodes} />
+          <EvidenceGraphEdgeList title="已连通证据链" edges={summary.covered_edges} />
+          <EvidenceGraphEdgeList title="待补齐证据链" edges={summary.missing_edges} />
+        </div>
+      ) : (
+        <p className="mt-3 rounded-xl border border-dashed border-border bg-background/70 p-4 text-sm leading-6 text-muted-foreground">
+          当前病例暂无可展示的证据图谱覆盖数据。
+        </p>
+      )}
+    </section>
+  );
+}
+
+function EvidenceGraphNodeList({
+  title,
+  nodes,
+}: Readonly<{
+  title: string;
+  nodes: EvidenceGraphSummary["covered_evidence_nodes"];
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-background/90 p-4">
+      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      {nodes.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
+          {nodes.map((node) => (
+            <li className="rounded-lg bg-muted/60 px-3 py-2" key={node.node_id}>
+              <p className="font-medium text-foreground">{node.label}</p>
+              <p className="mt-1 break-all font-mono">{node.node_id} · {node.source_id}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">无。</p>
+      )}
+    </div>
+  );
+}
+
+function EvidenceGraphEdgeList({
+  title,
+  edges,
+}: Readonly<{
+  title: string;
+  edges: EvidenceGraphSummary["covered_edges"];
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-background/90 p-4">
+      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      {edges.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
+          {edges.map((edge) => (
+            <li className="rounded-lg bg-muted/60 px-3 py-2" key={`${edge.from_node}-${edge.to_node}-${edge.relation}`}>
+              <p className="font-medium text-foreground">{edge.from_label} → {edge.to_label}</p>
+              <p className="mt-1 break-all font-mono">{edge.from_node} / {edge.relation} / {edge.to_node}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">无。</p>
       )}
     </div>
   );

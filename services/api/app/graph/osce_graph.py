@@ -371,6 +371,12 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         rubric_scores,
         report.get("dimension_traces", {}),
     )
+    evidence_graph_summary = _build_evidence_graph_summary(
+        report.get("case_id", ""),
+        state.get("revealed_facts", []),
+        state.get("requested_exams", []),
+        state.get("requested_tests", []),
+    )
 
     feedback_report = {
         **report,
@@ -381,6 +387,7 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "knowledge_recommendations": knowledge_recommendations,
         "llm_reasoning_feedback": llm_reasoning_feedback,
         "explanation_source_items": explanation_source_items,
+        "evidence_graph_summary": evidence_graph_summary,
         "source_references": source_references,
         "source_reference_items": [_serialize_feedback_source_item(item) for item in source_items],
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
@@ -395,6 +402,107 @@ def _serialize_feedback_source_item(item: FeedbackSourceItem) -> dict[str, Any]:
         "source_type": item.source_type,
         "title": item.title,
         "metadata": item.metadata,
+    }
+
+
+def _build_evidence_graph_summary(
+    case_id: str,
+    revealed_facts: Any,
+    requested_exams: Any,
+    requested_tests: Any,
+) -> dict[str, Any]:
+    if not case_id:
+        return _empty_evidence_graph_summary("")
+    case = _load_case(case_id)
+    direct_evidence_types = {"history_fact", "physical_exam", "auxiliary_test"}
+    direct_nodes = [
+        node
+        for node in case.evidence_graph.evidence_nodes
+        if node.node_type in direct_evidence_types
+    ]
+    if not direct_nodes:
+        return _empty_evidence_graph_summary(case.case_id)
+
+    collected_source_ids = _collected_source_ids(revealed_facts, requested_exams, requested_tests)
+    covered_node_ids = {
+        node.node_id
+        for node in direct_nodes
+        if node.source_id in collected_source_ids
+    }
+    node_labels = {node.node_id: node.label for node in case.evidence_graph.evidence_nodes}
+    covered_nodes = [node for node in direct_nodes if node.node_id in covered_node_ids]
+    missing_nodes = [node for node in direct_nodes if node.node_id not in covered_node_ids]
+    covered_edges = [
+        edge
+        for edge in case.evidence_graph.evidence_edges
+        if edge.from_node in covered_node_ids
+    ]
+    missing_edges = [
+        edge
+        for edge in case.evidence_graph.evidence_edges
+        if edge.from_node not in covered_node_ids
+    ]
+
+    return {
+        "case_id": case.case_id,
+        "total_evidence_node_count": len(direct_nodes),
+        "covered_evidence_node_count": len(covered_nodes),
+        "missing_evidence_node_count": len(missing_nodes),
+        "coverage_ratio": round(len(covered_nodes) / len(direct_nodes), 4),
+        "covered_evidence_nodes": [_serialize_evidence_graph_node(node) for node in covered_nodes],
+        "missing_evidence_nodes": [_serialize_evidence_graph_node(node) for node in missing_nodes],
+        "covered_edges": [_serialize_evidence_graph_edge(edge, node_labels) for edge in covered_edges],
+        "missing_edges": [_serialize_evidence_graph_edge(edge, node_labels) for edge in missing_edges],
+        "scoring_boundary": "EvidenceGraph 仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。",
+    }
+
+
+def _empty_evidence_graph_summary(case_id: str) -> dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "total_evidence_node_count": 0,
+        "covered_evidence_node_count": 0,
+        "missing_evidence_node_count": 0,
+        "coverage_ratio": 0.0,
+        "covered_evidence_nodes": [],
+        "missing_evidence_nodes": [],
+        "covered_edges": [],
+        "missing_edges": [],
+        "scoring_boundary": "EvidenceGraph 仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。",
+    }
+
+
+def _collected_source_ids(
+    revealed_facts: Any,
+    requested_exams: Any,
+    requested_tests: Any,
+) -> set[str]:
+    source_ids: set[str] = set()
+    for items in [revealed_facts, requested_exams, requested_tests]:
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, str) and item:
+                source_ids.add(item)
+    return source_ids
+
+
+def _serialize_evidence_graph_node(node: Any) -> dict[str, str]:
+    return {
+        "node_id": node.node_id,
+        "node_type": node.node_type,
+        "source_id": node.source_id,
+        "label": node.label,
+    }
+
+
+def _serialize_evidence_graph_edge(edge: Any, node_labels: dict[str, str]) -> dict[str, str]:
+    return {
+        "from_node": edge.from_node,
+        "to_node": edge.to_node,
+        "relation": edge.relation,
+        "from_label": node_labels.get(edge.from_node, edge.from_node),
+        "to_label": node_labels.get(edge.to_node, edge.to_node),
     }
 
 

@@ -285,6 +285,26 @@ test("report source chips are grouped by case rubric public source and evidence"
   assert.match(reportSource, /<SourceReferenceGroups groups=\{sourceReferenceGroups\} \/>/);
 });
 
+test("report page renders evidence graph coverage from backend report", () => {
+  assert.match(reportModelSource, /export type EvidenceGraphNodeItem = Readonly<\{/);
+  assert.match(reportModelSource, /export type EvidenceGraphEdgeItem = Readonly<\{/);
+  assert.match(reportModelSource, /export type EvidenceGraphSummary = Readonly<\{/);
+  assert.match(reportModelSource, /evidence_graph_summary\?: EvidenceGraphSummary \| null;/);
+  assert.match(reportModelSource, /evidence_graph_summary: report\.evidence_graph_summary \?\? null,/);
+  assert.match(reportSource, /function EvidenceGraphSummarySection/);
+  assert.match(reportSource, /<EvidenceGraphSummarySection summary=\{report\.evidence_graph_summary\} \/>/);
+  assert.match(reportSource, /证据图谱覆盖/);
+  assert.match(reportSource, /summary\.covered_evidence_node_count/);
+  assert.match(reportSource, /summary\.total_evidence_node_count/);
+  assert.match(reportSource, /nodes=\{summary\.covered_evidence_nodes\}/);
+  assert.match(reportSource, /nodes=\{summary\.missing_evidence_nodes\}/);
+  assert.match(reportSource, /edges=\{summary\.covered_edges\}/);
+  assert.match(reportSource, /edges=\{summary\.missing_edges\}/);
+  assert.match(reportSource, /nodes\.map\(\(node\) =>/);
+  assert.match(reportSource, /edges\.map\(\(edge\) =>/);
+  assert.match(reportSource, /证据图谱仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。/);
+});
+
 test("home header links to the learning profile page", () => {
   const headerSource = getHeaderSource();
 

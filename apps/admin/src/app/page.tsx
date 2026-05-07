@@ -23,6 +23,34 @@ type AdminSourceReferenceItem = Readonly<{
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
+type AdminEvidenceGraphNodeItem = Readonly<{
+  node_id: string;
+  node_type: string;
+  source_id: string;
+  label: string;
+}>;
+
+type AdminEvidenceGraphEdgeItem = Readonly<{
+  from_node: string;
+  to_node: string;
+  relation: string;
+  from_label: string;
+  to_label: string;
+}>;
+
+type AdminEvidenceGraphSummary = Readonly<{
+  case_id: string;
+  total_evidence_node_count: number;
+  covered_evidence_node_count: number;
+  missing_evidence_node_count: number;
+  coverage_ratio: number;
+  covered_evidence_nodes: readonly AdminEvidenceGraphNodeItem[];
+  missing_evidence_nodes: readonly AdminEvidenceGraphNodeItem[];
+  covered_edges: readonly AdminEvidenceGraphEdgeItem[];
+  missing_edges: readonly AdminEvidenceGraphEdgeItem[];
+  scoring_boundary: string;
+}>;
+
 type AdminSessionReport = Readonly<{
   report_id: string;
   session_id: string;
@@ -33,6 +61,7 @@ type AdminSessionReport = Readonly<{
   missed_items: readonly string[];
   source_references?: readonly string[];
   source_reference_items?: readonly AdminSourceReferenceItem[];
+  evidence_graph_summary?: AdminEvidenceGraphSummary | null;
   knowledge_recommendations: readonly ReportRecommendation[];
 }>;
 
@@ -2423,6 +2452,65 @@ export default function AdminDashboardPage() {
                         </p>
                       ))}
                     </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">证据图谱覆盖</h3>
+                    {selectedReport.evidence_graph_summary && selectedReport.evidence_graph_summary.total_evidence_node_count > 0 ? (
+                      <div className="mt-2 grid gap-3">
+                        <p className="rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">
+                          已收集 {selectedReport.evidence_graph_summary.covered_evidence_node_count} / {selectedReport.evidence_graph_summary.total_evidence_node_count} 个证据节点 · 覆盖率 {Math.round(selectedReport.evidence_graph_summary.coverage_ratio * 100)}%
+                        </p>
+                        <div className="grid gap-2 lg:grid-cols-2">
+                          <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                            <p className="text-xs font-semibold text-[#141413]">已收集证据节点</p>
+                            <div className="mt-2 grid gap-1">
+                              {selectedReport.evidence_graph_summary.covered_evidence_nodes.map((node) => (
+                                <p className="break-words text-xs leading-5 text-[#6F6257]" key={node.node_id}>
+                                  {node.label} · {node.source_id}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                            <p className="text-xs font-semibold text-[#141413]">缺失证据节点</p>
+                            <div className="mt-2 grid gap-1">
+                              {selectedReport.evidence_graph_summary.missing_evidence_nodes.map((node) => (
+                                <p className="break-words text-xs leading-5 text-[#6F6257]" key={node.node_id}>
+                                  {node.label} · {node.source_id}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                            <p className="text-xs font-semibold text-[#141413]">已连通证据链</p>
+                            <div className="mt-2 grid gap-1">
+                              {selectedReport.evidence_graph_summary.covered_edges.map((edge) => (
+                                <p className="break-words text-xs leading-5 text-[#6F6257]" key={`${edge.from_node}-${edge.to_node}-${edge.relation}`}>
+                                  {edge.from_label} → {edge.to_label}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                            <p className="text-xs font-semibold text-[#141413]">待补齐证据链</p>
+                            <div className="mt-2 grid gap-1">
+                              {selectedReport.evidence_graph_summary.missing_edges.map((edge) => (
+                                <p className="break-words text-xs leading-5 text-[#6F6257]" key={`${edge.from_node}-${edge.to_node}-${edge.relation}`}>
+                                  {edge.from_label} → {edge.to_label}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#8A7D6F]">
+                          {selectedReport.evidence_graph_summary.scoring_boundary}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-2 rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">
+                        当前报告暂无证据图谱覆盖数据。
+                      </p>
+                    )}
                   </div>
                   <div>
                     <h3 className="text-sm font-semibold">RAG 来源引用</h3>

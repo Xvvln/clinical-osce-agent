@@ -1021,6 +1021,30 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         "evidence:lab.cbc",
         "evidence:急性阑尾炎",
     ]
+    evidence_graph_summary = report_payload["evidence_graph_summary"]
+    assert evidence_graph_summary["case_id"] == "appendicitis_001"
+    assert evidence_graph_summary["total_evidence_node_count"] == 5
+    assert evidence_graph_summary["covered_evidence_node_count"] == 2
+    assert evidence_graph_summary["missing_evidence_node_count"] == 3
+    assert evidence_graph_summary["coverage_ratio"] == 0.4
+    assert [node["node_id"] for node in evidence_graph_summary["covered_evidence_nodes"]] == [
+        "ev_peritoneal_signs",
+        "ev_wbc_crp_elevated",
+    ]
+    assert [node["node_id"] for node in evidence_graph_summary["missing_evidence_nodes"]] == [
+        "ev_migratory_rlq_pain",
+        "ev_ultrasound_appendix",
+        "nf_urinalysis_negative",
+    ]
+    assert [edge["from_node"] for edge in evidence_graph_summary["covered_edges"]] == [
+        "ev_peritoneal_signs",
+        "ev_wbc_crp_elevated",
+    ]
+    assert [edge["from_node"] for edge in evidence_graph_summary["missing_edges"]] == [
+        "ev_migratory_rlq_pain",
+        "ev_ultrasound_appendix",
+        "nf_urinalysis_negative",
+    ]
     assert report_payload["feedback_summary"] == "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。"
     report_text = str(report_payload)
     for forbidden_term in ["用药剂量", "治疗方案", "手术方案", "处置建议"]:
