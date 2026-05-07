@@ -195,6 +195,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
         "is_abnormal": true,
         "linked_rubric_items": ["ax_cbc"]
@@ -205,6 +209,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "CRP 48 mg/L。",
         "is_abnormal": true,
         "linked_rubric_items": ["ax_crp"]
@@ -215,6 +223,10 @@
         "category": "影像",
         "invasiveness": "无创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "右下腹见管状低回声结构，直径 9 mm，周围少量渗出。",
         "is_abnormal": true,
         "linked_rubric_items": ["ax_us"]
@@ -227,6 +239,10 @@
         "category": "实验室",
         "invasiveness": "无创",
         "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": ["右侧输尿管结石"],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "尿常规阴性，未见血尿。",
         "is_abnormal": false,
         "linked_rubric_items": ["ax_ua"]
@@ -237,6 +253,10 @@
         "category": "影像",
         "invasiveness": "无创",
         "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": "基础病史、查体、血常规和超声已足够支持训练推理时，不应把 CT 作为第一步机械申请。",
         "result": "阑尾增粗，周围脂肪间隙模糊。",
         "is_abnormal": true,
         "linked_rubric_items": []
@@ -321,6 +341,26 @@
     ],
     "suggested_next_steps": "建议外科会诊评估后续处理，教学模拟不涉及真实用药剂量或处置方案。"
   },
+  "distractor_clues": [
+    {
+      "clue_id": "dc_food_poisoning_concern",
+      "patient_expression": "我一开始以为是不是吃坏肚子了。",
+      "teaching_value": "训练学生区分患者想法与结构化医学证据，避免把患者猜测直接当成诊断依据。",
+      "should_not_score_as": ["急性胃肠炎确诊依据"]
+    }
+  ],
+  "negative_findings": [
+    {
+      "finding_id": "nf_no_diarrhea",
+      "source": "appendicitis_001.hf_05",
+      "supports_exclusion_of": ["急性胃肠炎"]
+    },
+    {
+      "finding_id": "nf_urinalysis_negative",
+      "source": "lab.urinalysis",
+      "supports_exclusion_of": ["右侧输尿管结石"]
+    }
+  ],
   "evidence_graph": {
     "evidence_nodes": [
       {

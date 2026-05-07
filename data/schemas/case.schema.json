@@ -68,6 +68,48 @@
           "title": "Cost Hint",
           "type": "string"
         },
+        "diagnostic_role": {
+          "enum": [
+            "supports_primary_diagnosis",
+            "rules_out_alternative",
+            "risk_stratification",
+            "contextual_baseline"
+          ],
+          "title": "Diagnostic Role",
+          "type": "string"
+        },
+        "rules_out": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rules Out",
+          "type": "array"
+        },
+        "recommended_stage": {
+          "default": "auxiliary_test",
+          "enum": [
+            "case_intro",
+            "history_taking",
+            "physical_exam",
+            "auxiliary_test",
+            "diagnosis_submission",
+            "feedback_review"
+          ],
+          "title": "Recommended Stage",
+          "type": "string"
+        },
+        "overuse_warning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Overuse Warning"
+        },
         "result": {
           "title": "Result",
           "type": "string"
@@ -90,10 +132,38 @@
         "category",
         "invasiveness",
         "cost_hint",
+        "diagnostic_role",
         "result",
         "is_abnormal"
       ],
       "title": "AuxiliaryTestItem",
+      "type": "object"
+    },
+    "CaseTeachingFocus": {
+      "properties": {
+        "learning_objectives": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Learning Objectives",
+          "type": "array"
+        },
+        "common_error_patterns": {
+          "items": {
+            "$ref": "#/$defs/TeachingErrorPattern"
+          },
+          "title": "Common Error Patterns",
+          "type": "array"
+        },
+        "recommended_training_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recommended Training Path",
+          "type": "array"
+        }
+      },
+      "title": "CaseTeachingFocus",
       "type": "object"
     },
     "DiagnosisSpec": {
@@ -188,6 +258,37 @@
         "key_distinction"
       ],
       "title": "DifferentialDiagnosis",
+      "type": "object"
+    },
+    "DistractorClue": {
+      "properties": {
+        "clue_id": {
+          "pattern": "^dc_[a-z0-9_]+$",
+          "title": "Clue Id",
+          "type": "string"
+        },
+        "patient_expression": {
+          "title": "Patient Expression",
+          "type": "string"
+        },
+        "teaching_value": {
+          "title": "Teaching Value",
+          "type": "string"
+        },
+        "should_not_score_as": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Should Not Score As",
+          "type": "array"
+        }
+      },
+      "required": [
+        "clue_id",
+        "patient_expression",
+        "teaching_value"
+      ],
+      "title": "DistractorClue",
       "type": "object"
     },
     "EvidenceGraph": {
@@ -500,6 +601,32 @@
       "title": "HistoryTaking",
       "type": "object"
     },
+    "NegativeFinding": {
+      "properties": {
+        "finding_id": {
+          "pattern": "^nf_[a-z0-9_]+$",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "supports_exclusion_of": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supports Exclusion Of",
+          "type": "array"
+        }
+      },
+      "required": [
+        "finding_id",
+        "source"
+      ],
+      "title": "NegativeFinding",
+      "type": "object"
+    },
     "PatientProfile": {
       "properties": {
         "name_placeholder": {
@@ -764,6 +891,37 @@
       ],
       "title": "SourceAttribution",
       "type": "object"
+    },
+    "TeachingErrorPattern": {
+      "properties": {
+        "pattern_id": {
+          "pattern": "^[a-z0-9_]+_\\d{3}\\.pattern\\.[a-z0-9_]+$",
+          "title": "Pattern Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "focus": {
+          "title": "Focus",
+          "type": "string"
+        },
+        "related_rubric_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Rubric Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern_id",
+        "title",
+        "focus"
+      ],
+      "title": "TeachingErrorPattern",
+      "type": "object"
     }
   },
   "properties": {
@@ -820,6 +978,20 @@
     "diagnosis": {
       "$ref": "#/$defs/DiagnosisSpec"
     },
+    "distractor_clues": {
+      "items": {
+        "$ref": "#/$defs/DistractorClue"
+      },
+      "title": "Distractor Clues",
+      "type": "array"
+    },
+    "negative_findings": {
+      "items": {
+        "$ref": "#/$defs/NegativeFinding"
+      },
+      "title": "Negative Findings",
+      "type": "array"
+    },
     "evidence_graph": {
       "$ref": "#/$defs/EvidenceGraph"
     },
@@ -833,6 +1005,9 @@
     },
     "source_attribution": {
       "$ref": "#/$defs/SourceAttribution"
+    },
+    "teaching_focus": {
+      "$ref": "#/$defs/CaseTeachingFocus"
     },
     "schema_version": {
       "const": "1.1",

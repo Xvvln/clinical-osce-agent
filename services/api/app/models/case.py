@@ -53,6 +53,20 @@ BlockingRule = Literal[
 ]
 TestCategory = Literal["实验室", "影像", "心电", "内镜", "病理", "其他"]
 ReasoningKind = Literal["支持", "排除", "鉴别"]
+TrainingStage = Literal[
+    "case_intro",
+    "history_taking",
+    "physical_exam",
+    "auxiliary_test",
+    "diagnosis_submission",
+    "feedback_review",
+]
+AuxiliaryDiagnosticRole = Literal[
+    "supports_primary_diagnosis",
+    "rules_out_alternative",
+    "risk_stratification",
+    "contextual_baseline",
+]
 EvidenceGraphNodeType = Literal[
     "history_fact",
     "physical_exam",
@@ -152,6 +166,10 @@ class AuxiliaryTestItem(BaseModel):
     category: TestCategory
     invasiveness: Literal["无创", "微创", "有创"]
     cost_hint: Literal["基础", "中等", "昂贵"]
+    diagnostic_role: AuxiliaryDiagnosticRole
+    rules_out: list[str] = Field(default_factory=list)
+    recommended_stage: TrainingStage = "auxiliary_test"
+    overuse_warning: str | None = None
     result: str
     is_abnormal: bool
     linked_rubric_items: list[str] = Field(default_factory=list)
@@ -169,6 +187,19 @@ class ReasoningPoint(BaseModel):
     kind: ReasoningKind
     required_evidence: list[str] = Field(default_factory=list)
     weight: int = Field(..., ge=1, le=10)
+
+
+class DistractorClue(BaseModel):
+    clue_id: str = Field(..., pattern=r"^dc_[a-z0-9_]+$")
+    patient_expression: str
+    teaching_value: str
+    should_not_score_as: list[str] = Field(default_factory=list)
+
+
+class NegativeFinding(BaseModel):
+    finding_id: str = Field(..., pattern=r"^nf_[a-z0-9_]+$")
+    source: str
+    supports_exclusion_of: list[str] = Field(default_factory=list)
 
 
 class EvidenceGraphNode(BaseModel):
@@ -216,6 +247,8 @@ class Case(BaseModel):
     physical_exam: PhysicalExamBundle
     auxiliary_tests: AuxiliaryTestBundle
     diagnosis: DiagnosisSpec
+    distractor_clues: list[DistractorClue] = Field(default_factory=list)
+    negative_findings: list[NegativeFinding] = Field(default_factory=list)
     evidence_graph: EvidenceGraph = Field(default_factory=EvidenceGraph)
     rubric_ref: RubricRef
     safety_notes: str = Field(..., min_length=1)
@@ -267,6 +300,7 @@ class Case(BaseModel):
             raise ValueError(f"abnormal findings missing from reasoning evidence: {missing_abnormal}")
 
         _validate_evidence_graph(self)
+        _validate_differential_training_metadata(self)
 
         banned_phrases = [
             "替代医生诊断",
@@ -325,6 +359,29 @@ def _validate_evidence_graph(case: Case) -> None:
         raise ValueError(f"evidence graph edge endpoint missing: {missing_edge_endpoints}")
 
 
+def _validate_differential_training_metadata(case: Case) -> None:
+    source_ids = {
+        hidden_fact.fact_id for hidden_fact in case.history.hidden_facts
+    }
+    source_ids.update(
+        exam.exam_code
+        for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+    )
+    source_ids.update(
+        test.test_code
+        for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+    )
+    source_ids.update(point.point_id for point in case.diagnosis.reasoning_points)
+
+    missing_negative_sources = [
+        (finding.finding_id, finding.source)
+        for finding in case.negative_findings
+        if finding.source not in source_ids
+    ]
+    if missing_negative_sources:
+        raise ValueError(f"negative finding source missing from case: {missing_negative_sources}")
+
+
 def _teaching_focus_texts(teaching_focus: CaseTeachingFocus) -> list[str]:
     texts = [*teaching_focus.learning_objectives, *teaching_focus.recommended_training_path]
     for pattern in teaching_focus.common_error_patterns:
@@ -334,6 +391,7 @@ def _teaching_focus_texts(teaching_focus: CaseTeachingFocus) -> list[str]:
 
 __all__ = [
     "AuxiliaryTestBundle",
+    "AuxiliaryDiagnosticRole",
     "AuxiliaryTestItem",
     "BlockingRule",
     "CaseTeachingFocus",
@@ -341,6 +399,7 @@ __all__ = [
     "CourseModule",
     "DiagnosisSpec",
     "DifferentialDiagnosis",
+    "DistractorClue",
     "EvidenceGraph",
     "EvidenceGraphEdge",
     "EvidenceGraphNode",
@@ -350,6 +409,7 @@ __all__ = [
     "HistorySlot",
     "HistoryTaking",
     "HistoryTopic",
+    "NegativeFinding",
     "PatientProfile",
     "PhysicalExamBundle",
     "PhysicalExamItem",
@@ -360,4 +420,5 @@ __all__ = [
     "SourceAttribution",
     "TeachingErrorPattern",
     "TestCategory",
+    "TrainingStage",
 ]

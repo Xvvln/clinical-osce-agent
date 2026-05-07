@@ -126,6 +126,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "TSH < 0.01 mIU/L。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_tsh"]
@@ -136,6 +140,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": ["焦虑障碍"],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "FT4 明显升高。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_ft4"]
@@ -146,6 +154,10 @@
         "category": "影像",
         "invasiveness": "无创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "甲状腺弥漫性增大，血流丰富。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_thyroid_us"]
@@ -197,6 +209,8 @@
     ],
     "suggested_next_steps": "建议结合内分泌专科评估进一步完善病因学检查，教学模拟不涉及具体药物剂量。"
   },
+  "distractor_clues": [],
+  "negative_findings": [],
   "evidence_graph": {
     "evidence_nodes": [],
     "evidence_edges": []

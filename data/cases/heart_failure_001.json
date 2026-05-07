@@ -106,6 +106,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": ["肺炎"],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "BNP 明显升高。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_bnp"]
@@ -116,6 +120,10 @@
         "category": "影像",
         "invasiveness": "无创",
         "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": ["慢性阻塞性肺疾病急性加重"],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "左心室射血分数降低。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_echo"]
@@ -167,6 +175,8 @@
     ],
     "suggested_next_steps": "建议结合心内科评估进一步判断心衰分型与诱因，教学模拟不涉及具体剂量方案。"
   },
+  "distractor_clues": [],
+  "negative_findings": [],
   "evidence_graph": {
     "evidence_nodes": [],
     "evidence_edges": []

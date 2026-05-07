@@ -163,6 +163,10 @@ def build_valid_case_payload() -> dict[str, Any]:
                     "category": "实验室",
                     "invasiveness": "无创",
                     "cost_hint": "基础",
+                    "diagnostic_role": "supports_primary_diagnosis",
+                    "rules_out": [],
+                    "recommended_stage": "auxiliary_test",
+                    "overuse_warning": None,
                     "result": "白细胞升高，中性粒细胞比例升高。",
                     "is_abnormal": True,
                     "linked_rubric_items": ["at_cbc"],
@@ -509,6 +513,56 @@ def test_evidence_graph_edge_endpoint_must_exist() -> None:
         validate_case(payload)
 
 
+def test_case_schema_supports_distractors_negative_findings_and_test_roles() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    payload = build_valid_case_payload()
+    payload["distractor_clues"] = [
+        {
+            "clue_id": "dc_food_poisoning_concern",
+            "patient_expression": "我一开始以为是不是吃坏肚子了。",
+            "teaching_value": "训练学生区分患者想法与结构化医学证据。",
+            "should_not_score_as": ["急性胃肠炎确诊依据"],
+        }
+    ]
+    payload["negative_findings"] = [
+        {
+            "finding_id": "nf_no_diarrhea",
+            "source": f"{payload['case_id']}.hf_03",
+            "supports_exclusion_of": ["急性胃肠炎"],
+        }
+    ]
+    payload["auxiliary_tests"]["must_items"][0].update(
+        {
+            "diagnostic_role": "supports_primary_diagnosis",
+            "rules_out": [],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": None,
+        }
+    )
+
+    case_model = validate_case(payload)
+
+    assert case_model.distractor_clues[0].clue_id == "dc_food_poisoning_concern"
+    assert case_model.negative_findings[0].source == f"{payload['case_id']}.hf_03"
+    assert case_model.auxiliary_tests.must_items[0].diagnostic_role == "supports_primary_diagnosis"
+    assert case_model.auxiliary_tests.must_items[0].recommended_stage == "auxiliary_test"
+
+
+def test_negative_finding_source_must_exist_in_case() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    payload = build_valid_case_payload()
+    payload["negative_findings"] = [
+        {
+            "finding_id": "nf_missing_source",
+            "source": "missing.case_source",
+            "supports_exclusion_of": ["急性胃肠炎"],
+        }
+    ]
+
+    with pytest.raises(Exception, match="negative finding source missing from case"):
+        validate_case(payload)
+
+
 def test_appendicitis_001_evidence_graph_references_existing_case_items() -> None:
     _, _, validate_case, _, _ = _load_step2_contract()
     repo_root = Path(__file__).resolve().parents[3]
@@ -527,6 +581,25 @@ def test_appendicitis_001_evidence_graph_references_existing_case_items() -> Non
     assert case_model.evidence_graph.evidence_edges
     assert all(edge.from_node in node_ids for edge in case_model.evidence_graph.evidence_edges)
     assert all(edge.to_node in node_ids for edge in case_model.evidence_graph.evidence_edges)
+
+
+def test_appendicitis_001_has_deep_differential_training_metadata() -> None:
+    _, _, validate_case, _, _ = _load_step2_contract()
+    repo_root = Path(__file__).resolve().parents[3]
+    case_path = repo_root / "data" / "cases" / "appendicitis_001.json"
+    case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+
+    case_model = validate_case(case_payload)
+
+    assert [clue.clue_id for clue in case_model.distractor_clues] == ["dc_food_poisoning_concern"]
+    assert {finding.finding_id for finding in case_model.negative_findings} == {
+        "nf_no_diarrhea",
+        "nf_urinalysis_negative",
+    }
+    urinalysis = next(test for test in case_model.auxiliary_tests.optional_items if test.test_code == "lab.urinalysis")
+    assert urinalysis.diagnostic_role == "rules_out_alternative"
+    assert urinalysis.rules_out == ["右侧输尿管结石"]
+    assert urinalysis.recommended_stage == "auxiliary_test"
 
 
 def _assert_case_rubric_roundtrip(case_name: str) -> None:

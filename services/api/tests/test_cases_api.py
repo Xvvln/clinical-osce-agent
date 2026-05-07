@@ -7,6 +7,66 @@ from app.services.auth_store import AuthStore
 client = TestClient(main.app)
 
 
+def _expected_appendicitis_auxiliary_quick_options() -> list[dict[str, object]]:
+    return [
+        {
+            "test_code": "lab.cbc",
+            "test_name_cn": "血常规",
+            "category": "实验室",
+            "invasiveness": "微创",
+            "cost_hint": "基础",
+            "diagnostic_role": "supports_primary_diagnosis",
+            "rules_out": [],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": None,
+        },
+        {
+            "test_code": "lab.crp",
+            "test_name_cn": "C 反应蛋白",
+            "category": "实验室",
+            "invasiveness": "微创",
+            "cost_hint": "基础",
+            "diagnostic_role": "supports_primary_diagnosis",
+            "rules_out": [],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": None,
+        },
+        {
+            "test_code": "img.abd_us",
+            "test_name_cn": "腹部超声",
+            "category": "影像",
+            "invasiveness": "无创",
+            "cost_hint": "基础",
+            "diagnostic_role": "supports_primary_diagnosis",
+            "rules_out": [],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": None,
+        },
+        {
+            "test_code": "lab.urinalysis",
+            "test_name_cn": "尿常规",
+            "category": "实验室",
+            "invasiveness": "无创",
+            "cost_hint": "基础",
+            "diagnostic_role": "rules_out_alternative",
+            "rules_out": ["右侧输尿管结石"],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": None,
+        },
+        {
+            "test_code": "img.abd_ct",
+            "test_name_cn": "腹部 CT",
+            "category": "影像",
+            "invasiveness": "无创",
+            "cost_hint": "中等",
+            "diagnostic_role": "supports_primary_diagnosis",
+            "rules_out": [],
+            "recommended_stage": "auxiliary_test",
+            "overuse_warning": "基础病史、查体、血常规和超声已足够支持训练推理时，不应把 CT 作为第一步机械申请。",
+        },
+    ]
+
+
 def test_list_cases_returns_valid_case_summaries() -> None:
     response = client.get("/api/cases")
 
@@ -55,13 +115,7 @@ def test_list_cases_returns_valid_case_summaries() -> None:
             {"exam_code": "abd.special.rovsing", "exam_name_cn": "Rovsing 征"},
             {"exam_code": "abd.special.psoas", "exam_name_cn": "腰大肌征"},
         ],
-        "auxiliary_test_options": [
-            {"test_code": "lab.cbc", "test_name_cn": "血常规", "category": "实验室"},
-            {"test_code": "lab.crp", "test_name_cn": "C 反应蛋白", "category": "实验室"},
-            {"test_code": "img.abd_us", "test_name_cn": "腹部超声", "category": "影像"},
-            {"test_code": "lab.urinalysis", "test_name_cn": "尿常规", "category": "实验室"},
-            {"test_code": "img.abd_ct", "test_name_cn": "腹部 CT", "category": "影像"},
-        ],
+        "auxiliary_test_options": _expected_appendicitis_auxiliary_quick_options(),
         "teaching_focus": {
             "learning_objectives": [
                 "围绕急腹症完成疼痛演变史采集",
@@ -136,7 +190,7 @@ def test_get_case_detail_returns_student_safe_payload() -> None:
     }
     assert case_payload["teaching_focus"]["recommended_training_path"][-1] == "最后提交诊断、支持证据、排除依据和下一步训练方向"
     assert case_payload["physical_exam_options"][0] == {"exam_code": "vital.temperature", "exam_name_cn": "体温"}
-    assert case_payload["auxiliary_test_options"][0] == {"test_code": "lab.cbc", "test_name_cn": "血常规", "category": "实验室"}
+    assert case_payload["auxiliary_test_options"] == _expected_appendicitis_auxiliary_quick_options()
     assert "hidden_facts" not in str(case_payload)
     assert "canonical_answer" not in str(case_payload)
     assert "result" not in str(case_payload["physical_exam_options"])

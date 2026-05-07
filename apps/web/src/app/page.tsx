@@ -171,13 +171,32 @@ type AuxiliaryTestOption = Readonly<{
   test_code: string;
   test_name_cn: string;
   category: string;
+  invasiveness: string;
+  cost_hint: string;
+  diagnostic_role: string;
+  rules_out: readonly string[];
+  recommended_stage: string;
+  overuse_warning: string | null;
   result: string;
   is_abnormal: boolean;
 }>;
 
 type PhysicalExamQuickOption = Readonly<Pick<PhysicalExamOption, "exam_code" | "exam_name_cn">>;
 
-type AuxiliaryTestQuickOption = Readonly<Pick<AuxiliaryTestOption, "test_code" | "test_name_cn" | "category">>;
+type AuxiliaryTestQuickOption = Readonly<
+  Pick<
+    AuxiliaryTestOption,
+    | "test_code"
+    | "test_name_cn"
+    | "category"
+    | "invasiveness"
+    | "cost_hint"
+    | "diagnostic_role"
+    | "rules_out"
+    | "recommended_stage"
+    | "overuse_warning"
+  >
+>;
 
 type TrainingProgressSection = Readonly<{
   total: number;
@@ -492,11 +511,61 @@ const appendicitisPhysicalExamOptions: readonly PhysicalExamQuickOption[] = [
 ];
 
 const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
-  { test_code: "lab.cbc", test_name_cn: "血常规", category: "实验室" },
-  { test_code: "lab.crp", test_name_cn: "C 反应蛋白", category: "实验室" },
-  { test_code: "img.abd_us", test_name_cn: "腹部超声", category: "影像" },
-  { test_code: "lab.urinalysis", test_name_cn: "尿常规", category: "实验室" },
-  { test_code: "img.abd_ct", test_name_cn: "腹部 CT", category: "影像" },
+  {
+    test_code: "lab.cbc",
+    test_name_cn: "血常规",
+    category: "实验室",
+    invasiveness: "微创",
+    cost_hint: "基础",
+    diagnostic_role: "supports_primary_diagnosis",
+    rules_out: [],
+    recommended_stage: "auxiliary_test",
+    overuse_warning: null,
+  },
+  {
+    test_code: "lab.crp",
+    test_name_cn: "C 反应蛋白",
+    category: "实验室",
+    invasiveness: "微创",
+    cost_hint: "基础",
+    diagnostic_role: "supports_primary_diagnosis",
+    rules_out: [],
+    recommended_stage: "auxiliary_test",
+    overuse_warning: null,
+  },
+  {
+    test_code: "img.abd_us",
+    test_name_cn: "腹部超声",
+    category: "影像",
+    invasiveness: "无创",
+    cost_hint: "基础",
+    diagnostic_role: "supports_primary_diagnosis",
+    rules_out: [],
+    recommended_stage: "auxiliary_test",
+    overuse_warning: null,
+  },
+  {
+    test_code: "lab.urinalysis",
+    test_name_cn: "尿常规",
+    category: "实验室",
+    invasiveness: "无创",
+    cost_hint: "基础",
+    diagnostic_role: "rules_out_alternative",
+    rules_out: ["右侧输尿管结石"],
+    recommended_stage: "auxiliary_test",
+    overuse_warning: null,
+  },
+  {
+    test_code: "img.abd_ct",
+    test_name_cn: "腹部 CT",
+    category: "影像",
+    invasiveness: "无创",
+    cost_hint: "中等",
+    diagnostic_role: "supports_primary_diagnosis",
+    rules_out: [],
+    recommended_stage: "auxiliary_test",
+    overuse_warning: "基础证据已足够支持训练推理时，不应把 CT 作为第一步机械申请。",
+  },
 ];
 
 const appendicitisPatientProfile: StudentVisiblePatientProfile = {
@@ -840,6 +909,17 @@ function formatStage(stage: string | undefined): string {
 
 function getCoachMessageLabel(content: string): "安全边界" | "过程提示" {
   return content.includes("本系统仅用于 OSCE 教学模拟训练") ? "安全边界" : "过程提示";
+}
+
+function getDiagnosticRoleLabel(role: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    supports_primary_diagnosis: "支持主诊断",
+    rules_out_alternative: "排除鉴别",
+    risk_stratification: "风险分层",
+    contextual_baseline: "基础背景",
+  };
+
+  return labels[role] ?? "教学证据";
 }
 
 function mapApiMessage(message: ApiMessage, index: number): ChatMessage {
@@ -2644,13 +2724,21 @@ function HomeContent() {
                   ))}
                   {auxiliaryTestOptions.map((testOption) => (
                     <button
-                      className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-md border border-border bg-background px-3 py-1.5 text-left text-xs font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!authUser || !selectedCaseId || isCreating || isRequestingTest}
                       key={testOption.test_code}
                       onClick={() => handleAuxiliaryTestRequest(testOption.test_code)}
+                      title={
+                        testOption.rules_out.length > 0
+                          ? `用于排除：${testOption.rules_out.join("、")}`
+                          : testOption.overuse_warning ?? undefined
+                      }
                       type="button"
                     >
-                      {isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}
+                      <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
+                      <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                        {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
+                      </span>
                     </button>
                   ))}
                 </div>

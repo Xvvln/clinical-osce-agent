@@ -99,6 +99,10 @@
         "category": "心电",
         "invasiveness": "无创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "Ⅱ、Ⅲ、aVF 导联 ST 段抬高。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_ecg"]
@@ -109,6 +113,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "肌钙蛋白升高。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_troponin"]
@@ -160,6 +168,8 @@
     ],
     "suggested_next_steps": "建议立即结合心内科评估完善急诊处置流程，教学模拟不涉及具体抢救用药。"
   },
+  "distractor_clues": [],
+  "negative_findings": [],
   "evidence_graph": {
     "evidence_nodes": [],
     "evidence_edges": []

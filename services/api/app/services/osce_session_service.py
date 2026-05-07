@@ -547,11 +547,17 @@ def _serialize_physical_exam_quick_option(exam: PhysicalExamItem) -> dict[str, s
     }
 
 
-def _serialize_auxiliary_test_quick_option(test: AuxiliaryTestItem) -> dict[str, str]:
+def _serialize_auxiliary_test_quick_option(test: AuxiliaryTestItem) -> dict[str, Any]:
     return {
         "test_code": test.test_code,
         "test_name_cn": test.test_name_cn,
         "category": test.category,
+        "invasiveness": test.invasiveness,
+        "cost_hint": test.cost_hint,
+        "diagnostic_role": test.diagnostic_role,
+        "rules_out": test.rules_out,
+        "recommended_stage": test.recommended_stage,
+        "overuse_warning": test.overuse_warning,
     }
 
 
@@ -569,6 +575,12 @@ def _serialize_auxiliary_test_option(test: AuxiliaryTestItem) -> dict[str, Any]:
         "test_code": test.test_code,
         "test_name_cn": test.test_name_cn,
         "category": test.category,
+        "invasiveness": test.invasiveness,
+        "cost_hint": test.cost_hint,
+        "diagnostic_role": test.diagnostic_role,
+        "rules_out": test.rules_out,
+        "recommended_stage": test.recommended_stage,
+        "overuse_warning": test.overuse_warning,
         "result": test.result,
         "is_abnormal": test.is_abnormal,
     }

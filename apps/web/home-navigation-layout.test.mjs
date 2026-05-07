@@ -518,6 +518,15 @@ test("home quick actions are available after a case is selected and before a bac
   assert.doesNotMatch(pageSource, /session\?\.auxiliary_test_options\.map/);
 });
 
+test("student auxiliary test buttons expose cost, invasiveness, and diagnostic role metadata", () => {
+  assert.match(pageSource, /diagnostic_role: string;/);
+  assert.match(pageSource, /rules_out: readonly string\[];/);
+  assert.match(pageSource, /getDiagnosticRoleLabel\(testOption\.diagnostic_role\)/);
+  assert.match(pageSource, /testOption\.cost_hint/);
+  assert.match(pageSource, /testOption\.invasiveness/);
+  assert.match(pageSource, /testOption\.rules_out\.length > 0/);
+});
+
 test("home diagnosis hypothesis panel can record in-progress hypotheses", () => {
   assert.match(pageSource, /function recordHypothesis\(sessionId: string, hypothesis: string\): Promise<OsceSession>/);
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/hypotheses/);

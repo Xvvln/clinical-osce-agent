@@ -99,6 +99,10 @@
         "category": "实验室",
         "invasiveness": "微创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "白细胞和中性粒细胞比例升高。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_cbc"]
@@ -109,6 +113,10 @@
         "category": "影像",
         "invasiveness": "无创",
         "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
         "result": "右下肺片状浸润影。",
         "is_abnormal": true,
         "linked_rubric_items": ["at_chest_xray"]
@@ -160,6 +168,8 @@
     ],
     "suggested_next_steps": "建议结合呼吸内科评估进一步判断严重程度并完善后续处理。"
   },
+  "distractor_clues": [],
+  "negative_findings": [],
   "evidence_graph": {
     "evidence_nodes": [],
     "evidence_edges": []
