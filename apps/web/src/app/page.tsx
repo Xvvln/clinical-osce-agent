@@ -25,7 +25,7 @@ type OsceDockMenuGroup = "training" | "resources" | "system";
 
 type OsceDockSide = "left" | "right";
 
-type ApiConfigProvider = "custom_backend" | "gemini" | "vertex_gemini_adc" | "openai_compatible";
+type ApiConfigProvider = "custom_backend" | "gemini" | "vertex_gemini_adc" | "vertex_gemini_api_key" | "openai_compatible";
 
 type StudentApiConfig = Readonly<{
   provider: ApiConfigProvider;
@@ -492,6 +492,13 @@ const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
     id: "vertex_gemini_adc",
     label: "Vertex Gemini ADC",
     defaultModel: "gemini-3.1-pro-preview",
+    defaultBaseUrl: "",
+    defaultProxyUrl: "http://127.0.0.1:7897",
+  },
+  {
+    id: "vertex_gemini_api_key",
+    label: "Vertex Gemini API Key",
+    defaultModel: "gemini-2.5-flash",
     defaultBaseUrl: "",
     defaultProxyUrl: "http://127.0.0.1:7897",
   },
@@ -1693,7 +1700,7 @@ function HomeContent() {
     }));
     setApiConfigTestResult(null);
     setApiConfigStatusText(
-      provider === "openai_compatible" || provider === "vertex_gemini_adc"
+      provider === "openai_compatible" || provider === "vertex_gemini_adc" || provider === "vertex_gemini_api_key"
         ? "已切换服务端，保存后会应用到本次后端运行时。"
         : "已切换服务端，保存后写入本机浏览器。",
     );
@@ -1702,8 +1709,12 @@ function HomeContent() {
   async function handleSaveStudentApiConfig(): Promise<void> {
     saveStudentApiConfig(studentApiConfig);
     setApiConfigTestResult(null);
-    if (studentApiConfig.provider !== "openai_compatible" && studentApiConfig.provider !== "vertex_gemini_adc") {
-      setApiConfigStatusText("已保存到本机浏览器；跨模块训练注入请使用 OpenAI 兼容或 Vertex Gemini ADC。");
+    if (
+      studentApiConfig.provider !== "openai_compatible" &&
+      studentApiConfig.provider !== "vertex_gemini_adc" &&
+      studentApiConfig.provider !== "vertex_gemini_api_key"
+    ) {
+      setApiConfigStatusText("已保存到本机浏览器；跨模块训练注入请使用 OpenAI 兼容或 Vertex Gemini。");
       return;
     }
 
@@ -1759,8 +1770,13 @@ function HomeContent() {
   const preparedDynamicTeachingFocus = session?.dynamic_teaching_focus ?? null;
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
-  const apiConfigBaseUrlLabel = isVertexGeminiAdcConfig ? "Project ID" : "Base URL";
-  const apiConfigBaseUrlPlaceholder = isVertexGeminiAdcConfig ? "例如：my-gcp-project" : selectedApiConfigProviderOption.defaultBaseUrl;
+  const isVertexGeminiApiKeyConfig = studentApiConfig.provider === "vertex_gemini_api_key";
+  const apiConfigBaseUrlLabel = isVertexGeminiAdcConfig ? "Project ID" : isVertexGeminiApiKeyConfig ? "Base URL（可留空）" : "Base URL";
+  const apiConfigBaseUrlPlaceholder = isVertexGeminiAdcConfig
+    ? "例如：my-gcp-project"
+    : isVertexGeminiApiKeyConfig
+      ? "Vertex API Key 模式无需填写"
+      : selectedApiConfigProviderOption.defaultBaseUrl;
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
     if (!session) {
@@ -3108,6 +3124,15 @@ function HomeContent() {
                   </button>
                   <button
                     className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
+                      studentApiConfig.provider === "vertex_gemini_api_key" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                    }`}
+                    onClick={() => handleStudentApiProviderChange("vertex_gemini_api_key")}
+                    type="button"
+                  >
+                    Vertex Gemini API Key
+                  </button>
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
                       studentApiConfig.provider === "openai_compatible" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
                     }`}
                     onClick={() => handleStudentApiProviderChange("openai_compatible")}
@@ -3129,7 +3154,15 @@ function HomeContent() {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, apiKey: event.target.value }));
                       setApiConfigTestResult(null);
                     }}
-                    placeholder={isVertexGeminiAdcConfig ? "使用本机 ADC，无需 API Key" : studentApiConfig.provider === "custom_backend" ? "自定义后端可选" : "输入服务商密钥"}
+                    placeholder={
+                      isVertexGeminiAdcConfig
+                        ? "使用本机 ADC，无需 API Key"
+                        : studentApiConfig.provider === "custom_backend"
+                          ? "自定义后端可选"
+                          : studentApiConfig.provider !== "vertex_gemini_api_key"
+                            ? "输入服务商密钥"
+                            : "输入 Vertex API Key"
+                    }
                     type="password"
                     value={studentApiConfig.apiKey}
                   />
@@ -3189,7 +3222,7 @@ function HomeContent() {
                 </button>
                 <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
               </div>
-              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容或 Vertex Gemini ADC 配置可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
+              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
             </div>
           </div>
         </div>

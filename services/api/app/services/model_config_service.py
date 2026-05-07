@@ -52,84 +52,119 @@ def _gemini_patient_api_config() -> dict[str, Any]:
 
 
 def _gemini_patient_vertex_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
     runtime_active = runtime_vertex_config is not None
     enabled = runtime_active or _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
+    vertex_api_key = (
+        runtime_vertex_config.api_key
+        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
+        else _env("OSCE_GEMINI_PATIENT_API_KEY") or _env("OSCE_VERTEX_API_KEY")
+    )
     project = runtime_vertex_config.project if runtime_active else _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT")
     model = runtime_vertex_config.model if runtime_active else _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
     location = runtime_vertex_config.location if runtime_active else _env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
-    configured = enabled and bool(project)
+    secret_configured = bool(vertex_api_key)
+    configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
         provider_id="gemini_patient_vertex",
         label="Vertex Gemini 标准化病人",
         capability="标准化病人自然语言改写",
         enabled=enabled,
         configured=configured,
-        secret_configured=False,
-        auth_mode="vertex_adc",
+        secret_configured=secret_configured,
+        auth_mode="vertex_api_key" if secret_configured else "vertex_adc",
         model=model,
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_GEMINI_PATIENT_USE_VERTEX=true", "OSCE_GEMINI_PATIENT_PROJECT 或 OSCE_VERTEX_PROJECT"],
-        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_GEMINI_PATIENT_PROJECT 或 OSCE_VERTEX_PROJECT", project)]),
+        required_env=[
+            "OSCE_GEMINI_PATIENT_USE_VERTEX=true",
+            "OSCE_GEMINI_PATIENT_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_GEMINI_PATIENT_API_KEY/OSCE_VERTEX_API_KEY",
+        ],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [
+                (
+                    "OSCE_GEMINI_PATIENT_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_GEMINI_PATIENT_API_KEY/OSCE_VERTEX_API_KEY",
+                    project or ("configured" if secret_configured else ""),
+                )
+            ],
+        ),
         integration_status="wired",
-        notes="通过 Google Application Default Credentials 调用 Vertex AI，不在系统内保存凭据文件。",
+        notes="支持 Google Application Default Credentials 或 Vertex Express/API Key；密钥只来自环境变量或本次运行时内存，不落库也不回显。",
     )
 
 
 def _vertex_rubric_scorer_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
     runtime_active = runtime_vertex_config is not None
     enabled = runtime_active or _truthy_env("OSCE_VERTEX_ENABLED")
+    vertex_api_key = (
+        runtime_vertex_config.api_key
+        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
+        else _env("OSCE_VERTEX_API_KEY")
+    )
     project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
     model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
     location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
-    configured = enabled and bool(project)
+    secret_configured = bool(vertex_api_key)
+    configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
         provider_id="vertex_rubric_scorer",
         label="Vertex Gemini LLM 评分",
         capability="llm_rubric 语义评分",
         enabled=enabled,
         configured=configured,
-        secret_configured=False,
-        auth_mode="vertex_adc",
+        secret_configured=secret_configured,
+        auth_mode="vertex_api_key" if secret_configured else "vertex_adc",
         model=model,
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_ENABLED=true", "OSCE_VERTEX_PROJECT"],
-        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_PROJECT", project)]),
+        required_env=["OSCE_VERTEX_ENABLED=true", "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [("OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
+        ),
         integration_status="wired",
-        notes="只参与 rubric 中 llm_rubric 项的语义评分；规则评分仍由后端确定性执行。",
+        notes="只参与 rubric 中 llm_rubric 项的语义评分；可用 ADC 或 Vertex Express/API Key，规则评分仍由后端确定性执行。",
     )
 
 
 def _vertex_skill_candidate_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
     runtime_active = runtime_vertex_config is not None
     enabled = runtime_active or _truthy_env("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED")
+    vertex_api_key = (
+        runtime_vertex_config.api_key
+        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
+        else _env("OSCE_VERTEX_API_KEY")
+    )
     project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
     model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", "gemini-3.1-pro-preview")
     location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
-    configured = enabled and bool(project)
+    secret_configured = bool(vertex_api_key)
+    configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
         provider_id="vertex_skill_candidate",
         label="Vertex Gemini Skill 候选生成",
         capability="训练模式级候选 Skill 文案生成",
         enabled=enabled,
         configured=configured,
-        secret_configured=False,
-        auth_mode="vertex_adc",
+        secret_configured=secret_configured,
+        auth_mode="vertex_api_key" if secret_configured else "vertex_adc",
         model=model,
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=true", "OSCE_VERTEX_PROJECT"],
-        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_PROJECT", project)]),
+        required_env=["OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=true", "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [("OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
+        ),
         integration_status="wired",
         notes="LLM 只生成标题、说明和教学策略；candidate_id、pattern_id 和漏项聚合仍由后端确定性生成。",
     )

@@ -45,6 +45,18 @@ class RuntimeModelConfig:
                 "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
                 "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
             }
+        if self.provider == "vertex_gemini_api_key":
+            return {
+                "active": True,
+                "provider": self.provider,
+                "model": self.model,
+                "base_url": self.base_url,
+                "proxy_url": self.proxy_url,
+                "project": self.project,
+                "location": self.location,
+                "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+                "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
+            }
         return {
             "active": True,
             "provider": self.provider,
@@ -63,8 +75,10 @@ class RuntimeModelConfigStore:
 
     def apply_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
         provider = _normalize_text(config.get("provider", ""))
-        if provider not in {"openai_compatible", "vertex_gemini_adc"}:
-            raise ValueError("runtime model config currently supports openai_compatible or vertex_gemini_adc only")
+        if provider not in {"openai_compatible", "vertex_gemini_adc", "vertex_gemini_api_key"}:
+            raise ValueError(
+                "runtime model config currently supports openai_compatible, vertex_gemini_adc or vertex_gemini_api_key only"
+            )
 
         api_key = _normalize_text(config.get("api_key", ""))
         model = _normalize_text(config.get("model", ""))
@@ -72,6 +86,8 @@ class RuntimeModelConfigStore:
         proxy_url = _normalize_text(config.get("proxy_url", ""))
         if provider == "openai_compatible" and not api_key:
             raise ValueError("api_key is required for openai_compatible")
+        if provider == "vertex_gemini_api_key" and not api_key:
+            raise ValueError("api_key is required for vertex_gemini_api_key")
         if not model:
             raise ValueError(f"model is required for {provider}")
         project = ""
@@ -82,6 +98,10 @@ class RuntimeModelConfigStore:
             location = _normalize_text(config.get("location", "")) or "global"
             if not project:
                 raise ValueError("project is required for vertex_gemini_adc")
+        if provider == "vertex_gemini_api_key":
+            base_url = ""
+            project = ""
+            location = _normalize_text(config.get("location", "")) or "global"
 
         runtime_config = RuntimeModelConfig(
             provider=provider,
@@ -109,6 +129,18 @@ class RuntimeModelConfigStore:
     def get_vertex_gemini_adc_config(self) -> RuntimeModelConfig | None:
         active_config = self.get_active_config()
         if active_config is None or active_config.provider != "vertex_gemini_adc":
+            return None
+        return active_config
+
+    def get_vertex_gemini_api_key_config(self) -> RuntimeModelConfig | None:
+        active_config = self.get_active_config()
+        if active_config is None or active_config.provider != "vertex_gemini_api_key":
+            return None
+        return active_config
+
+    def get_vertex_gemini_config(self) -> RuntimeModelConfig | None:
+        active_config = self.get_active_config()
+        if active_config is None or active_config.provider not in {"vertex_gemini_adc", "vertex_gemini_api_key"}:
             return None
         return active_config
 

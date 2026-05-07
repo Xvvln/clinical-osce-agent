@@ -284,6 +284,42 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
 
 
+def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_gemini_api_key_config(monkeypatch) -> None:
+    created_clients: list[dict[str, object]] = []
+
+    def fake_client(**kwargs: object) -> FakeSkillCandidateClient:
+        created_clients.append(kwargs)
+        return FakeSkillCandidateClient()
+
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_api_key",
+            "api_key": "student-vertex-secret",
+            "model": "gemini-2.5-flash",
+            "base_url": "",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr("app.services.training_skill_candidate_service.genai.Client", fake_client)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+    try:
+        generator = create_default_training_skill_candidate_generator()
+    finally:
+        runtime_model_config_store.clear()
+
+    assert isinstance(generator, VertexGeminiTrainingSkillCandidateGenerator)
+    assert generator._settings.api_key == "student-vertex-secret"
+    assert generator._settings.project == ""
+    assert generator._settings.location == "global"
+    assert generator._settings.skill_candidate_model == "gemini-2.5-flash"
+    assert created_clients == [{"vertexai": True, "api_key": "student-vertex-secret"}]
+    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+
+
 def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern() -> None:
     captured_contexts: list[TrainingSkillCandidateContext] = []
 

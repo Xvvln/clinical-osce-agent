@@ -14,6 +14,7 @@ SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {
     "local_backend",
     "gemini",
     "vertex_gemini_adc",
+    "vertex_gemini_api_key",
     "openai_compatible",
 }
 DEFAULT_CUSTOM_BACKEND_BASE_URL = "http://127.0.0.1:8000"
@@ -61,6 +62,17 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
         return _test_vertex_gemini_adc(
             project=base_url,
             location=DEFAULT_VERTEX_GEMINI_LOCATION,
+            model=model,
+            proxy_url=proxy_url,
+        )
+
+    if provider == "vertex_gemini_api_key":
+        if not api_key:
+            raise ValueError("api_key is required for vertex_gemini_api_key")
+        if not model:
+            raise ValueError("model is required for vertex_gemini_api_key")
+        return _test_vertex_gemini_api_key(
+            api_key=api_key,
             model=model,
             proxy_url=proxy_url,
         )
@@ -186,6 +198,34 @@ def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_ur
         ok=True,
         provider="vertex_gemini_adc",
         message="Vertex Gemini ADC 连通性测试通过。",
+        checked_url=checked_url,
+    )
+
+
+def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> dict[str, object]:
+    checked_url = f"vertex-api-key://express/{model}"
+    try:
+        _apply_process_proxy(proxy_url)
+        client = genai.Client(vertexai=True, api_key=api_key)
+        client.models.generate_content(
+            model=model,
+            contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
+            config=types.GenerateContentConfig(
+                system_instruction="只输出 JSON。",
+                response_mime_type="application/json",
+            ),
+        )
+    except Exception as exc:
+        return _connectivity_result(
+            ok=False,
+            provider="vertex_gemini_api_key",
+            message=f"Vertex Gemini API Key 连通性测试失败：{exc.__class__.__name__}",
+            checked_url=checked_url,
+        )
+    return _connectivity_result(
+        ok=True,
+        provider="vertex_gemini_api_key",
+        message="Vertex Gemini API Key 连通性测试通过。",
         checked_url=checked_url,
     )
 

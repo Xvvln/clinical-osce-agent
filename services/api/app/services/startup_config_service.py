@@ -106,7 +106,7 @@ def _provider_issue_code(provider_id: str) -> str:
     if provider_id == "chroma_retrieval":
         return "chroma_missing_env"
     if provider_id.startswith("vertex_") or provider_id == "gemini_patient_vertex":
-        return "vertex_missing_project"
+        return "vertex_missing_auth"
     if provider_id == "gemini_patient_api":
         return "gemini_missing_env"
     return "provider_missing_env"

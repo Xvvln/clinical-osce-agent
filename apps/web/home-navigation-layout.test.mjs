@@ -140,7 +140,7 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
 });
 
 test("home OSCE dock opens student API config dialog instead of navigating directly to admin", () => {
-  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "vertex_gemini_adc" \| "openai_compatible";/);
+  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "vertex_gemini_adc" \| "vertex_gemini_api_key" \| "openai_compatible";/);
   assert.match(pageSource, /const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";/);
   assert.match(pageSource, /function createDefaultStudentApiConfig\(\): StudentApiConfig/);
   assert.match(pageSource, /function loadStudentApiConfig\(\): StudentApiConfig/);
@@ -158,10 +158,12 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\s*自定义后端\s*</);
   assert.match(pageSource, />\s*Gemini Developer API\s*</);
   assert.match(pageSource, />\s*Vertex Gemini ADC\s*</);
+  assert.match(pageSource, />\s*Vertex Gemini API Key\s*</);
   assert.match(pageSource, />\s*OpenAI 兼容\s*</);
   assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
   assert.match(pageSource, /id="student-api-key-input"/);
   assert.match(pageSource, /disabled=\{studentApiConfig\.provider === "vertex_gemini_adc"\}/);
+  assert.match(pageSource, /studentApiConfig\.provider !== "vertex_gemini_api_key"/);
   assert.match(pageSource, /id="student-api-model-input"/);
   assert.match(pageSource, /id="student-api-base-url-input"/);
   assert.match(pageSource, /id="student-api-proxy-url-input"/);
@@ -171,6 +173,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\{isTestingStudentApiConfig \? "测试中" : "测试连通性"\}<\/button>/);
   assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
+  assert.match(pageSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置可用于标准化病人、llm_rubric 和 Skill 候选文案/);
 });
 
 test("home production deployment hides student runtime API config entry", () => {

@@ -40,7 +40,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert {
         "missing_admin_emails",
         "openai_missing_env",
-        "vertex_missing_project",
+        "vertex_missing_auth",
         "chroma_missing_env",
     }.issubset(issue_codes)
 
@@ -48,7 +48,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert providers["openai_compatible"]["enabled"] is True
     assert providers["openai_compatible"]["configured"] is False
     assert providers["openai_compatible"]["missing_env"] == ["OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"]
-    assert providers["vertex_rubric_scorer"]["missing_env"] == ["OSCE_VERTEX_PROJECT"]
+    assert providers["vertex_rubric_scorer"]["missing_env"] == ["OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"]
     assert providers["chroma_retrieval"]["missing_env"] == ["CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"]
 
 

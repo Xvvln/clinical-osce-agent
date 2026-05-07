@@ -64,11 +64,13 @@ class GeminiPatientResponder:
         if client is not None:
             self._client = client
         elif settings.use_vertex:
-            self._client = genai.Client(
-                vertexai=True,
-                project=settings.project,
-                location=settings.location,
-            )
+            client_options: dict[str, object] = {"vertexai": True}
+            if settings.api_key:
+                client_options["api_key"] = settings.api_key
+            else:
+                client_options["project"] = settings.project
+                client_options["location"] = settings.location
+            self._client = genai.Client(**client_options)
         else:
             self._client = genai.Client(api_key=settings.api_key)
 
@@ -124,6 +126,20 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
     if runtime_openai_settings is not None:
         return OpenAICompatiblePatientResponder(runtime_openai_settings)
 
+    runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
+    if runtime_vertex_api_key_config is not None:
+        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
+        return GeminiPatientResponder(
+            settings=GeminiPatientSettings(
+                api_key=runtime_vertex_api_key_config.api_key,
+                use_vertex=True,
+                project="",
+                location=runtime_vertex_api_key_config.location,
+                model=runtime_vertex_api_key_config.model,
+                proxy_url=runtime_vertex_api_key_config.proxy_url,
+            )
+        )
+
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
         _apply_process_proxy(runtime_vertex_config.proxy_url)
@@ -146,15 +162,19 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
     _apply_process_proxy(settings.proxy_url)
 
     if settings.use_vertex:
+        vertex_api_key = settings.api_key or os.getenv("OSCE_VERTEX_API_KEY", "")
         project = settings.project or os.getenv("OSCE_VERTEX_PROJECT", "")
         location = os.getenv("OSCE_GEMINI_PATIENT_LOCATION", "") or os.getenv("OSCE_VERTEX_LOCATION", "") or settings.location
         model = os.getenv("OSCE_GEMINI_PATIENT_MODEL", "") or os.getenv("OSCE_VERTEX_MODEL", "") or settings.model
-        if not project:
-            raise RuntimeError("未配置 Vertex AI 项目，需设置 OSCE_GEMINI_PATIENT_PROJECT 或 OSCE_VERTEX_PROJECT。")
+        if not project and not vertex_api_key:
+            raise RuntimeError(
+                "未配置 Vertex AI 鉴权，需设置 OSCE_GEMINI_PATIENT_PROJECT/OSCE_VERTEX_PROJECT 走 ADC，"
+                "或设置 OSCE_GEMINI_PATIENT_API_KEY/OSCE_VERTEX_API_KEY 走 Vertex API Key。"
+            )
         return GeminiPatientResponder(
             settings=settings.model_copy(
                 update={
-                    "api_key": "",
+                    "api_key": vertex_api_key,
                     "project": project,
                     "location": location,
                     "model": model,

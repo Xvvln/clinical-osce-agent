@@ -322,6 +322,38 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
     assert providers["chroma_retrieval"]["configured"] is False
 
 
+def test_admin_model_config_reports_runtime_vertex_gemini_api_key_without_secret(tmp_path, monkeypatch) -> None:
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_api_key",
+            "api_key": "student-vertex-secret",
+            "model": "gemini-2.5-flash",
+            "base_url": "",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+
+    try:
+        with authenticated_admin_client(tmp_path, monkeypatch) as client:
+            response = client.get("/api/admin/model-config")
+    finally:
+        runtime_model_config_store.clear()
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert "student-vertex-secret" not in response_text
+    providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
+    for provider_id in ["gemini_patient_vertex", "vertex_rubric_scorer", "vertex_skill_candidate"]:
+        assert providers[provider_id]["configured"] is True
+        assert providers[provider_id]["secret_configured"] is True
+        assert providers[provider_id]["auth_mode"] == "vertex_api_key"
+        assert providers[provider_id]["model"] == "gemini-2.5-flash"
+        assert providers[provider_id]["project"] == ""
+    assert providers["vertex_embedding_retrieval"]["configured"] is False
+    assert providers["vertex_embedding_retrieval"]["auth_mode"] == "vertex_adc"
+
+
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/cases/appendicitis_001/raw")

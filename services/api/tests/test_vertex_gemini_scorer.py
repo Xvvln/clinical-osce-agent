@@ -225,3 +225,37 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
     assert scorer._settings.model == "gemini-3.1-pro-preview"
     assert created_clients == [{"vertexai": True, "project": "demo-project", "location": "global"}]
     assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+
+
+def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_api_key_config(monkeypatch) -> None:
+    created_clients: list[dict[str, object]] = []
+
+    def fake_client(**kwargs: object) -> FakeClient:
+        created_clients.append(kwargs)
+        return FakeClient()
+
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_api_key",
+            "api_key": "student-vertex-secret",
+            "model": "gemini-2.5-flash",
+            "base_url": "",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", fake_client)
+    monkeypatch.delenv("OSCE_VERTEX_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    try:
+        scorer = create_default_vertex_gemini_scorer()
+    finally:
+        runtime_model_config_store.clear()
+
+    assert isinstance(scorer, VertexGeminiRubricScorer)
+    assert scorer._settings.api_key == "student-vertex-secret"
+    assert scorer._settings.project == ""
+    assert scorer._settings.location == "global"
+    assert scorer._settings.model == "gemini-2.5-flash"
+    assert created_clients == [{"vertexai": True, "api_key": "student-vertex-secret"}]

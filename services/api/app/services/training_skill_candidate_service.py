@@ -53,6 +53,7 @@ class VertexGeminiSkillCandidateSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OSCE_VERTEX_", env_file=".env", extra="ignore")
 
     skill_candidate_enabled: bool = False
+    api_key: str = ""
     project: str = ""
     location: str = "global"
     skill_candidate_model: str = "gemini-3.1-pro-preview"
@@ -75,11 +76,16 @@ SKILL_CANDIDATE_SYSTEM_PROMPT = """你是 OSCE 临床思维训练的教学 Skill
 class VertexGeminiTrainingSkillCandidateGenerator:
     def __init__(self, settings: VertexGeminiSkillCandidateSettings, client: Any | None = None) -> None:
         self._settings = settings
-        self._client = client or genai.Client(
-            vertexai=True,
-            project=settings.project,
-            location=settings.location,
-        )
+        if client is not None:
+            self._client = client
+        elif settings.api_key:
+            self._client = genai.Client(vertexai=True, api_key=settings.api_key)
+        else:
+            self._client = genai.Client(
+                vertexai=True,
+                project=settings.project,
+                location=settings.location,
+            )
 
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         try:
@@ -147,6 +153,21 @@ def create_default_training_skill_candidate_generator(
     if runtime_openai_settings is not None:
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=runtime_openai_settings)
 
+    runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
+    if runtime_vertex_api_key_config is not None:
+        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
+        return VertexGeminiTrainingSkillCandidateGenerator(
+            settings=VertexGeminiSkillCandidateSettings(
+                skill_candidate_enabled=True,
+                api_key=runtime_vertex_api_key_config.api_key,
+                project="",
+                location=runtime_vertex_api_key_config.location,
+                skill_candidate_model=runtime_vertex_api_key_config.model,
+                proxy_url=runtime_vertex_api_key_config.proxy_url,
+            ),
+            client=client,
+        )
+
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
         _apply_process_proxy(runtime_vertex_config.proxy_url)
@@ -166,7 +187,7 @@ def create_default_training_skill_candidate_generator(
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=openai_settings)
 
     settings = VertexGeminiSkillCandidateSettings()
-    if not settings.skill_candidate_enabled or not settings.project:
+    if not settings.skill_candidate_enabled or not (settings.project or settings.api_key):
         return TemplateTrainingSkillCandidateGenerator()
     _apply_process_proxy(settings.proxy_url)
     return VertexGeminiTrainingSkillCandidateGenerator(settings=settings, client=client)
