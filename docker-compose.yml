@@ -5,6 +5,9 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
     environment:
       CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
       CLINICAL_OSCE_ADMIN_EMAILS: admin-demo@example.test
@@ -28,6 +31,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmjs.org}
         CLINICAL_OSCE_WEB_API_URL: http://api:8000
         NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
     environment:
@@ -44,6 +48,7 @@ services:
       context: .
       dockerfile: apps/admin/Dockerfile
       args:
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmjs.org}
         CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
     environment:
       CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
