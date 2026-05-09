@@ -143,9 +143,9 @@ PROFILE_DIMENSION_LABELS: dict[str, str] = {
 }
 
 app = FastAPI(
-    title="Clinical OSCE Agent API",
+    title="临境 OSCE 智能体（TraceOSCE）API",
     version="0.1.0",
-    description="Backend scaffold for the Clinical Reasoning OSCE Agent.",
+    description="临境 OSCE 智能体（TraceOSCE）的 OSCE 训练后端服务。",
 )
 
 

@@ -448,7 +448,7 @@ export default function ReportPage() {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                Clinical OSCE Agent
+                临境 OSCE 智能体（TraceOSCE）
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">评分报告</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">

@@ -2314,9 +2314,9 @@ function HomeContent() {
       <aside className="hidden w-80 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:block">
         <div className="mb-6">
           <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-            Clinical OSCE Agent
+            临境 OSCE 智能体（TraceOSCE）
           </p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">问诊推理舱</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">临境 OSCE 智能体（TraceOSCE）</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             基于公开 OSCE 病例数据的诊断学临床思维训练工作台。
           </p>
@@ -3440,7 +3440,7 @@ function HomeContent() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur">
           <section className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">Clinical OSCE Agent</p>
+              <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">登录 / 注册</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 {isCheckingAuth ? "正在读取登录状态..." : "登录后训练记录、报告和后续会话管理会逐步绑定到当前账号。"}

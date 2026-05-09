@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Clinical OSCE 管理后台",
-  description: "Teacher-facing review dashboard for Clinical OSCE Agent",
+  title: "临境 OSCE 智能体（TraceOSCE）管理后台",
+  description: "临境 OSCE 智能体（TraceOSCE）的教师与管理端复盘后台",
   icons: { icon: "/admin-icon.svg" },
 };
 

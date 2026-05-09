@@ -90,7 +90,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\("\/api\/admin\/retrieval-eval"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
-  assert.match(adminPageSource, /Clinical OSCE 管理后台/);
+  assert.match(adminPageSource, /临境 OSCE 智能体（TraceOSCE）管理后台/);
   assert.match(adminPageSource, /总览/);
   assert.match(adminPageSource, /训练 Session/);
   assert.match(adminPageSource, /评分报告/);
@@ -576,7 +576,7 @@ test("admin app has Next.js root layout and global styles", () => {
   assert.ok(existsSync(adminIconUrl), "admin browser icon should exist to avoid favicon 404s");
   assert.match(adminLayoutSource, /import type \{ Metadata \} from "next"/);
   assert.match(adminLayoutSource, /import "\.\/globals\.css"/);
-  assert.match(adminLayoutSource, /title: "Clinical OSCE 管理后台"/);
+  assert.match(adminLayoutSource, /title: "临境 OSCE 智能体（TraceOSCE）管理后台"/);
   assert.match(adminLayoutSource, /icons: \{ icon: "\/admin-icon\.svg" \}/);
   assert.match(adminLayoutSource, /<html lang="zh-CN">/);
   assert.match(adminGlobalsSource, /@import "tailwindcss";/);

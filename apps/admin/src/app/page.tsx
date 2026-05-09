@@ -1860,10 +1860,10 @@ export default function AdminDashboardPage() {
       <div className={isAdminLoginDialogOpen ? "pointer-events-none blur-sm" : ""}>
         <div className="mx-auto max-w-7xl">
         <header className="rounded-[2rem] border border-[#E6DFD2] bg-white/75 p-6 shadow-sm backdrop-blur">
-          <p className="text-xs font-medium uppercase tracking-[0.28em] text-[#8A7D6F]">Clinical OSCE Agent Admin</p>
+          <p className="text-xs font-medium uppercase tracking-[0.28em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
           <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h1 className="text-3xl font-semibold tracking-tight">Clinical OSCE 管理后台</h1>
+              <h1 className="text-3xl font-semibold tracking-tight">临境 OSCE 智能体（TraceOSCE）管理后台</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6257]">
                 教师视角查看训练 Session、评分报告、系统评测、训练日志，并审核受控进化产生的候选 Skill。
               </p>
@@ -3491,7 +3491,7 @@ export default function AdminDashboardPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#141413]/35 p-4 backdrop-blur">
           <section className="w-full max-w-md rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xl">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.24em] text-[#8A7D6F]">Clinical OSCE Agent Admin</p>
+              <p className="text-xs font-medium uppercase tracking-[0.24em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">管理员登录</h2>
               <p className="mt-2 text-sm leading-6 text-[#6F6257]">登录管理员账号后读取训练 Session、评分报告、系统评测和候选 Skill 审核数据。</p>
               <p className="mt-2 rounded-lg border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-2 text-xs leading-5 text-[#AE5630]">演示账号已预填：{DEMO_ADMIN_EMAIL} / {DEMO_ADMIN_PASSWORD}</p>

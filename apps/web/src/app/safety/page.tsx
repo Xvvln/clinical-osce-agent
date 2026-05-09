@@ -8,7 +8,7 @@ type SafetySection = Readonly<{
 const safetySections: readonly SafetySection[] = [
   {
     title: "教学模拟用途",
-    detail: "Clinical OSCE Agent 仅用于医学生 OSCE 问诊、查体、检查申请、诊断推理和复盘训练，不构成真实医疗服务。",
+    detail: "临境 OSCE 智能体（TraceOSCE）仅用于医学生 OSCE 问诊、查体、检查申请、诊断推理和复盘训练，不构成真实医疗服务。",
   },
   {
     title: "不替代真实诊疗",
@@ -39,7 +39,7 @@ export default function SafetyPage() {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                Clinical OSCE Agent
+                临境 OSCE 智能体（TraceOSCE）
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">安全声明</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">

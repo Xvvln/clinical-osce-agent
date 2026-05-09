@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "问诊推理舱",
-  description: "OSCE diagnostic reasoning training workbench",
+  title: "临境 OSCE 智能体（TraceOSCE）",
+  description: "OSCE 临床思维训练智能体",
   icons: {
     icon: "/favicon.svg",
   },
