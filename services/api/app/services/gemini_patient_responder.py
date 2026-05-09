@@ -107,9 +107,21 @@ class OpenAICompatiblePatientResponder:
         return reply
 
 
+class DeterministicPatientResponder:
+    def __call__(self, request: PatientResponderRequest) -> str:
+        reply = request.canonical_answer.strip() or "这个问题我不太确定，或者病例中没有提供相关信息。"
+        for term in request.forbidden_terms:
+            if term:
+                reply = reply.replace(term, "相关诊断")
+        if len(reply) > 120:
+            reply = f"{reply[:117]}..."
+        _assert_no_forbidden_terms(reply, request.forbidden_terms)
+        return reply
+
+
 class LazyGeminiPatientResponder:
     def __init__(self) -> None:
-        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | None = None
+        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | DeterministicPatientResponder | None = None
 
     def __call__(self, request: PatientResponderRequest) -> str:
         if self._responder is None:
@@ -121,7 +133,7 @@ def create_default_gemini_patient_responder() -> LazyGeminiPatientResponder:
     return LazyGeminiPatientResponder()
 
 
-def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatiblePatientResponder:
+def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatiblePatientResponder | DeterministicPatientResponder:
     runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
     if runtime_openai_settings is not None:
         return OpenAICompatiblePatientResponder(runtime_openai_settings)
@@ -184,10 +196,7 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
 
     api_key = settings.api_key or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
     if not api_key:
-        raise RuntimeError(
-            "未配置 Gemini API key，需设置 OSCE_GEMINI_PATIENT_API_KEY、GEMINI_API_KEY 或 GOOGLE_API_KEY；"
-            "如需使用 Vertex ADC，需设置 OSCE_GEMINI_PATIENT_USE_VERTEX=true 和 OSCE_GEMINI_PATIENT_PROJECT。"
-        )
+        return DeterministicPatientResponder()
     return GeminiPatientResponder(settings=settings.model_copy(update={"api_key": api_key}))
 
 
@@ -206,6 +215,7 @@ def _apply_process_proxy(proxy_url: str) -> None:
 
 
 __all__ = [
+    "DeterministicPatientResponder",
     "GeminiPatientResponder",
     "GeminiPatientSettings",
     "OpenAICompatiblePatientResponder",

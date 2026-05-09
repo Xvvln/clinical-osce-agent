@@ -24,6 +24,44 @@ def test_gemini_patient_settings_defaults_to_gemini_31_pro_preview() -> None:
     assert settings.proxy_url == "http://127.0.0.1:7897"
 
 
+def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
+    runtime_model_config_store.clear()
+    for key in [
+        "OSCE_GEMINI_PATIENT_API_KEY",
+        "OSCE_GEMINI_PATIENT_PROJECT",
+        "OSCE_VERTEX_API_KEY",
+        "OSCE_VERTEX_PROJECT",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OSCE_OPENAI_API_KEY",
+        "OSCE_OPENAI_MODEL",
+    ]:
+        monkeypatch.setenv(key, "")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")
+
+    def fail_client(**kwargs: object) -> object:
+        raise AssertionError(f"external Gemini client should not be created: {kwargs}")
+
+    monkeypatch.setattr(module.genai, "Client", fail_client)
+
+    responder = module._create_configured_responder()
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="哪里疼？",
+            current_intent="ask_location",
+            canonical_answer="右下腹疼痛明显。",
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert isinstance(responder, module.DeterministicPatientResponder)
+    assert reply == "右下腹疼痛明显。"
+
+
 def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(monkeypatch) -> None:
     captured_clients: list[FakeVertexClient] = []
 
