@@ -20,6 +20,7 @@ from app.services.training_skill_candidate_service import TemplateTrainingSkillC
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.training_skill_auto_approval_service import TrainingSkillAutoApprovalSettingsStore
 
 
 @contextmanager
@@ -104,6 +105,8 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/evolution/candidates/missing_candidate"),
             unauthenticated_client.get("/api/admin/evolution/candidates/missing_candidate/events"),
             unauthenticated_client.get("/api/admin/evolution/events"),
+            unauthenticated_client.get("/api/admin/evolution/settings"),
+            unauthenticated_client.patch("/api/admin/evolution/settings", json={"auto_apply_enabled": True}),
             unauthenticated_client.get("/api/admin/evolution/skill-effects"),
             unauthenticated_client.post("/api/admin/evolution/candidates/generate"),
             unauthenticated_client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
@@ -151,6 +154,8 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/evolution/candidates/missing_candidate"),
             client.get("/api/admin/evolution/candidates/missing_candidate/events"),
             client.get("/api/admin/evolution/events"),
+            client.get("/api/admin/evolution/settings"),
+            client.patch("/api/admin/evolution/settings", json={"auto_apply_enabled": True}),
             client.get("/api/admin/evolution/skill-effects"),
             client.post("/api/admin/evolution/candidates/generate"),
             client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
@@ -228,6 +233,31 @@ def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
 
     assert schema["required"] == ["candidate_id"]
     assert list(schema["properties"]) == ["candidate_id"]
+
+
+def test_admin_can_toggle_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None:
+    settings_store = TrainingSkillAutoApprovalSettingsStore(tmp_path / "training_skill_auto_approval.sqlite3")
+    monkeypatch.setattr(main, "training_skill_auto_approval_settings_store", settings_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        default_response = client.get("/api/admin/evolution/settings")
+        update_response = client.patch("/api/admin/evolution/settings", json={"auto_apply_enabled": True})
+        persisted_response = client.get("/api/admin/evolution/settings")
+
+    assert default_response.status_code == 200
+    assert default_response.json()["settings"] == {
+        "auto_apply_enabled": False,
+        "approval_agent_id": "skill_auto_approval_agent",
+        "updated_by": "",
+        "updated_at": None,
+    }
+    assert update_response.status_code == 200
+    updated_settings = update_response.json()["settings"]
+    assert updated_settings["auto_apply_enabled"] is True
+    assert updated_settings["approval_agent_id"] == "skill_auto_approval_agent"
+    assert updated_settings["updated_by"] == "admin@example.test"
+    assert isinstance(updated_settings["updated_at"], str)
+    assert persisted_response.json()["settings"] == updated_settings
 
 
 def test_admin_can_list_dynamic_teaching_focus_patterns(tmp_path, monkeypatch) -> None:
@@ -1741,6 +1771,9 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         "saved_count": 1,
         "ready_for_review_count": 1,
         "blocked_by_regression_count": 0,
+        "auto_apply_enabled": False,
+        "auto_approved_count": 0,
+        "approval_agent_modified_count": 0,
         "candidates": [expected_candidate_summary],
     }
     assert candidates_response.status_code == 200
@@ -1767,6 +1800,123 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     assert captured_service.training_skill_store is osce_session_service.training_skill_store
     assert captured_service.session_store is osce_session_service.session_store
 
+
+
+def test_admin_auto_approval_agent_revises_and_enables_generated_skill(tmp_path, monkeypatch) -> None:
+    class UnsafeSkillCandidateGenerator:
+        def generate_candidate(self, context):
+            candidate = TemplateTrainingSkillCandidateGenerator().generate_candidate(context)
+            candidate["title"] = "推理链与用药剂量纠偏"
+            candidate["description"] = "训练中反复漏掉 reasoning_core，需要提醒学生补充用药剂量。"
+            candidate["suggested_strategy"] = "提交诊断前提示学生补充推理链，并给出用药剂量。"
+            candidate["teaching_action_plan"] = expected_training_skill_action_plan(
+                candidate["stage_scope"],
+                candidate["trigger_item_ids"],
+                candidate["suggested_strategy"],
+            )
+            return candidate
+
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    for session_id, student_id in [
+        ("session_auto_skill_one", "student_a"),
+        ("session_auto_skill_two", "student_b"),
+    ]:
+        session_store.save_session(
+            OsceSession(
+                session_id=session_id,
+                student_id=student_id,
+                case_id="appendicitis_001",
+                stage="report_ready",
+            )
+        )
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    for session_id, student_id in [
+        ("session_auto_skill_one", "student_a"),
+        ("session_auto_skill_two", "student_b"),
+    ]:
+        event_store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id=student_id,
+            event_type="report_generated",
+            payload={
+                "report_id": f"report_{session_id}",
+                "total_score": 58,
+                "missed_items": ["reasoning_core"],
+                "knowledge_recommendations": [
+                    {
+                        "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                        "title": "补充临床推理证据链",
+                    }
+                ],
+            },
+        )
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
+    settings_store = TrainingSkillAutoApprovalSettingsStore(tmp_path / "training_skill_auto_approval.sqlite3")
+    settings_store.update_settings(auto_apply_enabled=True, updated_by="admin@example.test")
+
+    def fake_run_evaluation_cases(evaluation_cases, service):
+        return EvaluationBatchResult(
+            total_cases=1,
+            passed_cases=1,
+            failed_cases=0,
+            results=[],
+            passed=True,
+            total_duration_ms=20,
+        )
+
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_skill_store", skill_store, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(main, "training_skill_candidate_service", TrainingSkillCandidateService(generator=UnsafeSkillCandidateGenerator()), raising=False)
+    monkeypatch.setattr(main, "training_skill_auto_approval_settings_store", settings_store, raising=False)
+    monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(main, "run_evaluation_cases", fake_run_evaluation_cases, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post("/api/admin/evolution/candidates/generate")
+        candidate_response = client.get("/api/admin/evolution/candidates/skill_candidate_training_pattern_reasoning_core")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_apply_enabled"] is True
+    assert payload["auto_approved_count"] == 1
+    assert payload["approval_agent_modified_count"] == 1
+    assert payload["ready_for_review_count"] == 0
+    assert payload["candidates"][0]["status"] == "approved"
+
+    assert candidate_response.status_code == 200
+    candidate = candidate_response.json()["candidate"]
+    assert candidate["review"]["status"] == "approved"
+    assert candidate["review"]["reviewer_id"] == "skill_auto_approval_agent"
+    assert candidate["review"]["approval_mode"] == "auto_agent"
+    assert "用药剂量" not in candidate["title"]
+    assert "用药剂量" not in candidate["description"]
+    assert "用药剂量" not in candidate["suggested_strategy"]
+    assert candidate["approval_agent_review"]["agent_id"] == "skill_auto_approval_agent"
+    assert candidate["approval_agent_review"]["revision_status"] == "modified"
+    assert {
+        changed_field["field"]
+        for changed_field in candidate["approval_agent_review"]["changed_fields"]
+    } >= {"title", "description", "suggested_strategy", "teaching_action_plan"}
+    assert "candidate_id" in candidate["approval_agent_review"]["protected_fields"]
+
+    enabled_skill = skill_store.get_skill("skill_training_pattern_reasoning_core")
+    assert enabled_skill is not None
+    assert enabled_skill["status"] == "enabled"
+    assert "用药剂量" not in enabled_skill["suggested_strategy"]
+
+    audit_events = event_store.list_session_events("skill_candidate_training_pattern_reasoning_core")
+    assert [event["event_type"] for event in audit_events] == [
+        "admin_skill_candidate_generated",
+        "admin_skill_candidate_agent_reviewed",
+        "admin_skill_candidate_auto_approved",
+    ]
+    assert audit_events[1]["payload"]["revision_status"] == "modified"
+    assert audit_events[2]["payload"]["skill_id"] == "skill_training_pattern_reasoning_core"
 
 
 def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_candidates(tmp_path, monkeypatch) -> None:

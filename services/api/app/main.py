@@ -30,6 +30,11 @@ from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.training_insight_service import TrainingInsightService
+from app.services.training_skill_auto_approval_service import (
+    AUTO_APPROVAL_AGENT_ID,
+    training_skill_approval_agent,
+    training_skill_auto_approval_settings_store,
+)
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
 from app.services.training_skill_context_safety import candidate_with_context_safety_review
@@ -48,6 +53,8 @@ DEFAULT_DEMO_ADMIN_PASSWORD = "safe-admin-password"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_approved",
+    "admin_skill_candidate_agent_reviewed",
+    "admin_skill_candidate_auto_approved",
     "admin_skill_candidate_generated",
     "admin_skill_candidate_rejected",
 }
@@ -191,6 +198,10 @@ class AdminTrainingSkillReviewRequest(BaseModel):
     candidate_id: str
 
 
+class AdminTrainingSkillAutoApprovalSettingsRequest(BaseModel):
+    auto_apply_enabled: bool
+
+
 class AdminCaseValidationRequest(BaseModel):
     case: dict[str, Any]
     rubric: dict[str, Any] | None = None
@@ -332,6 +343,18 @@ def _list_admin_skill_candidate_review_events() -> list[dict[str, Any]]:
             if event["event_type"] in ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES
         )
     return sorted(events, key=lambda event: str(event["created_at"]), reverse=True)
+
+
+def _set_approval_agent_decision(candidate: dict[str, Any], review: dict[str, Any]) -> None:
+    agent_review = candidate.get("approval_agent_review")
+    if not isinstance(agent_review, dict):
+        return
+    candidate["approval_agent_review"] = {
+        **agent_review,
+        "decision": "approved_for_auto_apply" if review["status"] == "ready_for_review" else "blocked_by_regression",
+        "regression_status": review["status"],
+        "regression_passed": review["regression_passed"],
+    }
 
 
 def _get_average_score(reports: list[dict[str, Any]]) -> int:
@@ -1066,6 +1089,27 @@ def list_admin_training_skill_review_events(
     )
 
 
+@app.get("/api/admin/evolution/settings")
+def get_admin_training_skill_evolution_settings(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"settings": training_skill_auto_approval_settings_store.get_settings()}
+
+
+@app.patch("/api/admin/evolution/settings")
+def update_admin_training_skill_evolution_settings(
+    request: AdminTrainingSkillAutoApprovalSettingsRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    settings = training_skill_auto_approval_settings_store.update_settings(
+        auto_apply_enabled=request.auto_apply_enabled,
+        updated_by=reviewer["email"],
+    )
+    return {"settings": settings}
+
+
 @app.post("/api/admin/evolution/candidates/generate")
 def generate_admin_training_skill_candidates(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -1076,14 +1120,31 @@ def generate_admin_training_skill_candidates(
     candidates = training_skill_candidate_service.propose_candidates(insights, min_count=2)
     batch_result = _run_admin_evaluation_cases()
     evaluation_result_store.save_batch_result(ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID, batch_result)
+    auto_approval_settings = training_skill_auto_approval_settings_store.get_settings()
+    auto_apply_enabled = bool(auto_approval_settings["auto_apply_enabled"])
     saved_candidate_summaries: list[dict[str, object]] = []
     ready_for_review_count = 0
     blocked_by_regression_count = 0
+    auto_approved_count = 0
+    approval_agent_modified_count = 0
 
     for candidate in candidates:
+        if auto_apply_enabled:
+            candidate = training_skill_approval_agent.review_candidate(candidate)
         review = training_skill_regression_gate.review_candidate(candidate, batch_result)
+        if auto_apply_enabled:
+            _set_approval_agent_decision(candidate, review)
+            if review["status"] == "ready_for_review":
+                review = {
+                    **review,
+                    "status": "approved",
+                    "reviewer_id": AUTO_APPROVAL_AGENT_ID,
+                    "approval_mode": "auto_agent",
+                }
         if not training_skill_candidate_store.save_candidate_unless_reviewed(candidate, review):
             continue
+        if auto_apply_enabled and candidate["approval_agent_review"]["revision_status"] == "modified":
+            approval_agent_modified_count += 1
         if review["status"] == "ready_for_review":
             ready_for_review_count += 1
         if review["status"] == "blocked_by_regression":
@@ -1102,12 +1163,42 @@ def generate_admin_training_skill_candidates(
                 "source_report_count": candidate["source_report_count"],
             },
         )
+        if auto_apply_enabled:
+            _append_admin_skill_candidate_review_event(
+                candidate=candidate,
+                reviewer_email=AUTO_APPROVAL_AGENT_ID,
+                event_type="admin_skill_candidate_agent_reviewed",
+                payload={
+                    "candidate_id": candidate["candidate_id"],
+                    **candidate["approval_agent_review"],
+                },
+            )
+        if auto_apply_enabled and review["status"] == "approved":
+            if not osce_session_service.training_skill_store.enable_candidate({**candidate, "review": review}):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="candidate could not be auto enabled")
+            skill_id = f"skill_{candidate['trigger_item_id']}"
+            auto_approved_count += 1
+            _append_admin_skill_candidate_review_event(
+                candidate=candidate,
+                reviewer_email=AUTO_APPROVAL_AGENT_ID,
+                event_type="admin_skill_candidate_auto_approved",
+                payload={
+                    "candidate_id": candidate["candidate_id"],
+                    "reviewer_email": AUTO_APPROVAL_AGENT_ID,
+                    "skill_id": skill_id,
+                    "approval_mode": "auto_agent",
+                    "revision_status": candidate["approval_agent_review"]["revision_status"],
+                },
+            )
 
     return {
         "generated_count": len(candidates),
         "saved_count": len(saved_candidate_summaries),
         "ready_for_review_count": ready_for_review_count,
         "blocked_by_regression_count": blocked_by_regression_count,
+        "auto_apply_enabled": auto_apply_enabled,
+        "auto_approved_count": auto_approved_count,
+        "approval_agent_modified_count": approval_agent_modified_count,
         "candidates": saved_candidate_summaries,
     }
 

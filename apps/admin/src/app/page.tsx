@@ -229,6 +229,25 @@ type TrainingSkillCandidateReview = Readonly<{
   evaluation_failed_cases: number;
   blocking_failures: readonly unknown[];
   reviewer_id?: string;
+  approval_mode?: string;
+}>;
+
+type TrainingSkillApprovalAgentChangedField = Readonly<{
+  field: string;
+  before: unknown;
+  after: unknown;
+}>;
+
+type TrainingSkillApprovalAgentReview = Readonly<{
+  agent_id: string;
+  decision: string;
+  revision_status: string;
+  changed_fields: readonly TrainingSkillApprovalAgentChangedField[];
+  reviewed_fields: readonly string[];
+  protected_fields: readonly string[];
+  safety_constraints: readonly string[];
+  regression_status?: string;
+  regression_passed?: boolean;
 }>;
 
 type TrainingSkillTeachingAction = Readonly<{
@@ -259,6 +278,14 @@ type TrainingSkillCandidateDetail = Readonly<{
   support_count: number;
   related_recommendations: readonly string[];
   review: TrainingSkillCandidateReview;
+  approval_agent_review?: TrainingSkillApprovalAgentReview;
+}>;
+
+type TrainingSkillAutoApprovalSettings = Readonly<{
+  auto_apply_enabled: boolean;
+  approval_agent_id: string;
+  updated_by: string;
+  updated_at: string | null;
 }>;
 
 type TrainingSkillEffectGroup = Readonly<{
@@ -585,7 +612,14 @@ type TrainingSkillCandidateGenerationResponse = Readonly<{
   saved_count: number;
   ready_for_review_count: number;
   blocked_by_regression_count: number;
+  auto_apply_enabled: boolean;
+  auto_approved_count: number;
+  approval_agent_modified_count: number;
   candidates: readonly TrainingSkillCandidateSummary[];
+}>;
+
+type TrainingSkillAutoApprovalSettingsResponse = Readonly<{
+  settings: TrainingSkillAutoApprovalSettings;
 }>;
 
 type CandidateDetailResponse = Readonly<{
@@ -937,6 +971,24 @@ async function generateTrainingSkillCandidates(): Promise<TrainingSkillCandidate
   return (await response.json()) as TrainingSkillCandidateGenerationResponse;
 }
 
+async function getTrainingSkillAutoApprovalSettings(): Promise<TrainingSkillAutoApprovalSettings> {
+  const response = await fetch("/api/admin/evolution/settings", { method: "GET" });
+  await assertAdminResponseOk(response, "读取 Skill 自动应用设置");
+  const payload = (await response.json()) as TrainingSkillAutoApprovalSettingsResponse;
+  return payload.settings;
+}
+
+async function updateTrainingSkillAutoApprovalSettings(autoApplyEnabled: boolean): Promise<TrainingSkillAutoApprovalSettings> {
+  const response = await fetch("/api/admin/evolution/settings", {
+    body: JSON.stringify({ auto_apply_enabled: autoApplyEnabled }),
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+  await assertAdminResponseOk(response, "更新 Skill 自动应用设置");
+  const payload = (await response.json()) as TrainingSkillAutoApprovalSettingsResponse;
+  return payload.settings;
+}
+
 async function getTrainingSkillCandidate(candidateId: string): Promise<TrainingSkillCandidateDetail> {
   const response = await fetch(`/api/admin/evolution/candidates/${candidateId}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取候选 Skill 详情");
@@ -1232,9 +1284,11 @@ export default function AdminDashboardPage() {
   const [selectedEvaluation, setSelectedEvaluation] = useState<EvaluationBatchDetail | null>(null);
   const [isRunningEvaluation, setIsRunningEvaluation] = useState(false);
   const [isGeneratingCandidates, setIsGeneratingCandidates] = useState(false);
+  const [isUpdatingAutoApproval, setIsUpdatingAutoApproval] = useState(false);
   const [candidates, setCandidates] = useState<readonly TrainingSkillCandidateSummary[]>([]);
   const [candidatePagination, setCandidatePagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedCandidate, setSelectedCandidate] = useState<TrainingSkillCandidateDetail | null>(null);
+  const [autoApprovalSettings, setAutoApprovalSettings] = useState<TrainingSkillAutoApprovalSettings | null>(null);
   const [caseSearchText, setCaseSearchText] = useState("");
   const [caseImportJsonText, setCaseImportJsonText] = useState("");
   const [rubricImportJsonText, setRubricImportJsonText] = useState("");
@@ -1279,7 +1333,7 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage] = await Promise.all([
+    const [nextCases, nextSources, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminModelConfig(),
@@ -1292,6 +1346,7 @@ export default function AdminDashboardPage() {
       getAdminEvaluations(initialListQuery),
       getTrainingSkillCandidates(initialListQuery),
       getAdminAuditEvents(initialListQuery),
+      getTrainingSkillAutoApprovalSettings(),
     ]);
     setCases(nextCases);
     setSources(nextSources);
@@ -1311,6 +1366,7 @@ export default function AdminDashboardPage() {
     setCandidatePagination(nextCandidatePage.pagination);
     setAuditEvents(nextAuditPage.events);
     setAuditPagination(nextAuditPage.pagination);
+    setAutoApprovalSettings(nextAutoApprovalSettings);
     setStatusText("已读取管理后台数据。");
     if (nextCases[0]) {
       const firstCaseRaw = await getAdminCaseRaw(nextCases[0].case_id);
@@ -1721,7 +1777,11 @@ export default function AdminDashboardPage() {
         setSelectedCandidate(null);
         setCandidateAuditEvents([]);
       }
-      setStatusText(`已从训练日志生成 ${result.generated_count} 个候选 Skill，${result.ready_for_review_count} 个进入审核，${result.blocked_by_regression_count} 个被回归阻塞。`);
+      setStatusText(
+        result.auto_apply_enabled
+          ? `已从训练日志生成 ${result.generated_count} 个候选 Skill，审批 Agent 自动启用 ${result.auto_approved_count} 个，修订 ${result.approval_agent_modified_count} 个，${result.blocked_by_regression_count} 个被回归阻塞。`
+          : `已从训练日志生成 ${result.generated_count} 个候选 Skill，${result.ready_for_review_count} 个进入审核，${result.blocked_by_regression_count} 个被回归阻塞。`,
+      );
     } catch (error: unknown) {
       const message = getAdminErrorMessage(error);
       setStatusText(message);
@@ -1737,6 +1797,27 @@ export default function AdminDashboardPage() {
   async function handleSelectCandidate(candidateId: string) {
     setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
     setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
+  }
+
+  async function handleToggleAutoApproval() {
+    if (!autoApprovalSettings || isUpdatingAutoApproval) {
+      return;
+    }
+    setIsUpdatingAutoApproval(true);
+    try {
+      const nextSettings = await updateTrainingSkillAutoApprovalSettings(!autoApprovalSettings.auto_apply_enabled);
+      setAutoApprovalSettings(nextSettings);
+      setStatusText(nextSettings.auto_apply_enabled ? "Skill 自动应用已开启，后续候选将由审批 Agent 修订并自动启用。" : "Skill 自动应用已关闭，候选 Skill 将继续等待管理员人工审核。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsUpdatingAutoApproval(false);
+    }
   }
 
   async function handleSelectTeachingFocusPattern(focusId: string) {
@@ -3151,6 +3232,27 @@ export default function AdminDashboardPage() {
                   </p>
                 </div>
               </div>
+              <div className="mt-4 rounded-xl border border-[#E6DFD2] bg-white p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">Skill 自动应用</h3>
+                    <p className="mt-1 text-xs leading-5 text-[#6F6257]">
+                      审批 Agent：{autoApprovalSettings?.approval_agent_id ?? "skill_auto_approval_agent"} · {autoApprovalSettings?.auto_apply_enabled ? "自动应用已开启" : "自动应用已关闭"}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">
+                      开启后，候选 Skill 会先由审批 Agent 审核和修订教学文案，再通过回归门禁并自动写入 enabled Skill 库；关闭时沿用人工审核。
+                    </p>
+                  </div>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!autoApprovalSettings || isUpdatingAutoApproval}
+                    onClick={() => void handleToggleAutoApproval()}
+                    type="button"
+                  >
+                    {autoApprovalSettings?.auto_apply_enabled ? "关闭自动应用" : "开启自动应用"}
+                  </button>
+                </div>
+              </div>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <input
                   aria-label="筛选候选 Skill"
@@ -3287,6 +3389,39 @@ export default function AdminDashboardPage() {
                       <h4 className="text-sm font-semibold">教学策略</h4>
                       <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.suggested_strategy}</p>
                     </div>
+                    {selectedCandidate.approval_agent_review ? (
+                      <div>
+                        <h4 className="text-sm font-semibold">审批 Agent 修订记录</h4>
+                        <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                          <p className="font-medium text-[#141413]">
+                            {selectedCandidate.approval_agent_review.agent_id} · {selectedCandidate.approval_agent_review.decision} · {selectedCandidate.approval_agent_review.revision_status}
+                          </p>
+                          <p className="mt-1">保护字段：{selectedCandidate.approval_agent_review.protected_fields.join("、")}</p>
+                          <p className="mt-1">安全约束：{selectedCandidate.approval_agent_review.safety_constraints.join("、")}</p>
+                          <div className="mt-2 grid gap-2">
+                            {selectedCandidate.approval_agent_review.changed_fields.length > 0 ? (
+                              selectedCandidate.approval_agent_review.changed_fields.map((changedField) => (
+                                <div className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2" key={changedField.field}>
+                                  <p className="font-medium text-[#141413]">{changedField.field}</p>
+                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#6F6257]">
+                                    {JSON.stringify(
+                                      {
+                                        before: changedField.before,
+                                        after: changedField.after,
+                                      },
+                                      null,
+                                      2,
+                                    )}
+                                  </pre>
+                                </div>
+                              ))
+                            ) : (
+                              <p>审批 Agent 未修改候选内容。</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                     <div>
                       <h4 className="text-sm font-semibold">教学动作计划</h4>
                       <div className="mt-2 grid gap-2">

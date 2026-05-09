@@ -49,11 +49,14 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillApprovalAgentReview = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillAutoApprovalSettings = Readonly<\{/);
   assert.match(adminPageSource, /skill_type: string;/);
   assert.match(adminPageSource, /stage_scope: readonly string\[];/);
   assert.match(adminPageSource, /applies_when: Readonly<Record<string, unknown>>;/);
   assert.match(adminPageSource, /effect_status: string;/);
   assert.match(adminPageSource, /teaching_action_plan: readonly TrainingSkillTeachingAction\[];/);
+  assert.match(adminPageSource, /approval_agent_review\?: TrainingSkillApprovalAgentReview;/);
   assert.match(adminPageSource, /prohibited_content_policy: Readonly<Record<string, unknown>>;/);
   assert.match(adminPageSource, /success_metrics: readonly string\[];/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
@@ -79,6 +82,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/candidates\/\$\{candidateId\}\/events`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evolution\/events\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/skill-effects"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/settings"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/settings", \{/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/teaching-focus\/patterns"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/teaching-focus\/patterns\/\$\{encodeURIComponent\(focusId\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
@@ -506,6 +511,9 @@ test("admin dashboard can export current paginated list pages as JSON", () => {
 
 test("admin dashboard can generate candidate skills from training logs", () => {
   assert.match(adminPageSource, /type TrainingSkillCandidateGenerationResponse = Readonly<\{/);
+  assert.match(adminPageSource, /auto_apply_enabled: boolean;/);
+  assert.match(adminPageSource, /auto_approved_count: number;/);
+  assert.match(adminPageSource, /approval_agent_modified_count: number;/);
   assert.match(adminPageSource, /async function generateTrainingSkillCandidates\(\): Promise<TrainingSkillCandidateGenerationResponse>/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/candidates\/generate"/);
   assert.match(adminPageSource, /const \[isGeneratingCandidates, setIsGeneratingCandidates\] = useState\(false\)/);
@@ -530,6 +538,17 @@ test("admin dashboard can generate candidate skills from training logs", () => {
   assert.match(adminPageSource, /从训练日志生成候选 Skill/);
   assert.match(adminPageSource, /生成中/);
   assert.match(adminPageSource, /已从训练日志生成/);
+});
+
+test("admin dashboard exposes auto skill application controls and agent revisions", () => {
+  assert.match(adminPageSource, /Skill 自动应用/);
+  assert.match(adminPageSource, /审批 Agent/);
+  assert.match(adminPageSource, /autoApprovalSettings\.auto_apply_enabled/);
+  assert.match(adminPageSource, /handleToggleAutoApproval/);
+  assert.match(adminPageSource, /审批 Agent 修订记录/);
+  assert.match(adminPageSource, /selectedCandidate\.approval_agent_review/);
+  assert.match(adminPageSource, /changed_fields/);
+  assert.match(adminPageSource, /protected_fields/);
 });
 
 test("admin review actions only send candidate id", () => {
