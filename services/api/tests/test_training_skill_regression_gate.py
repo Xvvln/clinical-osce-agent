@@ -89,6 +89,46 @@ def test_training_skill_regression_gate_blocks_candidate_with_forbidden_medical_
     }
 
 
+def test_training_skill_regression_gate_blocks_dose_and_drug_variants() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "trigger_item_id": "reasoning_core",
+        "title": "剂量表达测试",
+        "description": "提醒学生不要直接写阿莫西林500mg q8h。",
+        "suggested_strategy": "提示学生给出处方。",
+        "status": "draft",
+    }
+    batch_result = EvaluationBatchResult(
+        total_cases=1,
+        passed_cases=1,
+        failed_cases=0,
+        results=[
+            EvaluationResult(
+                session_id="session_one",
+                actual_total_score=55,
+                expected_total_score=55,
+                forbidden_term_violations=[],
+                passed=True,
+                duration_ms=10,
+            )
+        ],
+        passed=True,
+        total_duration_ms=10,
+    )
+
+    review = TrainingSkillRegressionGate().review_candidate(candidate, batch_result)
+
+    assert review["status"] == "blocked_by_regression"
+    assert review["regression_passed"] is False
+    assert review["candidate_safety_violations"] == [
+        "剂量",
+        "处方",
+        "阿莫西林",
+        "dose_expression",
+        "dose_frequency",
+    ]
+
+
 def test_training_skill_regression_gate_blocks_case_incompatible_candidate_content() -> None:
     candidate = {
         "candidate_id": "skill_candidate_training_pattern_dxd_ectopic",

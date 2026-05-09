@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
@@ -11,7 +12,17 @@ FORBIDDEN_CANDIDATE_TERMS = [
     "用药建议",
     "手术方案",
     "处置建议",
+    "剂量",
+    "处方",
+    "阿莫西林",
+    "头孢",
+    "抗生素",
 ]
+
+FORBIDDEN_CANDIDATE_PATTERNS = {
+    "dose_expression": re.compile(r"\d+(?:\.\d+)?\s*(?:mg|g|ml|mL|ug|μg|iu|IU|片|粒|支|袋)", re.IGNORECASE),
+    "dose_frequency": re.compile(r"(?<![A-Za-z0-9])(?:q\d+h|bid|tid|qid|qd|qn|prn|po|iv|im)(?![A-Za-z0-9])", re.IGNORECASE),
+}
 
 
 class TrainingSkillRegressionGate:
@@ -44,7 +55,16 @@ def _candidate_safety_violations(candidate: dict[str, Any]) -> list[str]:
         str(candidate.get(field, ""))
         for field in ["title", "description", "suggested_strategy", "trigger_item_id"]
     )
-    return [term for term in FORBIDDEN_CANDIDATE_TERMS if term in candidate_text]
+    violations: list[str] = []
+    for term in FORBIDDEN_CANDIDATE_TERMS:
+        if term in candidate_text and not any(term in existing_term for existing_term in violations):
+            violations.append(term)
+    violations.extend(
+        violation_id
+        for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items()
+        if pattern.search(candidate_text)
+    )
+    return violations
 
 
 def _blocking_failure(result: EvaluationResult) -> dict[str, Any]:

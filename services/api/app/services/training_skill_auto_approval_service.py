@@ -3,12 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from app.services.training_skill_policy import build_teaching_action_plan
-from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_TERMS
+from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_PATTERNS, FORBIDDEN_CANDIDATE_TERMS
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skill_auto_approval.sqlite3"
@@ -30,11 +31,21 @@ PROTECTED_CANDIDATE_FIELDS = [
 ]
 
 SAFE_TERM_REPLACEMENTS = {
+    "剂量": "证据链训练要点",
+    "处方": "训练复盘策略",
+    "阿莫西林": "训练证据链",
+    "头孢": "训练证据链",
+    "抗生素": "训练证据链",
     "治疗方案": "训练复盘策略",
     "用药剂量": "证据链训练要点",
     "用药建议": "学习复盘建议",
     "手术方案": "训练步骤安排",
     "处置建议": "下一步训练建议",
+}
+
+SAFE_PATTERN_REPLACEMENTS = {
+    "dose_expression": "证据链训练要点",
+    "dose_frequency": "训练复盘频次",
 }
 
 SAFETY_SUFFIX = "仅提示训练步骤和证据链复盘，不透露病例答案或隐藏事实，不提供真实诊疗信息。"
@@ -166,6 +177,8 @@ def _sanitize_training_text(text: str) -> str:
     sanitized = text
     for forbidden_term in FORBIDDEN_CANDIDATE_TERMS:
         sanitized = sanitized.replace(forbidden_term, SAFE_TERM_REPLACEMENTS[forbidden_term])
+    for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items():
+        sanitized = re.sub(pattern, SAFE_PATTERN_REPLACEMENTS[violation_id], sanitized)
     return sanitized.strip()
 
 
