@@ -19,9 +19,11 @@ type WorkflowStepDefinition = Readonly<{
   label: string;
 }>;
 
-type RightPanelKey = "evidence" | "procedures" | "hypotheses" | "report";
+type RightPanelKey = "focus" | "agent" | "evidence" | "procedures" | "hypotheses" | "report";
 
-type OsceDockMenuGroup = "training" | "resources" | "system";
+type OsceDockMenuGroup = "training" | "system";
+
+type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
 type OsceDockSide = "left" | "right";
 
@@ -1459,10 +1461,18 @@ function resizeTextareaToContent(textarea: HTMLTextAreaElement): void {
   textarea.style.overflowY = textarea.scrollHeight > DIAGNOSIS_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
 }
 
-function CaseSelectionPrompt({ selectedCase }: Readonly<{ selectedCase: CaseOption | null }>) {
+function CaseSelectionPrompt({ onDismiss, selectedCase }: Readonly<{ onDismiss: () => void; selectedCase: CaseOption | null }>) {
   return (
     <div className="flex justify-center">
-      <div className="w-full max-w-xl rounded-xl border border-brand/20 bg-brand/5 p-4 text-center shadow-xs">
+      <div className="relative w-full max-w-xl rounded-xl border border-brand/20 bg-brand/5 p-4 text-center shadow-xs">
+        <button
+          aria-label="关闭训练准备提示"
+          className="absolute right-3 top-3 inline-flex size-7 items-center justify-center rounded-full border border-brand/20 bg-background text-sm font-medium whitespace-nowrap text-brand transition hover:bg-brand/10"
+          onClick={onDismiss}
+          type="button"
+        >
+          ×
+        </button>
         <p className="text-xs font-medium text-brand">训练准备提示</p>
         <p className="mt-2 text-sm font-semibold text-foreground">
           {selectedCase ? `已选择${selectedCase.title}` : "请先选择一个病例"}
@@ -1489,13 +1499,13 @@ function OpeningTaskCardMessage({ openingTaskCard }: Readonly<{ openingTaskCard:
   }
 
   return (
-    <div className="rounded-xl border border-brand/20 bg-brand/5 p-4 shadow-xs">
-      <p className="text-xs font-medium text-brand">开局任务卡</p>
+    <div className="mx-auto w-full max-w-2xl rounded-2xl border border-brand/30 bg-[#FFF8E8] p-4">
+      <p className="text-xs font-semibold text-[#8A5A00]">开局任务卡</p>
       <p className="mt-2 text-sm font-semibold text-foreground">{openingTaskCard.role}</p>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">{openingTaskCard.scenario}</p>
-      <ul className="mt-3 grid gap-2 text-xs leading-5 sm:grid-cols-2">
+      <ul className="mt-3 flex flex-wrap gap-2 text-xs leading-5">
         {openingTaskCard.tasks.map((task) => (
-          <li className="rounded-md border border-brand/15 bg-background px-3 py-2" key={task}>
+          <li className="rounded-full border border-brand/20 bg-background px-3 py-1.5" key={task}>
             {task}
           </li>
         ))}
@@ -1520,6 +1530,8 @@ function HomeContent() {
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
+    focus: false,
+    agent: false,
     evidence: true,
     procedures: true,
     hypotheses: true,
@@ -1531,6 +1543,8 @@ function HomeContent() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isCasePreparationPromptDismissed, setIsCasePreparationPromptDismissed] = useState(false);
+  const [openProcedureActionGroup, setOpenProcedureActionGroup] = useState<ProcedureActionGroup | null>(null);
   const [isRequestingExam, setIsRequestingExam] = useState(false);
   const [isRequestingTest, setIsRequestingTest] = useState(false);
   const [hypothesisValue, setHypothesisValue] = useState("");
@@ -1541,9 +1555,11 @@ function HomeContent() {
   const [supportingEvidenceValue, setSupportingEvidenceValue] = useState("");
   const [exclusionEvidenceValue, setExclusionEvidenceValue] = useState("");
   const [nextStepValue, setNextStepValue] = useState("");
+  const [isDiagnosisComposerOpen, setIsDiagnosisComposerOpen] = useState(false);
   const [isSubmittingDiagnosis, setIsSubmittingDiagnosis] = useState(false);
   const [feedbackReport, setFeedbackReport] = useState<FeedbackReport | null>(null);
   const [procedureResults, setProcedureResults] = useState<readonly ProcedureResult[]>([]);
+  const [selectedProcedureResult, setSelectedProcedureResult] = useState<ProcedureResult | null>(null);
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
@@ -1634,6 +1650,10 @@ function HomeContent() {
   }, []);
 
   useEffect(() => {
+    setIsCasePreparationPromptDismissed(false);
+  }, [selectedCaseId]);
+
+  useEffect(() => {
     if (isCheckingAuth) {
       return;
     }
@@ -1650,6 +1670,7 @@ function HomeContent() {
       setSession(null);
       setFeedbackReport(null);
       setProcedureResults([]);
+      setSelectedProcedureResult(null);
       setIsPatientProfileOpen(false);
       setStatusText(selectedCaseId ? "已选择病例，发送问诊或点击训练操作后开始新会话。" : "请选择病例后再开始训练。");
       setErrorText(null);
@@ -1671,6 +1692,7 @@ function HomeContent() {
       setNextStepValue("");
       setFeedbackReport(null);
       setProcedureResults([]);
+      setSelectedProcedureResult(null);
       setIsPatientProfileOpen(false);
       setStatusText("正在恢复后端训练会话...");
       setErrorText(null);
@@ -1922,6 +1944,12 @@ function HomeContent() {
   );
   const physicalExamOptions = session?.physical_exam_options ?? selectedCase?.physicalExamOptions ?? [];
   const auxiliaryTestOptions = session?.auxiliary_test_options ?? selectedCase?.auxiliaryTestOptions ?? [];
+  const requestedExamCodeSet = useMemo(() => new Set(session?.requested_exams ?? []), [session?.requested_exams]);
+  const requestedTestCodeSet = useMemo(() => new Set(session?.requested_tests ?? []), [session?.requested_tests]);
+  const pendingPhysicalExamOptions = physicalExamOptions.filter((examOption) => !requestedExamCodeSet.has(examOption.exam_code));
+  const completedPhysicalExamOptions = physicalExamOptions.filter((examOption) => requestedExamCodeSet.has(examOption.exam_code));
+  const pendingAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => !requestedTestCodeSet.has(testOption.test_code));
+  const completedAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => requestedTestCodeSet.has(testOption.test_code));
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
   const preparedTeachingFocus = session?.teaching_focus ?? selectedCase?.teachingFocus ?? null;
@@ -1959,10 +1987,16 @@ function HomeContent() {
 
   const requestedItems = useMemo(
     () => [
-      ...(session?.requested_exams.map((exam) => ({ id: `exam:${exam}`, label: `查体：${exam}` })) ?? []),
-      ...(session?.requested_tests.map((test) => ({ id: `test:${test}`, label: `检查：${test}` })) ?? []),
+      ...(session?.requested_exams.map((exam) => ({
+        id: `exam:${exam}`,
+        label: `查体：${physicalExamOptions.find((examOption) => examOption.exam_code === exam)?.exam_name_cn ?? exam}`,
+      })) ?? []),
+      ...(session?.requested_tests.map((test) => ({
+        id: `test:${test}`,
+        label: `检查：${auxiliaryTestOptions.find((testOption) => testOption.test_code === test)?.test_name_cn ?? test}`,
+      })) ?? []),
     ],
-    [session?.requested_exams, session?.requested_tests],
+    [auxiliaryTestOptions, physicalExamOptions, session?.requested_exams, session?.requested_tests],
   );
 
   const procedureItems = useMemo(
@@ -1974,6 +2008,10 @@ function HomeContent() {
     ],
     [procedureResults, requestedItems],
   );
+
+  function getProcedureResultById(procedureId: string): ProcedureResult | null {
+    return procedureItems.find((item) => item.id === procedureId) ?? null;
+  }
 
   const sourceReferenceGroups = useMemo(
     () => groupSourceReferences(feedbackReport?.source_reference_items ?? [], feedbackReport?.source_references ?? []),
@@ -1998,9 +2036,9 @@ function HomeContent() {
   const osceDockPanelAlignmentClass = osceDockPosition.side === "right" ? "right-0" : "left-0";
   const osceDockPanelVerticalClass = osceDockPosition.isReady && osceDockPosition.y < 260 ? "top-16" : "bottom-16";
   const osceDockSubmenuAlignmentClass = osceDockPosition.side === "right" ? "right-full mr-2" : "left-full ml-2";
-  const osceDockActionClass = "rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent";
-  const osceDockButtonActionClass = "rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
-  const osceDockMenuButtonClass = "rounded-lg border border-border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent";
+  const osceDockActionClass = "rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand/30 hover:bg-accent";
+  const osceDockButtonActionClass = "rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
+  const osceDockMenuButtonClass = "rounded-lg border border-border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand/30 hover:bg-accent";
 
   const scoringPreview = useMemo(
     () => [
@@ -2161,15 +2199,17 @@ function HomeContent() {
       }
       const shouldShowPhysicalExamSequenceReminder = activeSession.training_progress.history.covered === 0;
       const updatedSession = await requestPhysicalExam(activeSession.session_id, examCode);
+      const nextProcedureResult = {
+        id: `exam:${updatedSession.exam_code}`,
+        label: `查体：${updatedSession.exam_name_cn}`,
+        result: updatedSession.result,
+      };
       setSession(updatedSession);
       setProcedureResults((currentResults) => [
         ...currentResults.filter((result) => result.id !== `exam:${updatedSession.exam_code}`),
-        {
-          id: `exam:${updatedSession.exam_code}`,
-          label: `查体：${updatedSession.exam_name_cn}`,
-          result: updatedSession.result,
-        },
+        nextProcedureResult,
       ]);
+      setSelectedProcedureResult(nextProcedureResult);
       const sequenceReminder = shouldShowPhysicalExamSequenceReminder
         ? " OSCE 通常建议先完成核心病史采集，再进入查体。"
         : "";
@@ -2197,15 +2237,17 @@ function HomeContent() {
       }
       const shouldShowAuxiliaryTestSequenceReminder = activeSession.training_progress.physical_exam.requested === 0;
       const updatedSession = await requestAuxiliaryTest(activeSession.session_id, testCode);
+      const nextProcedureResult = {
+        id: `test:${updatedSession.test_code}`,
+        label: `检查：${updatedSession.test_name_cn}`,
+        result: updatedSession.result,
+      };
       setSession(updatedSession);
       setProcedureResults((currentResults) => [
         ...currentResults.filter((result) => result.id !== `test:${updatedSession.test_code}`),
-        {
-          id: `test:${updatedSession.test_code}`,
-          label: `检查：${updatedSession.test_name_cn}`,
-          result: updatedSession.result,
-        },
+        nextProcedureResult,
       ]);
+      setSelectedProcedureResult(nextProcedureResult);
       const sequenceReminder = shouldShowAuxiliaryTestSequenceReminder
         ? " 现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。"
         : "";
@@ -2308,253 +2350,52 @@ function HomeContent() {
   }
 
   return (
-    <main className="relative min-h-screen bg-muted/40 text-foreground">
-      <div className={isAuthDialogOpen ? "pointer-events-none blur-sm" : ""}>
-        <div className="flex min-h-screen">
-      <aside className="hidden w-80 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:block">
+    <main className="relative h-screen overflow-hidden bg-muted/40 text-foreground">
+      <div className={isAuthDialogOpen ? "h-full pointer-events-none blur-sm" : "h-full"}>
+        <div className="flex h-full min-h-0">
+      <aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mb-6">
-          <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-            临境 OSCE 智能体（TraceOSCE）
-          </p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">临境 OSCE 智能体（TraceOSCE）</h1>
+          <h1 className="text-xl font-semibold tracking-tight">临境 OSCE 智能体</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            基于公开 OSCE 病例数据的诊断学临床思维训练工作台。
+            基于公开 OSCE 病例数据的诊断学临床思维训练
           </p>
         </div>
 
-        <div className="mt-4">
-          <Panel title="问诊引导" description="优先完成不会泄露诊断的核心病史采集。">
-            {session ? (
-              <div className="space-y-3 text-xs leading-5">
-                <p className="rounded-lg border border-[#B5812A]/30 bg-[#FFF8E8] p-3 text-[#8A5A00]">
-                  {session?.inquiry_guidance.priority}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {session.inquiry_guidance.suggested_questions.map((question) => (
-                    <button
-                      className="rounded-md border border-border bg-background px-3 py-1.5 text-left text-xs font-medium shadow-xs transition hover:bg-accent"
-                      key={question}
-                      onClick={() => setInputValue(question)}
-                      type="button"
-                    >
-                      {question}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {session.inquiry_guidance.categories.map((category) => (
-                    <span className="rounded-full bg-muted px-2 py-1 text-[11px] text-muted-foreground" key={category}>
-                      {category}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                创建训练会话后，这里会展示推荐问诊顺序和示例问题。
-              </p>
-            )}
-          </Panel>
-        </div>
-
-        <div className="mt-4">
-          <Panel title="病例信息与选择" description="先选择病例，再开始 OSCE 训练。">
-            <div className="space-y-3">
-              <div className="rounded-lg border border-border bg-muted/60 p-3 text-xs leading-5">
-                <p className="text-muted-foreground">当前选择</p>
-                {selectedCase ? (
-                  <>
-                    <p className="mt-1 font-medium">{session?.case_title ?? selectedCase.title}</p>
-                    <p className="mt-1 text-muted-foreground">{session?.chief_complaint ?? selectedCase.chiefComplaint}</p>
-                    {session ? (
-                      <p className="mt-2 rounded-md bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground">
-                        会话 ID：{session.session_id}
-                      </p>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="mt-1 text-muted-foreground">尚未选择病例，请先进入病例库选择训练场景。</p>
-                )}
-                <button
-                  className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-center text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!preparedPatientProfile}
-                  onClick={() => setIsPatientProfileOpen(true)}
-                  type="button"
-                >
-                  患者信息
-                </button>
-              </div>
-              <Link
-                className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
-                href="/cases"
+        <Panel title="训练导航" description="当前病例、阶段和下一步。">
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-muted/60 p-3 text-xs leading-5">
+              <p className="text-muted-foreground">当前选择</p>
+              {selectedCase ? (
+                <>
+                  <p className="mt-1 font-medium">{session?.case_title ?? selectedCase.title}</p>
+                  <p className="mt-1 text-muted-foreground">{session?.chief_complaint ?? selectedCase.chiefComplaint}</p>
+                  {session ? (
+                    <p className="mt-2 rounded-md bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                      会话 ID：{session.session_id}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="mt-1 text-muted-foreground">尚未选择病例，请先进入病例库选择训练场景。</p>
+              )}
+              <button
+                className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-center text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!preparedPatientProfile}
+                onClick={() => setIsPatientProfileOpen(true)}
+                type="button"
               >
-                选择病例
-              </Link>
+                患者信息
+              </button>
             </div>
-          </Panel>
-        </div>
 
-        <div className="mt-4">
-          <Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">
-            {session?.pedagogy_state ? (
-              <div className="space-y-3 text-xs leading-5">
-                <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Active Goal</p>
-                  <p className="mt-1 font-semibold text-foreground">{session.pedagogy_state.active_learning_goal}</p>
-                  <p className="mt-2 text-muted-foreground">{session.pedagogy_state.next_best_action}</p>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="text-muted-foreground">教学模式</p>
-                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.coaching_mode}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="text-muted-foreground">教学安全边界</p>
-                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.safety_mode}</p>
-                  </div>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <p className="font-semibold text-foreground">阶段检查点</p>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div>
-                      <p className="text-muted-foreground">状态</p>
-                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.status}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground">准备度</p>
-                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.readiness}</p>
-                    </div>
-                  </div>
-                  <p className="mt-2 break-words text-[11px] text-muted-foreground">
-                    待补证据：{session.pedagogy_state.stage_checkpoint.pending_signal_ids.join("、") || "暂无"}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <p className="font-semibold text-foreground">教学计划</p>
-                  <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.teaching_plan.selected_strategy}</p>
-                  <p className="mt-2 text-muted-foreground">{session.pedagogy_state.teaching_plan.strategy_reason}</p>
-                  <p className="mt-2 break-words text-[11px] text-muted-foreground">
-                    来源：{session.pedagogy_state.teaching_plan.source_references.join("、") || "当前阶段规则"}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <p className="font-semibold text-foreground">Hint Ladder</p>
-                  <div className="mt-2 space-y-2">
-                    {session.pedagogy_state.hint_ladder.map((hint) => (
-                      <div className="rounded-md bg-muted px-2 py-1" key={`${hint.action_type}-${hint.level}`}>
-                        <p className="font-mono text-[11px] text-muted-foreground">Level {hint.level} · {hint.disclosure_policy}</p>
-                        <p className="mt-1 text-foreground">{hint.message_template}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-border bg-background p-3">
-                  <p className="font-semibold text-foreground">最近决策轨迹</p>
-                  <div className="mt-2 space-y-2">
-                    {session.agent_decision_trace.slice(-3).map((trace) => (
-                      <div className="rounded-md bg-muted px-2 py-1" key={trace.trace_id}>
-                        <p className="font-mono text-[11px] text-muted-foreground">{trace.node} · {trace.stage}</p>
-                        <p className="mt-1 text-foreground">{trace.decision}</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          observe: {trace.observe.checkpoint_status} · decide: {trace.decide.selected_strategy}
-                        </p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          act: Level {trace.act.hint_ladder_levels.join("/")} · reflect: {trace.reflect.safety_mode}
-                        </p>
-                      </div>
-                    ))}
-                    {session.agent_decision_trace.length === 0 ? (
-                      <p className="text-muted-foreground">暂无决策轨迹。</p>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                智能体还未形成可展示的教学状态。
-              </p>
-            )}
-          </Panel>
-        </div>
+            <Link
+              className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
+              href="/cases"
+            >
+              选择病例
+            </Link>
 
-        <div className="mt-4">
-          <Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">
-            {preparedDynamicTeachingFocus && preparedDynamicTeachingFocus.patterns.length > 0 ? (
-              <div className="space-y-2 text-xs leading-5">
-                {preparedDynamicTeachingFocus.patterns.map((pattern) => (
-                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3" key={pattern.focus_id}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-semibold text-foreground">{pattern.title}</p>
-                      <span className="rounded-full border border-brand/20 bg-background px-2 py-0.5 text-[11px] text-brand">
-                        {pattern.severity}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-muted-foreground">{pattern.description}</p>
-                    <p className="mt-2 text-brand">{pattern.training_suggestion}</p>
-                    <p className="mt-2 text-[11px] text-muted-foreground">生成依据：{pattern.why_now}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                开始训练后，系统会根据当前会话进度动态派生下一步训练重点。
-              </p>
-            )}
-          </Panel>
-        </div>
-
-        <div className="mt-4">
-          <Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">
-            {preparedTeachingFocus && (
-              preparedTeachingFocus.learning_objectives.length > 0
-              || preparedTeachingFocus.common_error_patterns.length > 0
-              || preparedTeachingFocus.recommended_training_path.length > 0
-            ) ? (
-              <div className="space-y-3 text-xs leading-5">
-                {preparedTeachingFocus.learning_objectives.length > 0 ? (
-                  <div>
-                    <p className="font-semibold text-brand">学习目标</p>
-                    <ul className="mt-1 space-y-1 text-muted-foreground">
-                      {preparedTeachingFocus.learning_objectives.map((objective) => (
-                        <li key={objective}>· {objective}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {preparedTeachingFocus.common_error_patterns.length > 0 ? (
-                  <div>
-                    <p className="font-semibold text-brand">常见误区</p>
-                    <div className="mt-2 space-y-2">
-                      {preparedTeachingFocus.common_error_patterns.map((pattern) => (
-                        <div className="rounded-lg border border-dashed border-brand/20 bg-brand/5 p-2" key={pattern.pattern_id}>
-                          <p className="font-medium text-foreground">{pattern.title}</p>
-                          <p className="mt-1 text-muted-foreground">{pattern.focus}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {preparedTeachingFocus.recommended_training_path.length > 0 ? (
-                  <div>
-                    <p className="font-semibold text-brand">训练路径</p>
-                    <ol className="mt-1 space-y-1 text-muted-foreground">
-                      {preparedTeachingFocus.recommended_training_path.map((step, index) => (
-                        <li key={step}>{index + 1}. {step}</li>
-                      ))}
-                    </ol>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                该病例暂未配置学生可见的训练重点；训练评分仍以病例事实和 Rubric 为准。
-              </p>
-            )}
-          </Panel>
-        </div>
-
-        <div className="mt-4">
-          <Panel title="OSCE 流程导航" description="按完整训练闭环提示下一步操作。">
             <div className="space-y-2">
               {workflowStepDefinitions.map((step, index) => (
                 <div
@@ -2568,86 +2409,90 @@ function HomeContent() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 rounded-lg border border-brand/20 bg-brand/5 p-3">
+
+            <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
               <p className="text-sm font-semibold text-brand">下一步建议</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">{trainingSuggestion}</p>
             </div>
-          </Panel>
+          </div>
+        </Panel>
+        </div>
+        <div className="mt-4 border-t border-border pt-4">
+          <p className="text-xs font-medium text-muted-foreground">个人中心</p>
+          {authUser ? (
+            <div className="relative mt-2">
+              <button
+                aria-expanded={isAccountMenuOpen}
+                aria-haspopup="menu"
+                aria-label="打开个人中心菜单"
+                className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm font-medium text-foreground shadow-xs transition hover:border-brand/30 hover:bg-accent"
+                onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
+                type="button"
+              >
+                <span className="whitespace-nowrap">测试账号</span>
+                <span className="max-w-28 truncate text-xs text-muted-foreground">{authUser.display_name}</span>
+              </button>
+              {isAccountMenuOpen ? (
+                <div className="absolute bottom-12 left-0 z-50 w-full rounded-xl border border-border bg-white p-2 shadow-[0_18px_40px_rgba(20,20,19,0.14)]">
+                  <p className="px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    当前登录：<span className="font-medium text-foreground">{authUser.display_name}</span>
+                  </p>
+                  <Link
+                    className="block rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand/30 hover:bg-accent"
+                    href="/history"
+                  >
+                    训练记录
+                  </Link>
+                  <Link
+                    className="mt-2 block rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand/30 hover:bg-accent"
+                    href="/profile"
+                  >
+                    学习画像
+                  </Link>
+                  <button
+                    className="mt-2 inline-flex w-full items-center justify-center rounded-lg border border-[#B42318]/30 bg-[#FEF3F2] text-[#B42318] px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-[#FEE4E2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isSubmittingAuth}
+                    onClick={handleLogout}
+                    type="button"
+                  >
+                    退出登录
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <button
+              className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+              onClick={() => setIsAuthDialogOpen(true)}
+              type="button"
+            >
+              登录 / 注册
+            </button>
+          )}
         </div>
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-border bg-background px-5">
-          <div>
-            <p className="text-xs text-muted-foreground">OSCE 工作台 · 教学模拟，非真实诊疗建议</p>
-            <h2 className="text-base font-semibold">
-              {formatStage(session?.stage)} · {session?.case_title ?? "本地训练会话"}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {authUser ? (
-              <div className="relative">
-                <button
-                  aria-expanded={isAccountMenuOpen}
-                  aria-label="打开测试账号菜单"
-                  className="flex items-center gap-2 rounded-md border border-brand/20 bg-brand/10 px-4 py-2 text-sm font-medium text-brand shadow-xs transition hover:bg-brand/15"
-                  onClick={() => setIsAccountMenuOpen((isOpen) => !isOpen)}
-                  type="button"
-                >
-                  <span className="whitespace-nowrap">测试账号</span>
-                  <span className="max-w-28 truncate text-xs text-muted-foreground">{authUser.display_name}</span>
-                </button>
-                {isAccountMenuOpen ? (
-                  <div className="absolute right-0 top-12 z-50 w-56 rounded-xl border border-border bg-white p-2 shadow-xl">
-                    <p className="px-3 py-2 text-xs leading-5 text-muted-foreground">
-                      当前登录：<span className="font-medium text-foreground">{authUser.display_name}</span>
-                    </p>
-                    <Link
-                      className="block rounded-lg px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent"
-                      href="/history"
-                    >
-                      训练记录
-                    </Link>
-                    <Link
-                      className="block rounded-lg px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent"
-                      href="/profile"
-                    >
-                      学习画像
-                    </Link>
-                    <button
-                      className="mt-1 inline-flex w-full items-center justify-center rounded-lg border border-red-600 bg-red-600 text-white px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={isSubmittingAuth}
-                      onClick={handleLogout}
-                      type="button"
-                    >
-                      退出登录
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <button
-                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                onClick={() => setIsAuthDialogOpen(true)}
-                type="button"
-              >
-                登录 / 注册
-              </button>
-            )}
-          </div>
-        </header>
-
-        <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden p-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="flex min-h-0 flex-col rounded-xl border border-border bg-background shadow-xs">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden p-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="relative flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xs">
             <div className="border-b border-border p-4">
-              <p className="text-sm font-semibold">医患对话</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                已接入本地 FastAPI session API；支持问诊、查体、辅助检查、诊断提交与最小报告展示。
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">医患对话</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {session?.case_title ?? selectedCase?.title ?? "请先选择病例"}
+                  </p>
+                </div>
+                <div className="max-w-sm rounded-lg border border-brand/20 bg-brand/5 px-3 py-2 text-xs leading-5 text-brand">
+                  {trainingSuggestion}
+                </div>
+              </div>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto p-5">
-              {!session ? <CaseSelectionPrompt selectedCase={selectedCase} /> : null}
+            <div className="flex-1 space-y-4 overflow-y-auto p-5 pb-40">
+              {!session && !isCasePreparationPromptDismissed ? (
+                <CaseSelectionPrompt selectedCase={selectedCase} onDismiss={() => setIsCasePreparationPromptDismissed(true)} />
+              ) : null}
               <OpeningTaskCardMessage openingTaskCard={preparedOpeningTaskCard} />
               {chatMessages.map((message) => {
                 const isStudent = message.speaker === "student";
@@ -2673,77 +2518,176 @@ function HomeContent() {
               })}
             </div>
 
-            <div className="border-t border-border bg-background p-4">
-              <div className="rounded-xl border border-input bg-muted/50 p-3">
-                <form onSubmit={handleSubmit}>
-                  <label className="sr-only" htmlFor="history-question">
-                    输入下一句问诊问题
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || isCreating || isSending}
-                      id="history-question"
-                      onChange={(event) => setInputValue(event.target.value)}
-                      placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"
-                      value={inputValue}
-                    />
-                    <button
-                      className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!authUser || !selectedCaseId || isCreating || !inputValue.trim() || isSending}
-                      type="submit"
-                    >
-                      {isSending ? "发送中" : "发送问诊"}
-                    </button>
-                  </div>
-                </form>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                    onClick={() => setInputValue("什么时候开始疼的？")}
-                    type="button"
-                  >
-                    问现病史
-                  </button>
-                  <button
-                    className="rounded-md border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
-                    onClick={handleHintRequest}
-                    type="button"
-                  >{isRequestingHint ? "提示生成中" : "请求提示"}</button>
-                  {physicalExamOptions.map((examOption) => (
-                    <button
-                      className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!authUser || !selectedCaseId || isCreating || isRequestingExam}
-                      key={examOption.exam_code}
-                      onClick={() => handlePhysicalExamRequest(examOption.exam_code)}
-                      type="button"
-                    >
-                      {isRequestingExam ? "查体中" : `查体：${examOption.exam_name_cn}`}
-                    </button>
-                  ))}
-                  {auxiliaryTestOptions.map((testOption) => (
-                    <button
-                      className="rounded-md border border-border bg-background px-3 py-1.5 text-left text-xs font-medium shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!authUser || !selectedCaseId || isCreating || isRequestingTest}
-                      key={testOption.test_code}
-                      onClick={() => handleAuxiliaryTestRequest(testOption.test_code)}
-                      title={
-                        testOption.rules_out.length > 0
-                          ? `用于排除：${testOption.rules_out.join("、")}`
-                          : testOption.overuse_warning ?? undefined
-                      }
-                      type="button"
-                    >
-                      <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
-                      <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
-                        {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10">
+              <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
+                <button
+                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                  onClick={() => setInputValue("什么时候开始疼的？")}
+                  type="button"
+                >
+                  问现病史
+                </button>
+                <button
+                  className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
+                  onClick={handleHintRequest}
+                  type="button"
+                >{isRequestingHint ? "提示生成中" : "请求提示"}</button>
+                <button
+                  aria-expanded={openProcedureActionGroup === "physical_exam"}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={physicalExamOptions.length === 0}
+                  onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "physical_exam" ? null : "physical_exam")}
+                  type="button"
+                >
+                  查体项目
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                    {pendingPhysicalExamOptions.length}/{physicalExamOptions.length}
+                  </span>
+                </button>
+                <button
+                  aria-expanded={openProcedureActionGroup === "auxiliary_test"}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={auxiliaryTestOptions.length === 0}
+                  onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "auxiliary_test" ? null : "auxiliary_test")}
+                  type="button"
+                >
+                  辅助检查
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                    {pendingAuxiliaryTestOptions.length}/{auxiliaryTestOptions.length}
+                  </span>
+                </button>
+                <button
+                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                  onClick={() => setIsDiagnosisComposerOpen((isOpen) => !isOpen)}
+                  type="button"
+                >{isDiagnosisComposerOpen ? "收起诊断" : "填写诊断"}</button>
+                {openProcedureActionGroup === "physical_exam" ? (
+                  <div className="absolute bottom-11 left-0 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold">查体项目</p>
+                      <span className="rounded-full border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                        {completedPhysicalExamOptions.length} 已查看
                       </span>
-                    </button>
-                  ))}
+                    </div>
+                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                      {pendingPhysicalExamOptions.length > 0 ? (
+                        pendingPhysicalExamOptions.map((examOption) => (
+                          <button
+                            className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser || !selectedCaseId || isCreating || isRequestingExam}
+                            key={examOption.exam_code}
+                            onClick={() => handlePhysicalExamRequest(examOption.exam_code)}
+                            type="button"
+                          >
+                            <span className="block whitespace-nowrap">{isRequestingExam ? "查体中" : examOption.exam_name_cn}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                          当前查体项目都已查看。
+                        </p>
+                      )}
+                      {completedPhysicalExamOptions.length > 0 ? (
+                        <div className="border-t border-border pt-3">
+                          <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                          <div className="mt-2 grid gap-2">
+                            {completedPhysicalExamOptions.map((examOption) => (
+                              <button
+                                className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
+                                key={examOption.exam_code}
+                                onClick={() => setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`))}
+                                type="button"
+                              >
+                                查体：{examOption.exam_name_cn}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {openProcedureActionGroup === "auxiliary_test" ? (
+                  <div className="absolute bottom-11 left-32 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold">辅助检查</p>
+                      <span className="rounded-full border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                        {completedAuxiliaryTestOptions.length} 已查看
+                      </span>
+                    </div>
+                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                      {pendingAuxiliaryTestOptions.length > 0 ? (
+                        pendingAuxiliaryTestOptions.map((testOption) => (
+                          <button
+                            className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser || !selectedCaseId || isCreating || isRequestingTest}
+                            key={testOption.test_code}
+                            onClick={() => handleAuxiliaryTestRequest(testOption.test_code)}
+                            title={
+                              testOption.rules_out.length > 0
+                                ? `用于排除：${testOption.rules_out.join("、")}`
+                                : testOption.overuse_warning ?? undefined
+                            }
+                            type="button"
+                          >
+                            <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
+                            <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                              {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                          当前辅助检查都已查看。
+                        </p>
+                      )}
+                      {completedAuxiliaryTestOptions.length > 0 ? (
+                        <div className="border-t border-border pt-3">
+                          <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                          <div className="mt-2 grid gap-2">
+                            {completedAuxiliaryTestOptions.map((testOption) => (
+                              <button
+                                className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
+                                key={testOption.test_code}
+                                onClick={() => setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`))}
+                                type="button"
+                              >
+                                {testOption.category}：{testOption.test_name_cn}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <form className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]" onSubmit={handleSubmit}>
+                <label className="sr-only" htmlFor="history-question">
+                  输入下一句问诊问题
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
+                    disabled={!authUser || !selectedCaseId || isCreating || isSending}
+                    id="history-question"
+                    onChange={(event) => setInputValue(event.target.value)}
+                    placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"
+                    value={inputValue}
+                  />
+                  <button
+                    className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!authUser || !selectedCaseId || isCreating || !inputValue.trim() || isSending}
+                    type="submit"
+                  >
+                    {isSending ? "发送中" : "发送问诊"}
+                  </button>
                 </div>
-                <div className="mt-3 rounded-lg border border-border bg-background p-3">
-                  <div className="grid gap-2">
+              </form>
+              {isDiagnosisComposerOpen ? (
+                  <div className="pointer-events-auto mx-auto mt-3 max-w-3xl rounded-lg border border-border bg-background p-3 shadow-[0_10px_30px_rgba(20,20,19,0.12)]">
+                    <div className="grid gap-2">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <label className="sr-only" htmlFor="diagnosis-input">
                         输入最终诊断
@@ -2824,11 +2768,11 @@ function HomeContent() {
                     >
                       {isSubmittingDiagnosis ? "生成中" : "提交诊断"}
                     </button>
+                    </div>
                   </div>
-                </div>
-                <p className="mt-3 text-xs leading-5 text-muted-foreground">{statusText}</p>
-                {errorText ? <p className="mt-2 text-xs leading-5 text-red-600">{errorText}</p> : null}
-              </div>
+                ) : null}
+                <p className="mx-auto mt-2 max-w-3xl text-xs leading-5 text-muted-foreground">{statusText}</p>
+                {errorText ? <p className="mx-auto mt-2 max-w-3xl text-xs leading-5 text-red-600">{errorText}</p> : null}
             </div>
           </div>
 
@@ -2890,6 +2834,196 @@ function HomeContent() {
             </Panel>
 
             <CollapsiblePanel
+              title="教学重点与问诊提示"
+              description="展开查看训练重点、误区和推荐问诊。"
+              isOpen={rightPanelOpenStates.focus}
+              maxContentHeightClass="max-h-80"
+              onToggle={() => toggleRightPanel("focus")}
+            >
+              <div className="space-y-3 text-xs leading-5">
+                {session?.inquiry_guidance.priority ? (
+                  <p className="rounded-lg border border-[#B5812A]/30 bg-[#FFF8E8] p-3 text-[#8A5A00]">
+                    {session?.inquiry_guidance.priority}
+                  </p>
+                ) : (
+                  <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-muted-foreground">
+                    创建训练会话后，这里会展示推荐问诊顺序和示例问题。
+                  </p>
+                )}
+                {session ? (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {session.inquiry_guidance.suggested_questions.map((question) => (
+                        <button
+                          className="rounded-md border border-border bg-background px-3 py-1.5 text-left text-xs font-medium shadow-xs transition hover:bg-accent"
+                          key={question}
+                          onClick={() => setInputValue(question)}
+                          type="button"
+                        >
+                          {question}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {session.inquiry_guidance.categories.map((category) => (
+                        <span className="rounded-full bg-muted px-2 py-1 text-[11px] text-muted-foreground" key={category}>
+                          {category}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+
+                {preparedDynamicTeachingFocus && preparedDynamicTeachingFocus.patterns.length > 0 ? (
+                  <div className="space-y-2">
+                    {preparedDynamicTeachingFocus.patterns.map((pattern) => (
+                      <div className="rounded-lg border border-brand/20 bg-brand/5 p-3" key={pattern.focus_id}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-foreground">{pattern.title}</p>
+                          <span className="rounded-full border border-brand/20 bg-background px-2 py-0.5 text-[11px] text-brand">
+                            {pattern.severity}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-muted-foreground">{pattern.description}</p>
+                        <p className="mt-2 text-brand">{pattern.training_suggestion}</p>
+                        <p className="mt-2 text-[11px] text-muted-foreground">生成依据：{pattern.why_now}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {preparedTeachingFocus && (
+                  preparedTeachingFocus.learning_objectives.length > 0
+                  || preparedTeachingFocus.common_error_patterns.length > 0
+                  || preparedTeachingFocus.recommended_training_path.length > 0
+                ) ? (
+                  <div className="space-y-3 rounded-lg border border-border bg-background p-3">
+                    {preparedTeachingFocus.learning_objectives.length > 0 ? (
+                      <div>
+                        <p className="font-semibold text-brand">学习目标</p>
+                        <ul className="mt-1 space-y-1 text-muted-foreground">
+                          {preparedTeachingFocus.learning_objectives.map((objective) => (
+                            <li key={objective}>· {objective}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {preparedTeachingFocus.common_error_patterns.length > 0 ? (
+                      <div>
+                        <p className="font-semibold text-brand">常见误区</p>
+                        <div className="mt-2 space-y-2">
+                          {preparedTeachingFocus.common_error_patterns.map((pattern) => (
+                            <div className="rounded-lg border border-dashed border-brand/20 bg-brand/5 p-2" key={pattern.pattern_id}>
+                              <p className="font-medium text-foreground">{pattern.title}</p>
+                              <p className="mt-1 text-muted-foreground">{pattern.focus}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {preparedTeachingFocus.recommended_training_path.length > 0 ? (
+                      <div>
+                        <p className="font-semibold text-brand">训练路径</p>
+                        <ol className="mt-1 space-y-1 text-muted-foreground">
+                          {preparedTeachingFocus.recommended_training_path.map((step, index) => (
+                            <li key={step}>{index + 1}. {step}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              title="智能体教学详情"
+              description="展开查看教学策略、阶段检查点和决策轨迹。"
+              isOpen={rightPanelOpenStates.agent}
+              maxContentHeightClass="max-h-96"
+              onToggle={() => toggleRightPanel("agent")}
+            >
+              {session?.pedagogy_state ? (
+                <div className="space-y-3 text-xs leading-5">
+                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Active Goal</p>
+                    <p className="mt-1 font-semibold text-foreground">{session.pedagogy_state.active_learning_goal}</p>
+                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.next_best_action}</p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-lg border border-border bg-background p-3">
+                      <p className="text-muted-foreground">教学模式</p>
+                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.coaching_mode}</p>
+                    </div>
+                    <div className="rounded-lg border border-border bg-background p-3">
+                      <p className="text-muted-foreground">教学安全边界</p>
+                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.safety_mode}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="font-semibold text-foreground">阶段检查点</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <p className="text-muted-foreground">状态</p>
+                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.status}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">准备度</p>
+                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.readiness}</p>
+                      </div>
+                    </div>
+                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
+                      待补证据：{session.pedagogy_state.stage_checkpoint.pending_signal_ids.join("、") || "暂无"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="font-semibold text-foreground">教学计划</p>
+                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.teaching_plan.selected_strategy}</p>
+                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.teaching_plan.strategy_reason}</p>
+                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
+                      来源：{session.pedagogy_state.teaching_plan.source_references.join("、") || "当前阶段规则"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="font-semibold text-foreground">Hint Ladder</p>
+                    <div className="mt-2 space-y-2">
+                      {session.pedagogy_state.hint_ladder.map((hint) => (
+                        <div className="rounded-md bg-muted px-2 py-1" key={`${hint.action_type}-${hint.level}`}>
+                          <p className="font-mono text-[11px] text-muted-foreground">Level {hint.level} · {hint.disclosure_policy}</p>
+                          <p className="mt-1 text-foreground">{hint.message_template}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="font-semibold text-foreground">最近决策轨迹</p>
+                    <div className="mt-2 space-y-2">
+                      {session.agent_decision_trace.slice(-3).map((trace) => (
+                        <div className="rounded-md bg-muted px-2 py-1" key={trace.trace_id}>
+                          <p className="font-mono text-[11px] text-muted-foreground">{trace.node} · {trace.stage}</p>
+                          <p className="mt-1 text-foreground">{trace.decision}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            observe: {trace.observe.checkpoint_status} · decide: {trace.decide.selected_strategy}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            act: Level {trace.act.hint_ladder_levels.join("/")} · reflect: {trace.reflect.safety_mode}
+                          </p>
+                        </div>
+                      ))}
+                      {session.agent_decision_trace.length === 0 ? (
+                        <p className="text-muted-foreground">暂无决策轨迹。</p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+                  智能体还未形成可展示的教学状态。
+                </p>
+              )}
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
               title="已收集线索"
               description="来自问诊节点的结构化事实。"
               isOpen={rightPanelOpenStates.evidence}
@@ -2921,9 +3055,15 @@ function HomeContent() {
               {procedureItems.length > 0 ? (
                 <ul className="space-y-2 text-sm">
                   {procedureItems.map((item) => (
-                    <li className="rounded-md bg-muted px-3 py-2" key={item.id}>
-                      <p className="font-medium">{item.label}</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.result}</p>
+                    <li key={item.id}>
+                      <button
+                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-sm font-medium text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
+                        onClick={() => setSelectedProcedureResult(item)}
+                        type="button"
+                      >
+                        <span className="min-w-0 truncate">{item.label}</span>
+                        <span className="shrink-0 text-[11px] whitespace-nowrap">查看结果</span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -3111,28 +3251,32 @@ function HomeContent() {
       </section>
       <div className="fixed z-40" style={osceDockStyle}>
         {isOsceDockOpen ? (
-          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} rounded-2xl border border-border bg-white p-4 shadow-xl`}>
-            <div className="grid w-32 gap-2">
+          <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} rounded-2xl border border-border bg-white/95 p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)] backdrop-blur`}>
+            <div className="grid w-36 gap-2">
               <button
-                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "training" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
+                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "training" ? "border-brand bg-brand text-white" : "bg-background text-foreground"}`}
                 onClick={() => selectOsceDockMenuGroup("training")}
                 type="button"
               >
-                训练操作台
+                训练入口
               </button>
+              {isStudentRuntimeApiConfigEnabled ? (
+                <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
+                  API 配置
+                </button>
+              ) : null}
+              <Link className={osceDockActionClass} href="/safety">
+                安全声明
+              </Link>
+              <Link className={osceDockActionClass} href="/sources">
+                数据来源
+              </Link>
               <button
-                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "system" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
+                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "system" ? "border-brand bg-brand text-white" : "bg-background text-foreground"}`}
                 onClick={() => selectOsceDockMenuGroup("system")}
                 type="button"
               >
-                系统与配置
-              </button>
-              <button
-                className={`${osceDockMenuButtonClass} ${osceDockMenuGroup === "resources" ? "border-brand bg-brand text-white" : "bg-muted text-foreground"}`}
-                onClick={() => selectOsceDockMenuGroup("resources")}
-                type="button"
-              >
-                资料与说明
+                系统状态
               </button>
               <button
                 aria-label="关闭 OSCE 快捷入口"
@@ -3144,7 +3288,7 @@ function HomeContent() {
               </button>
             </div>
             {osceDockMenuGroup ? (
-              <div className={`absolute top-0 ${osceDockSubmenuAlignmentClass} w-44 rounded-2xl border border-border bg-white p-2 shadow-xl`}>
+              <div className={`absolute top-0 ${osceDockSubmenuAlignmentClass} w-48 rounded-2xl border border-border bg-white/95 p-2 shadow-[0_18px_45px_rgba(20,20,19,0.14)] backdrop-blur`}>
                 {osceDockMenuGroup === "training" ? (
                   <div className="grid gap-2">
                     <Link className={osceDockActionClass} href="/cases">
@@ -3175,23 +3319,14 @@ function HomeContent() {
                     </button>
                   </div>
                 ) : null}
-                {osceDockMenuGroup === "resources" ? (
-                  <div className="grid gap-2">
-                    <Link className={osceDockActionClass} href="/safety">
-                      安全声明
-                    </Link>
-                    <Link className={osceDockActionClass} href="/sources">
-                      数据来源
-                    </Link>
-                  </div>
-                ) : null}
                 {osceDockMenuGroup === "system" ? (
                   <div className="grid gap-2">
-                    {isStudentRuntimeApiConfigEnabled ? (
-                      <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
-                        API 配置
-                      </button>
-                    ) : null}
+                    <span className="rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-muted-foreground">
+                      {authUser ? "账号已登录" : "等待登录"}
+                    </span>
+                    <span className="rounded-lg border border-border bg-muted px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-muted-foreground">
+                      {selectedCase ? "病例已选择" : "未选择病例"}
+                    </span>
                   </div>
                 ) : null}
               </div>
@@ -3201,7 +3336,7 @@ function HomeContent() {
         <button
           aria-label="打开 OSCE 快捷入口"
           aria-pressed={isOsceDockOpen}
-          className="relative flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/30 bg-brand text-xs font-semibold tracking-[0.12em] text-white shadow-xl transition hover:bg-brand-hover active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
+          className="relative flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/35 bg-[#FFF8E8] text-brand shadow-[0_14px_32px_rgba(174,86,48,0.22)] transition hover:border-brand hover:bg-[#FFEED8] active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
           onClick={handleOsceDockButtonClick}
           onPointerCancel={handleOsceDockPointerCancel}
           onPointerDown={handleOsceDockPointerDown}
@@ -3209,10 +3344,34 @@ function HomeContent() {
           onPointerUp={handleOsceDockPointerUp}
           type="button"
         >
-          <span className="pointer-events-none absolute inset-1 rounded-full border-2 border-white bg-transparent" />
-          <span className="relative z-10">OSCE</span>
+          <span className="pointer-events-none absolute inset-1.5 rounded-full border border-brand/20 bg-background/80" />
+          <span className="relative z-10 flex size-8 items-center justify-center rounded-full bg-brand text-base font-semibold text-white">临</span>
+          <span className="pointer-events-none absolute right-2 top-2 size-2 rounded-full bg-[#86B993]" />
         </button>
       </div>
+      {selectedProcedureResult ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium text-brand">已查看结果</p>
+                <h2 className="mt-1 text-base font-semibold">{selectedProcedureResult.label}</h2>
+              </div>
+              <button
+                aria-label="关闭查体检查结果"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                onClick={() => setSelectedProcedureResult(null)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+            <p className="mt-4 rounded-xl border border-border bg-muted/50 p-4 text-sm leading-7 text-foreground">
+              {selectedProcedureResult.result}
+            </p>
+          </div>
+        </div>
+      ) : null}
       {isPatientProfileOpen && preparedPatientProfile ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl">
@@ -3434,7 +3593,7 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
-        </div>
+      </div>
       </div>
       {!isCheckingAuth && isAuthDialogOpen ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur">

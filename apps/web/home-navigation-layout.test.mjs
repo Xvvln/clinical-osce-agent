@@ -18,12 +18,6 @@ const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl,
 const webDockerfileSource = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
 const webReadmeSource = readFileSync(new URL("./README.md", import.meta.url), "utf8");
 
-function getHeaderSource() {
-  const headerMatch = pageSource.match(/<header[\s\S]*?<\/header>/);
-  assert.ok(headerMatch, "home page should render a top header");
-  return headerMatch[0];
-}
-
 function getInteractiveElementsWithLabel(source, label) {
   return (source.match(/<(?:button|Link|a)\b[\s\S]*?<\/(?:button|Link|a)>/g) ?? []).filter((element) => element.includes(label));
 }
@@ -39,13 +33,11 @@ function assertInteractiveLabelsDoNotWrap(sourceName, source, labels) {
   }
 }
 
-test("home header keeps safety and source links out of the top navigation", () => {
-  const headerSource = getHeaderSource();
-
-  assert.doesNotMatch(headerSource, /href="\/safety"/);
-  assert.doesNotMatch(headerSource, /href="\/sources"/);
-  assert.doesNotMatch(headerSource, />\s*安全声明\s*<\/Link>/);
-  assert.doesNotMatch(headerSource, />\s*数据来源\s*<\/Link>/);
+test("home shell removes the top navigation bar", () => {
+  assert.doesNotMatch(pageSource, /<header[\s\S]*?<\/header>/);
+  assert.doesNotMatch(pageSource, /className="flex h-12 shrink-0 items-center justify-end border-b border-border bg-background px-4"/);
+  assert.doesNotMatch(pageSource, /href="\/safety"[\s\S]*?>\s*安全声明\s*<\/Link>[\s\S]*<header/);
+  assert.doesNotMatch(pageSource, /href="\/sources"[\s\S]*?>\s*数据来源\s*<\/Link>[\s\S]*<header/);
 });
 
 test("home page does not render large safety and source panels", () => {
@@ -86,6 +78,8 @@ test("student action buttons keep Chinese labels on one line", () => {
     "关闭菜单",
     "退出登录",
     "关闭",
+    "查体项目",
+    "辅助检查",
     "保存配置",
     "测试连通性",
   ]);
@@ -97,8 +91,8 @@ test("student action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("sources page", sourcesSource, ["返回工作台"]);
 });
 
-test("home page replaces the Next dev ball with an OSCE floating dock", () => {
-  assert.match(pageSource, /type OsceDockMenuGroup = "training" \| "resources" \| "system";/);
+test("home page replaces the Next dev ball with a polished OSCE floating dock", () => {
+  assert.match(pageSource, /type OsceDockMenuGroup = "training" \| "system";/);
   assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);
   assert.match(pageSource, /const \[isOsceDockOpen, setIsOsceDockOpen\] = useState\(false\);/);
   assert.match(pageSource, /const \[osceDockMenuGroup, setOsceDockMenuGroup\] = useState<OsceDockMenuGroup \| null>\(null\);/);
@@ -112,14 +106,13 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /if \(!isOsceDockOpen\) \{[\s\S]*?setOsceDockMenuGroup\(null\);[\s\S]*?\}/);
   assert.doesNotMatch(pageSource, />\s*OSCE 快捷入口\s*</);
   assert.doesNotMatch(pageSource, /OSCE Dock/);
-  assert.match(pageSource, /bg-white p-4 shadow-xl/);
-  assert.match(pageSource, /<div className="grid w-32 gap-2">/);
-  assert.match(pageSource, />\s*训练操作台\s*<\/button>[\s\S]*?>\s*系统与配置\s*<\/button>[\s\S]*?>\s*资料与说明\s*<\/button>[\s\S]*?>\s*关闭菜单\s*<\/button>/);
-  assert.doesNotMatch(pageSource, />\s*训练\s*<\/button>[\s\S]*?>\s*资料\s*<\/button>[\s\S]*?>\s*系统\s*<\/button>/);
-  assert.match(pageSource, /absolute top-0 \$\{osceDockSubmenuAlignmentClass\} w-44 rounded-2xl border border-border bg-white p-2 shadow-xl/);
+  assert.match(pageSource, /bg-white\/95 p-3 shadow-\[0_18px_45px_rgba\(20,20,19,0\.16\)\] backdrop-blur/);
+  assert.match(pageSource, /<div className="grid w-36 gap-2">/);
+  assert.match(pageSource, />\s*训练入口\s*<\/button>[\s\S]*?>\s*API 配置\s*<\/button>[\s\S]*href="\/safety"[\s\S]*?>\s*安全声明\s*<\/Link>[\s\S]*href="\/sources"[\s\S]*?>\s*数据来源\s*<\/Link>[\s\S]*?>\s*系统状态\s*<\/button>[\s\S]*?>\s*关闭菜单\s*<\/button>/);
+  assert.doesNotMatch(pageSource, />\s*训练操作台\s*<\/button>[\s\S]*?>\s*系统与配置\s*<\/button>[\s\S]*?>\s*资料与说明\s*<\/button>/);
+  assert.match(pageSource, /absolute top-0 \$\{osceDockSubmenuAlignmentClass\} w-48 rounded-2xl border border-border bg-white\/95 p-2 shadow-\[0_18px_45px_rgba\(20,20,19,0\.14\)\] backdrop-blur/);
   assert.match(pageSource, /osceDockMenuGroup \? \(/);
   assert.match(pageSource, /selectOsceDockMenuGroup\("training"\)/);
-  assert.match(pageSource, /selectOsceDockMenuGroup\("resources"\)/);
   assert.match(pageSource, /selectOsceDockMenuGroup\("system"\)/);
   assert.match(pageSource, /href="\/cases"/);
   assert.match(pageSource, /href="\/history"/);
@@ -135,9 +128,13 @@ test("home page replaces the Next dev ball with an OSCE floating dock", () => {
   assert.match(pageSource, /onClick=\{\(\) => void handleHintRequest\(\)\}/);
   assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
   assert.match(pageSource, /const osceDockActionClass = "[^"]*whitespace-nowrap/);
-  assert.match(pageSource, /absolute inset-1 rounded-full border-2 border-white bg-transparent/);
-  assert.doesNotMatch(pageSource, /absolute -inset-2 rounded-full border-2 border-white/);
-  assert.match(pageSource, /relative flex size-14/);
+  assert.match(pageSource, /rounded-full border border-brand\/35 bg-\[#FFF8E8\] text-brand shadow-\[0_14px_32px_rgba\(174,86,48,0\.22\)\]/);
+  assert.match(pageSource, /absolute inset-1\.5 rounded-full border border-brand\/20 bg-background\/80/);
+  assert.match(pageSource, /relative z-10 flex size-8 items-center justify-center rounded-full bg-brand text-base font-semibold text-white/);
+  assert.match(pageSource, />\s*临\s*<\/span>/);
+  assert.match(pageSource, /absolute right-2 top-2 size-2 rounded-full bg-\[#86B993\]/);
+  assert.doesNotMatch(pageSource, /absolute inset-2 rounded-full border-2 border-white\/80 bg-transparent/);
+  assert.doesNotMatch(pageSource, /relative z-10">OSCE<\/span>/);
 });
 
 test("home OSCE dock opens student API config dialog instead of navigating directly to admin", () => {
@@ -196,7 +193,7 @@ test("home production deployment hides student runtime API config entry", () => 
   assert.match(webDockerfileSource, /NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=\$\{NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE\}/);
 });
 
-test("home page exposes the agent pedagogy state card", () => {
+test("home page keeps agent pedagogy details behind a collapsible panel", () => {
   assert.match(pageSource, /type TeachingPlan = Readonly<\{/);
   assert.match(pageSource, /type StageCheckpoint = Readonly<\{/);
   assert.match(pageSource, /type HintLadderStep = Readonly<\{/);
@@ -209,7 +206,10 @@ test("home page exposes the agent pedagogy state card", () => {
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
   assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
-  assert.match(pageSource, /<Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">/);
+  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "procedures" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /agent: false,/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*description="展开查看教学策略、阶段检查点和决策轨迹。"[\s\S]*isOpen=\{rightPanelOpenStates\.agent\}/);
+  assert.doesNotMatch(pageSource, /<Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">/);
   assert.match(pageSource, /session\.pedagogy_state\.active_learning_goal/);
   assert.match(pageSource, /session\.pedagogy_state\.next_best_action/);
   assert.match(pageSource, /session\.pedagogy_state\.coaching_mode/);
@@ -229,19 +229,53 @@ test("home page exposes the agent pedagogy state card", () => {
   assert.match(pageSource, /教学安全边界/);
 });
 
-test("home header uses a test account menu for profile actions", () => {
-  const headerSource = getHeaderSource();
+test("home left sidebar uses a personal center menu for profile actions", () => {
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
+  const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
 
   assert.match(pageSource, /const \[isAccountMenuOpen, setIsAccountMenuOpen\] = useState\(false\);/);
-  assert.match(headerSource, /aria-label="打开测试账号菜单"/);
-  assert.match(headerSource, /setIsAccountMenuOpen\(\(isOpen\) => !isOpen\)/);
-  assert.match(headerSource, />\s*测试账号\s*</);
-  assert.match(headerSource, /className="block rounded-lg px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent"[\s\S]*?href="\/history"[\s\S]*?>\s*训练记录\s*<\/Link>/);
-  assert.match(headerSource, /className="block rounded-lg px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:bg-accent"[\s\S]*?href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
-  assert.match(headerSource, /onClick=\{handleLogout\}/);
-  assert.match(headerSource, /border-red-600 bg-red-600 text-white/);
-  assert.match(headerSource, /inline-flex w-full items-center justify-center/);
-  assert.doesNotMatch(headerSource, />\s*退出登录\s*<\/button>[\s\S]*\{authUser \? \(/);
+  assert.notEqual(leftAsideIndex, -1);
+  assert.match(leftAsideSource, />\s*个人中心\s*</);
+  assert.match(leftAsideSource, /aria-label="打开个人中心菜单"/);
+  assert.match(leftAsideSource, /aria-haspopup="menu"/);
+  assert.match(leftAsideSource, /setIsAccountMenuOpen\(\(isOpen\) => !isOpen\)/);
+  assert.match(leftAsideSource, />\s*测试账号\s*</);
+  assert.match(leftAsideSource, /className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm font-medium text-foreground shadow-xs transition hover:border-brand\/30 hover:bg-accent"/);
+  assert.match(leftAsideSource, /className="block rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand\/30 hover:bg-accent"[\s\S]*?href="\/history"[\s\S]*?>\s*训练记录\s*<\/Link>/);
+  assert.match(leftAsideSource, /className="mt-2 block rounded-lg border border-border bg-background px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition hover:border-brand\/30 hover:bg-accent"[\s\S]*?href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
+  assert.match(leftAsideSource, /onClick=\{handleLogout\}/);
+  assert.match(leftAsideSource, /border-\[#B42318\]\/30 bg-\[#FEF3F2\] text-\[#B42318\]/);
+  assert.match(leftAsideSource, /inline-flex w-full items-center justify-center/);
+  assert.doesNotMatch(leftAsideSource, />\s*退出登录\s*<\/button>[\s\S]*\{authUser \? \(/);
+});
+
+test("home shell keeps the student-facing brand compact", () => {
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
+  const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
+
+  assert.notEqual(leftAsideIndex, -1);
+  assert.match(leftAsideSource, /<h1 className="text-xl font-semibold tracking-tight">临境 OSCE 智能体<\/h1>/);
+  assert.match(leftAsideSource, /基于公开 OSCE 病例数据的诊断学临床思维训练/);
+  assert.doesNotMatch(leftAsideSource, /uppercase tracking-\[0\.24em\][\s\S]*?>OSCE<\/p>/);
+  assert.doesNotMatch(leftAsideSource, /TraceOSCE/);
+  assert.doesNotMatch(leftAsideSource, /训练工作台/);
+});
+
+test("home shell starts directly with the training workspace after removing the navigation bar", () => {
+  const contentShellIndex = pageSource.indexOf('<div className="flex h-full min-h-0">');
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const workspaceGridIndex = pageSource.indexOf('<div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden p-3 xl:grid-cols-[minmax(0,1fr)_320px]">');
+
+  assert.notEqual(contentShellIndex, -1);
+  assert.notEqual(leftAsideIndex, -1);
+  assert.notEqual(workspaceGridIndex, -1);
+  assert.ok(contentShellIndex < leftAsideIndex);
+  assert.ok(leftAsideIndex < workspaceGridIndex);
+  assert.doesNotMatch(pageSource, /<header[\s\S]*?<\/header>/);
+  assert.doesNotMatch(pageSource, /OSCE 工作台 · 教学模拟，非真实诊疗建议/);
+  assert.doesNotMatch(pageSource, /<h2 className="text-base font-semibold">\s*\{formatStage\(session\?\.stage\)\}/);
 });
 
 test("home OSCE dock can be dragged and snaps to the viewport edge", () => {
@@ -335,10 +369,12 @@ test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportSource, /证据图谱仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。/);
 });
 
-test("home header links to the learning profile page", () => {
-  const headerSource = getHeaderSource();
+test("home personal center links to the learning profile page", () => {
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
+  const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
 
-  assert.match(headerSource, /href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
+  assert.match(leftAsideSource, /href="\/profile"[\s\S]*?>\s*学习画像\s*<\/Link>/);
 });
 
 test("profile page reads backend aggregated learning profile without per-session report requests", () => {
@@ -393,7 +429,7 @@ test("home workspace exposes OSCE workflow navigation and next-step guidance", (
   assert.match(pageSource, /function getWorkflowStepStatus\(stepKey: WorkflowStepDefinition\["key"\], session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): StageStatus/);
   assert.match(pageSource, /function getNextWorkflowSuggestion\(session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): string/);
   assert.match(pageSource, /"请先询问起病、部位、性质、程度和伴随症状。"/);
-  assert.match(pageSource, /<Panel title="OSCE 流程导航" description="按完整训练闭环提示下一步操作。">/);
+  assert.match(pageSource, /<Panel title="训练导航" description="当前病例、阶段和下一步。">/);
   assert.match(pageSource, /<p className="text-sm font-semibold text-brand">下一步建议<\/p>/);
 });
 
@@ -424,10 +460,13 @@ test("home workspace starts without a default case and only prepares a case afte
   assert.match(pageSource, /const \[selectedCaseId, setSelectedCaseId\] = useState<string \| null>\(initialCaseId\);/);
   assert.doesNotMatch(pageSource, /searchParams\.get\("case_id"\) \?\? DEFAULT_CASE_ID/);
   assert.match(pageSource, /const selectedCase = useMemo\([\s\S]*?selectedCaseId \? caseOptionsState\.find\(\(caseOption\) => caseOption\.id === selectedCaseId\) \?\? null : null/);
+  assert.match(pageSource, /const \[isCasePreparationPromptDismissed, setIsCasePreparationPromptDismissed\] = useState\(false\);/);
+  assert.match(pageSource, /setIsCasePreparationPromptDismissed\(false\);/);
   assert.match(pageSource, /function CaseSelectionPrompt\(/);
-  assert.match(pageSource, /<div className="flex justify-center">[\s\S]*?<div className="w-full max-w-xl rounded-xl/);
+  assert.match(pageSource, /aria-label="关闭训练准备提示"/);
+  assert.match(pageSource, /<div className="flex justify-center">[\s\S]*?<div className="relative w-full max-w-xl rounded-xl/);
   assert.match(pageSource, /text-center/);
-  assert.match(pageSource, /<CaseSelectionPrompt selectedCase=\{selectedCase\} \/>/);
+  assert.match(pageSource, /\{!session && !isCasePreparationPromptDismissed \? \([\s\S]*<CaseSelectionPrompt[\s\S]*selectedCase=\{selectedCase\}[\s\S]*onDismiss=\{\(\) => setIsCasePreparationPromptDismissed\(true\)\}[\s\S]*\/>[\s\S]*\) : null\}/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
   assert.match(pageSource, /const preparedOpeningTaskCard = session\?\.opening_task_card \?\? selectedCase\?\.openingTaskCard \?\? null;/);
   assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>/);
@@ -450,23 +489,25 @@ test("home workspace creates a new backend session only after a selected-case tr
 
 
 test("home case card points users to the case selection page", () => {
-  assert.match(pageSource, /<Panel[\s\S]*title="病例信息与选择"[\s\S]*description="先选择病例，再开始 OSCE 训练。"/);
+  assert.match(pageSource, /<Panel[\s\S]*title="训练导航"[\s\S]*description="当前病例、阶段和下一步。"/);
   assert.match(pageSource, />当前选择<\/p>/);
   assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
   assert.doesNotMatch(pageSource, /const \[isCaseSelectorOpen, setIsCaseSelectorOpen\]/);
   assert.doesNotMatch(pageSource, /caseOptionsState\.map\(\(caseOption\) =>/);
-  assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="当前病例"/);
+  assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例信息与选择"/);
   assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例选择"/);
 });
 
 
 test("home right sidebar starts with progress and keeps collapsible cards bounded", () => {
-  assert.match(pageSource, /type RightPanelKey = "evidence" \| "procedures" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "procedures" \| "hypotheses" \| "report";/);
   assert.match(pageSource, /function CollapsiblePanel\(/);
   assert.match(pageSource, /maxContentHeightClass = "max-h-64"/);
   assert.match(pageSource, /overflow-y-auto pr-1/);
   assert.match(pageSource, /const \[rightPanelOpenStates, setRightPanelOpenStates\] = useState<Record<RightPanelKey, boolean>>/);
+  assert.match(pageSource, /focus: false,/);
+  assert.match(pageSource, /agent: false,/);
   assert.match(pageSource, /report: true,/);
   assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) =>/);
 
@@ -479,30 +520,59 @@ test("home right sidebar starts with progress and keeps collapsible cards bounde
   assert.ok(progressPanelIndex < evidencePanelIndex);
 
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="已收集线索"[\s\S]*maxContentHeightClass="max-h-64"/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*maxContentHeightClass="max-h-80"/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*maxContentHeightClass="max-h-96"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="查体与检查申请"[\s\S]*maxContentHeightClass="max-h-64"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"[\s\S]*maxContentHeightClass="max-h-48"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="评分报告"[\s\S]*maxContentHeightClass="max-h-96"/);
 });
 
 
-test("home sidebars prioritize guidance, case context, progress, and evidence flow", () => {
-  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-80 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:block">');
-  const guidancePanelIndex = pageSource.indexOf('title="问诊引导"', leftAsideIndex);
-  const casePanelIndex = pageSource.indexOf('title="病例信息与选择"', leftAsideIndex);
-  const workflowPanelIndex = pageSource.indexOf('title="OSCE 流程导航"', leftAsideIndex);
+test("home sidebars prioritize a compact student task flow", () => {
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
+  const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
+  const navigationPanelIndex = pageSource.indexOf('title="训练导航"', leftAsideIndex);
+  const currentCaseIndex = pageSource.indexOf(">当前选择</p>", leftAsideIndex);
+  const nextSuggestionIndex = pageSource.indexOf(">下一步建议</p>", leftAsideIndex);
   assert.notEqual(leftAsideIndex, -1);
-  assert.notEqual(guidancePanelIndex, -1);
-  assert.notEqual(casePanelIndex, -1);
-  assert.notEqual(workflowPanelIndex, -1);
-  assert.ok(guidancePanelIndex < casePanelIndex);
-  assert.ok(casePanelIndex < workflowPanelIndex);
+  assert.notEqual(navigationPanelIndex, -1);
+  assert.notEqual(currentCaseIndex, -1);
+  assert.notEqual(nextSuggestionIndex, -1);
+  assert.doesNotMatch(leftAsideSource, /title="问诊引导"|title="智能体状态"|title="当前训练重点"|title="训练重点"|title="OSCE 流程导航"/);
 
   const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">');
+  const focusPanelIndex = pageSource.indexOf('title="教学重点与问诊提示"', rightAsideIndex);
+  const agentPanelIndex = pageSource.indexOf('title="智能体教学详情"', rightAsideIndex);
   const procedurePanelIndex = pageSource.indexOf('title="查体与检查申请"', rightAsideIndex);
   const hypothesisPanelIndex = pageSource.indexOf('title="诊断假设"', rightAsideIndex);
+  assert.notEqual(focusPanelIndex, -1);
+  assert.notEqual(agentPanelIndex, -1);
   assert.notEqual(procedurePanelIndex, -1);
   assert.notEqual(hypothesisPanelIndex, -1);
+  assert.ok(focusPanelIndex < agentPanelIndex);
+  assert.ok(agentPanelIndex < procedurePanelIndex);
   assert.ok(procedurePanelIndex < hypothesisPanelIndex);
+});
+
+test("home workspace keeps the composer sticky and final diagnosis collapsed", () => {
+  assert.match(pageSource, /<main className="relative h-screen overflow-hidden bg-muted\/40 text-foreground">/);
+  assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "h-full pointer-events-none blur-sm" : "h-full"\}>/);
+  assert.match(pageSource, /<div className="flex h-full min-h-0">/);
+  assert.match(pageSource, /className="flex-1 space-y-4 overflow-y-auto p-5 pb-40"/);
+  assert.match(pageSource, /const \[isDiagnosisComposerOpen, setIsDiagnosisComposerOpen\] = useState\(false\);/);
+  assert.match(pageSource, /className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10"/);
+  assert.match(pageSource, /className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
+  assert.match(pageSource, /className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"/);
+  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  assert.notEqual(quickActionRowIndex, -1);
+  assert.notEqual(inputComposerIndex, -1);
+  assert.ok(quickActionRowIndex < inputComposerIndex);
+  assert.doesNotMatch(pageSource, /rounded-xl border border-input bg-muted\/50 p-3/);
+  assert.doesNotMatch(pageSource, /sticky bottom-0 z-20 bg-gradient-to-t/);
+  assert.match(pageSource, />\{isDiagnosisComposerOpen \? "收起诊断" : "填写诊断"\}<\/button>/);
+  assert.match(pageSource, /\{isDiagnosisComposerOpen \? \([\s\S]*id="diagnosis-input"[\s\S]*\) : null\}/);
 });
 
 test("home quick actions allow realistic sequence jumps but show teaching reminders", () => {
@@ -516,11 +586,37 @@ test("home quick actions allow realistic sequence jumps but show teaching remind
   assert.doesNotMatch(pageSource, /canRequestAuxiliaryTest/);
 });
 
+test("home quick actions group procedure choices and open viewed results in a modal", () => {
+  assert.match(pageSource, /type ProcedureActionGroup = "physical_exam" \| "auxiliary_test";/);
+  assert.match(pageSource, /const \[openProcedureActionGroup, setOpenProcedureActionGroup\] = useState<ProcedureActionGroup \| null>\(null\);/);
+  assert.match(pageSource, /const \[selectedProcedureResult, setSelectedProcedureResult\] = useState<ProcedureResult \| null>\(null\);/);
+  assert.match(pageSource, /const requestedExamCodeSet = useMemo\(\(\) => new Set\(session\?\.requested_exams \?\? \[\]\), \[session\?\.requested_exams\]\);/);
+  assert.match(pageSource, /const requestedTestCodeSet = useMemo\(\(\) => new Set\(session\?\.requested_tests \?\? \[\]\), \[session\?\.requested_tests\]\);/);
+  assert.match(pageSource, /const pendingPhysicalExamOptions = physicalExamOptions\.filter\(\(examOption\) => !requestedExamCodeSet\.has\(examOption\.exam_code\)\);/);
+  assert.match(pageSource, /const completedPhysicalExamOptions = physicalExamOptions\.filter\(\(examOption\) => requestedExamCodeSet\.has\(examOption\.exam_code\)\);/);
+  assert.match(pageSource, /const pendingAuxiliaryTestOptions = auxiliaryTestOptions\.filter\(\(testOption\) => !requestedTestCodeSet\.has\(testOption\.test_code\)\);/);
+  assert.match(pageSource, /const completedAuxiliaryTestOptions = auxiliaryTestOptions\.filter\(\(testOption\) => requestedTestCodeSet\.has\(testOption\.test_code\)\);/);
+  assert.match(pageSource, /aria-expanded=\{openProcedureActionGroup === "physical_exam"\}[\s\S]*?>\s*查体项目/);
+  assert.match(pageSource, /aria-expanded=\{openProcedureActionGroup === "auxiliary_test"\}[\s\S]*?>\s*辅助检查/);
+  assert.match(pageSource, /openProcedureActionGroup === "physical_exam" \? \(/);
+  assert.match(pageSource, /openProcedureActionGroup === "auxiliary_test" \? \(/);
+  assert.match(pageSource, /className="absolute bottom-11 left-0 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-\[0_18px_45px_rgba\(20,20,19,0\.16\)\]"/);
+  assert.match(pageSource, /className="absolute bottom-11 left-32 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-\[0_18px_45px_rgba\(20,20,19,0\.16\)\]"/);
+  assert.match(pageSource, /className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1"/);
+  assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedPhysicalExamOptions\.map/);
+  assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedAuxiliaryTestOptions\.map/);
+  assert.match(pageSource, /setSelectedProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\)/);
+  assert.match(pageSource, /setSelectedProcedureResult\(getProcedureResultById\(`test:\$\{testOption\.test_code\}`\)\)/);
+  assert.match(pageSource, /aria-label="关闭查体检查结果"/);
+  assert.match(pageSource, /selectedProcedureResult\.result/);
+  assert.doesNotMatch(pageSource, /<p className="mt-1 text-xs leading-5 text-muted-foreground">\{item\.result\}<\/p>/);
+});
+
 test("home quick actions are available after a case is selected and before a backend session exists", () => {
   assert.match(pageSource, /const physicalExamOptions = session\?\.physical_exam_options \?\? selectedCase\?\.physicalExamOptions \?\? \[\];/);
   assert.match(pageSource, /const auxiliaryTestOptions = session\?\.auxiliary_test_options \?\? selectedCase\?\.auxiliaryTestOptions \?\? \[\];/);
-  assert.match(pageSource, /physicalExamOptions\.map/);
-  assert.match(pageSource, /auxiliaryTestOptions\.map/);
+  assert.match(pageSource, /pendingPhysicalExamOptions\.map/);
+  assert.match(pageSource, /pendingAuxiliaryTestOptions\.map/);
   assert.doesNotMatch(pageSource, /session\?\.physical_exam_options\.map/);
   assert.doesNotMatch(pageSource, /session\?\.auxiliary_test_options\.map/);
 });
@@ -619,7 +715,7 @@ test("home current case card can show student-visible patient profile modal", ()
 });
 
 
-test("home workspace renders opening task card in the dialogue area and inquiry guidance in the sidebar", () => {
+test("home workspace renders opening task card and keeps teaching guidance in collapsible details", () => {
   assert.match(pageSource, /type OpeningTaskCard = Readonly<\{/);
   assert.match(pageSource, /opening_task_card: OpeningTaskCard;/);
   assert.match(pageSource, /type CaseTeachingFocus = Readonly<\{/);
@@ -628,10 +724,11 @@ test("home workspace renders opening task card in the dialogue area and inquiry 
   assert.match(pageSource, /dynamic_teaching_focus: DerivedTeachingFocus;/);
   assert.match(pageSource, /const preparedTeachingFocus = session\?\.teaching_focus \?\? selectedCase\?\.teachingFocus \?\? null;/);
   assert.match(pageSource, /const preparedDynamicTeachingFocus = session\?\.dynamic_teaching_focus \?\? null;/);
-  assert.match(pageSource, /<Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">/);
+  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*description="展开查看训练重点、误区和推荐问诊。"/);
   assert.match(pageSource, /preparedDynamicTeachingFocus\.patterns\.map/);
   assert.match(pageSource, /pattern\.why_now/);
-  assert.match(pageSource, /<Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">/);
+  assert.doesNotMatch(pageSource, /<Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">/);
+  assert.doesNotMatch(pageSource, /<Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">/);
   assert.match(pageSource, /preparedTeachingFocus\.learning_objectives\.map/);
   assert.match(pageSource, /preparedTeachingFocus\.common_error_patterns\.map/);
   assert.match(pageSource, /preparedTeachingFocus\.recommended_training_path\.map/);
@@ -639,11 +736,18 @@ test("home workspace renders opening task card in the dialogue area and inquiry 
   assert.match(pageSource, /inquiry_guidance: InquiryGuidance;/);
   assert.match(pageSource, /function OpeningTaskCardMessage\(/);
   assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>[\s\S]*\{chatMessages\.map/);
+  const openingTaskCardFunctionSource = pageSource.slice(
+    pageSource.indexOf("function OpeningTaskCardMessage"),
+    pageSource.indexOf("function HomeContent"),
+  );
+  assert.match(pageSource, /className="mx-auto w-full max-w-2xl rounded-2xl border border-brand\/30 bg-\[#FFF8E8\] p-4"/);
+  assert.doesNotMatch(openingTaskCardFunctionSource, /shadow-/);
+  assert.match(pageSource, /className="mt-3 flex flex-wrap gap-2 text-xs leading-5"/);
   assert.match(pageSource, /openingTaskCard\.role/);
   assert.match(pageSource, /openingTaskCard\.scenario/);
   assert.match(pageSource, /openingTaskCard\.tasks\.map/);
   assert.doesNotMatch(pageSource, /<Panel title="开局任务卡"/);
-  assert.match(pageSource, /<Panel title="问诊引导" description="优先完成不会泄露诊断的核心病史采集。">/);
+  assert.doesNotMatch(pageSource, /<Panel title="问诊引导" description="优先完成不会泄露诊断的核心病史采集。">/);
   assert.match(pageSource, /session\?\.inquiry_guidance\.priority/);
   assert.match(pageSource, /session\.inquiry_guidance\.suggested_questions\.map/);
   assert.match(pageSource, /onClick=\{\(\) => setInputValue\(question\)\}/);
@@ -784,7 +888,7 @@ test("home page renders login/register dialog on the existing workspace", () => 
   assert.match(pageSource, /const \[authPassword, setAuthPassword\] = useState\(DEFAULT_AUTH_PASSWORD\);/);
   assert.match(pageSource, /setAuthEmail\(DEFAULT_AUTH_EMAIL\);/);
   assert.match(pageSource, /setAuthPassword\(DEFAULT_AUTH_PASSWORD\);/);
-  assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "pointer-events-none blur-sm"/);
+  assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "h-full pointer-events-none blur-sm" : "h-full"\}>/);
   assert.match(pageSource, /\{!isCheckingAuth && isAuthDialogOpen \? \(/);
   assert.match(pageSource, /backdrop-blur/);
   assert.match(pageSource, />\s*登录 \/ 注册\s*</);
