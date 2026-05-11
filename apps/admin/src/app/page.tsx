@@ -335,6 +335,20 @@ type AgentDecisionPayload = Readonly<{
   pedagogyState: Record<string, unknown> | null;
 }>;
 
+type AgentTurnPayload = Readonly<{
+  turn_id: string;
+  student_message: string;
+  reply: string;
+  reply_role: string;
+  current_intent: string;
+  turn_policy: string;
+  turn_analysis: Record<string, unknown> | null;
+  agent_path: readonly string[];
+  revealed_fact_id: string | null;
+  source_references: readonly string[];
+  safety_flags: readonly string[];
+}>;
+
 type AdminCaseSummary = Readonly<{
   case_id: string;
   case_title: string;
@@ -701,6 +715,21 @@ function getRecordValue(value: unknown): Record<string, unknown> | null {
   return isRecordValue(value) ? value : null;
 }
 
+function getStringValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function getNullableStringValue(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function getStringArrayValue(record: Record<string, unknown>, key: string): readonly string[] {
+  const value = record[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function formatAgentDecisionValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value.length > 0 ? value.map((item) => formatAgentDecisionValue(item)).join("、") : "暂无";
@@ -721,6 +750,26 @@ function getAgentDecisionPayload(event: TrainingEventRecord): AgentDecisionPaylo
   return {
     latestDecision: getRecordValue(event.payload.latest_decision),
     pedagogyState: getRecordValue(event.payload.pedagogy_state),
+  };
+}
+
+function getAgentTurnPayload(event: TrainingEventRecord): AgentTurnPayload | null {
+  const turnPayload = getRecordValue(event.payload.agent_turn);
+  if (!turnPayload) {
+    return null;
+  }
+  return {
+    turn_id: getStringValue(turnPayload, "turn_id"),
+    student_message: getStringValue(turnPayload, "student_message"),
+    reply: getStringValue(turnPayload, "reply"),
+    reply_role: getStringValue(turnPayload, "reply_role"),
+    current_intent: getStringValue(turnPayload, "current_intent"),
+    turn_policy: getStringValue(turnPayload, "turn_policy"),
+    turn_analysis: getRecordValue(turnPayload.turn_analysis),
+    agent_path: getStringArrayValue(turnPayload, "agent_path"),
+    revealed_fact_id: getNullableStringValue(turnPayload, "revealed_fact_id"),
+    source_references: getStringArrayValue(turnPayload, "source_references"),
+    safety_flags: getStringArrayValue(turnPayload, "safety_flags"),
   };
 }
 
@@ -1328,6 +1377,7 @@ export default function AdminDashboardPage() {
   const currentCaseImportPayloadKey = getAdminCaseImportPayloadKey(caseImportJsonText, rubricImportJsonText);
   const canImportCasePayload = validatedCaseImport?.payloadKey === currentCaseImportPayloadKey && validatedCaseImport.result.valid && !isCaseImportBusy;
   const evaluationChartSummary = buildEvaluationChartSummary(evaluations, selectedEvaluation);
+  const agentTurnEvents = trainingEvents.filter((event) => getAgentTurnPayload(event) !== null);
   const agentDecisionEvents = trainingEvents.filter((event) => event.event_type === "agent_decision_traced");
   const agentReflectionEvents = trainingEvents.filter((event) => event.event_type === "agent_reflection_recorded");
 
@@ -2727,6 +2777,56 @@ export default function AdminDashboardPage() {
                   ))
                 ) : (
                   <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">选择训练 Session 或输入 session_id 后读取训练日志。</p>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+              <h2 className="text-xl font-semibold">受控话轮记忆</h2>
+              <div className="mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1">
+                {agentTurnEvents.length > 0 ? (
+                  agentTurnEvents.map((event) => {
+                    const turnPayload = getAgentTurnPayload(event);
+                    if (!turnPayload) {
+                      return null;
+                    }
+                    return (
+                      <article className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`agent-turn-${event.created_at}-${turnPayload.turn_id}`}>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
+                            <h3 className="mt-1 text-sm font-semibold text-[#141413]">{turnPayload.turn_id || event.event_type}</h3>
+                          </div>
+                          <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{turnPayload.reply_role || "reply"}</span>
+                        </div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">学生输入</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">{turnPayload.student_message || "暂无"}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">可见回复</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">{turnPayload.reply || "暂无"}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">意图分析</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">意图：{turnPayload.current_intent || "暂无"}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">策略：{turnPayload.turn_policy || "暂无"}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">分析：{formatAgentDecisionValue(turnPayload.turn_analysis)}</p>
+                          </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">事实门禁</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">披露事实：{turnPayload.revealed_fact_id ?? "本轮未披露隐藏事实"}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">Agent 路径：{turnPayload.agent_path.join(" → ") || "暂无"}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">来源：{turnPayload.source_references.join("、") || "暂无"}</p>
+                            <p className="break-words text-[11px] leading-5 text-[#6F6257]">安全标记：{turnPayload.safety_flags.join("、") || "无"}</p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })
+                ) : (
+                  <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">当前 Session 暂无受控话轮记忆。</p>
                 )}
               </div>
             </section>

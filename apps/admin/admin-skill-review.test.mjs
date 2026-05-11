@@ -117,6 +117,16 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /missing_edges\.map/);
   assert.match(adminPageSource, /系统评测/);
   assert.match(adminPageSource, /训练日志/);
+  assert.match(adminPageSource, /受控话轮记忆/);
+  assert.match(adminPageSource, /agentTurnEvents/);
+  assert.match(adminPageSource, /event\.payload\.agent_turn/);
+  assert.match(adminPageSource, /function getAgentTurnPayload/);
+  assert.match(adminPageSource, /turnPayload\.current_intent/);
+  assert.match(adminPageSource, /turnPayload\.turn_policy/);
+  assert.match(adminPageSource, /turnPayload\.turn_analysis/);
+  assert.match(adminPageSource, /turnPayload\.agent_path/);
+  assert.match(adminPageSource, /事实门禁/);
+  assert.match(adminPageSource, /意图分析/);
   assert.match(adminPageSource, /智能体决策轨迹/);
   assert.match(adminPageSource, /agentDecisionEvents/);
   assert.match(adminPageSource, /event\.event_type === "agent_decision_traced"/);
