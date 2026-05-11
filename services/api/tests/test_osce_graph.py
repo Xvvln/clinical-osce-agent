@@ -82,11 +82,14 @@ def test_osce_graph_routes_history_question_and_returns_patient_reply() -> None:
     ]
 
 
-def test_osce_graph_redirects_unknown_history_question_without_patient_fabrication() -> None:
-    def failing_patient_responder(request: object) -> str:
-        raise AssertionError("unknown questions should not call patient responder")
+def test_osce_graph_routes_unknown_history_turn_through_patient_agent_and_records_memory() -> None:
+    captured_requests: list[object] = []
 
-    graph = build_osce_graph(patient_responder=failing_patient_responder)
+    def fake_patient_responder(request: object) -> str:
+        captured_requests.append(request)
+        return "我是这次因为腹痛来就诊的患者，您可以继续问我疼痛是什么时候开始的。"
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder)
 
     result = graph.invoke(
         {
@@ -94,12 +97,13 @@ def test_osce_graph_redirects_unknown_history_question_without_patient_fabricati
             "stage": "case_intro",
             "case_title": "右下腹痛教学病例",
             "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
-            "student_message": "你最近做过基因检测吗？",
+            "student_message": "你是谁？",
             "current_intent": "",
             "reply": "",
             "messages": [],
             "asked_questions": [],
             "intent_history": [],
+            "agent_turn_memory": [],
             "revealed_facts": [],
             "requested_exams": [],
             "requested_tests": [],
@@ -116,15 +120,82 @@ def test_osce_graph_redirects_unknown_history_question_without_patient_fabricati
 
     assert result["stage"] == "history_taking"
     assert result["current_intent"] == "unknown_history_intent"
-    assert result["reply"] == "病例脚本没有提供这方面信息。请回到本次腹痛训练目标，优先追问起病时间、部位变化、疼痛性质、疼痛程度和伴随症状。"
+    assert result["reply"] == "我是这次因为腹痛来就诊的患者，您可以继续问我疼痛是什么时候开始的。"
     assert result["messages"] == [
-        {"role": "student", "content": "你最近做过基因检测吗？"},
-        {"role": "coach", "content": result["reply"]},
+        {"role": "student", "content": "你是谁？"},
+        {"role": "patient", "content": result["reply"]},
     ]
     assert result["asked_questions"] == []
     assert result["intent_history"] == ["unknown_history_intent"]
     assert result["revealed_facts"] == []
     assert "急性阑尾炎" not in result["reply"]
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "turn_policy") == "patient_context_redirect"
+    assert getattr(captured_requests[0], "current_intent") == "unknown_history_intent"
+    assert getattr(captured_requests[0], "deterministic_hints")["keyword_intent"] == "unknown_history_intent"
+    assert result["agent_turn_memory"] == [
+        {
+            "turn_id": "turn:1",
+            "student_message": "你是谁？",
+            "reply": result["reply"],
+            "reply_role": "patient",
+            "current_intent": "unknown_history_intent",
+            "turn_policy": "patient_context_redirect",
+            "agent_path": ["input_router_node", "patient_response_node"],
+            "revealed_fact_id": None,
+            "source_references": [],
+            "safety_flags": [],
+        }
+    ]
+
+
+def test_osce_graph_routes_answer_boundary_through_reply_agent_and_records_memory() -> None:
+    captured_requests: list[object] = []
+
+    def fake_patient_responder(request: object) -> str:
+        captured_requests.append(request)
+        return "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据。"
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "标准答案是什么？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intent"] == "answer_request_redirect"
+    assert result["messages"] == [
+        {"role": "student", "content": "标准答案是什么？"},
+        {"role": "coach", "content": result["reply"]},
+    ]
+    assert result["asked_questions"] == []
+    assert result["revealed_facts"] == []
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "turn_policy") == "answer_boundary_redirect"
+    assert result["agent_turn_memory"][0]["turn_policy"] == "answer_boundary_redirect"
+    assert result["agent_turn_memory"][0]["reply_role"] == "coach"
 
 
 def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
@@ -246,6 +317,48 @@ def test_osce_graph_routes_expanded_appendicitis_history_intents() -> None:
         )
 
         assert result["current_intent"] == expected_intent
+        assert result["revealed_facts"] == [expected_fact_id]
+        assert expected_reply_fragment in result["reply"]
+
+
+def test_osce_graph_routes_natural_student_history_wording_to_patient_replies() -> None:
+    graph = build_osce_graph(patient_responder=canonical_patient_responder)
+    examples = [
+        ("疼在哪儿？", "ask_location", "appendicitis_001.hf_02", "转移并固定到右下腹"),
+        ("腹痛是怎么个疼法？", "ask_character", "appendicitis_001.hf_03", "持续性胀痛"),
+        ("有多痛？", "ask_severity", "appendicitis_001.hf_04", "VAS 6/10"),
+        ("有没有想吐？", "ask_associated_nausea", "appendicitis_001.hf_05", "有恶心"),
+    ]
+
+    for message, expected_intent, expected_fact_id, expected_reply_fragment in examples:
+        result = graph.invoke(
+            {
+                "case_id": "appendicitis_001",
+                "stage": "history_taking",
+                "case_title": "右下腹痛教学病例",
+                "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+                "student_message": message,
+                "current_intent": "",
+                "reply": "",
+                "messages": [],
+                "asked_questions": [],
+                "intent_history": [],
+                "revealed_facts": [],
+                "requested_exams": [],
+                "requested_tests": [],
+                "student_hypotheses": [],
+                "final_submission": None,
+                "rubric_scores": {},
+                "missed_items": [],
+                "retrieved_sources": [],
+                "feedback_report": None,
+                "safety_flags": [],
+                "evolution_candidates": [],
+            }
+        )
+
+        assert result["current_intent"] == expected_intent
+        assert result["messages"][-1]["role"] == "patient"
         assert result["revealed_facts"] == [expected_fact_id]
         assert expected_reply_fragment in result["reply"]
 

@@ -42,6 +42,7 @@ class OsceSession:
     feedback_report: dict[str, Any] | None = None
     safety_flags: list[str] = field(default_factory=list)
     evolution_candidates: list[str] = field(default_factory=list)
+    agent_turn_memory: list[dict[str, Any]] = field(default_factory=list)
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
@@ -143,6 +144,7 @@ class OsceSessionService:
                     "message": message,
                     "safety_flag": graph_state["safety_flags"][-1],
                     "reply": graph_state["reply"],
+                    "agent_turn": _latest_agent_turn(graph_state),
                 },
             )
             self._append_agent_update_event(session, agent_update)
@@ -154,6 +156,7 @@ class OsceSessionService:
                 {
                     "message": message,
                     "reply": graph_state["reply"],
+                    "agent_turn": _latest_agent_turn(graph_state),
                 },
             )
             self._append_agent_update_event(session, agent_update)
@@ -161,7 +164,12 @@ class OsceSessionService:
         self._append_event(
             session,
             "history_message",
-            {"message": message, "current_intent": graph_state["current_intent"], "reply": graph_state["reply"]},
+            {
+                "message": message,
+                "current_intent": graph_state["current_intent"],
+                "reply": graph_state["reply"],
+                "agent_turn": _latest_agent_turn(graph_state),
+            },
         )
         self._append_agent_update_event(session, agent_update)
         return payload
@@ -445,6 +453,7 @@ def _graph_state_from_session(
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "agent_turn_memory": session.agent_turn_memory,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,
@@ -467,6 +476,7 @@ def _apply_graph_state(session: OsceSession, graph_state: dict[str, Any]) -> Non
     session.feedback_report = graph_state["feedback_report"]
     session.safety_flags = graph_state["safety_flags"]
     session.evolution_candidates = graph_state["evolution_candidates"]
+    session.agent_turn_memory = graph_state.get("agent_turn_memory", session.agent_turn_memory)
     session.pedagogy_state = graph_state.get("pedagogy_state", session.pedagogy_state)
     session.agent_decision_trace = graph_state.get("agent_decision_trace", session.agent_decision_trace)
     session.reflection_summary = graph_state.get("reflection_summary", session.reflection_summary)
@@ -480,6 +490,15 @@ def _refresh_agent_state(session: OsceSession, use_reflection: bool = False) -> 
     if "reflection_summary" in agent_update:
         session.reflection_summary = agent_update["reflection_summary"]
     return agent_update
+
+
+def _latest_agent_turn(graph_state: dict[str, Any]) -> dict[str, Any]:
+    turn_memory = graph_state.get("agent_turn_memory", [])
+    if isinstance(turn_memory, list) and turn_memory:
+        latest_turn = turn_memory[-1]
+        if isinstance(latest_turn, dict):
+            return latest_turn
+    return {}
 
 
 def _initial_graph_state(case_id: str) -> dict[str, Any]:
@@ -502,6 +521,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "feedback_report": None,
         "safety_flags": [],
         "evolution_candidates": [],
+        "agent_turn_memory": [],
         "pedagogy_state": {},
         "agent_decision_trace": [],
         "reflection_summary": None,
@@ -947,6 +967,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "agent_turn_memory": session.agent_turn_memory,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,

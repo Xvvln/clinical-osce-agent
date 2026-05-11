@@ -1,6 +1,7 @@
 import os
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
+from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.vertex_gemini_scorer import (
@@ -150,6 +151,41 @@ class FakeOpenAICompatibleHttpClient:
         return FakeOpenAICompatibleRubricResponse()
 
 
+class FakeAnthropicRubricResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": '{"score":8,"covered_evidence":["hf_01"],"missing_evidence":["lab.cbc"],"rationale":"覆盖核心病史，缺少血常规证据。"}',
+                }
+            ],
+        }
+
+
+class FakeAnthropicHttpClient:
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeAnthropicHttpClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeAnthropicRubricResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeAnthropicRubricResponse()
+
+
 def test_create_default_vertex_gemini_scorer_uses_runtime_openai_compatible_config(monkeypatch) -> None:
     FakeOpenAICompatibleHttpClient.calls = []
     runtime_model_config_store.clear()
@@ -190,6 +226,48 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_openai_compatible_conf
     )
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
+
+
+def test_create_default_vertex_gemini_scorer_uses_runtime_anthropic_config(monkeypatch) -> None:
+    FakeAnthropicHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "anthropic",
+            "api_key": "student-anthropic-secret",
+            "model": "claude-3-5-sonnet-latest",
+            "base_url": "https://api.anthropic.com",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(anthropic_module.httpx, "Client", FakeAnthropicHttpClient)
+    monkeypatch.delenv("OSCE_VERTEX_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    try:
+        scorer = create_default_vertex_gemini_scorer()
+        assert scorer is not None
+        response = scorer(
+            LlmRubricRequest(
+                rubric_item_id="reasoning_core",
+                description="推理链覆盖关键证据并能自圆其说",
+                max_score=10,
+                student_final_reasoning="转移性右下腹痛支持诊断。",
+                relevant_facts_revealed=["hf_01"],
+                required_evidence=["hf_01", "lab.cbc"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert response == LlmRubricResponse(
+        score=8,
+        covered_evidence=["hf_01"],
+        missing_evidence=["lab.cbc"],
+        rationale="覆盖核心病史，缺少血常规证据。",
+    )
+    assert FakeAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
+    assert FakeAnthropicHttpClient.calls[0]["json"]["model"] == "claude-3-5-sonnet-latest"
 
 
 def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_config(monkeypatch) -> None:

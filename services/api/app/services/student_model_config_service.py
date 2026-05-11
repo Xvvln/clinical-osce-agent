@@ -16,10 +16,12 @@ SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {
     "vertex_gemini_adc",
     "vertex_gemini_api_key",
     "openai_compatible",
+    "anthropic",
 }
 DEFAULT_CUSTOM_BACKEND_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
 DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEFAULT_VERTEX_GEMINI_LOCATION = "global"
 STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS = 5.0
 
@@ -75,6 +77,32 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
             api_key=api_key,
             model=model,
             proxy_url=proxy_url,
+        )
+
+    if provider == "anthropic":
+        if not api_key:
+            raise ValueError("api_key is required for anthropic")
+        if not model:
+            raise ValueError("model is required for anthropic")
+        endpoint = _join_url(base_url or DEFAULT_ANTHROPIC_BASE_URL, "/v1/messages")
+        return _test_http_endpoint(
+            provider=provider,
+            endpoint=endpoint,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+            body={
+                "model": model,
+                "max_tokens": 128,
+                "system": "只输出 JSON。",
+                "messages": [
+                    {"role": "user", "content": json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":"))},
+                ],
+            },
+            proxy_url=proxy_url,
+            success_message="Anthropic 服务端连通性测试通过。",
         )
 
     if not api_key:
@@ -157,10 +185,17 @@ def _test_http_endpoint(
             checked_url=endpoint,
         )
 
+    error_detail = _extract_http_error_detail(
+        response,
+        sensitive_values=_build_sensitive_header_values(headers),
+    )
+    error_message = f"连通性测试失败：HTTP {response.status_code}"
+    if error_detail:
+        error_message = f"{error_message}：{error_detail}"
     return _connectivity_result(
         ok=False,
         provider=provider,
-        message=f"连通性测试失败：HTTP {response.status_code}",
+        message=error_message,
         checked_url=endpoint,
     )
 
@@ -172,6 +207,74 @@ def _connectivity_result(*, ok: bool, provider: str, message: str, checked_url: 
         "message": message,
         "checked_url": checked_url,
     }
+
+
+def _extract_http_error_detail(response: object, *, sensitive_values: list[str]) -> str:
+    detail_parts: list[str] = []
+    try:
+        response_json = response.json()  # type: ignore[attr-defined]
+    except Exception:
+        response_json = None
+
+    if isinstance(response_json, dict):
+        detail_parts.extend(_extract_json_error_parts(response_json))
+    elif isinstance(response_json, str):
+        detail_parts.append(response_json)
+
+    if not detail_parts:
+        response_text = _normalize_text(getattr(response, "text", ""))
+        if response_text:
+            detail_parts.append(response_text)
+
+    compact_parts = [_sanitize_error_detail(part, sensitive_values=sensitive_values) for part in detail_parts]
+    compact_parts = [_truncate_error_detail(part) for part in compact_parts if part]
+    return "；".join(dict.fromkeys(compact_parts))
+
+
+def _extract_json_error_parts(payload: dict[str, object]) -> list[str]:
+    parts: list[str] = []
+    error_payload = payload.get("error")
+    if isinstance(error_payload, dict):
+        for key in ("message", "param", "detail", "type"):
+            value = _normalize_text(error_payload.get(key))
+            if value:
+                parts.append(value)
+    elif isinstance(error_payload, str):
+        parts.append(error_payload)
+
+    for key in ("detail", "message"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            parts.extend(_extract_json_error_parts(value))
+    return parts
+
+
+def _build_sensitive_header_values(headers: dict[str, str]) -> list[str]:
+    values: list[str] = []
+    for value in headers.values():
+        normalized_value = _normalize_text(value)
+        if not normalized_value:
+            continue
+        values.append(normalized_value)
+        if normalized_value.lower().startswith("bearer "):
+            values.append(normalized_value[7:].strip())
+    return values
+
+
+def _sanitize_error_detail(detail: str, *, sensitive_values: list[str]) -> str:
+    sanitized_detail = _normalize_text(detail)
+    for sensitive_value in sensitive_values:
+        if sensitive_value:
+            sanitized_detail = sanitized_detail.replace(sensitive_value, "[redacted]")
+    return sanitized_detail
+
+
+def _truncate_error_detail(detail: str) -> str:
+    if len(detail) <= 320:
+        return detail
+    return f"{detail[:317]}..."
 
 
 def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_url: str) -> dict[str, object]:

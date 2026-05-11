@@ -8,6 +8,7 @@ from app.services.auth_store import AuthStore
 from app.services.osce_session_service import osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
+from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_store import TrainingSkillStore
 
@@ -60,6 +61,37 @@ def test_create_session_requires_logged_in_user() -> None:
 
     assert create_response.status_code == 401
     assert create_response.json() == {"detail": "not authenticated"}
+
+
+def test_create_session_requires_runtime_model_config_when_training_gate_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_model_config_store.clear()
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert create_response.status_code == 409
+    assert create_response.json() == {"detail": "请先在 API 配置中应用可用模型，再开始训练。"}
+
+
+def test_create_session_uses_persisted_user_runtime_model_config_after_runtime_clear(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+    save_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "teaching-model",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        },
+    )
+    runtime_model_config_store.clear()
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert save_response.status_code == 200
+    assert create_response.status_code == 200
+    assert create_response.json()["case_id"] == "appendicitis_001"
 
 
 def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str, str]) -> None:
@@ -536,6 +568,7 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
         "message": message,
         "safety_flag": "real_medical_advice_request",
         "reply": payload["reply"],
+        "agent_turn": payload["agent_turn_memory"][0],
     }
 
 
@@ -570,6 +603,7 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
     assert find_event(events, "answer_request_redirected")["payload"] == {
         "message": message,
         "reply": payload["reply"],
+        "agent_turn": payload["agent_turn_memory"][0],
     }
 
 
@@ -1350,6 +1384,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
     client.get(f"/api/sessions/{session_id}/report")
+    state_payload = client.get(f"/api/sessions/{session_id}").json()
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
 
@@ -1377,6 +1412,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "message": "什么时候开始疼的？",
         "current_intent": "ask_onset",
         "reply": "24 小时前开始，最初是上腹部隐痛。",
+        "agent_turn": state_payload["agent_turn_memory"][0],
     }
     assert filtered_business_events[3]["payload"] == {"exam_code": "abd.palpation.rebound", "result": "右下腹反跳痛阳性。"}
     assert filtered_business_events[4]["payload"] == {"test_code": "lab.cbc", "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。"}

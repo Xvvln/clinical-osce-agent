@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
+from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 
 RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
@@ -23,8 +24,27 @@ class RuntimeModelConfig:
     project: str = ""
     location: str = "global"
 
+    def to_config_dict(self) -> dict[str, str]:
+        return {
+            "provider": self.provider,
+            "api_key": self.api_key,
+            "model": self.model,
+            "base_url": self.project if self.provider == "vertex_gemini_adc" else self.base_url,
+            "proxy_url": self.proxy_url,
+            "location": self.location,
+        }
+
     def to_openai_compatible_settings(self) -> OpenAICompatibleSettings:
         return OpenAICompatibleSettings(
+            enabled=True,
+            api_key=self.api_key,
+            model=self.model,
+            base_url=self.base_url,
+            proxy_url=self.proxy_url,
+        )
+
+    def to_anthropic_settings(self) -> AnthropicSettings:
+        return AnthropicSettings(
             enabled=True,
             api_key=self.api_key,
             model=self.model,
@@ -57,6 +77,16 @@ class RuntimeModelConfig:
                 "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
                 "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
             }
+        if self.provider == "anthropic":
+            return {
+                "active": True,
+                "provider": self.provider,
+                "model": self.model,
+                "base_url": self.base_url,
+                "proxy_url": self.proxy_url,
+                "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+                "message": "Anthropic 服务端已应用到本次后端运行时。",
+            }
         return {
             "active": True,
             "provider": self.provider,
@@ -75,9 +105,9 @@ class RuntimeModelConfigStore:
 
     def apply_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
         provider = _normalize_text(config.get("provider", ""))
-        if provider not in {"openai_compatible", "vertex_gemini_adc", "vertex_gemini_api_key"}:
+        if provider not in {"openai_compatible", "anthropic", "vertex_gemini_adc", "vertex_gemini_api_key"}:
             raise ValueError(
-                "runtime model config currently supports openai_compatible, vertex_gemini_adc or vertex_gemini_api_key only"
+                "runtime model config currently supports openai_compatible, anthropic, vertex_gemini_adc or vertex_gemini_api_key only"
             )
 
         api_key = _normalize_text(config.get("api_key", ""))
@@ -86,12 +116,16 @@ class RuntimeModelConfigStore:
         proxy_url = _normalize_text(config.get("proxy_url", ""))
         if provider == "openai_compatible" and not api_key:
             raise ValueError("api_key is required for openai_compatible")
+        if provider == "anthropic" and not api_key:
+            raise ValueError("api_key is required for anthropic")
         if provider == "vertex_gemini_api_key" and not api_key:
             raise ValueError("api_key is required for vertex_gemini_api_key")
         if not model:
             raise ValueError(f"model is required for {provider}")
         project = ""
         location = "global"
+        if provider == "anthropic" and not _normalize_text(config.get("base_url", "")):
+            base_url = "https://api.anthropic.com"
         if provider == "vertex_gemini_adc":
             project = base_url
             base_url = project
@@ -125,6 +159,12 @@ class RuntimeModelConfigStore:
         if active_config is None or active_config.provider != "openai_compatible":
             return None
         return active_config.to_openai_compatible_settings()
+
+    def get_anthropic_settings(self) -> AnthropicSettings | None:
+        active_config = self.get_active_config()
+        if active_config is None or active_config.provider != "anthropic":
+            return None
+        return active_config.to_anthropic_settings()
 
     def get_vertex_gemini_adc_config(self) -> RuntimeModelConfig | None:
         active_config = self.get_active_config()

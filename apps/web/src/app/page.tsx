@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent, PointerEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent, PointerEvent, ReactNode, UIEvent } from "react";
 import { getCurrentUser, loginUser, logoutUser, registerUser } from "./auth-client";
 import type { AuthUser } from "./auth-client";
 
@@ -19,7 +19,7 @@ type WorkflowStepDefinition = Readonly<{
   label: string;
 }>;
 
-type RightPanelKey = "focus" | "agent" | "evidence" | "procedures" | "hypotheses" | "report";
+type RightPanelKey = "focus" | "agent" | "evidence" | "hypotheses" | "report";
 
 type OsceDockMenuGroup = "training" | "system";
 
@@ -27,7 +27,7 @@ type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
 type OsceDockSide = "left" | "right";
 
-type ApiConfigProvider = "custom_backend" | "gemini" | "vertex_gemini_adc" | "vertex_gemini_api_key" | "openai_compatible";
+type ApiConfigProvider = "custom_backend" | "gemini" | "vertex_gemini_adc" | "vertex_gemini_api_key" | "openai_compatible" | "anthropic";
 
 type StudentApiConfig = Readonly<{
   provider: ApiConfigProvider;
@@ -50,6 +50,7 @@ type StudentApiConfigRuntimeResponse = Readonly<{
   model: string;
   base_url: string;
   proxy_url: string;
+  api_key_saved?: boolean;
   integration_targets: readonly string[];
   message: string;
 }>;
@@ -335,6 +336,19 @@ type AgentDecisionTraceItem = Readonly<{
   reflect: AgentTraceReflect;
 }>;
 
+type AgentTurnMemoryItem = Readonly<{
+  turn_id: string;
+  student_message: string;
+  reply: string;
+  reply_role: "student" | "patient" | "coach" | string;
+  current_intent: string;
+  turn_policy: string;
+  agent_path: readonly string[];
+  revealed_fact_id: string | null;
+  source_references: readonly string[];
+  safety_flags: readonly string[];
+}>;
+
 type ReflectionPrompt = Readonly<{
   prompt_id: string;
   question: string;
@@ -381,6 +395,7 @@ type OsceSession = Readonly<{
   feedback_report: Readonly<Record<string, unknown>> | null;
   safety_flags: readonly string[];
   evolution_candidates: readonly string[];
+  agent_turn_memory: readonly AgentTurnMemoryItem[];
   pedagogy_state: PedagogyState;
   agent_decision_trace: readonly AgentDecisionTraceItem[];
   reflection_summary: ReflectionSummary | null;
@@ -393,6 +408,8 @@ type ChatMessage = {
   readonly speaker: "student" | "patient" | "coach";
   readonly label: string;
   readonly text: string;
+  readonly finalText?: string;
+  readonly isPending?: boolean;
 };
 
 type EvidenceItem = {
@@ -616,11 +633,13 @@ const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
 const PRODUCTION_DEPLOYMENT_MODES = new Set(["single-node-prod", "vertex-prod"]);
 const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES.has(DEPLOYMENT_MODE);
-const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";
+const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";
+const OSCE_DOCK_POSITION_STORAGE_KEY = "clinical_osce_osce_dock_position";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
 const OSCE_DOCK_MARGIN = 20;
 const OSCE_DOCK_BUTTON_SIZE = 56;
 const OSCE_DOCK_DRAG_THRESHOLD = 4;
+const PATIENT_REPLY_TYPEWRITER_DELAY_MS = 14;
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -656,6 +675,13 @@ const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
     label: "OpenAI 兼容",
     defaultModel: "gpt-4.1-mini",
     defaultBaseUrl: "https://api.openai.com/v1",
+    defaultProxyUrl: "http://127.0.0.1:7897",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    defaultModel: "claude-3-5-sonnet-latest",
+    defaultBaseUrl: "https://api.anthropic.com",
     defaultProxyUrl: "http://127.0.0.1:7897",
   },
 ];
@@ -886,10 +912,6 @@ function getNextWorkflowSuggestion(session: OsceSession | null, feedbackReport: 
   return "请先询问起病、部位、性质、程度和伴随症状。";
 }
 
-function formatProgressCount(covered: number, total: number): string {
-  return `${covered}/${total}`;
-}
-
 function buildStructuredReasoning(
   differentialDiagnosis: string,
   supportingEvidence: string,
@@ -909,8 +931,17 @@ function formatStage(stage: string | undefined): string {
   return stageLabel ?? "等待会话";
 }
 
-function getCoachMessageLabel(content: string): "安全边界" | "过程提示" {
-  return content.includes("本系统仅用于 OSCE 教学模拟训练") ? "安全边界" : "过程提示";
+function getCoachMessageLabel(content: string): "安全边界" | "答题边界" | "问诊引导" | "过程提示" {
+  if (content.includes("本系统仅用于 OSCE 教学模拟训练")) {
+    return "安全边界";
+  }
+  if (content.includes("不能直接告诉你标准答案")) {
+    return "答题边界";
+  }
+  if (content.includes("病例脚本没有提供这方面信息")) {
+    return "问诊引导";
+  }
+  return "过程提示";
 }
 
 function getDiagnosticRoleLabel(role: string): string {
@@ -951,6 +982,32 @@ function mapApiMessage(message: ApiMessage, index: number): ChatMessage {
     label: "标准化病人",
     text: message.content,
   };
+}
+
+function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<ChatMessage, "speaker" | "label"> {
+  const matchingReplyMessage = [...session.messages].reverse().find(
+    (message) => message.content === replyText && (message.role === "coach" || message.role === "patient"),
+  );
+
+  if (matchingReplyMessage?.role === "coach") {
+    return {
+      speaker: "coach",
+      label: getCoachMessageLabel(replyText),
+    };
+  }
+
+  return {
+    speaker: "patient",
+    label: "标准化病人",
+  };
+}
+
+function hasMessageWithSpeakerAndText(
+  messages: readonly ChatMessage[],
+  speaker: ChatMessage["speaker"],
+  text: string,
+): boolean {
+  return messages.some((message) => message.speaker === speaker && message.text === text);
 }
 
 function getEvidenceItem(factId: string): EvidenceItem {
@@ -1121,11 +1178,54 @@ function getSideSnappedOsceDockPosition(side: OsceDockSide, y: number): OsceDock
 
 function getSnappedOsceDockPosition(x: number, y: number): OsceDockPosition {
   if (typeof window === "undefined") {
-    return getSideSnappedOsceDockPosition("left", y);
+    return getSideSnappedOsceDockPosition("right", y);
   }
 
   const side: OsceDockSide = x + OSCE_DOCK_BUTTON_SIZE / 2 < window.innerWidth / 2 ? "left" : "right";
   return getSideSnappedOsceDockPosition(side, y);
+}
+
+function createDefaultOsceDockPosition(): OsceDockPosition {
+  if (typeof window === "undefined") {
+    return {
+      x: OSCE_DOCK_MARGIN,
+      y: OSCE_DOCK_MARGIN,
+      side: "right",
+      isReady: false,
+    };
+  }
+
+  return getSideSnappedOsceDockPosition("right", window.innerHeight - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN);
+}
+
+function loadOsceDockPosition(): OsceDockPosition {
+  const defaultPosition = createDefaultOsceDockPosition();
+
+  if (typeof window === "undefined") {
+    return defaultPosition;
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(OSCE_DOCK_POSITION_STORAGE_KEY);
+    if (!storedValue) {
+      return defaultPosition;
+    }
+
+    const storedPosition = JSON.parse(storedValue) as Partial<OsceDockPosition>;
+    const side: OsceDockSide = storedPosition.side === "left" || storedPosition.side === "right" ? storedPosition.side : defaultPosition.side;
+    const y = typeof storedPosition.y === "number" ? storedPosition.y : defaultPosition.y;
+    return getSideSnappedOsceDockPosition(side, y);
+  } catch {
+    return defaultPosition;
+  }
+}
+
+function saveOsceDockPosition(position: OsceDockPosition): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(OSCE_DOCK_POSITION_STORAGE_KEY, JSON.stringify({ side: position.side, y: position.y }));
 }
 
 function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
@@ -1203,45 +1303,23 @@ function createDefaultStudentApiConfig(): StudentApiConfig {
   return {
     provider: defaultProvider.id,
     apiKey: "",
-    model: defaultProvider.defaultModel,
-    baseUrl: defaultProvider.defaultBaseUrl,
-    proxyUrl: defaultProvider.defaultProxyUrl,
+    model: "",
+    baseUrl: "",
+    proxyUrl: "",
   };
 }
 
-function loadStudentApiConfig(): StudentApiConfig {
-  const defaultConfig = createDefaultStudentApiConfig();
-  if (typeof window === "undefined") {
-    return defaultConfig;
+function createStudentApiConfigFromRuntime(runtimeConfig: StudentApiConfigRuntimeResponse): StudentApiConfig {
+  if (!runtimeConfig.active || !isApiConfigProvider(runtimeConfig.provider)) {
+    return createDefaultStudentApiConfig();
   }
-
-  const storedValue = window.localStorage.getItem(STUDENT_API_CONFIG_STORAGE_KEY);
-  if (!storedValue) {
-    return defaultConfig;
-  }
-
-  try {
-    const parsedValue = JSON.parse(storedValue) as Readonly<Partial<StudentApiConfig>>;
-    const provider = normalizeApiConfigProvider(parsedValue.provider, defaultConfig.provider);
-    const providerOption = getApiConfigProviderOption(provider);
-    return {
-      provider,
-      apiKey: typeof parsedValue.apiKey === "string" ? parsedValue.apiKey : "",
-      model: typeof parsedValue.model === "string" ? parsedValue.model : providerOption.defaultModel,
-      baseUrl: typeof parsedValue.baseUrl === "string" ? parsedValue.baseUrl : providerOption.defaultBaseUrl,
-      proxyUrl: typeof parsedValue.proxyUrl === "string" ? parsedValue.proxyUrl : providerOption.defaultProxyUrl,
-    };
-  } catch {
-    return defaultConfig;
-  }
-}
-
-function saveStudentApiConfig(config: StudentApiConfig): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(STUDENT_API_CONFIG_STORAGE_KEY, JSON.stringify(config));
+  return {
+    provider: runtimeConfig.provider,
+    apiKey: "",
+    model: runtimeConfig.model,
+    baseUrl: runtimeConfig.base_url,
+    proxyUrl: runtimeConfig.proxy_url,
+  };
 }
 
 function testStudentApiConfigConnection(config: StudentApiConfig): Promise<StudentApiConfigTestResponse> {
@@ -1268,6 +1346,32 @@ function applyStudentApiConfigToRuntime(config: StudentApiConfig): Promise<Stude
       proxy_url: config.proxyUrl,
     }),
   });
+}
+
+function getStudentRuntimeApiConfig(): Promise<StudentApiConfigRuntimeResponse> {
+  return requestJson<StudentApiConfigRuntimeResponse>("/api/model-config/runtime", {
+    method: "GET",
+  });
+}
+
+function isRuntimeStudentApiProvider(provider: ApiConfigProvider): boolean {
+  return provider === "openai_compatible" || provider === "anthropic" || provider === "vertex_gemini_adc" || provider === "vertex_gemini_api_key";
+}
+
+function formatRuntimeApiConfigSummary(runtimeConfig: StudentApiConfigRuntimeResponse | null): string {
+  if (!runtimeConfig) {
+    return "未启用，使用本地确定性回退";
+  }
+  if (!runtimeConfig.active) {
+    return runtimeConfig.message ?? "未启用，使用本地确定性回退";
+  }
+  const providerLabel = getApiConfigProviderOption(runtimeConfig.provider || "custom_backend").label;
+  const details = [
+    runtimeConfig.model ? `模型 ${runtimeConfig.model}` : "",
+    runtimeConfig.base_url ? `地址 ${runtimeConfig.base_url}` : "",
+    runtimeConfig.proxy_url ? `代理 ${runtimeConfig.proxy_url}` : "",
+  ].filter(Boolean);
+  return [providerLabel, ...details].join(" · ");
 }
 
 async function getCases(): Promise<readonly CaseOption[]> {
@@ -1406,52 +1510,8 @@ function CollapsiblePanel({
       title={title}
       description={description}
     >
-      {isOpen ? <div className={`${maxContentHeightClass} overflow-y-auto pr-1`}>{children}</div> : null}
+      {isOpen ? <div className={`${maxContentHeightClass} overflow-y-scroll pr-1 student-rail-scrollbar`} onScroll={handleStudentRailScroll}>{children}</div> : null}
     </Panel>
-  );
-}
-
-function CoverageMapSection({
-  title,
-  items,
-}: Readonly<{
-  title: string;
-  items: readonly CoverageMapItem[];
-}>) {
-  return (
-    <section className="rounded-xl border border-border bg-background p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <p className="text-xs font-semibold text-foreground">{title}</p>
-        <p className="text-[11px] text-muted-foreground">{items.filter((item) => item.status === "covered").length}/{items.length}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {items.map((item) => (
-          <span
-            className={
-              item.status === "covered"
-                ? "rounded-lg border border-brand/30 bg-brand/10 px-2.5 py-1.5 text-[11px] font-medium text-brand"
-                : "rounded-lg border border-dashed border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground"
-            }
-            key={`${title}-${item.status}-${item.label}`}
-          >
-            <span className="mr-1 font-semibold">{item.status === "covered" ? "已覆盖" : "待覆盖"}</span>
-            <span>{item.label}</span>
-            <span className="mt-1 block font-mono text-[10px] opacity-70">{item.id}</span>
-          </span>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CoverageMap({ trainingProgress }: Readonly<{ trainingProgress: TrainingProgress }>) {
-  return (
-    <div className="grid gap-3 md:grid-cols-2">
-      <CoverageMapSection title="问诊事实" items={trainingProgress.coverage_map.history} />
-      <CoverageMapSection title="查体项目" items={trainingProgress.coverage_map.physical_exam} />
-      <CoverageMapSection title="辅助检查" items={trainingProgress.coverage_map.auxiliary_test} />
-      <CoverageMapSection title="推理证据" items={trainingProgress.coverage_map.reasoning} />
-    </div>
   );
 }
 
@@ -1459,6 +1519,88 @@ function resizeTextareaToContent(textarea: HTMLTextAreaElement): void {
   textarea.style.height = "auto";
   textarea.style.height = `${Math.min(textarea.scrollHeight, DIAGNOSIS_TEXTAREA_MAX_HEIGHT)}px`;
   textarea.style.overflowY = textarea.scrollHeight > DIAGNOSIS_TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
+}
+
+const studentRailScrollbarTimers = new WeakMap<HTMLElement, number>();
+
+function handleStudentRailScroll(event: UIEvent<HTMLElement>): void {
+  const scrollElement = event.currentTarget;
+  scrollElement.classList.add("is-student-scrollbar-active");
+  const previousTimer = studentRailScrollbarTimers.get(scrollElement);
+  if (previousTimer) {
+    window.clearTimeout(previousTimer);
+  }
+  const nextTimer = window.setTimeout(() => {
+    scrollElement.classList.remove("is-student-scrollbar-active");
+    studentRailScrollbarTimers.delete(scrollElement);
+  }, 900);
+  studentRailScrollbarTimers.set(scrollElement, nextTimer);
+}
+
+function PendingThinkingIndicator() {
+  return (
+    <span aria-label="判断中" className="inline-flex items-center gap-1">
+      <span>判断中</span>
+      <span aria-hidden="true" className="inline-flex gap-0.5">
+        {[0, 1, 2].map((dotIndex) => (
+          <span className="clinical-osce-thinking-dot" key={dotIndex} style={{ animationDelay: `${dotIndex * 140}ms` }}>
+            .
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+function CoverageMapSection({ items, title }: Readonly<{ items: readonly CoverageMapItem[]; title: string }>) {
+  const coveredCount = items.filter((item) => item.status === "covered").length;
+
+  return (
+    <section className="rounded-xl border border-border bg-muted/40 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+          {coveredCount}/{items.length}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {items.length > 0 ? (
+          items.map((item) => {
+            const visibleLabel = item.status === "covered" ? item.label : `未覆盖素材：${item.id}`;
+            return (
+              <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs" key={item.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate">{visibleLabel}</span>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+                      item.status === "covered" ? "bg-[#EEF6EF] text-[#236146]" : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {item.status === "covered" ? "已覆盖" : "待覆盖"}
+                  </span>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="rounded-lg border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            暂无素材项。
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CoverageMap({ trainingProgress }: Readonly<{ trainingProgress: TrainingProgress }>) {
+  return (
+    <div className="grid gap-3">
+      <CoverageMapSection items={trainingProgress.coverage_map.history} title="问诊线索覆盖" />
+      <CoverageMapSection items={trainingProgress.coverage_map.physical_exam} title="查体项目覆盖" />
+      <CoverageMapSection items={trainingProgress.coverage_map.auxiliary_test} title="辅助检查覆盖" />
+      <CoverageMapSection items={trainingProgress.coverage_map.reasoning} title="推理证据覆盖" />
+    </div>
+  );
 }
 
 function CaseSelectionPrompt({ onDismiss, selectedCase }: Readonly<{ onDismiss: () => void; selectedCase: CaseOption | null }>) {
@@ -1499,7 +1641,7 @@ function OpeningTaskCardMessage({ openingTaskCard }: Readonly<{ openingTaskCard:
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl rounded-2xl border border-brand/30 bg-[#FFF8E8] p-4">
+    <div className="mx-auto w-full max-w-lg rounded-2xl border border-brand/30 bg-[#FFF8E8] p-4">
       <p className="text-xs font-semibold text-[#8A5A00]">开局任务卡</p>
       <p className="mt-2 text-sm font-semibold text-foreground">{openingTaskCard.role}</p>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">{openingTaskCard.scenario}</p>
@@ -1520,20 +1662,20 @@ function HomeContent() {
   const initialCaseId = searchParams.get("case_id");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(initialCaseId);
   const [caseOptionsState, setCaseOptionsState] = useState<readonly CaseOption[]>(caseOptions);
-  const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isOsceDockOpen, setIsOsceDockOpen] = useState(false);
   const [osceDockMenuGroup, setOsceDockMenuGroup] = useState<OsceDockMenuGroup | null>(null);
   const [isApiConfigHelpOpen, setIsApiConfigHelpOpen] = useState(false);
   const [studentApiConfig, setStudentApiConfig] = useState<StudentApiConfig>(createDefaultStudentApiConfig());
-  const [apiConfigStatusText, setApiConfigStatusText] = useState("OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时。");
+  const [runtimeApiConfig, setRuntimeApiConfig] = useState<StudentApiConfigRuntimeResponse | null>(null);
+  const [apiConfigStatusText, setApiConfigStatusText] = useState("配置按当前登录账号保存在后端；密钥不会回显。");
   const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
+  const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     focus: false,
     agent: false,
     evidence: true,
-    procedures: true,
     hypotheses: true,
     report: true,
   });
@@ -1543,6 +1685,8 @@ function HomeContent() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [optimisticHistoryMessage, setOptimisticHistoryMessage] = useState<ChatMessage | null>(null);
+  const [pendingPatientMessage, setPendingPatientMessage] = useState<ChatMessage | null>(null);
   const [isCasePreparationPromptDismissed, setIsCasePreparationPromptDismissed] = useState(false);
   const [openProcedureActionGroup, setOpenProcedureActionGroup] = useState<ProcedureActionGroup | null>(null);
   const [isRequestingExam, setIsRequestingExam] = useState(false);
@@ -1560,6 +1704,7 @@ function HomeContent() {
   const [feedbackReport, setFeedbackReport] = useState<FeedbackReport | null>(null);
   const [procedureResults, setProcedureResults] = useState<readonly ProcedureResult[]>([]);
   const [selectedProcedureResult, setSelectedProcedureResult] = useState<ProcedureResult | null>(null);
+  const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
@@ -1574,15 +1719,73 @@ function HomeContent() {
   const [osceDockPosition, setOsceDockPosition] = useState<OsceDockPosition>({
     x: OSCE_DOCK_MARGIN,
     y: OSCE_DOCK_MARGIN,
-    side: "left",
+    side: "right",
     isReady: false,
   });
   const osceDockDragRef = useRef<OsceDockDragState | null>(null);
   const suppressOsceDockClickRef = useRef(false);
+  const osceDockContainerRef = useRef<HTMLDivElement | null>(null);
+  const procedureActionContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setStudentApiConfig(loadStudentApiConfig());
-  }, []);
+    if (!isStudentRuntimeApiConfigEnabled || isCheckingAuth) {
+      return;
+    }
+
+    if (!authUser) {
+      setRuntimeApiConfig(null);
+      setStudentApiConfig(createDefaultStudentApiConfig());
+      return;
+    }
+
+    let isMounted = true;
+    async function loadRuntimeApiConfig() {
+      try {
+        const runtimeConfig = await getStudentRuntimeApiConfig();
+        if (isMounted) {
+          setRuntimeApiConfig(runtimeConfig);
+          setStudentApiConfig(createStudentApiConfigFromRuntime(runtimeConfig));
+        }
+      } catch {
+        if (isMounted) {
+          setRuntimeApiConfig(null);
+          setStudentApiConfig(createDefaultStudentApiConfig());
+        }
+      }
+    }
+
+    void loadRuntimeApiConfig();
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser, isCheckingAuth]);
+
+  useEffect(() => {
+    if (!isApiConfigHelpOpen || !isStudentRuntimeApiConfigEnabled || !authUser) {
+      return;
+    }
+
+    let isMounted = true;
+    async function loadRuntimeApiConfig() {
+      try {
+        const runtimeConfig = await getStudentRuntimeApiConfig();
+        if (isMounted) {
+          setRuntimeApiConfig(runtimeConfig);
+          setStudentApiConfig(createStudentApiConfigFromRuntime(runtimeConfig));
+        }
+      } catch {
+        if (isMounted) {
+          setRuntimeApiConfig(null);
+        }
+      }
+    }
+
+    void loadRuntimeApiConfig();
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser, isApiConfigHelpOpen]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1672,7 +1875,13 @@ function HomeContent() {
       setProcedureResults([]);
       setSelectedProcedureResult(null);
       setIsPatientProfileOpen(false);
-      setStatusText(selectedCaseId ? "已选择病例，发送问诊或点击训练操作后开始新会话。" : "请选择病例后再开始训练。");
+      setStatusText(
+        selectedCaseId
+          ? isTrainingModelConfigReady
+            ? "已选择病例，发送问诊或点击训练操作后开始新会话。"
+            : TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE
+          : "请选择病例后再开始训练。",
+      );
       setErrorText(null);
       return;
     }
@@ -1731,16 +1940,18 @@ function HomeContent() {
     return () => {
       isMounted = false;
     };
-  }, [authUser, isCheckingAuth, requestedSessionId, selectedCaseId]);
+  }, [authUser, isCheckingAuth, isTrainingModelConfigReady, requestedSessionId, selectedCaseId]);
 
   useEffect(() => {
     function snapDockToCurrentEdge() {
       setOsceDockPosition((currentPosition) => {
         if (!currentPosition.isReady) {
-          return getSideSnappedOsceDockPosition("left", window.innerHeight - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN);
+          return loadOsceDockPosition();
         }
 
-        return getSideSnappedOsceDockPosition(currentPosition.side, currentPosition.y);
+        const snappedPosition = getSideSnappedOsceDockPosition(currentPosition.side, currentPosition.y);
+        saveOsceDockPosition(snappedPosition);
+        return snappedPosition;
       });
     }
 
@@ -1751,6 +1962,32 @@ function HomeContent() {
       window.removeEventListener("resize", snapDockToCurrentEdge);
     };
   }, []);
+
+  useEffect(() => {
+    function closeSecondaryMenusOnOutsidePointerDown(event: globalThis.PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (isOsceDockOpen && osceDockContainerRef.current && !osceDockContainerRef.current.contains(target)) {
+        closeOsceDock();
+      }
+
+      if (osceDockMenuGroup && osceDockContainerRef.current && !osceDockContainerRef.current.contains(target)) {
+        setOsceDockMenuGroup(null);
+      }
+
+      if (openProcedureActionGroup && procedureActionContainerRef.current && !procedureActionContainerRef.current.contains(target)) {
+        setOpenProcedureActionGroup(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeSecondaryMenusOnOutsidePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", closeSecondaryMenusOnOutsidePointerDown);
+    };
+  }, [isOsceDockOpen, openProcedureActionGroup, osceDockMenuGroup]);
 
   useEffect(() => {
     if (!feedbackReport && !session?.feedback_report) {
@@ -1836,7 +2073,9 @@ function HomeContent() {
     event.preventDefault();
     const nextX = dragState.startX + event.clientX - dragState.startPointerX;
     const nextY = dragState.startY + event.clientY - dragState.startPointerY;
-    setOsceDockPosition(getSnappedOsceDockPosition(nextX, nextY));
+    const snappedPosition = getSnappedOsceDockPosition(nextX, nextY);
+    saveOsceDockPosition(snappedPosition);
+    setOsceDockPosition(snappedPosition);
     window.setTimeout(() => {
       suppressOsceDockClickRef.current = false;
     }, 0);
@@ -1853,7 +2092,11 @@ function HomeContent() {
     }
 
     osceDockDragRef.current = null;
-    setOsceDockPosition((currentPosition) => getSnappedOsceDockPosition(currentPosition.x, currentPosition.y));
+    setOsceDockPosition((currentPosition) => {
+      const snappedPosition = getSnappedOsceDockPosition(currentPosition.x, currentPosition.y);
+      saveOsceDockPosition(snappedPosition);
+      return snappedPosition;
+    });
     window.setTimeout(() => {
       suppressOsceDockClickRef.current = false;
     }, 0);
@@ -1869,39 +2112,40 @@ function HomeContent() {
   }
 
   function handleStudentApiProviderChange(provider: ApiConfigProvider): void {
-    const providerOption = getApiConfigProviderOption(provider);
     setStudentApiConfig((currentConfig) => ({
       ...currentConfig,
       provider,
-      apiKey: provider === "vertex_gemini_adc" ? "" : currentConfig.apiKey,
-      model: providerOption.defaultModel,
-      baseUrl: providerOption.defaultBaseUrl,
-      proxyUrl: providerOption.defaultProxyUrl,
+      apiKey: "",
+      model: "",
+      baseUrl: "",
+      proxyUrl: "",
     }));
     setApiConfigTestResult(null);
     setApiConfigStatusText(
-      provider === "openai_compatible" || provider === "vertex_gemini_adc" || provider === "vertex_gemini_api_key"
-        ? "已切换服务端，保存后会应用到本次后端运行时。"
-        : "已切换服务端，保存后写入本机浏览器。",
+      isRuntimeStudentApiProvider(provider)
+        ? "已切换服务端，保存后会按当前登录账号持久化并应用到训练智能体。"
+        : "已切换服务端，可测试连通性；训练智能体请使用 OpenAI 兼容、Anthropic 或 Vertex Gemini。",
     );
   }
 
   async function handleSaveStudentApiConfig(): Promise<void> {
-    saveStudentApiConfig(studentApiConfig);
     setApiConfigTestResult(null);
-    if (
-      studentApiConfig.provider !== "openai_compatible" &&
-      studentApiConfig.provider !== "vertex_gemini_adc" &&
-      studentApiConfig.provider !== "vertex_gemini_api_key"
-    ) {
-      setApiConfigStatusText("已保存到本机浏览器；跨模块训练注入请使用 OpenAI 兼容或 Vertex Gemini。");
+    if (!authUser) {
+      setApiConfigStatusText("请先登录后再保存 API 配置。");
+      setIsAuthDialogOpen(true);
+      return;
+    }
+    if (!isRuntimeStudentApiProvider(studentApiConfig.provider)) {
+      setApiConfigStatusText("当前服务端仅用于连通性测试；训练智能体请使用 OpenAI 兼容、Anthropic 或 Vertex Gemini。");
       return;
     }
 
     setIsApplyingStudentApiConfig(true);
-    setApiConfigStatusText("正在应用到后端运行时...");
+    setApiConfigStatusText("正在保存到当前账号并应用到后端运行时...");
     try {
       const result = await applyStudentApiConfigToRuntime(studentApiConfig);
+      setRuntimeApiConfig(result);
+      setStudentApiConfig(createStudentApiConfigFromRuntime(result));
       setApiConfigStatusText(result.message);
     } catch (error) {
       setApiConfigStatusText(error instanceof Error ? error.message : "应用到后端运行时失败。");
@@ -1957,6 +2201,11 @@ function HomeContent() {
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
   const isVertexGeminiApiKeyConfig = studentApiConfig.provider === "vertex_gemini_api_key";
+  const hasSavedApiKeyForSelectedProvider = Boolean(
+    runtimeApiConfig?.active
+    && runtimeApiConfig.provider === studentApiConfig.provider
+    && runtimeApiConfig.api_key_saved,
+  );
   const apiConfigBaseUrlLabel = isVertexGeminiAdcConfig ? "Project ID" : isVertexGeminiApiKeyConfig ? "Base URL（可留空）" : "Base URL";
   const apiConfigBaseUrlPlaceholder = isVertexGeminiAdcConfig
     ? "例如：my-gcp-project"
@@ -1965,20 +2214,51 @@ function HomeContent() {
       : selectedApiConfigProviderOption.defaultBaseUrl;
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
+    let baseMessages: ChatMessage[] = [];
     if (!session) {
-      return [];
+      baseMessages = [];
+    } else {
+      baseMessages = [
+        {
+          id: "chief-complaint",
+          speaker: "patient",
+          label: "标准化病人",
+          text: `医生您好，我这次主要是${session.chief_complaint}。`,
+        },
+        ...session.messages.map(mapApiMessage),
+      ];
     }
 
-    return [
-      {
-        id: "chief-complaint",
-        speaker: "patient",
-        label: "标准化病人",
-        text: `医生您好，我这次主要是${session.chief_complaint}。`,
-      },
-      ...session.messages.map(mapApiMessage),
-    ];
-  }, [session]);
+    if (pendingPatientMessage?.finalText) {
+      baseMessages = baseMessages.filter(
+        (message) => !(message.speaker === pendingPatientMessage.speaker && message.text === pendingPatientMessage.finalText),
+      );
+    }
+
+    const nextMessages = [...baseMessages];
+    if (
+      optimisticHistoryMessage &&
+      !hasMessageWithSpeakerAndText(nextMessages, optimisticHistoryMessage.speaker, optimisticHistoryMessage.text)
+    ) {
+      nextMessages.push(optimisticHistoryMessage);
+    }
+    if (pendingPatientMessage) {
+      nextMessages.push(pendingPatientMessage);
+    }
+
+    return nextMessages;
+  }, [optimisticHistoryMessage, pendingPatientMessage, session]);
+
+  useEffect(() => {
+    const chatScrollContainer = chatScrollContainerRef.current;
+    if (!chatScrollContainer) {
+      return;
+    }
+    chatScrollContainer.scrollTo({
+      top: chatScrollContainer.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [chatMessages.length, optimisticHistoryMessage?.text, pendingPatientMessage?.text, statusText, errorText]);
 
   const evidenceItems = useMemo(
     () => session?.revealed_facts.map(getEvidenceItem) ?? [],
@@ -2031,7 +2311,7 @@ function HomeContent() {
       }
     : {
         bottom: `${OSCE_DOCK_MARGIN}px`,
-        left: `${OSCE_DOCK_MARGIN}px`,
+        right: `${OSCE_DOCK_MARGIN}px`,
       };
   const osceDockPanelAlignmentClass = osceDockPosition.side === "right" ? "right-0" : "left-0";
   const osceDockPanelVerticalClass = osceDockPosition.isReady && osceDockPosition.y < 260 ? "top-16" : "bottom-16";
@@ -2115,8 +2395,18 @@ function HomeContent() {
     }
   }
 
+  function promptTrainingModelConfigRequired(): void {
+    setStatusText(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE);
+    setErrorText(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE);
+    setIsApiConfigHelpOpen(true);
+  }
+
   async function ensureActiveSession(): Promise<OsceSession | null> {
     if (session) {
+      if (!isTrainingModelConfigReady) {
+        promptTrainingModelConfigRequired();
+        return null;
+      }
       return session;
     }
 
@@ -2128,6 +2418,11 @@ function HomeContent() {
 
     if (!selectedCaseId) {
       setStatusText("请先选择病例，再开始训练。");
+      return null;
+    }
+
+    if (!isTrainingModelConfigReady) {
+      promptTrainingModelConfigRequired();
       return null;
     }
 
@@ -2155,6 +2450,31 @@ function HomeContent() {
     }
   }
 
+  async function animatePendingPatientReply(messageId: string, replyText: string): Promise<void> {
+    if (!replyText) {
+      setPendingPatientMessage((currentMessage) => currentMessage?.id === messageId ? null : currentMessage);
+      return;
+    }
+
+    for (let index = 1; index <= replyText.length; index += 1) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, PATIENT_REPLY_TYPEWRITER_DELAY_MS);
+      });
+      setPendingPatientMessage((currentMessage) =>
+        currentMessage?.id === messageId
+          ? {
+              ...currentMessage,
+              finalText: replyText,
+              isPending: index < replyText.length,
+              text: replyText.slice(0, index),
+            }
+          : currentMessage,
+      );
+    }
+
+    setPendingPatientMessage((currentMessage) => currentMessage?.id === messageId ? null : currentMessage);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = inputValue.trim();
@@ -2163,20 +2483,59 @@ function HomeContent() {
       return;
     }
 
+    if (!isTrainingModelConfigReady) {
+      promptTrainingModelConfigRequired();
+      return;
+    }
+
+    const requestTimestamp = Date.now();
+    const optimisticQuestionId = `optimistic-student-${requestTimestamp}`;
+    const pendingPatientReplyId = `pending-patient-${requestTimestamp}`;
     setIsSending(true);
     setErrorText(null);
+    setInputValue("");
+    setOptimisticHistoryMessage({
+      id: optimisticQuestionId,
+      speaker: "student",
+      label: "学生",
+      text: message,
+    });
+    setPendingPatientMessage({
+      id: pendingPatientReplyId,
+      speaker: "coach",
+      label: "判断中",
+      text: "判断中",
+      isPending: true,
+    });
+    setStatusText("正在处理问诊");
 
     try {
       const activeSession = await ensureActiveSession();
       if (!activeSession) {
+        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         return;
       }
 
       const updatedSession = await sendHistoryMessage(activeSession.session_id, message);
+      const replyText = updatedSession.reply ?? "";
+      const replyMessageMetadata = getReplyMessageMetadata(updatedSession, replyText);
+      const replyStatusLabel = replyMessageMetadata.speaker === "coach" ? replyMessageMetadata.label : "标准化病人回复";
+      setPendingPatientMessage((currentMessage) =>
+        currentMessage?.id === pendingPatientReplyId
+          ? {
+              ...currentMessage,
+              ...replyMessageMetadata,
+              finalText: replyText,
+            }
+          : currentMessage,
+      );
       setSession(updatedSession);
-      setInputValue("");
-      setStatusText(`已收到标准化病人回复：${updatedSession.current_intent ?? "未识别意图"}`);
+      setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
+      setStatusText(`正在显示${replyStatusLabel}...`);
+      await animatePendingPatientReply(pendingPatientReplyId, updatedSession.reply ?? "");
+      setStatusText(`已收到${replyStatusLabel}：${updatedSession.current_intent ?? "未识别意图"}`);
     } catch (error) {
+      setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
       setErrorText(error instanceof Error ? error.message : "发送问诊失败。");
       setStatusText("问诊发送失败，请确认后端仍在运行。");
     } finally {
@@ -2354,7 +2713,7 @@ function HomeContent() {
       <div className={isAuthDialogOpen ? "h-full pointer-events-none blur-sm" : "h-full"}>
         <div className="flex h-full min-h-0">
       <aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-scroll student-rail-scrollbar" onScroll={handleStudentRailScroll}>
         <div className="mb-6">
           <h1 className="text-xl font-semibold tracking-tight">临境 OSCE 智能体</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
@@ -2390,7 +2749,7 @@ function HomeContent() {
             </div>
 
             <Link
-              className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
+              className="mx-auto flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926]"
               href="/cases"
             >
               选择病例
@@ -2484,12 +2843,13 @@ function HomeContent() {
                   </p>
                 </div>
                 <div className="max-w-sm rounded-lg border border-brand/20 bg-brand/5 px-3 py-2 text-xs leading-5 text-brand">
-                  {trainingSuggestion}
+                  <p>{statusText}</p>
+                  {errorText ? <p className="mt-1 text-red-600">{errorText}</p> : null}
                 </div>
               </div>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto p-5 pb-40">
+            <div className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar" ref={chatScrollContainerRef}>
               {!session && !isCasePreparationPromptDismissed ? (
                 <CaseSelectionPrompt selectedCase={selectedCase} onDismiss={() => setIsCasePreparationPromptDismissed(true)} />
               ) : null}
@@ -2497,21 +2857,19 @@ function HomeContent() {
               {chatMessages.map((message) => {
                 const isStudent = message.speaker === "student";
                 const isCoach = message.speaker === "coach";
+                const messageRowClass = isStudent ? "justify-end" : isCoach ? "justify-center" : "justify-start";
+                const messageBubbleClass = isStudent
+                  ? "max-w-[76%] rounded-xl border border-brand bg-brand px-4 py-3 text-sm leading-6 text-white shadow-xs"
+                  : isCoach
+                    ? "w-full max-w-lg border-[#B5812A]/30 bg-[#FFF8E8] rounded-xl border px-4 py-3 text-sm leading-6 text-foreground shadow-xs"
+                    : "max-w-[76%] rounded-xl border border-border bg-muted px-4 py-3 text-sm leading-6 text-foreground shadow-xs";
                 return (
-                  <div className={`flex ${isStudent ? "justify-end" : "justify-start"}`} key={message.id}>
-                    <div
-                      className={`max-w-[76%] rounded-xl border px-4 py-3 text-sm leading-6 shadow-xs ${
-                        isStudent
-                          ? "border-brand bg-brand text-white"
-                          : isCoach
-                            ? "border-[#B5812A]/30 bg-[#FFF8E8] text-foreground"
-                            : "border-border bg-muted text-foreground"
-                      }`}
-                    >
+                  <div className={`flex ${messageRowClass}`} key={message.id}>
+                    <div className={messageBubbleClass}>
                       <p className={isStudent ? "text-white/80" : isCoach ? "text-[#8A5A00]" : "text-muted-foreground"}>
                         {message.label}
                       </p>
-                      <p className="mt-1">{message.text}</p>
+                      <p className="mt-1">{message.isPending && !message.finalText ? <PendingThinkingIndicator /> : message.text}</p>
                     </div>
                   </div>
                 );
@@ -2519,7 +2877,7 @@ function HomeContent() {
             </div>
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10">
-              <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
+              <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
                 <button
                   className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
                   onClick={() => setInputValue("什么时候开始疼的？")}
@@ -2529,32 +2887,32 @@ function HomeContent() {
                 </button>
                 <button
                   className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingHint}
                   onClick={handleHintRequest}
                   type="button"
                 >{isRequestingHint ? "提示生成中" : "请求提示"}</button>
                 <button
                   aria-expanded={openProcedureActionGroup === "physical_exam"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={physicalExamOptions.length === 0}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || physicalExamOptions.length === 0}
                   onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "physical_exam" ? null : "physical_exam")}
                   type="button"
                 >
                   查体项目
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {pendingPhysicalExamOptions.length}/{physicalExamOptions.length}
+                    {completedPhysicalExamOptions.length}/{physicalExamOptions.length}
                   </span>
                 </button>
                 <button
                   aria-expanded={openProcedureActionGroup === "auxiliary_test"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={auxiliaryTestOptions.length === 0}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || auxiliaryTestOptions.length === 0}
                   onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "auxiliary_test" ? null : "auxiliary_test")}
                   type="button"
                 >
                   辅助检查
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {pendingAuxiliaryTestOptions.length}/{auxiliaryTestOptions.length}
+                    {completedAuxiliaryTestOptions.length}/{auxiliaryTestOptions.length}
                   </span>
                 </button>
                 <button
@@ -2563,21 +2921,24 @@ function HomeContent() {
                   type="button"
                 >{isDiagnosisComposerOpen ? "收起诊断" : "填写诊断"}</button>
                 {openProcedureActionGroup === "physical_exam" ? (
-                  <div className="absolute bottom-11 left-0 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]">
+                  <div className="absolute bottom-11 left-0 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]" data-procedure-action-menu="true">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-semibold">查体项目</p>
                       <span className="rounded-full border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
                         {completedPhysicalExamOptions.length} 已查看
                       </span>
                     </div>
-                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll={handleStudentRailScroll}>
                       {pendingPhysicalExamOptions.length > 0 ? (
                         pendingPhysicalExamOptions.map((examOption) => (
                           <button
                             className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || isCreating || isRequestingExam}
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingExam}
                             key={examOption.exam_code}
-                            onClick={() => handlePhysicalExamRequest(examOption.exam_code)}
+                            onClick={() => {
+                              setOpenProcedureActionGroup(null);
+                              void handlePhysicalExamRequest(examOption.exam_code);
+                            }}
                             type="button"
                           >
                             <span className="block whitespace-nowrap">{isRequestingExam ? "查体中" : examOption.exam_name_cn}</span>
@@ -2596,7 +2957,10 @@ function HomeContent() {
                               <button
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={examOption.exam_code}
-                                onClick={() => setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`))}
+                                onClick={() => {
+                                  setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
+                                  setOpenProcedureActionGroup(null);
+                                }}
                                 type="button"
                               >
                                 查体：{examOption.exam_name_cn}
@@ -2609,21 +2973,24 @@ function HomeContent() {
                   </div>
                 ) : null}
                 {openProcedureActionGroup === "auxiliary_test" ? (
-                  <div className="absolute bottom-11 left-32 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]">
+                  <div className="absolute bottom-11 left-32 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)]" data-procedure-action-menu="true">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-semibold">辅助检查</p>
                       <span className="rounded-full border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
                         {completedAuxiliaryTestOptions.length} 已查看
                       </span>
                     </div>
-                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                    <div className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll={handleStudentRailScroll}>
                       {pendingAuxiliaryTestOptions.length > 0 ? (
                         pendingAuxiliaryTestOptions.map((testOption) => (
                           <button
                             className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || isCreating || isRequestingTest}
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingTest}
                             key={testOption.test_code}
-                            onClick={() => handleAuxiliaryTestRequest(testOption.test_code)}
+                            onClick={() => {
+                              setOpenProcedureActionGroup(null);
+                              void handleAuxiliaryTestRequest(testOption.test_code);
+                            }}
                             title={
                               testOption.rules_out.length > 0
                                 ? `用于排除：${testOption.rules_out.join("、")}`
@@ -2650,7 +3017,10 @@ function HomeContent() {
                               <button
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={testOption.test_code}
-                                onClick={() => setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`))}
+                                onClick={() => {
+                                  setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
+                                  setOpenProcedureActionGroup(null);
+                                }}
                                 type="button"
                               >
                                 {testOption.category}：{testOption.test_name_cn}
@@ -2670,7 +3040,7 @@ function HomeContent() {
                 <div className="flex items-center gap-2">
                   <input
                     className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
-                    disabled={!authUser || !selectedCaseId || isCreating || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSending}
                     id="history-question"
                     onChange={(event) => setInputValue(event.target.value)}
                     placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"
@@ -2678,7 +3048,7 @@ function HomeContent() {
                   />
                   <button
                     className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!authUser || !selectedCaseId || isCreating || !inputValue.trim() || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || !inputValue.trim() || isSending}
                     type="submit"
                   >
                     {isSending ? "发送中" : "发送问诊"}
@@ -2694,7 +3064,7 @@ function HomeContent() {
                       </label>
                       <input
                         className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                        disabled={!authUser || !selectedCaseId || isCreating || isSubmittingDiagnosis}
+                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
                         id="diagnosis-input"
                         onChange={(event) => setDiagnosisValue(event.target.value)}
                         placeholder="最终诊断"
@@ -2705,7 +3075,7 @@ function HomeContent() {
                       </label>
                       <input
                         className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                        disabled={!authUser || !selectedCaseId || isCreating || isSubmittingDiagnosis}
+                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
                         id="differential-diagnosis-input"
                         onChange={(event) => setDifferentialDiagnosisValue(event.target.value)}
                         placeholder="至少 2 个合理鉴别诊断"
@@ -2717,7 +3087,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
                       id="supporting-evidence-input"
                       onChange={(event) => setSupportingEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -2730,7 +3100,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
                       id="exclusion-evidence-input"
                       onChange={(event) => setExclusionEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -2743,7 +3113,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
                       id="next-step-input"
                       onChange={(event) => setNextStepValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -2755,6 +3125,7 @@ function HomeContent() {
                       className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-fit"
                       disabled={
                         !authUser ||
+                        !isTrainingModelConfigReady ||
                         isCreating ||
                         !diagnosisValue.trim() ||
                         !differentialDiagnosisValue.trim() ||
@@ -2771,68 +3142,10 @@ function HomeContent() {
                     </div>
                   </div>
                 ) : null}
-                <p className="mx-auto mt-2 max-w-3xl text-xs leading-5 text-muted-foreground">{statusText}</p>
-                {errorText ? <p className="mx-auto mt-2 max-w-3xl text-xs leading-5 text-red-600">{errorText}</p> : null}
             </div>
           </div>
 
-          <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-            <Panel title="训练进度与素材覆盖" description="用病例素材覆盖度提示下一步训练动作。">
-              {session ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">问诊线索</p>
-                      <p className="mt-1 text-lg font-semibold text-brand">
-                        {formatProgressCount(session.training_progress.history.covered, session.training_progress.history.total)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">查体项目</p>
-                      <p className="mt-1 text-lg font-semibold text-brand">
-                        {formatProgressCount(
-                          session.training_progress.physical_exam.requested,
-                          session.training_progress.physical_exam.total,
-                        )}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">辅助检查</p>
-                      <p className="mt-1 text-lg font-semibold text-brand">
-                        {formatProgressCount(
-                          session.training_progress.auxiliary_test.requested,
-                          session.training_progress.auxiliary_test.total,
-                        )}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">推理证据</p>
-                      <p className="mt-1 text-lg font-semibold text-brand">
-                        {formatProgressCount(
-                          session.training_progress.reasoning.collected_evidence_count,
-                          session.training_progress.reasoning.total_evidence,
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3 text-xs leading-5 text-brand">
-                    {session.training_progress.next_focus}
-                  </div>
-                  <button
-                    className="w-full rounded-lg border border-dashed border-brand/30 bg-brand/5 px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-brand transition hover:bg-brand/10"
-                    onClick={() => setIsCoverageMapOpen(true)}
-                    type="button"
-                  >
-                    开发者功能：查看素材覆盖图谱
-                  </button>
-                </div>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                  创建训练会话后，这里会展示病例素材覆盖度和下一步建议。
-                </p>
-              )}
-            </Panel>
-
+          <aside className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar" onScroll={handleStudentRailScroll}>
             <CollapsiblePanel
               title="教学重点与问诊提示"
               description="展开查看训练重点、误区和推荐问诊。"
@@ -3047,34 +3360,6 @@ function HomeContent() {
             </CollapsiblePanel>
 
             <CollapsiblePanel
-              title="查体与检查申请"
-              isOpen={rightPanelOpenStates.procedures}
-              maxContentHeightClass="max-h-64"
-              onToggle={() => toggleRightPanel("procedures")}
-            >
-              {procedureItems.length > 0 ? (
-                <ul className="space-y-2 text-sm">
-                  {procedureItems.map((item) => (
-                    <li key={item.id}>
-                      <button
-                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-sm font-medium text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
-                        onClick={() => setSelectedProcedureResult(item)}
-                        type="button"
-                      >
-                        <span className="min-w-0 truncate">{item.label}</span>
-                        <span className="shrink-0 text-[11px] whitespace-nowrap">查看结果</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs leading-5 text-muted-foreground">
-                  点击快捷操作后，这里会展示后端返回的查体和辅助检查结果。
-                </p>
-              )}
-            </CollapsiblePanel>
-
-            <CollapsiblePanel
               title="诊断假设"
               isOpen={rightPanelOpenStates.hypotheses}
               maxContentHeightClass="max-h-48"
@@ -3246,10 +3531,24 @@ function HomeContent() {
                 </div>
               ) : null}
             </CollapsiblePanel>
+            <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
+              <p className="font-medium text-foreground">管理员图谱</p>
+              <p className="mt-1 text-muted-foreground">
+                查看本次训练素材覆盖状态；未覆盖项只显示素材 ID，避免提前泄露隐藏结果。
+              </p>
+              <button
+                className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!session}
+                onClick={() => setIsCoverageMapOpen(true)}
+                type="button"
+              >
+                查看素材覆盖图谱
+              </button>
+            </div>
           </aside>
         </div>
       </section>
-      <div className="fixed z-40" style={osceDockStyle}>
+      <div className="fixed z-40" ref={osceDockContainerRef} style={osceDockStyle}>
         {isOsceDockOpen ? (
           <section className={`absolute ${osceDockPanelVerticalClass} ${osceDockPanelAlignmentClass} rounded-2xl border border-border bg-white/95 p-3 shadow-[0_18px_45px_rgba(20,20,19,0.16)] backdrop-blur`}>
             <div className="grid w-36 gap-2">
@@ -3261,14 +3560,21 @@ function HomeContent() {
                 训练入口
               </button>
               {isStudentRuntimeApiConfigEnabled ? (
-                <button className={osceDockButtonActionClass} onClick={() => setIsApiConfigHelpOpen(true)} type="button">
+                <button
+                  className={osceDockButtonActionClass}
+                  onClick={() => {
+                    closeOsceDock();
+                    setIsApiConfigHelpOpen(true);
+                  }}
+                  type="button"
+                >
                   API 配置
                 </button>
               ) : null}
-              <Link className={osceDockActionClass} href="/safety">
+              <Link className={osceDockActionClass} href="/safety" onClick={closeOsceDock}>
                 安全声明
               </Link>
-              <Link className={osceDockActionClass} href="/sources">
+              <Link className={osceDockActionClass} href="/sources" onClick={closeOsceDock}>
                 数据来源
               </Link>
               <button
@@ -3291,11 +3597,11 @@ function HomeContent() {
               <div className={`absolute top-0 ${osceDockSubmenuAlignmentClass} w-48 rounded-2xl border border-border bg-white/95 p-2 shadow-[0_18px_45px_rgba(20,20,19,0.14)] backdrop-blur`}>
                 {osceDockMenuGroup === "training" ? (
                   <div className="grid gap-2">
-                    <Link className={osceDockActionClass} href="/cases">
+                    <Link className={osceDockActionClass} href="/cases" onClick={closeOsceDock}>
                       病例库
                     </Link>
                     {feedbackReport ? (
-                      <Link className="rounded-lg border border-brand bg-brand px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover" href={`/report?session_id=${feedbackReport.session_id}`}>
+                      <Link className="rounded-lg border border-brand bg-brand px-3 py-2 text-center text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover" href={`/report?session_id=${feedbackReport.session_id}`} onClick={closeOsceDock}>
                         评分报告
                       </Link>
                     ) : (
@@ -3303,8 +3609,11 @@ function HomeContent() {
                     )}
                     <button
                       className={osceDockButtonActionClass}
-                      disabled={!authUser || !selectedCaseId || isCreating || isRequestingHint}
-                      onClick={() => void handleHintRequest()}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingHint}
+                      onClick={() => {
+                        closeOsceDock();
+                        void handleHintRequest();
+                      }}
                       type="button"
                     >
                       过程提示
@@ -3312,7 +3621,10 @@ function HomeContent() {
                     <button
                       className={osceDockButtonActionClass}
                       disabled={!preparedPatientProfile}
-                      onClick={() => setIsPatientProfileOpen(true)}
+                      onClick={() => {
+                        closeOsceDock();
+                        setIsPatientProfileOpen(true);
+                      }}
                       type="button"
                     >
                       患者信息
@@ -3372,6 +3684,32 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
+      {isCoverageMapOpen && session ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="max-h-[82vh] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium text-brand">管理员图谱</p>
+                <h2 className="mt-1 text-base font-semibold">管理员图谱 · 素材覆盖</h2>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  用于答辩和调试训练路径覆盖，不参与评分决策；未覆盖项不会展示隐藏结果文本。
+                </p>
+              </div>
+              <button
+                aria-label="关闭素材覆盖图谱"
+                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                onClick={() => setIsCoverageMapOpen(false)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-4">
+              <CoverageMap trainingProgress={session.training_progress} />
+            </div>
+          </div>
+        </div>
+      ) : null}
       {isPatientProfileOpen && preparedPatientProfile ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl">
@@ -3413,32 +3751,6 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
-      {isCoverageMapOpen && session ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="max-h-[82vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-medium text-brand">开发者功能</p>
-                <h2 className="mt-1 text-base font-semibold">开发者功能 · 素材覆盖图谱</h2>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  用于调试病例素材覆盖，不直接作为学生评分依据。
-                </p>
-              </div>
-              <button
-                aria-label="关闭素材覆盖图谱"
-                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                onClick={() => setIsCoverageMapOpen(false)}
-                type="button"
-              >
-                关闭
-              </button>
-            </div>
-            <div className="mt-4">
-              <CoverageMap trainingProgress={session.training_progress} />
-            </div>
-          </div>
-        </div>
-      ) : null}
       {isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl">
@@ -3446,7 +3758,6 @@ function HomeContent() {
               <div>
                 <p className="text-xs font-medium text-brand">系统与配置</p>
                 <h2 className="mt-1 text-base font-semibold">API 配置</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">选择服务端并测试连通性；OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时。</p>
               </div>
               <button
                 aria-label="关闭 API 配置说明"
@@ -3461,52 +3772,27 @@ function HomeContent() {
               <section className="space-y-2">
                 <p className="text-sm font-medium">服务端</p>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "custom_backend" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
-                    }`}
-                    onClick={() => handleStudentApiProviderChange("custom_backend")}
-                    type="button"
-                  >
-                    自定义后端
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "gemini" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
-                    }`}
-                    onClick={() => handleStudentApiProviderChange("gemini")}
-                    type="button"
-                  >
-                    Gemini Developer API
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "vertex_gemini_adc" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
-                    }`}
-                    onClick={() => handleStudentApiProviderChange("vertex_gemini_adc")}
-                    type="button"
-                  >
-                    Vertex Gemini ADC
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "vertex_gemini_api_key" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
-                    }`}
-                    onClick={() => handleStudentApiProviderChange("vertex_gemini_api_key")}
-                    type="button"
-                  >
-                    Vertex Gemini API Key
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
-                      studentApiConfig.provider === "openai_compatible" ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
-                    }`}
-                    onClick={() => handleStudentApiProviderChange("openai_compatible")}
-                    type="button"
-                  >
-                    OpenAI 兼容
-                  </button>
+                  {apiConfigProviderOptions.map((providerOption) => {
+                    const isSelectedProvider = studentApiConfig.provider === providerOption.id;
+                    const isCurrentProvider = Boolean(runtimeApiConfig?.active && runtimeApiConfig.provider === providerOption.id);
+                    return (
+                      <button
+                        className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
+                          isSelectedProvider ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
+                        }`}
+                        key={providerOption.id}
+                        onClick={() => handleStudentApiProviderChange(providerOption.id)}
+                        type="button"
+                      >
+                        <span>{providerOption.label}</span>
+                        {isCurrentProvider ? <span className="ml-2 rounded-full bg-background/85 px-2 py-0.5 text-[11px] text-brand">当前</span> : null}
+                      </button>
+                    );
+                  })}
                 </div>
+                <p className="rounded-lg border border-border bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                  当前渠道：{formatRuntimeApiConfigSummary(runtimeApiConfig)}
+                </p>
               </section>
               <div className="grid gap-3">
                 <label className="space-y-1 text-sm font-medium" htmlFor="student-api-key-input">
@@ -3525,13 +3811,16 @@ function HomeContent() {
                         ? "使用本机 ADC，无需 API Key"
                         : studentApiConfig.provider === "custom_backend"
                           ? "自定义后端可选"
-                          : studentApiConfig.provider !== "vertex_gemini_api_key"
-                            ? "输入服务商密钥"
-                            : "输入 Vertex API Key"
+                          : hasSavedApiKeyForSelectedProvider
+                            ? "已保存，可留空沿用"
+                            : studentApiConfig.provider !== "vertex_gemini_api_key"
+                              ? "输入服务商密钥"
+                              : "输入 Vertex API Key"
                     }
                     type="password"
                     value={studentApiConfig.apiKey}
                   />
+                  {hasSavedApiKeyForSelectedProvider ? <span className="block text-xs font-normal text-muted-foreground">密钥已保存，留空会沿用当前账号的已保存密钥。</span> : null}
                 </label>
                 <label className="space-y-1 text-sm font-medium" htmlFor="student-api-model-input">
                   <span>模型</span>
@@ -3588,7 +3877,7 @@ function HomeContent() {
                 </button>
                 <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
               </div>
-              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
+              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端，可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
             </div>
           </div>
         </div>

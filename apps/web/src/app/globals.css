@@ -80,6 +80,90 @@
     box-shadow: inset 9px 0 6px -1px rgb(73 49 34 / 0.04);
   }
 
+  .student-rail-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    scrollbar-color: transparent transparent;
+  }
+
+  .student-rail-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .student-rail-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .student-rail-scrollbar::-webkit-scrollbar-thumb {
+    background: transparent;
+    background-clip: content-box;
+    border: 1px solid transparent;
+    border-radius: 999px;
+  }
+
+  .student-rail-scrollbar.is-student-scrollbar-active {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--brand) 28%, transparent) transparent;
+  }
+
+  .student-rail-scrollbar.is-student-scrollbar-active::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .student-rail-scrollbar.is-student-scrollbar-active::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--brand) 28%, transparent);
+    background-clip: content-box;
+    border: 1px solid transparent;
+  }
+
+  .student-chat-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    scrollbar-color: #d6d3ce transparent;
+  }
+
+  .student-chat-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .student-chat-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .student-chat-scrollbar::-webkit-scrollbar-thumb {
+    background: #d6d3ce;
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+  }
+
+  .student-chat-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #c8c5bd;
+    background-clip: content-box;
+  }
+
+  @keyframes clinical-osce-thinking-dot {
+    0%,
+    80%,
+    100% {
+      opacity: 0.24;
+      transform: translateY(0);
+    }
+
+    40% {
+      opacity: 1;
+      transform: translateY(-2px);
+    }
+  }
+
+  .clinical-osce-thinking-dot {
+    display: inline-block;
+    animation: clinical-osce-thinking-dot 1.05s ease-in-out infinite;
+  }
+
   .bg-brand {
     background-color: var(--brand);
   }

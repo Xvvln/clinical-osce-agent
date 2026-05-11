@@ -175,8 +175,8 @@ CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=safe-admin-password
 - Gemini Developer API 可用于学生端标准化病人表达层，密钥只从环境变量读取。
 - Vertex Gemini 可用于标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；支持 ADC（Application Default Credentials，应用默认凭证）或 Vertex Express/API Key 两种认证方式。学生端 API 配置弹窗可选择 `Vertex Gemini ADC` 填写 Project ID，也可选择 `Vertex Gemini API Key` 只填写 API Key、模型和代理后应用到本次后端运行时。
 - Vertex embedding RAG 检索可通过 `OSCE_VERTEX_EMBEDDING_ENABLED=true` 和 `OSCE_VERTEX_EMBEDDING_PROJECT=<project_id>` 启用，默认模型为 `gemini-embedding-001`，只用于 RAG 来源片段召回、反馈解释和学习推荐；启用 `OSCE_CHROMA_ENABLED=true` 后可使用本地 ChromaDB `PersistentClient` 持久化病例、rubric 和 knowledge 来源条目向量，并在持久化目录生成 `retrieval_index_manifest.json` 供管理端展示索引状态、文档数、覆盖病例和是否需重建。该链路不参与评分或诊断，pgvector / 生产级向量检索仍属于后续扩展。
-- OpenAI 兼容配置可通过 `OSCE_OPENAI_*` 环境变量，或学生端 `/api/model-config/runtime` 本次运行时内存配置，接入标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；底层按 Chat Completions 请求 `{base_url}/chat/completions`，可用 `OSCE_OPENAI_PROXY_URL=http://127.0.0.1:7897` 或 `direct` 控制代理。
-- 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不会把运行时密钥写入数据库或 `.env`。学生端弹窗配置会保存在浏览器 `localStorage`，后端运行时配置只保存在当前 FastAPI 进程内存；需要重启后仍生效时，请写入 `.env` / 环境变量。
+- OpenAI 兼容和 Anthropic 配置可通过环境变量，或学生端 `/api/model-config/runtime` 按当前登录账号持久化后接入标准化病人、`llm_rubric` 评分和 Skill 候选文案生成；OpenAI 兼容底层按 Chat Completions 请求 `{base_url}/chat/completions`，Anthropic 兼容底层按 Messages 请求 `{base_url}/v1/messages`，代理可填 `http://127.0.0.1:7897` 或 `direct`。
+- 管理端登录后可在“模型 / API 配置”区块查看 `/api/admin/model-config` 返回的配置状态、缺失环境变量和接入边界；接口不会返回真实密钥值，也不会把运行时密钥写入 `.env`。学生端弹窗配置不再写浏览器 `localStorage`，会按登录账号保存到后端 runtime SQLite；状态接口只返回 provider、模型、地址、代理和 `api_key_saved`，不会回显密钥，同一账号后续可留空沿用已保存密钥。生产部署仍应改用服务端环境变量、密钥管理服务或管理员侧配置流程。
 
 本地演示管理员账号已在管理端登录弹窗中预填：`admin-demo@example.test / safe-admin-password`。后端会在首次使用这组凭据登录时创建或刷新该演示账号，并把它视为管理员邮箱；正式部署前应设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED=false`，改用自己的 `CLINICAL_OSCE_ADMIN_EMAILS` 白名单和真实账号。
 

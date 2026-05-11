@@ -119,14 +119,14 @@ test("home page replaces the Next dev ball with a polished OSCE floating dock", 
   assert.match(pageSource, /href="\/profile"/);
   assert.match(pageSource, /href="\/safety"/);
   assert.match(pageSource, /href="\/sources"/);
-  assert.match(pageSource, /onClick=\{\(\) => setIsApiConfigHelpOpen\(true\)\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?setIsApiConfigHelpOpen\(true\);[\s\S]*?\}\}/);
   assert.doesNotMatch(pageSource, /<a className=\{osceDockActionClass\} href=\{ADMIN_MODEL_CONFIG_URL\}/);
   assert.match(pageSource, /API 配置/);
   assert.match(pageSource, /安全声明/);
   assert.match(pageSource, /数据来源/);
   assert.match(pageSource, /href=\{`\/report\?session_id=\$\{feedbackReport\.session_id\}`\}/);
-  assert.match(pageSource, /onClick=\{\(\) => void handleHintRequest\(\)\}/);
-  assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?void handleHintRequest\(\);[\s\S]*?\}\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?setIsPatientProfileOpen\(true\);[\s\S]*?\}\}/);
   assert.match(pageSource, /const osceDockActionClass = "[^"]*whitespace-nowrap/);
   assert.match(pageSource, /rounded-full border border-brand\/35 bg-\[#FFF8E8\] text-brand shadow-\[0_14px_32px_rgba\(174,86,48,0\.22\)\]/);
   assert.match(pageSource, /absolute inset-1\.5 rounded-full border border-brand\/20 bg-background\/80/);
@@ -138,28 +138,42 @@ test("home page replaces the Next dev ball with a polished OSCE floating dock", 
 });
 
 test("home OSCE dock opens student API config dialog instead of navigating directly to admin", () => {
-  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "vertex_gemini_adc" \| "vertex_gemini_api_key" \| "openai_compatible";/);
-  assert.match(pageSource, /const STUDENT_API_CONFIG_STORAGE_KEY = "clinical_osce_student_api_config";/);
+  assert.match(pageSource, /type ApiConfigProvider = "custom_backend" \| "gemini" \| "vertex_gemini_adc" \| "vertex_gemini_api_key" \| "openai_compatible" \| "anthropic";/);
+  assert.doesNotMatch(pageSource, /STUDENT_API_CONFIG_STORAGE_KEY/);
   assert.match(pageSource, /function createDefaultStudentApiConfig\(\): StudentApiConfig/);
-  assert.match(pageSource, /function loadStudentApiConfig\(\): StudentApiConfig/);
-  assert.match(pageSource, /function saveStudentApiConfig\(config: StudentApiConfig\): void/);
+  assert.match(pageSource, /apiKey: "",[\s\S]*?model: "",[\s\S]*?baseUrl: "",[\s\S]*?proxyUrl: "",/);
+  assert.match(pageSource, /function createStudentApiConfigFromRuntime\(runtimeConfig: StudentApiConfigRuntimeResponse\): StudentApiConfig/);
+  assert.doesNotMatch(pageSource, /window\.localStorage\.getItem\(STUDENT_API_CONFIG_STORAGE_KEY\)/);
+  assert.doesNotMatch(pageSource, /window\.localStorage\.setItem\(STUDENT_API_CONFIG_STORAGE_KEY/);
   assert.match(pageSource, /function testStudentApiConfigConnection\(config: StudentApiConfig\): Promise<StudentApiConfigTestResponse>/);
+  assert.match(pageSource, /function getStudentRuntimeApiConfig\(\): Promise<StudentApiConfigRuntimeResponse>/);
   assert.match(pageSource, /\/api\/model-config\/test/);
+  assert.match(pageSource, /\/api\/model-config\/runtime/);
   assert.match(pageSource, /defaultModel: "gemini-3.1-pro-preview"/);
   assert.doesNotMatch(pageSource, /gemini-3\.1-flash-lite-preview/);
   assert.match(pageSource, /defaultProxyUrl: ""/);
   assert.match(pageSource, /defaultProxyUrl: "http:\/\/127\.0\.0\.1:7897"/);
+  assert.match(pageSource, /id: "anthropic",[\s\S]*?label: "Anthropic",[\s\S]*?defaultModel: "claude-3-5-sonnet-latest"/);
   assert.match(pageSource, /\{isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled \? \(/);
   assert.match(pageSource, /aria-label="关闭 API 配置说明"/);
   assert.match(pageSource, />\s*API 配置\s*</);
   assert.match(pageSource, />\s*服务端\s*</);
-  assert.match(pageSource, />\s*自定义后端\s*</);
-  assert.match(pageSource, />\s*Gemini Developer API\s*</);
-  assert.match(pageSource, />\s*Vertex Gemini ADC\s*</);
-  assert.match(pageSource, />\s*Vertex Gemini API Key\s*</);
-  assert.match(pageSource, />\s*OpenAI 兼容\s*</);
+  assert.match(pageSource, /label: "自定义后端"/);
+  assert.match(pageSource, /label: "Gemini Developer API"/);
+  assert.match(pageSource, /label: "Vertex Gemini ADC"/);
+  assert.match(pageSource, /label: "Vertex Gemini API Key"/);
+  assert.match(pageSource, /label: "OpenAI 兼容"/);
+  assert.match(pageSource, /label: "Anthropic"/);
+  assert.match(pageSource, /<span>\{providerOption\.label\}<\/span>/);
+  assert.match(pageSource, /runtimeApiConfig\?\.active && runtimeApiConfig\.provider === providerOption\.id/);
+  assert.match(pageSource, />\s*当前\s*<\/span>/);
+  assert.match(pageSource, /当前渠道：\{formatRuntimeApiConfigSummary\(runtimeApiConfig\)\}/);
+  assert.match(pageSource, /api_key_saved\?: boolean;/);
+  assert.match(pageSource, /setStudentApiConfig\(createStudentApiConfigFromRuntime\(runtimeConfig\)\)/);
+  assert.match(pageSource, /密钥已保存，留空会沿用当前账号的已保存密钥。/);
+  assert.match(pageSource, /runtimeConfig\.message \?\? "未启用，使用本地确定性回退"/);
   assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
-  assert.match(pageSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时/);
+  assert.doesNotMatch(pageSource, /选择服务端并测试连通性；OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时/);
   assert.match(pageSource, /id="student-api-key-input"/);
   assert.match(pageSource, /disabled=\{studentApiConfig\.provider === "vertex_gemini_adc"\}/);
   assert.match(pageSource, /studentApiConfig\.provider !== "vertex_gemini_api_key"/);
@@ -172,7 +186,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\{isTestingStudentApiConfig \? "测试中" : "测试连通性"\}<\/button>/);
   assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
-  assert.match(pageSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置可用于标准化病人、llm_rubric 和 Skill 候选文案/);
+  assert.match(pageSource, /OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端/);
 });
 
 test("student README documents blank diagnosis drafts and all runtime model providers", () => {
@@ -180,7 +194,8 @@ test("student README documents blank diagnosis drafts and all runtime model prov
   assert.match(webReadmeSource, /诊断提交表单保持空白结构化草稿/);
   assert.match(webReadmeSource, /后端不得下发标准诊断作为默认值/);
   assert.match(webReadmeSource, /Vertex Gemini API Key/);
-  assert.match(webReadmeSource, /OpenAI 兼容、Vertex Gemini ADC 或 Vertex Gemini API Key 配置保存时会调用 `\/api\/model-config\/runtime`/);
+  assert.match(webReadmeSource, /运行时模型配置按当前登录账号持久化/);
+  assert.doesNotMatch(webReadmeSource, /学生端配置保存到浏览器 `localStorage`/);
 });
 
 test("home production deployment hides student runtime API config entry", () => {
@@ -206,7 +221,7 @@ test("home page keeps agent pedagogy details behind a collapsible panel", () => 
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
   assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
-  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "procedures" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "hypotheses" \| "report";/);
   assert.match(pageSource, /agent: false,/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*description="展开查看教学策略、阶段检查点和决策轨迹。"[\s\S]*isOpen=\{rightPanelOpenStates\.agent\}/);
   assert.doesNotMatch(pageSource, /<Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">/);
@@ -280,17 +295,58 @@ test("home shell starts directly with the training workspace after removing the 
 
 test("home OSCE dock can be dragged and snaps to the viewport edge", () => {
   assert.match(pageSource, /type OsceDockPosition = Readonly<\{/);
+  assert.match(pageSource, /const OSCE_DOCK_POSITION_STORAGE_KEY = "clinical_osce_osce_dock_position";/);
   assert.match(pageSource, /const OSCE_DOCK_DRAG_THRESHOLD = 4;/);
+  assert.match(pageSource, /function createDefaultOsceDockPosition\(\): OsceDockPosition/);
+  assert.match(pageSource, /function loadOsceDockPosition\(\): OsceDockPosition/);
+  assert.match(pageSource, /function saveOsceDockPosition\(position: OsceDockPosition\): void/);
+  assert.match(pageSource, /window\.localStorage\.getItem\(OSCE_DOCK_POSITION_STORAGE_KEY\)/);
+  assert.match(pageSource, /window\.localStorage\.setItem\(OSCE_DOCK_POSITION_STORAGE_KEY/);
   assert.match(pageSource, /const osceDockDragRef = useRef<OsceDockDragState \| null>\(null\);/);
   assert.match(pageSource, /function getSnappedOsceDockPosition/);
   assert.match(pageSource, /window\.innerWidth/);
-  assert.match(pageSource, /setOsceDockPosition\(getSnappedOsceDockPosition/);
+  assert.match(pageSource, /return getSideSnappedOsceDockPosition\("right", window\.innerHeight - OSCE_DOCK_BUTTON_SIZE - OSCE_DOCK_MARGIN\);/);
+  assert.match(pageSource, /const snappedPosition = getSnappedOsceDockPosition/);
+  assert.match(pageSource, /side: "right",/);
+  assert.match(pageSource, /bottom: `\$\{OSCE_DOCK_MARGIN\}px`,[\s\S]*?right: `\$\{OSCE_DOCK_MARGIN\}px`,/);
+  assert.match(pageSource, /const snappedPosition = getSnappedOsceDockPosition\(nextX, nextY\);[\s\S]*?saveOsceDockPosition\(snappedPosition\);[\s\S]*?setOsceDockPosition\(snappedPosition\);/);
   assert.match(pageSource, /onPointerDown=\{handleOsceDockPointerDown\}/);
   assert.match(pageSource, /onPointerMove=\{handleOsceDockPointerMove\}/);
   assert.match(pageSource, /onPointerUp=\{handleOsceDockPointerUp\}/);
   assert.match(pageSource, /onPointerCancel=\{handleOsceDockPointerCancel\}/);
   assert.match(pageSource, /side === "right" \? "right-0" : "left-0"/);
   assert.match(pageSource, /touch-none cursor-grab/);
+});
+
+test("home workspace reserves side rail scrollbar gutters without layout shift", () => {
+  assert.match(globalsSource, /\.student-rail-scrollbar \{/);
+  assert.match(globalsSource, /scrollbar-width: thin;/);
+  assert.match(globalsSource, /scrollbar-gutter: stable;/);
+  assert.match(globalsSource, /scrollbar-color: transparent transparent;/);
+  assert.match(globalsSource, /\.student-rail-scrollbar\.is-student-scrollbar-active \{/);
+  assert.match(globalsSource, /scrollbar-width: thin;/);
+  assert.match(globalsSource, /\.student-rail-scrollbar::-webkit-scrollbar \{/);
+  assert.match(globalsSource, /\.student-rail-scrollbar::-webkit-scrollbar \{[\s\S]*?width: 6px;[\s\S]*?height: 6px;/);
+  assert.match(globalsSource, /\.student-rail-scrollbar\.is-student-scrollbar-active::-webkit-scrollbar-thumb/);
+  assert.match(pageSource, /function handleStudentRailScroll\(event: UIEvent<HTMLElement>\): void/);
+  assert.match(pageSource, /is-student-scrollbar-active/);
+  assert.match(pageSource, /className="min-h-0 flex-1 overflow-y-scroll student-rail-scrollbar"/);
+  assert.match(pageSource, /className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar"/);
+  assert.match(pageSource, /overflow-y-scroll pr-1 student-rail-scrollbar/);
+  assert.doesNotMatch(pageSource, /className="min-h-0 flex-1 overflow-y-auto student-rail-scrollbar"/);
+  assert.doesNotMatch(pageSource, /className="flex min-h-0 flex-col gap-4 overflow-y-auto student-rail-scrollbar"/);
+  assert.match(pageSource, /onScroll=\{handleStudentRailScroll\}/);
+});
+
+test("home dialogue area keeps a visible light gray scrollbar", () => {
+  assert.match(globalsSource, /\.student-chat-scrollbar \{/);
+  assert.match(globalsSource, /scrollbar-width: thin;/);
+  assert.match(globalsSource, /scrollbar-gutter: stable;/);
+  assert.match(globalsSource, /scrollbar-color: #d6d3ce transparent;/);
+  assert.match(globalsSource, /\.student-chat-scrollbar::-webkit-scrollbar \{/);
+  assert.match(globalsSource, /\.student-chat-scrollbar::-webkit-scrollbar-thumb \{/);
+  assert.match(pageSource, /className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar"/);
+  assert.doesNotMatch(pageSource, /className="flex-1 space-y-4 overflow-y-auto p-5 pb-40 student-rail-scrollbar"/);
 });
 
 test("case and history pages use Claude-like brand tokens without legacy teal hardcoding", () => {
@@ -441,7 +497,7 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.match(pageSource, /if \(isCheckingAuth\) \{/);
   assert.match(pageSource, /if \(!authUser\) \{/);
   assert.match(pageSource, /setStatusText\("请先登录后再开始或恢复训练。"\);/);
-  assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\(selectedCaseId \? "已选择病例，发送问诊或点击训练操作后开始新会话。" : "请选择病例后再开始训练。"\);[\s\S]*?return;[\s\S]*?\}/);
+  assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\([\s\S]*?selectedCaseId[\s\S]*?\? isTrainingModelConfigReady[\s\S]*?\? "已选择病例，发送问诊或点击训练操作后开始新会话。"[\s\S]*?: TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE[\s\S]*?: "请选择病例后再开始训练。"[\s\S]*?\);[\s\S]*?return;[\s\S]*?\}/);
   assert.match(pageSource, /const sessionIdToRestore = requestedSessionId;/);
   assert.match(pageSource, /const nextSession = await getSession\(sessionIdToRestore\);/);
   assert.match(pageSource, /setStatusText\("已恢复后端训练会话，可以继续训练。"\);/);
@@ -452,7 +508,7 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.match(pageSource, /setIsAuthDialogOpen\(true\);/);
   assert.doesNotMatch(pageSource, /requestedSessionId\s*\? await getSession\(requestedSessionId\)\s*: await createSession\(selectedCaseId\)/);
   assert.doesNotMatch(pageSource, /throw new Error\(detail \|\| `请求失败：\$\{response\.status\}`\);/);
-  assert.match(pageSource, /\}, \[authUser, isCheckingAuth, requestedSessionId, selectedCaseId\]\);/);
+  assert.match(pageSource, /\}, \[authUser, isCheckingAuth, isTrainingModelConfigReady, requestedSessionId, selectedCaseId\]\);/);
 });
 
 test("home workspace starts without a default case and only prepares a case after selection", () => {
@@ -470,21 +526,27 @@ test("home workspace starts without a default case and only prepares a case afte
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
   assert.match(pageSource, /const preparedOpeningTaskCard = session\?\.opening_task_card \?\? selectedCase\?\.openingTaskCard \?\? null;/);
   assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>/);
-  assert.match(pageSource, /if \(!session\) \{\s*return \[\];\s*\}/);
+  assert.match(pageSource, /let baseMessages: ChatMessage\[\] = \[\];/);
+  assert.match(pageSource, /if \(!session\) \{\s*baseMessages = \[\];\s*\}/);
   assert.doesNotMatch(pageSource, /speaker: "patient"[\s\S]{0,240}请先选择一个病例；进入病例后/);
 });
 
 test("home workspace creates a new backend session only after a selected-case training action", () => {
   assert.match(pageSource, /const \[isCreating, setIsCreating\] = useState\(false\);/);
+  assert.match(pageSource, /const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";/);
+  assert.match(pageSource, /const isTrainingModelConfigReady = Boolean\(runtimeApiConfig\?\.active\);/);
+  assert.match(pageSource, /function promptTrainingModelConfigRequired\(\): void \{[\s\S]*?setStatusText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setErrorText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setIsApiConfigHelpOpen\(true\);[\s\S]*?\}/);
   assert.match(pageSource, /async function ensureActiveSession\(\): Promise<OsceSession \| null>/);
   assert.match(pageSource, /if \(session\) \{[\s\S]*?return session;[\s\S]*?\}/);
   assert.match(pageSource, /if \(!selectedCaseId\) \{[\s\S]*?setStatusText\("请先选择病例，再开始训练。"\);[\s\S]*?return null;[\s\S]*?\}/);
+  assert.match(pageSource, /if \(!isTrainingModelConfigReady\) \{[\s\S]*?promptTrainingModelConfigRequired\(\);[\s\S]*?return null;[\s\S]*?\}/);
   assert.match(pageSource, /const nextSession = await createSession\(selectedCaseId\);/);
   assert.match(pageSource, /const activeSession = await ensureActiveSession\(\);/);
   assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
   assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
   assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isSending\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isSending\}/);
+  assert.ok(pageSource.indexOf("if (!isTrainingModelConfigReady)") < pageSource.indexOf("setOptimisticHistoryMessage({"));
 });
 
 
@@ -493,6 +555,8 @@ test("home case card points users to the case selection page", () => {
   assert.match(pageSource, />当前选择<\/p>/);
   assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
+  assert.match(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-\[#141413\] bg-\[#141413\] px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
+  assert.doesNotMatch(pageSource, /className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
   assert.doesNotMatch(pageSource, /const \[isCaseSelectorOpen, setIsCaseSelectorOpen\]/);
   assert.doesNotMatch(pageSource, /caseOptionsState\.map\(\(caseOption\) =>/);
   assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例信息与选择"/);
@@ -501,28 +565,33 @@ test("home case card points users to the case selection page", () => {
 
 
 test("home right sidebar starts with progress and keeps collapsible cards bounded", () => {
-  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "procedures" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "hypotheses" \| "report";/);
   assert.match(pageSource, /function CollapsiblePanel\(/);
   assert.match(pageSource, /maxContentHeightClass = "max-h-64"/);
-  assert.match(pageSource, /overflow-y-auto pr-1/);
+  assert.match(pageSource, /overflow-y-scroll pr-1 student-rail-scrollbar/);
   assert.match(pageSource, /const \[rightPanelOpenStates, setRightPanelOpenStates\] = useState<Record<RightPanelKey, boolean>>/);
   assert.match(pageSource, /focus: false,/);
   assert.match(pageSource, /agent: false,/);
+  assert.doesNotMatch(pageSource, /procedures: true,/);
   assert.match(pageSource, /report: true,/);
   assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) =>/);
 
-  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">');
-  const progressPanelIndex = pageSource.indexOf('title="训练进度与素材覆盖"', rightAsideIndex);
+  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar"');
+  const focusPanelIndex = pageSource.indexOf('title="教学重点与问诊提示"', rightAsideIndex);
   const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
   assert.notEqual(rightAsideIndex, -1);
-  assert.notEqual(progressPanelIndex, -1);
+  assert.notEqual(focusPanelIndex, -1);
   assert.notEqual(evidencePanelIndex, -1);
-  assert.ok(progressPanelIndex < evidencePanelIndex);
+  assert.ok(focusPanelIndex < evidencePanelIndex);
+  assert.doesNotMatch(pageSource, /title="训练进度与素材覆盖"/);
+  assert.match(pageSource, />\s*管理员图谱\s*<\/p>/);
+  assert.match(pageSource, />\s*查看素材覆盖图谱\s*<\/button>/);
 
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="已收集线索"[\s\S]*maxContentHeightClass="max-h-64"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*maxContentHeightClass="max-h-80"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*maxContentHeightClass="max-h-96"/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="查体与检查申请"[\s\S]*maxContentHeightClass="max-h-64"/);
+  assert.doesNotMatch(pageSource, /title="查体与检查申请"/);
+  assert.doesNotMatch(pageSource, /toggleRightPanel\("procedures"\)/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"[\s\S]*maxContentHeightClass="max-h-48"/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="评分报告"[\s\S]*maxContentHeightClass="max-h-96"/);
 });
@@ -541,25 +610,26 @@ test("home sidebars prioritize a compact student task flow", () => {
   assert.notEqual(nextSuggestionIndex, -1);
   assert.doesNotMatch(leftAsideSource, /title="问诊引导"|title="智能体状态"|title="当前训练重点"|title="训练重点"|title="OSCE 流程导航"/);
 
-  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto">');
+  const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar"');
   const focusPanelIndex = pageSource.indexOf('title="教学重点与问诊提示"', rightAsideIndex);
   const agentPanelIndex = pageSource.indexOf('title="智能体教学详情"', rightAsideIndex);
-  const procedurePanelIndex = pageSource.indexOf('title="查体与检查申请"', rightAsideIndex);
+  const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
   const hypothesisPanelIndex = pageSource.indexOf('title="诊断假设"', rightAsideIndex);
   assert.notEqual(focusPanelIndex, -1);
   assert.notEqual(agentPanelIndex, -1);
-  assert.notEqual(procedurePanelIndex, -1);
+  assert.notEqual(evidencePanelIndex, -1);
   assert.notEqual(hypothesisPanelIndex, -1);
   assert.ok(focusPanelIndex < agentPanelIndex);
-  assert.ok(agentPanelIndex < procedurePanelIndex);
-  assert.ok(procedurePanelIndex < hypothesisPanelIndex);
+  assert.ok(agentPanelIndex < evidencePanelIndex);
+  assert.ok(evidencePanelIndex < hypothesisPanelIndex);
 });
 
 test("home workspace keeps the composer sticky and final diagnosis collapsed", () => {
   assert.match(pageSource, /<main className="relative h-screen overflow-hidden bg-muted\/40 text-foreground">/);
   assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "h-full pointer-events-none blur-sm" : "h-full"\}>/);
   assert.match(pageSource, /<div className="flex h-full min-h-0">/);
-  assert.match(pageSource, /className="flex-1 space-y-4 overflow-y-auto p-5 pb-40"/);
+  assert.match(pageSource, /className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar"/);
+  assert.match(pageSource, /ref=\{chatScrollContainerRef\}/);
   assert.match(pageSource, /const \[isDiagnosisComposerOpen, setIsDiagnosisComposerOpen\] = useState\(false\);/);
   assert.match(pageSource, /className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10"/);
   assert.match(pageSource, /className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
@@ -571,6 +641,7 @@ test("home workspace keeps the composer sticky and final diagnosis collapsed", (
   assert.ok(quickActionRowIndex < inputComposerIndex);
   assert.doesNotMatch(pageSource, /rounded-xl border border-input bg-muted\/50 p-3/);
   assert.doesNotMatch(pageSource, /sticky bottom-0 z-20 bg-gradient-to-t/);
+  assert.doesNotMatch(pageSource, /<p className="mx-auto mt-2 max-w-3xl text-xs leading-5 text-muted-foreground">\{statusText\}<\/p>/);
   assert.match(pageSource, />\{isDiagnosisComposerOpen \? "收起诊断" : "填写诊断"\}<\/button>/);
   assert.match(pageSource, /\{isDiagnosisComposerOpen \? \([\s\S]*id="diagnosis-input"[\s\S]*\) : null\}/);
 });
@@ -580,8 +651,8 @@ test("home quick actions allow realistic sequence jumps but show teaching remind
   assert.match(pageSource, /const shouldShowAuxiliaryTestSequenceReminder = activeSession\.training_progress\.physical_exam\.requested === 0;/);
   assert.match(pageSource, /OSCE 通常建议先完成核心病史采集，再进入查体。/);
   assert.match(pageSource, /现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isRequestingExam\}/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| isCreating \|\| isRequestingTest\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isRequestingExam\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isRequestingTest\}/);
   assert.doesNotMatch(pageSource, /canRequestPhysicalExam/);
   assert.doesNotMatch(pageSource, /canRequestAuxiliaryTest/);
 });
@@ -596,13 +667,20 @@ test("home quick actions group procedure choices and open viewed results in a mo
   assert.match(pageSource, /const completedPhysicalExamOptions = physicalExamOptions\.filter\(\(examOption\) => requestedExamCodeSet\.has\(examOption\.exam_code\)\);/);
   assert.match(pageSource, /const pendingAuxiliaryTestOptions = auxiliaryTestOptions\.filter\(\(testOption\) => !requestedTestCodeSet\.has\(testOption\.test_code\)\);/);
   assert.match(pageSource, /const completedAuxiliaryTestOptions = auxiliaryTestOptions\.filter\(\(testOption\) => requestedTestCodeSet\.has\(testOption\.test_code\)\);/);
+  assert.match(pageSource, /\{completedPhysicalExamOptions\.length\}\/\{physicalExamOptions\.length\}/);
+  assert.match(pageSource, /\{completedAuxiliaryTestOptions\.length\}\/\{auxiliaryTestOptions\.length\}/);
+  assert.doesNotMatch(pageSource, /\{pendingPhysicalExamOptions\.length\}\/\{physicalExamOptions\.length\}/);
+  assert.doesNotMatch(pageSource, /\{pendingAuxiliaryTestOptions\.length\}\/\{auxiliaryTestOptions\.length\}/);
   assert.match(pageSource, /aria-expanded=\{openProcedureActionGroup === "physical_exam"\}[\s\S]*?>\s*查体项目/);
   assert.match(pageSource, /aria-expanded=\{openProcedureActionGroup === "auxiliary_test"\}[\s\S]*?>\s*辅助检查/);
   assert.match(pageSource, /openProcedureActionGroup === "physical_exam" \? \(/);
   assert.match(pageSource, /openProcedureActionGroup === "auxiliary_test" \? \(/);
+  assert.match(pageSource, /ref=\{procedureActionContainerRef\}/);
+  assert.match(pageSource, /data-procedure-action-menu="true"/);
+  assert.match(pageSource, /setOpenProcedureActionGroup\(null\);/);
   assert.match(pageSource, /className="absolute bottom-11 left-0 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-\[0_18px_45px_rgba\(20,20,19,0\.16\)\]"/);
   assert.match(pageSource, /className="absolute bottom-11 left-32 z-30 w-80 rounded-2xl border border-border bg-background p-3 shadow-\[0_18px_45px_rgba\(20,20,19,0\.16\)\]"/);
-  assert.match(pageSource, /className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1"/);
+  assert.match(pageSource, /className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll=\{handleStudentRailScroll\}/);
   assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedPhysicalExamOptions\.map/);
   assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedAuxiliaryTestOptions\.map/);
   assert.match(pageSource, /setSelectedProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\)/);
@@ -698,9 +776,72 @@ test("home workspace can request socratic hints and render coach messages", () =
 
 
 test("home workspace highlights safety guardrail replies", () => {
-  assert.match(pageSource, /function getCoachMessageLabel\(content: string\): "安全边界" \| "过程提示"/);
-  assert.match(pageSource, /content\.includes\("本系统仅用于 OSCE 教学模拟训练"\) \? "安全边界" : "过程提示"/);
+  assert.match(pageSource, /function getCoachMessageLabel\(content: string\): "安全边界" \| "答题边界" \| "问诊引导" \| "过程提示"/);
+  assert.match(pageSource, /content\.includes\("本系统仅用于 OSCE 教学模拟训练"\)[\s\S]*?return "安全边界";/);
+  assert.match(pageSource, /content\.includes\("不能直接告诉你标准答案"\)[\s\S]*?return "答题边界";/);
+  assert.match(pageSource, /content\.includes\("病例脚本没有提供这方面信息"\)[\s\S]*?return "问诊引导";/);
   assert.match(pageSource, /`安全边界：\$\{session\?\.safety_flags\.length \?\? 0\} 次`/);
+});
+
+test("home workspace auto-scrolls to the newest dialogue and keeps status in the dialogue header", () => {
+  assert.match(pageSource, /const chatScrollContainerRef = useRef<HTMLDivElement \| null>\(null\);/);
+  assert.match(pageSource, /useEffect\(\(\) => \{[\s\S]*?chatScrollContainer\.scrollTo\(\{[\s\S]*?top: chatScrollContainer\.scrollHeight,[\s\S]*?behavior: "smooth",[\s\S]*?\}\);[\s\S]*?\}, \[chatMessages\.length, optimisticHistoryMessage\?\.text, pendingPatientMessage\?\.text, statusText, errorText\]\);/);
+  assert.match(pageSource, /<div className="max-w-sm rounded-lg border border-brand\/20 bg-brand\/5 px-3 py-2 text-xs leading-5 text-brand">[\s\S]*?\{statusText\}[\s\S]*?\{errorText \? <p className="mt-1 text-red-600">\{errorText\}<\/p> : null\}/);
+  const dialogueHeaderIndex = pageSource.indexOf('<div className="border-b border-border p-4">');
+  const dialogueBodyIndex = pageSource.indexOf('<div className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar"', dialogueHeaderIndex);
+  assert.notEqual(dialogueHeaderIndex, -1);
+  assert.notEqual(dialogueBodyIndex, -1);
+  assert.doesNotMatch(pageSource.slice(dialogueHeaderIndex, dialogueBodyIndex), /\{trainingSuggestion\}/);
+});
+
+test("home inquiry submit shows optimistic student message and neutral streaming placeholder", () => {
+  assert.match(pageSource, /const \[optimisticHistoryMessage, setOptimisticHistoryMessage\] = useState<ChatMessage \| null>\(null\);/);
+  assert.match(pageSource, /const \[pendingPatientMessage, setPendingPatientMessage\] = useState<ChatMessage \| null>\(null\);/);
+  assert.match(pageSource, /function hasMessageWithSpeakerAndText\([\s\S]*?messages: readonly ChatMessage\[],[\s\S]*?speaker: ChatMessage\["speaker"\],[\s\S]*?text: string,[\s\S]*?\): boolean/);
+  assert.match(pageSource, /function getReplyMessageMetadata\(session: OsceSession, replyText: string\): Pick<ChatMessage, "speaker" \| "label">/);
+  assert.match(pageSource, /const matchingReplyMessage = \[\.\.\.session\.messages\]\.reverse\(\)\.find/);
+  assert.match(pageSource, /matchingReplyMessage\?\.role === "coach"[\s\S]*?speaker: "coach",[\s\S]*?label: getCoachMessageLabel\(replyText\),/);
+  assert.match(pageSource, /message\.speaker === pendingPatientMessage\.speaker && message\.text === pendingPatientMessage\.finalText/);
+  assert.doesNotMatch(pageSource, /message\.speaker === "patient" && message\.text === pendingPatientMessage\.finalText/);
+  assert.match(pageSource, /function PendingThinkingIndicator\(\)/);
+  assert.match(pageSource, /aria-label="判断中"/);
+  assert.match(pageSource, />判断中<\/span>/);
+  assert.doesNotMatch(pageSource, /aria-label="思考中"/);
+  assert.match(globalsSource, /@keyframes clinical-osce-thinking-dot/);
+  assert.match(globalsSource, /\.clinical-osce-thinking-dot/);
+  assert.match(pageSource, /async function animatePendingPatientReply\(messageId: string, replyText: string\): Promise<void>/);
+  assert.match(pageSource, /window\.setTimeout\(resolve, PATIENT_REPLY_TYPEWRITER_DELAY_MS\)/);
+  assert.match(pageSource, /replyText\.slice\(0, index\)/);
+  assert.match(pageSource, /setOptimisticHistoryMessage\(\{[\s\S]*?id: optimisticQuestionId,[\s\S]*?speaker: "student",[\s\S]*?label: "学生",[\s\S]*?text: message,[\s\S]*?\}\);/);
+  assert.match(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "coach",[\s\S]*?label: "判断中",[\s\S]*?text: "判断中",[\s\S]*?\}\);/);
+  assert.doesNotMatch(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "patient",[\s\S]*?label: "标准化病人",[\s\S]*?text: "思考中"/);
+  assert.doesNotMatch(pageSource, /text: "思考中\.\.\."/);
+  assert.match(pageSource, /message\.isPending && !message\.finalText \? <PendingThinkingIndicator \/> : message\.text/);
+  assert.match(pageSource, /setStatusText\("正在处理问诊"\);/);
+  assert.match(pageSource, /const replyMessageMetadata = getReplyMessageMetadata\(updatedSession, replyText\);/);
+  assert.match(pageSource, /const replyStatusLabel = replyMessageMetadata\.speaker === "coach" \? replyMessageMetadata\.label : "标准化病人回复";/);
+  assert.match(pageSource, /\.\.\.replyMessageMetadata,[\s\S]*?finalText: replyText,/);
+  assert.match(pageSource, /await animatePendingPatientReply\(pendingPatientReplyId, updatedSession\.reply \?\? ""\);/);
+  assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{updatedSession\.current_intent \?\? "未识别意图"\}`\);/);
+  assert.doesNotMatch(pageSource, /setStatusText\(`已收到标准化病人回复：\$\{updatedSession\.current_intent \?\? "未识别意图"\}`\);/);
+  assert.ok(pageSource.indexOf("setOptimisticHistoryMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
+  assert.ok(pageSource.indexOf("setPendingPatientMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
+});
+
+test("home secondary menus close from outside clicks and after action selection", () => {
+  assert.match(pageSource, /const osceDockContainerRef = useRef<HTMLDivElement \| null>\(null\);/);
+  assert.match(pageSource, /const procedureActionContainerRef = useRef<HTMLDivElement \| null>\(null\);/);
+  assert.match(pageSource, /document\.addEventListener\("pointerdown", closeSecondaryMenusOnOutsidePointerDown\);/);
+  assert.match(pageSource, /document\.removeEventListener\("pointerdown", closeSecondaryMenusOnOutsidePointerDown\);/);
+  assert.match(pageSource, /if \(isOsceDockOpen && osceDockContainerRef\.current && !osceDockContainerRef\.current\.contains\(target\)\) \{[\s\S]*?closeOsceDock\(\);/);
+  assert.match(pageSource, /if \(osceDockMenuGroup && osceDockContainerRef\.current && !osceDockContainerRef\.current\.contains\(target\)\)/);
+  assert.match(pageSource, /if \(openProcedureActionGroup && procedureActionContainerRef\.current && !procedureActionContainerRef\.current\.contains\(target\)\)/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?setIsApiConfigHelpOpen\(true\);[\s\S]*?\}\}/);
+  assert.match(pageSource, /href="\/safety" onClick=\{closeOsceDock\}/);
+  assert.match(pageSource, /href="\/sources" onClick=\{closeOsceDock\}/);
+  assert.match(pageSource, /href="\/cases" onClick=\{closeOsceDock\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?void handleHintRequest\(\);[\s\S]*?\}\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?setSelectedProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\);[\s\S]*?setOpenProcedureActionGroup\(null\);[\s\S]*?\}\}/);
 });
 
 
@@ -740,7 +881,8 @@ test("home workspace renders opening task card and keeps teaching guidance in co
     pageSource.indexOf("function OpeningTaskCardMessage"),
     pageSource.indexOf("function HomeContent"),
   );
-  assert.match(pageSource, /className="mx-auto w-full max-w-2xl rounded-2xl border border-brand\/30 bg-\[#FFF8E8\] p-4"/);
+  assert.match(pageSource, /className="mx-auto w-full max-w-lg rounded-2xl border border-brand\/30 bg-\[#FFF8E8\] p-4"/);
+  assert.doesNotMatch(pageSource, /max-w-2xl rounded-2xl border border-brand\/30 bg-\[#FFF8E8\]/);
   assert.doesNotMatch(openingTaskCardFunctionSource, /shadow-/);
   assert.match(pageSource, /className="mt-3 flex flex-wrap gap-2 text-xs leading-5"/);
   assert.match(pageSource, /openingTaskCard\.role/);
@@ -754,8 +896,15 @@ test("home workspace renders opening task card and keeps teaching guidance in co
   assert.match(pageSource, /session\.inquiry_guidance\.categories\.map/);
 });
 
+test("home workspace centers compact coach hint cards inside the dialogue stream", () => {
+  assert.match(pageSource, /const messageRowClass = isStudent \? "justify-end" : isCoach \? "justify-center" : "justify-start";/);
+  assert.match(pageSource, /const messageBubbleClass = isStudent[\s\S]*?isCoach[\s\S]*?w-full max-w-lg[\s\S]*?border-\[#B5812A\]\/30[\s\S]*?bg-\[#FFF8E8\][\s\S]*?text-foreground/);
+  assert.match(pageSource, /className=\{`flex \$\{messageRowClass\}`\}/);
+  assert.match(pageSource, /className=\{messageBubbleClass\}/);
+  assert.doesNotMatch(pageSource, /isCoach\s*\?\s*"border-\[#B5812A\]\/30 bg-\[#FFF8E8\] text-foreground"/);
+});
 
-test("home workspace renders training progress and opens developer coverage map from a button", () => {
+test("home workspace keeps backend progress data and exposes compact admin coverage map", () => {
   assert.match(pageSource, /type TrainingProgress = Readonly<\{/);
   assert.match(pageSource, /training_progress: TrainingProgress;/);
   assert.match(pageSource, /type CoverageMapItem = Readonly<\{/);
@@ -764,27 +913,26 @@ test("home workspace renders training progress and opens developer coverage map 
   assert.match(pageSource, /status: "covered" \| "pending";/);
   assert.match(pageSource, /type CoverageMapPayload = Readonly<\{/);
   assert.match(pageSource, /coverage_map: CoverageMapPayload;/);
-  assert.match(pageSource, /function formatProgressCount\(covered: number, total: number\): string/);
-  assert.match(pageSource, /function CoverageMap\(/);
-  assert.match(pageSource, /const \[isCoverageMapOpen, setIsCoverageMapOpen\] = useState\(false\);/);
   assert.match(pageSource, /session\?\.training_progress\.next_focus \?\? workflowSuggestion/);
-  assert.match(pageSource, /<Panel title="训练进度与素材覆盖" description="用病例素材覆盖度提示下一步训练动作。">/);
-  assert.match(pageSource, />问诊线索<\/p>/);
-  assert.match(pageSource, />查体项目<\/p>/);
-  assert.match(pageSource, />辅助检查<\/p>/);
-  assert.match(pageSource, />推理证据<\/p>/);
-  assert.match(pageSource, />\s*开发者功能：查看素材覆盖图谱\s*<\/button>/);
+  assert.doesNotMatch(pageSource, /function formatProgressCount\(covered: number, total: number\): string/);
+  assert.match(pageSource, /function CoverageMap\(/);
+  assert.match(pageSource, /function CoverageMapSection\(/);
+  assert.match(pageSource, /const \[isCoverageMapOpen, setIsCoverageMapOpen\] = useState\(false\);/);
+  assert.doesNotMatch(pageSource, /<Panel title="训练进度与素材覆盖"/);
+  assert.doesNotMatch(pageSource, />问诊线索<\/p>/);
+  assert.doesNotMatch(pageSource, />推理证据<\/p>/);
+  assert.doesNotMatch(pageSource, /\{session\.training_progress\.next_focus\}/);
+  assert.doesNotMatch(pageSource, /rounded-lg border border-brand\/20 bg-brand\/5 p-3 text-xs leading-5 text-brand/);
+  assert.match(pageSource, />\s*管理员图谱\s*<\/p>/);
+  assert.match(pageSource, />\s*查看素材覆盖图谱\s*<\/button>/);
   assert.match(pageSource, /onClick=\{\(\) => setIsCoverageMapOpen\(true\)\}/);
-  assert.match(pageSource, /开发者功能 · 素材覆盖图谱/);
-  assert.match(pageSource, /已覆盖/);
-  assert.match(pageSource, /待覆盖/);
+  assert.match(pageSource, /管理员图谱 · 素材覆盖/);
+  assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
+  assert.match(pageSource, /item\.status === "covered" \? item\.label : `未覆盖素材：\$\{item\.id\}`/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.history/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.physical_exam/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.auxiliary_test/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.reasoning/);
-  assert.match(pageSource, /item\.label/);
-  assert.match(pageSource, /item\.id/);
-  assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
   assert.doesNotMatch(pageSource, /function buildCoverageMapItems/);
   assert.doesNotMatch(pageSource, /待问诊素材：/);
   assert.doesNotMatch(pageSource, /待做必查体：/);

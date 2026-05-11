@@ -1,6 +1,7 @@
 import os
 
 from app.services import gemini_patient_responder as module
+from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -135,6 +136,65 @@ class FakeOpenAICompatibleHttpClient:
         return FakeOpenAICompatiblePatientResponse()
 
 
+class FakeAnthropicPatientResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": '{"reply":"我右下腹疼得比较明显。"}',
+                }
+            ],
+        }
+
+
+class FakeAnthropicHttpClient:
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeAnthropicHttpClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeAnthropicPatientResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeAnthropicPatientResponse()
+
+
+class FakePlainTextAnthropicPatientResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "开始时上腹部疼，现在右下腹最疼。",
+                }
+            ],
+        }
+
+
+class FakePlainTextAnthropicHttpClient(FakeAnthropicHttpClient):
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakePlainTextAnthropicPatientResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakePlainTextAnthropicPatientResponse()
+
+
 def test_create_configured_patient_responder_uses_runtime_openai_compatible_config(monkeypatch) -> None:
     FakeOpenAICompatibleHttpClient.calls = []
     runtime_model_config_store.clear()
@@ -172,6 +232,83 @@ def test_create_configured_patient_responder_uses_runtime_openai_compatible_conf
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
+
+
+def test_create_configured_patient_responder_uses_runtime_anthropic_config(monkeypatch) -> None:
+    FakeAnthropicHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "anthropic",
+            "api_key": "student-anthropic-secret",
+            "model": "claude-3-5-sonnet-latest",
+            "base_url": "https://api.anthropic.com",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(anthropic_module.httpx, "Client", FakeAnthropicHttpClient)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+        reply = responder(
+            module.PatientResponderRequest(
+                case_id="appendicitis_001",
+                case_title="急性腹痛问诊",
+                chief_complaint="腹痛 1 天",
+                student_message="哪里疼？",
+                current_intent="ask_location",
+                canonical_answer="右下腹疼痛明显。",
+                forbidden_terms=["急性阑尾炎"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert reply == "我右下腹疼得比较明显。"
+    assert FakeAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
+    assert FakeAnthropicHttpClient.calls[0]["headers"]["x-api-key"] == "student-anthropic-secret"
+    assert FakeAnthropicHttpClient.calls[0]["headers"]["anthropic-version"] == "2023-06-01"
+    assert FakeAnthropicHttpClient.calls[0]["json"]["model"] == "claude-3-5-sonnet-latest"
+
+
+def test_anthropic_patient_responder_accepts_plain_text_reply_for_single_field_schema(monkeypatch) -> None:
+    FakePlainTextAnthropicHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "anthropic",
+            "api_key": "student-anthropic-secret",
+            "model": "mimo-v2.5-pro",
+            "base_url": "https://api.anthropic.com",
+            "proxy_url": "direct",
+        }
+    )
+    monkeypatch.setattr(anthropic_module.httpx, "Client", FakePlainTextAnthropicHttpClient)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+        reply = responder(
+            module.PatientResponderRequest(
+                case_id="appendicitis_001",
+                case_title="急性腹痛问诊",
+                chief_complaint="腹痛 1 天",
+                student_message="哪里最疼？",
+                current_intent="ask_location",
+                canonical_answer="现在右下腹疼痛明显。",
+                forbidden_terms=["急性阑尾炎"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert reply == "开始时上腹部疼，现在右下腹最疼。"
+    assert FakePlainTextAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
 
 
 def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_config(monkeypatch) -> None:

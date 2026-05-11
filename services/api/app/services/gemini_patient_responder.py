@@ -10,17 +10,19 @@ from google.genai import types
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的标准化病人，只能把 canonical_answer 改写成自然口语回答。
+SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负责把 canonical_answer 改写成自然、简短的 OSCE 训练回复。
 
 硬性规则：
 - 只能表达 canonical_answer 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
 - 不得主动说出 forbidden_terms 中的任何词。
 - 如果 canonical_answer 表示病例未提供信息，就只表达“不清楚/没被告知/不太确定”的患者口吻。
+- 如果 turn_policy 是 answer_boundary_redirect 或 safety_boundary_redirect，用教学边界口吻提醒继续按 OSCE 流程训练，不要扮演真实医生给建议。
 - 回答必须是第一人称患者语气，中文，简短，不超过 80 个汉字。
 - 不输出用药剂量、治疗方案、手术方案或处置建议。
 """
@@ -36,6 +38,8 @@ class PatientResponderRequest(BaseModel):
     revealed_fact_id: str | None = None
     forbidden_terms: list[str] = Field(default_factory=list)
     prior_messages: list[dict[str, str]] = Field(default_factory=list)
+    turn_policy: str = "history_fact_disclosure"
+    deterministic_hints: dict[str, Any] = Field(default_factory=dict)
 
 
 class PatientResponderResponse(BaseModel):
@@ -107,6 +111,23 @@ class OpenAICompatiblePatientResponder:
         return reply
 
 
+class AnthropicPatientResponder:
+    def __init__(self, settings: AnthropicSettings, client: AnthropicChatClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or AnthropicChatClient(settings)
+
+    def __call__(self, request: PatientResponderRequest) -> str:
+        response = self._client.complete_json(
+            system_prompt=SYSTEM_PROMPT_TEMPLATE,
+            payload=request.model_dump(),
+            response_model=PatientResponderResponse,
+            temperature=0.4,
+        )
+        reply = response.reply.strip()
+        _assert_no_forbidden_terms(reply, request.forbidden_terms)
+        return reply
+
+
 class DeterministicPatientResponder:
     def __call__(self, request: PatientResponderRequest) -> str:
         reply = request.canonical_answer.strip() or "这个问题我不太确定，或者病例中没有提供相关信息。"
@@ -121,7 +142,7 @@ class DeterministicPatientResponder:
 
 class LazyGeminiPatientResponder:
     def __init__(self) -> None:
-        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | DeterministicPatientResponder | None = None
+        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | AnthropicPatientResponder | DeterministicPatientResponder | None = None
 
     def __call__(self, request: PatientResponderRequest) -> str:
         if self._responder is None:
@@ -133,10 +154,14 @@ def create_default_gemini_patient_responder() -> LazyGeminiPatientResponder:
     return LazyGeminiPatientResponder()
 
 
-def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatiblePatientResponder | DeterministicPatientResponder:
+def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatiblePatientResponder | AnthropicPatientResponder | DeterministicPatientResponder:
     runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
     if runtime_openai_settings is not None:
         return OpenAICompatiblePatientResponder(runtime_openai_settings)
+
+    runtime_anthropic_settings = runtime_model_config_store.get_anthropic_settings()
+    if runtime_anthropic_settings is not None:
+        return AnthropicPatientResponder(runtime_anthropic_settings)
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
@@ -169,6 +194,10 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
         return OpenAICompatiblePatientResponder(openai_settings)
+
+    anthropic_settings = AnthropicSettings()
+    if anthropic_settings.is_configured:
+        return AnthropicPatientResponder(anthropic_settings)
 
     settings = GeminiPatientSettings()
     _apply_process_proxy(settings.proxy_url)
@@ -215,6 +244,7 @@ def _apply_process_proxy(proxy_url: str) -> None:
 
 
 __all__ = [
+    "AnthropicPatientResponder",
     "DeterministicPatientResponder",
     "GeminiPatientResponder",
     "GeminiPatientSettings",

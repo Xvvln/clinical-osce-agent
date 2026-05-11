@@ -59,6 +59,7 @@ class OsceGraphState(TypedDict, total=False):
     feedback_report: dict[str, Any] | None
     safety_flags: list[str]
     evolution_candidates: list[str]
+    agent_turn_memory: list[dict[str, Any]]
     pedagogy_state: dict[str, Any]
     agent_decision_trace: list[dict[str, Any]]
     reflection_summary: dict[str, Any] | None
@@ -93,7 +94,9 @@ def input_router_node(state: OsceGraphState) -> dict[str, str]:
         ("ask_expectation", ["期望", "希望", "想要"]),
         ("ask_idea", ["想法", "觉得", "认为"]),
         ("ask_onset", ["什么时候", "何时", "多久", "开始"]),
-        ("ask_location", ["哪里", "位置", "部位"]),
+        ("ask_location", ["哪里", "哪儿", "哪", "位置", "部位", "什么地方"]),
+        ("ask_character", ["怎么疼", "怎么个疼", "疼法", "痛法"]),
+        ("ask_severity", ["多痛", "多疼", "痛不痛", "疼不疼"]),
         ("ask_past_medical_history", ["既往", "以前", "手术史"]),
     ]
     for intent, keywords in intent_keywords:
@@ -127,7 +130,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     case = _load_case(state["case_id"])
     intent = state.get("current_intent", "")
     revealed_facts = list(state.get("revealed_facts", []))
-    canonical_answer = "这个问题我不太确定，或者病例中没有提供相关信息。"
+    canonical_answer = _unknown_patient_context_answer(case)
     revealed_fact_id: str | None = None
     for hidden_fact in case.history.hidden_facts:
         if intent in hidden_fact.trigger_intents:
@@ -149,6 +152,13 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             revealed_fact_id=revealed_fact_id,
             forbidden_terms=[case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms],
             prior_messages=state.get("messages", []),
+            turn_policy=_turn_policy_for_patient_response(intent, revealed_fact_id),
+            deterministic_hints=_deterministic_turn_hints(
+                state,
+                keyword_intent=intent,
+                revealed_fact_id=revealed_fact_id,
+                turn_policy=_turn_policy_for_patient_response(intent, revealed_fact_id),
+            ),
         )
     )
     messages = [*state.get("messages", [])]
@@ -162,11 +172,23 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
 
     return {
         "stage": "history_taking",
+        "current_intent": intent,
         "reply": reply,
         "messages": messages,
-        "asked_questions": [*state.get("asked_questions", []), student_message],
+        "asked_questions": _asked_questions_after_patient_turn(state, student_message, revealed_fact_id),
         "intent_history": [*state.get("intent_history", []), intent],
         "revealed_facts": revealed_facts,
+        "agent_turn_memory": _append_agent_turn_memory(
+            state,
+            student_message=student_message,
+            reply=reply,
+            reply_role="patient",
+            current_intent=intent,
+            turn_policy=_turn_policy_for_patient_response(intent, revealed_fact_id),
+            agent_path=["input_router_node", "patient_response_node"],
+            revealed_fact_id=revealed_fact_id,
+            safety_flags=list(state.get("safety_flags", [])),
+        ),
     }
 
 
@@ -276,33 +298,58 @@ def socratic_hint_node(state: OsceGraphState) -> dict[str, Any]:
 
 
 
-def answer_request_redirect_node(state: OsceGraphState) -> dict[str, Any]:
+def answer_request_redirect_node(state: OsceGraphState, patient_responder: PatientResponder) -> dict[str, Any]:
+    reply = _guardrail_reply_from_agent(
+        state,
+        patient_responder,
+        current_intent="answer_request_redirect",
+        canonical_answer=ANSWER_REQUEST_REDIRECT_REPLY,
+        turn_policy="answer_boundary_redirect",
+    )
     student_message = state.get("student_message", "")
     messages = [*state.get("messages", [])]
     if student_message:
         messages.extend(
             [
                 {"role": "student", "content": student_message},
-                {"role": "coach", "content": ANSWER_REQUEST_REDIRECT_REPLY},
+                {"role": "coach", "content": reply},
             ]
         )
     return {
         "stage": state.get("stage") or "case_intro",
         "current_intent": "answer_request_redirect",
-        "reply": ANSWER_REQUEST_REDIRECT_REPLY,
+        "reply": reply,
         "messages": messages,
+        "agent_turn_memory": _append_agent_turn_memory(
+            state,
+            student_message=student_message,
+            reply=reply,
+            reply_role="coach",
+            current_intent="answer_request_redirect",
+            turn_policy="answer_boundary_redirect",
+            agent_path=["answer_request_redirect_node"],
+            revealed_fact_id=None,
+            safety_flags=list(state.get("safety_flags", [])),
+        ),
     }
 
 
 
-def safety_guardrail_node(state: OsceGraphState) -> dict[str, Any]:
+def safety_guardrail_node(state: OsceGraphState, patient_responder: PatientResponder) -> dict[str, Any]:
+    reply = _guardrail_reply_from_agent(
+        state,
+        patient_responder,
+        current_intent="safety_boundary",
+        canonical_answer=SAFETY_GUARDRAIL_REPLY,
+        turn_policy="safety_boundary_redirect",
+    )
     student_message = state.get("student_message", "")
     messages = [*state.get("messages", [])]
     if student_message:
         messages.extend(
             [
                 {"role": "student", "content": student_message},
-                {"role": "coach", "content": SAFETY_GUARDRAIL_REPLY},
+                {"role": "coach", "content": reply},
             ]
         )
     safety_flags = list(state.get("safety_flags", []))
@@ -311,9 +358,20 @@ def safety_guardrail_node(state: OsceGraphState) -> dict[str, Any]:
     return {
         "stage": state.get("stage") or "case_intro",
         "current_intent": "safety_boundary",
-        "reply": SAFETY_GUARDRAIL_REPLY,
+        "reply": reply,
         "messages": messages,
         "safety_flags": safety_flags,
+        "agent_turn_memory": _append_agent_turn_memory(
+            state,
+            student_message=student_message,
+            reply=reply,
+            reply_role="coach",
+            current_intent="safety_boundary",
+            turn_policy="safety_boundary_redirect",
+            agent_path=["safety_guardrail_node"],
+            revealed_fact_id=None,
+            safety_flags=safety_flags,
+        ),
     }
 
 
@@ -698,9 +756,112 @@ def _is_direct_answer_request(message: str, case_id: str) -> bool:
     return diagnosis_mentioned and any(marker in normalized for marker in diagnosis_question_markers)
 
 
+def _unknown_patient_context_answer(case: Any) -> str:
+    return (
+        f"我是这次因{case.chief_complaint}来就诊的患者。"
+        "这个问题我不太清楚，可以继续问我这次不舒服的起病、部位、性质、程度和伴随症状。"
+    )
+
+
+def _turn_policy_for_patient_response(intent: str, revealed_fact_id: str | None) -> str:
+    if revealed_fact_id:
+        return "history_fact_disclosure"
+    if intent == "unknown_history_intent":
+        return "patient_context_redirect"
+    return "patient_limited_answer"
+
+
+def _asked_questions_after_patient_turn(
+    state: OsceGraphState,
+    student_message: str,
+    revealed_fact_id: str | None,
+) -> list[str]:
+    asked_questions = list(state.get("asked_questions", []))
+    if student_message and revealed_fact_id is not None:
+        asked_questions.append(student_message)
+    return asked_questions
+
+
+def _deterministic_turn_hints(
+    state: OsceGraphState,
+    *,
+    keyword_intent: str,
+    revealed_fact_id: str | None,
+    turn_policy: str,
+) -> dict[str, Any]:
+    return {
+        "keyword_intent": keyword_intent,
+        "turn_policy": turn_policy,
+        "revealed_fact_id": revealed_fact_id,
+        "stage": state.get("stage") or "case_intro",
+        "safety_flags": list(state.get("safety_flags", [])),
+        "training_progress_next_focus": state.get("training_progress_next_focus", ""),
+    }
+
+
+def _guardrail_reply_from_agent(
+    state: OsceGraphState,
+    patient_responder: PatientResponder,
+    *,
+    current_intent: str,
+    canonical_answer: str,
+    turn_policy: str,
+) -> str:
+    case = _load_case(state["case_id"])
+    return patient_responder(
+        PatientResponderRequest(
+            case_id=case.case_id,
+            case_title=case.case_title,
+            chief_complaint=case.chief_complaint,
+            student_message=state.get("student_message", ""),
+            current_intent=current_intent,
+            canonical_answer=canonical_answer,
+            revealed_fact_id=None,
+            forbidden_terms=[case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms],
+            prior_messages=state.get("messages", []),
+            turn_policy=turn_policy,
+            deterministic_hints=_deterministic_turn_hints(
+                state,
+                keyword_intent=current_intent,
+                revealed_fact_id=None,
+                turn_policy=turn_policy,
+            ),
+        )
+    )
+
+
+def _append_agent_turn_memory(
+    state: OsceGraphState,
+    *,
+    student_message: str,
+    reply: str,
+    reply_role: str,
+    current_intent: str,
+    turn_policy: str,
+    agent_path: list[str],
+    revealed_fact_id: str | None,
+    safety_flags: list[str],
+) -> list[dict[str, Any]]:
+    turn_memory = list(state.get("agent_turn_memory", []))
+    source_references = [f"case:{state['case_id']}.history.{revealed_fact_id}"] if revealed_fact_id else []
+    turn_memory.append(
+        {
+            "turn_id": f"turn:{len(turn_memory) + 1}",
+            "student_message": student_message,
+            "reply": reply,
+            "reply_role": reply_role,
+            "current_intent": current_intent,
+            "turn_policy": turn_policy,
+            "agent_path": list(agent_path),
+            "revealed_fact_id": revealed_fact_id,
+            "source_references": source_references,
+            "safety_flags": list(safety_flags),
+        }
+    )
+    return turn_memory
+
+
 def _route_after_input_router(state: OsceGraphState) -> str:
-    if state.get("current_intent") == "unknown_history_intent":
-        return "unknown_history_redirect_node"
     return "patient_response_node"
 
 
@@ -745,8 +906,11 @@ def build_osce_graph(
     builder.add_node(auxiliary_test_node)
     builder.add_node(diagnosis_submit_node)
     builder.add_node(socratic_hint_node)
-    builder.add_node(answer_request_redirect_node)
-    builder.add_node(safety_guardrail_node)
+    builder.add_node(
+        "answer_request_redirect_node",
+        lambda state: answer_request_redirect_node(state, active_patient_responder),
+    )
+    builder.add_node("safety_guardrail_node", lambda state: safety_guardrail_node(state, active_patient_responder))
     builder.add_node("evaluation_node", lambda state: evaluation_node(state, llm_scorer=llm_scorer))
     builder.add_node(feedback_node)
     builder.add_edge(START, "load_case_node")
@@ -769,7 +933,6 @@ def build_osce_graph(
         "input_router_node",
         _route_after_input_router,
         {
-            "unknown_history_redirect_node": "unknown_history_redirect_node",
             "patient_response_node": "patient_response_node",
         },
     )

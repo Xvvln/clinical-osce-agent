@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 import yaml
 
 from app import main
+from app.main import AUTH_COOKIE_NAME
 from app.services.auth_store import AuthStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -67,11 +68,17 @@ def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -
     assert response.status_code == 401
 
 
-def test_runtime_model_config_not_exposed_in_production_ui(monkeypatch) -> None:
+def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch) -> None:
     runtime_model_config_store.clear()
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "vertex-prod")
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
+    user = auth_store.create_user("student@example.test", "safe-password-123", "学生甲")
+    assert user is not None
+    token = auth_store.create_session(user["user_id"])
 
     with TestClient(main.app) as client:
+        client.cookies.set(AUTH_COOKIE_NAME, token)
         response = client.post(
             "/api/model-config/runtime",
             json={

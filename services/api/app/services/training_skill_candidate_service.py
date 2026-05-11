@@ -10,6 +10,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_skill_policy import (
@@ -146,6 +147,32 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
         return _candidate_from_content(context, content)
 
 
+class AnthropicTrainingSkillCandidateGenerator:
+    def __init__(self, settings: AnthropicSettings, client: AnthropicChatClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or AnthropicChatClient(settings)
+
+    def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
+        try:
+            content = self._client.complete_json(
+                system_prompt=SKILL_CANDIDATE_SYSTEM_PROMPT,
+                payload={
+                    "pattern_id": context.pattern_id,
+                    "missed_items": _missed_item_payloads(context.missed_items),
+                    "support_count": context.support_count,
+                    "case_ids": context.case_ids,
+                    "source_report_count": context.source_report_count,
+                    "related_recommendations": context.related_recommendations,
+                },
+                response_model=GeneratedTrainingSkillCandidateContent,
+                temperature=0.2,
+            )
+        except Exception as exc:
+            raise TrainingSkillCandidateGenerationError("Skill candidate generation failed") from exc
+
+        return _candidate_from_content(context, content)
+
+
 class TemplateTrainingSkillCandidateGenerator:
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         return _build_candidate(context)
@@ -157,6 +184,10 @@ def create_default_training_skill_candidate_generator(
     runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
     if runtime_openai_settings is not None:
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=runtime_openai_settings)
+
+    runtime_anthropic_settings = runtime_model_config_store.get_anthropic_settings()
+    if runtime_anthropic_settings is not None:
+        return AnthropicTrainingSkillCandidateGenerator(settings=runtime_anthropic_settings)
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
@@ -190,6 +221,10 @@ def create_default_training_skill_candidate_generator(
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
         return OpenAICompatibleTrainingSkillCandidateGenerator(settings=openai_settings)
+
+    anthropic_settings = AnthropicSettings()
+    if anthropic_settings.is_configured:
+        return AnthropicTrainingSkillCandidateGenerator(settings=anthropic_settings)
 
     settings = VertexGeminiSkillCandidateSettings()
     if not settings.skill_candidate_enabled or not (settings.project or settings.api_key):

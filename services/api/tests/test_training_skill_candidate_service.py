@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services.training_skill_candidate_service import (
     OpenAICompatibleTrainingSkillCandidateGenerator,
@@ -270,6 +271,41 @@ class FakeOpenAICompatibleHttpClient:
         return FakeOpenAICompatibleSkillCandidateResponse()
 
 
+class FakeAnthropicSkillCandidateResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": '{"title":"Anthropic 生成的训练模式 Skill","description":"基于多项高频漏项生成的训练级教学 Skill。","suggested_strategy":"提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。"}',
+                }
+            ],
+        }
+
+
+class FakeAnthropicHttpClient:
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeAnthropicHttpClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeAnthropicSkillCandidateResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeAnthropicSkillCandidateResponse()
+
+
 def test_create_default_training_skill_candidate_generator_uses_runtime_openai_compatible_config(monkeypatch) -> None:
     FakeOpenAICompatibleHttpClient.calls = []
     runtime_model_config_store.clear()
@@ -300,6 +336,37 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_openai_c
     assert candidate["support_count"] == 2
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
+
+
+def test_create_default_training_skill_candidate_generator_uses_runtime_anthropic_config(monkeypatch) -> None:
+    FakeAnthropicHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "anthropic",
+            "api_key": "student-anthropic-secret",
+            "model": "claude-3-5-sonnet-latest",
+            "base_url": "https://api.anthropic.com",
+            "proxy_url": "http://127.0.0.1:7897",
+        }
+    )
+    monkeypatch.setattr(anthropic_module.httpx, "Client", FakeAnthropicHttpClient)
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    try:
+        generator = create_default_training_skill_candidate_generator()
+        candidate = generator.generate_candidate(_training_pattern_candidate_context())
+    finally:
+        runtime_model_config_store.clear()
+
+    assert candidate["candidate_id"] == "skill_candidate_training_pattern_reasoning_core_rs_exclude"
+    assert candidate["trigger_item_ids"] == ["reasoning_core", "rs_exclude"]
+    assert candidate["title"] == "Anthropic 生成的训练模式 Skill"
+    assert candidate["source_report_count"] == 3
+    assert candidate["support_count"] == 2
+    assert FakeAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
+    assert FakeAnthropicHttpClient.calls[0]["json"]["model"] == "claude-3-5-sonnet-latest"
 
 
 def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_gemini_adc_config(monkeypatch) -> None:

@@ -10,6 +10,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
+from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -75,10 +76,28 @@ class OpenAICompatibleRubricScorer:
         )
 
 
-def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICompatibleRubricScorer | None:
+class AnthropicRubricScorer:
+    def __init__(self, settings: AnthropicSettings, client: AnthropicChatClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or AnthropicChatClient(settings)
+
+    def __call__(self, request: LlmRubricRequest) -> LlmRubricResponse:
+        return self._client.complete_json(
+            system_prompt=SYSTEM_PROMPT_TEMPLATE,
+            payload=request.model_dump(),
+            response_model=LlmRubricResponse,
+            temperature=0.1,
+        )
+
+
+def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICompatibleRubricScorer | AnthropicRubricScorer | None:
     runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
     if runtime_openai_settings is not None:
         return OpenAICompatibleRubricScorer(runtime_openai_settings)
+
+    runtime_anthropic_settings = runtime_model_config_store.get_anthropic_settings()
+    if runtime_anthropic_settings is not None:
+        return AnthropicRubricScorer(runtime_anthropic_settings)
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
@@ -111,6 +130,10 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
     if openai_settings.is_configured:
         return OpenAICompatibleRubricScorer(openai_settings)
 
+    anthropic_settings = AnthropicSettings()
+    if anthropic_settings.is_configured:
+        return AnthropicRubricScorer(anthropic_settings)
+
     settings = VertexGeminiSettings()
     if not settings.enabled or not (settings.project or settings.api_key):
         return None
@@ -130,6 +153,7 @@ def _apply_process_proxy(proxy_url: str) -> None:
 
 
 __all__ = [
+    "AnthropicRubricScorer",
     "OpenAICompatibleRubricScorer",
     "VertexGeminiRubricScorer",
     "VertexGeminiSettings",

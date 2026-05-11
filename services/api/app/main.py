@@ -29,6 +29,7 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
+from app.services.user_model_config_store import user_model_config_store
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_auto_approval_service import (
     AUTO_APPROVAL_AGENT_ID,
@@ -51,6 +52,8 @@ DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
 DEFAULT_DEMO_ADMIN_EMAIL = "admin-demo@example.test"
 DEFAULT_DEMO_ADMIN_PASSWORD = "safe-admin-password"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
+TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME = "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING"
+TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。"
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_approved",
     "admin_skill_candidate_agent_reviewed",
@@ -257,6 +260,60 @@ def _require_current_user(auth_token: str | None) -> dict[str, str]:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
     return user
+
+
+def _is_training_model_config_required() -> bool:
+    value = os.getenv(TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME, "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _activate_user_runtime_model_config(user_id: str) -> bool:
+    saved_config = user_model_config_store.get_runtime_config(user_id)
+    if saved_config is None:
+        runtime_model_config_store.clear()
+        return False
+    runtime_model_config_store.apply_config(saved_config.to_config_dict())
+    return True
+
+
+def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, object]:
+    saved_config = user_model_config_store.get_runtime_config(user_id)
+    if saved_config is None:
+        runtime_model_config_store.clear()
+        return {
+            "active": False,
+            "provider": "",
+            "model": "",
+            "base_url": "",
+            "proxy_url": "",
+            "integration_targets": [],
+            "api_key_saved": False,
+            "message": "当前账号没有已保存并应用的模型配置。",
+        }
+    runtime_config = runtime_model_config_store.apply_config(saved_config.to_config_dict())
+    payload = runtime_config.public_payload()
+    payload["api_key_saved"] = bool(runtime_config.api_key)
+    return payload
+
+
+def _build_user_runtime_model_config_request(user_id: str, request: "StudentModelConfigTestRequest") -> dict[str, str]:
+    api_key = request.api_key
+    saved_config = user_model_config_store.get_runtime_config(user_id)
+    if not api_key and saved_config is not None and saved_config.provider == request.provider:
+        api_key = saved_config.api_key
+    return {
+        "provider": request.provider,
+        "api_key": api_key,
+        "model": request.model,
+        "base_url": request.base_url,
+        "proxy_url": request.proxy_url,
+    }
+
+
+def _require_runtime_model_config_for_training(user_id: str) -> None:
+    has_user_config = _activate_user_runtime_model_config(user_id)
+    if _is_training_model_config_required() and not has_user_config:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE)
 
 
 def _get_admin_email_set() -> set[str]:
@@ -647,30 +704,33 @@ def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, objec
 
 
 @app.post("/api/model-config/runtime")
-def apply_model_config_runtime(request: StudentModelConfigTestRequest) -> dict[str, object]:
+def apply_model_config_runtime(
+    request: StudentModelConfigTestRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
     if not is_runtime_model_config_write_supported():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="runtime model config is disabled in production deployment mode",
         )
+    user = _require_current_user(auth_token)
     try:
+        config_request = _build_user_runtime_model_config_request(user["user_id"], request)
         runtime_config = runtime_model_config_store.apply_config(
-            {
-                "provider": request.provider,
-                "api_key": request.api_key,
-                "model": request.model,
-                "base_url": request.base_url,
-                "proxy_url": request.proxy_url,
-            }
+            config_request
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return runtime_config.public_payload()
+    user_model_config_store.save_runtime_config(user["user_id"], runtime_config)
+    payload = runtime_config.public_payload()
+    payload["api_key_saved"] = bool(runtime_config.api_key)
+    return payload
 
 
 @app.get("/api/model-config/runtime")
-def get_model_config_runtime() -> dict[str, object]:
-    payload = runtime_model_config_store.public_status()
+def get_model_config_runtime(auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)) -> dict[str, object]:
+    user = _require_current_user(auth_token)
+    payload = _runtime_model_config_public_payload_for_user(user["user_id"])
     payload["runtime_write_supported"] = is_runtime_model_config_write_supported()
     payload["deployment_mode"] = get_deployment_mode()
     return payload
@@ -1439,6 +1499,7 @@ def create_session(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     user = _require_current_user(auth_token)
+    _require_runtime_model_config_for_training(user["user_id"])
     return osce_session_service.create_session(
         case_id=request.case_id,
         student_id=user["user_id"],
@@ -1459,7 +1520,8 @@ def send_message(
     request: MessageRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.handle_message(session_id, request.message)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -1472,7 +1534,8 @@ def request_physical_exam(
     request: PhysicalExamRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.request_physical_exam(session_id, request.exam_code)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -1485,7 +1548,8 @@ def request_auxiliary_test(
     request: AuxiliaryTestRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -1498,7 +1562,8 @@ def record_hypothesis(
     request: HypothesisRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -1510,7 +1575,8 @@ def request_hint(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.request_hint(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -1535,7 +1601,8 @@ def submit_diagnosis(
     request: SubmitDiagnosisRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    session_payload = _require_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     session = osce_session_service.submit_diagnosis(
         session_id=session_id,
         diagnosis=request.diagnosis,
