@@ -319,7 +319,7 @@ def test_student_can_apply_openai_compatible_config_to_runtime_without_leaking_s
         "base_url": "https://api.proxy.example/v1",
         "proxy_url": "http://127.0.0.1:7897",
         "api_key_saved": True,
-        "integration_targets": ["patient_responder", "llm_rubric_scorer", "skill_candidate_generator"],
+        "integration_targets": ["patient_responder", "turn_intent_agent", "llm_rubric_scorer", "skill_candidate_generator"],
         "message": "OpenAI 兼容服务端已应用到本次后端运行时。",
     }
     assert status_response.status_code == 200
@@ -353,7 +353,7 @@ def test_student_can_apply_anthropic_config_to_runtime_without_leaking_secret(tm
         "base_url": "https://api.anthropic.com",
         "proxy_url": "http://127.0.0.1:7897",
         "api_key_saved": True,
-        "integration_targets": ["patient_responder", "llm_rubric_scorer", "skill_candidate_generator"],
+        "integration_targets": ["patient_responder", "turn_intent_agent", "llm_rubric_scorer", "skill_candidate_generator"],
         "message": "Anthropic 服务端已应用到本次后端运行时。",
     }
     assert status_response.status_code == 200
@@ -389,7 +389,7 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key(t
         "project": "demo-project",
         "location": "global",
         "api_key_saved": False,
-        "integration_targets": ["patient_responder", "llm_rubric_scorer", "skill_candidate_generator"],
+        "integration_targets": ["patient_responder", "turn_intent_agent", "llm_rubric_scorer", "skill_candidate_generator"],
         "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
     }
     assert status_response.status_code == 200
@@ -423,7 +423,7 @@ def test_student_can_apply_vertex_gemini_api_key_config_to_runtime_without_leaki
         "project": "",
         "location": "global",
         "api_key_saved": True,
-        "integration_targets": ["patient_responder", "llm_rubric_scorer", "skill_candidate_generator"],
+        "integration_targets": ["patient_responder", "turn_intent_agent", "llm_rubric_scorer", "skill_candidate_generator"],
         "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
     }
     assert status_response.status_code == 200

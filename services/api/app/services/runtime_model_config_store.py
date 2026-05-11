@@ -9,6 +9,7 @@ from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 
 RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     "patient_responder",
+    "turn_intent_agent",
     "llm_rubric_scorer",
     "skill_candidate_generator",
 ]
