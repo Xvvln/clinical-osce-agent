@@ -47,8 +47,13 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type AdminTrainingInsights = Readonly<\{/);
   assert.match(adminPageSource, /type FrequentMissedItem = Readonly<\{/);
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
+  assert.match(adminPageSource, /type FrequentTurnPattern = Readonly<\{/);
+  assert.match(adminPageSource, /frequent_turn_patterns: readonly FrequentTurnPattern\[];/);
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
+  assert.match(adminPageSource, /source_report_ids\?: readonly string\[];/);
+  assert.match(adminPageSource, /source_session_ids\?: readonly string\[];/);
+  assert.match(adminPageSource, /source_turn_patterns\?: readonly FrequentTurnPattern\[];/);
   assert.match(adminPageSource, /type TrainingSkillApprovalAgentReview = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillAutoApprovalSettings = Readonly<\{/);
   assert.match(adminPageSource, /skill_type: string;/);
@@ -103,6 +108,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_ids/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_ids/);
   assert.match(adminPageSource, /常见漏项/);
+  assert.match(adminPageSource, /训练话轮模式/);
+  assert.match(adminPageSource, /insights\.frequent_turn_patterns/);
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /证据图谱覆盖/);
   assert.match(adminPageSource, /答辩证据链/);
@@ -150,6 +157,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /应用条件/);
   assert.match(adminPageSource, /效果状态/);
   assert.match(adminPageSource, /相关来源引用/);
+  assert.match(adminPageSource, /来源报告与话轮模式/);
+  assert.match(adminPageSource, /selectedCandidate\.source_report_ids/);
+  assert.match(adminPageSource, /selectedCandidate\.source_turn_patterns/);
+  assert.match(adminPageSource, /历史数据未记录/);
   assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /模型 \/ API 配置/);
   assert.match(adminPageSource, /部署模式/);

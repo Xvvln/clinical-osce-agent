@@ -11,6 +11,7 @@ from app.services.training_skill_candidate_service import (
     TrainingSkillCandidateGenerationError,
     TrainingSkillCandidateMissedItem,
     TrainingSkillCandidateService,
+    TrainingSkillCandidateTurnPattern,
     VertexGeminiSkillCandidateSettings,
     VertexGeminiTrainingSkillCandidateGenerator,
     create_default_training_skill_candidate_generator,
@@ -678,3 +679,185 @@ def test_training_skill_candidate_service_skips_when_no_repeated_training_patter
     candidates = TrainingSkillCandidateService().propose_candidates(insights, min_count=2)
 
     assert candidates == []
+
+
+def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_missed_items_do_not_repeat() -> None:
+    captured_contexts: list[TrainingSkillCandidateContext] = []
+
+    class FakeTrainingSkillCandidateGenerator:
+        def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
+            captured_contexts.append(context)
+            return {
+                "candidate_id": f"llm_candidate_{context.pattern_id}",
+                "trigger_item_id": context.pattern_id,
+                "trigger_item_ids": [trigger for pattern in context.turn_patterns for trigger in pattern.trigger_item_ids],
+                "case_ids": context.case_ids,
+                "title": "LLM 生成的话轮模式 Skill",
+                "description": f"LLM 基于 {len(context.turn_patterns)} 类话轮模式生成。",
+                "suggested_strategy": "先把偏题输入自然拉回问诊目标，再提醒学生覆盖起病、部位、性质和伴随症状。",
+                "status": "draft",
+                "source_report_count": context.source_report_count,
+                "support_count": context.support_count,
+                "source_report_ids": [report_id for pattern in context.turn_patterns for report_id in pattern.source_report_ids],
+                "source_turn_patterns": [pattern.pattern_id for pattern in context.turn_patterns],
+                "related_recommendations": context.related_recommendations,
+            }
+
+    insights = {
+        "session_count": 2,
+        "report_count": 2,
+        "frequent_missed_items": [
+            {"item_id": "ht_location", "count": 1, "case_ids": ["appendicitis_001"]},
+        ],
+        "frequent_learning_recommendations": [
+            {
+                "reference": "rubric:appendicitis_001_rubric.item.ht_location",
+                "title": "明确疼痛部位和迁移",
+                "count": 2,
+            }
+        ],
+        "frequent_turn_patterns": [
+            {
+                "pattern_id": "turn_pattern_off_topic_redirect",
+                "pattern_type": "off_topic_redirect",
+                "title": "偏题或寒暄后需要回到问诊目标",
+                "count": 2,
+                "trigger_item_ids": [
+                    "turn_intent:unknown_history_intent",
+                    "turn_policy:patient_context_redirect",
+                ],
+                "case_ids": ["appendicitis_001"],
+                "session_ids": ["session_one", "session_two"],
+                "source_report_ids": ["session_one_report", "session_two_report"],
+                "source_report_count": 2,
+            }
+        ],
+    }
+
+    candidates = TrainingSkillCandidateService(
+        generator=FakeTrainingSkillCandidateGenerator(),
+    ).propose_candidates(insights, min_count=2)
+
+    assert captured_contexts == [
+        TrainingSkillCandidateContext(
+            pattern_id="turn_pattern_off_topic_redirect",
+            missed_items=[],
+            support_count=2,
+            case_ids=["appendicitis_001"],
+            source_report_count=2,
+            related_recommendations=["rubric:appendicitis_001_rubric.item.ht_location"],
+            turn_patterns=[
+                TrainingSkillCandidateTurnPattern(
+                    pattern_id="turn_pattern_off_topic_redirect",
+                    pattern_type="off_topic_redirect",
+                    title="偏题或寒暄后需要回到问诊目标",
+                    count=2,
+                    trigger_item_ids=[
+                        "turn_intent:unknown_history_intent",
+                        "turn_policy:patient_context_redirect",
+                    ],
+                    case_ids=["appendicitis_001"],
+                    session_ids=["session_one", "session_two"],
+                    source_report_ids=["session_one_report", "session_two_report"],
+                    source_report_count=2,
+                )
+            ],
+        )
+    ]
+    assert candidates == [
+        {
+            "candidate_id": "llm_candidate_turn_pattern_off_topic_redirect",
+            "trigger_item_id": "turn_pattern_off_topic_redirect",
+            "trigger_item_ids": [
+                "turn_intent:unknown_history_intent",
+                "turn_policy:patient_context_redirect",
+            ],
+            "case_ids": ["appendicitis_001"],
+            "title": "LLM 生成的话轮模式 Skill",
+            "description": "LLM 基于 1 类话轮模式生成。",
+            "suggested_strategy": "先把偏题输入自然拉回问诊目标，再提醒学生覆盖起病、部位、性质和伴随症状。",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+            "source_report_ids": ["session_one_report", "session_two_report"],
+            "source_turn_patterns": ["turn_pattern_off_topic_redirect"],
+            "related_recommendations": ["rubric:appendicitis_001_rubric.item.ht_location"],
+        }
+    ]
+
+
+def test_template_training_skill_candidate_generator_builds_turn_pattern_candidate_without_external_llm(monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    candidates = TrainingSkillCandidateService().propose_candidates(
+        {
+            "session_count": 2,
+            "report_count": 2,
+            "frequent_missed_items": [],
+            "frequent_learning_recommendations": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.ht_location",
+                    "title": "明确疼痛部位和迁移",
+                    "count": 2,
+                }
+            ],
+            "frequent_turn_patterns": [
+                {
+                    "pattern_id": "turn_pattern_off_topic_redirect",
+                    "pattern_type": "off_topic_redirect",
+                    "title": "偏题或寒暄后需要回到问诊目标",
+                    "count": 2,
+                    "trigger_item_ids": [
+                        "turn_intent:unknown_history_intent",
+                        "turn_policy:patient_context_redirect",
+                    ],
+                    "case_ids": ["appendicitis_001"],
+                    "session_ids": ["session_one", "session_two"],
+                    "source_report_ids": ["session_one_report", "session_two_report"],
+                    "source_report_count": 2,
+                }
+            ],
+        },
+        min_count=2,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["candidate_id"] == "skill_candidate_turn_pattern_off_topic_redirect"
+    assert candidate["trigger_item_ids"] == [
+        "turn_intent:unknown_history_intent",
+        "turn_policy:patient_context_redirect",
+    ]
+    assert candidate["skill_type"] == "conversation_repair"
+    assert candidate["stage_scope"] == ["case_intro", "history_taking"]
+    assert candidate["source_report_ids"] == ["session_one_report", "session_two_report"]
+    assert candidate["source_turn_patterns"] == [
+        {
+            "pattern_id": "turn_pattern_off_topic_redirect",
+            "pattern_type": "off_topic_redirect",
+            "title": "偏题或寒暄后需要回到问诊目标",
+            "count": 2,
+            "trigger_item_ids": [
+                "turn_intent:unknown_history_intent",
+                "turn_policy:patient_context_redirect",
+            ],
+            "case_ids": ["appendicitis_001"],
+            "session_ids": ["session_one", "session_two"],
+            "source_report_ids": ["session_one_report", "session_two_report"],
+            "source_report_count": 2,
+        }
+    ]
+    assert candidate["applies_when"] == {
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro", "history_taking"],
+        "trigger_item_ids": [
+            "turn_intent:unknown_history_intent",
+            "turn_policy:patient_context_redirect",
+        ],
+        "current_missing_evidence": [
+            "turn_intent:unknown_history_intent",
+            "turn_policy:patient_context_redirect",
+        ],
+        "min_support_count": 2,
+    }

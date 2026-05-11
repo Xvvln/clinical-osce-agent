@@ -196,6 +196,18 @@ type FrequentLearningRecommendation = Readonly<{
   count: number;
 }>;
 
+type FrequentTurnPattern = Readonly<{
+  pattern_id: string;
+  pattern_type: string;
+  title: string;
+  count: number;
+  trigger_item_ids: readonly string[];
+  case_ids: readonly string[];
+  session_ids: readonly string[];
+  source_report_ids: readonly string[];
+  source_report_count: number;
+}>;
+
 type FrequentSourceReference = AdminSourceReferenceItem &
   Readonly<{
     count: number;
@@ -208,6 +220,7 @@ type AdminTrainingInsights = Readonly<{
   frequent_missed_items: readonly FrequentMissedItem[];
   frequent_learning_recommendations: readonly FrequentLearningRecommendation[];
   frequent_source_references: readonly FrequentSourceReference[];
+  frequent_turn_patterns: readonly FrequentTurnPattern[];
 }>;
 
 type TrainingSkillCandidateSummary = Readonly<{
@@ -276,6 +289,9 @@ type TrainingSkillCandidateDetail = Readonly<{
   status: string;
   source_report_count: number;
   support_count: number;
+  source_report_ids?: readonly string[];
+  source_session_ids?: readonly string[];
+  source_turn_patterns?: readonly FrequentTurnPattern[];
   related_recommendations: readonly string[];
   review: TrainingSkillCandidateReview;
   approval_agent_review?: TrainingSkillApprovalAgentReview;
@@ -2929,6 +2945,28 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
                   <div>
+                    <h3 className="text-sm font-semibold">训练话轮模式</h3>
+                    <div className="mt-2 grid gap-2">
+                      {insights.frequent_turn_patterns.length > 0 ? (
+                        insights.frequent_turn_patterns.map((pattern) => (
+                          <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]" key={pattern.pattern_id}>
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="font-semibold text-[#141413]">{pattern.title}</p>
+                                <p className="font-mono text-[11px] text-[#AE5630]">{pattern.pattern_id}</p>
+                              </div>
+                              <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{pattern.count} 次</span>
+                            </div>
+                            <p className="mt-2 text-xs text-[#8A7D6F]">类型：{pattern.pattern_type} · 报告：{pattern.source_report_count} 份</p>
+                            <p className="mt-1 break-words text-xs text-[#8A7D6F]">触发：{pattern.trigger_item_ids.join("、") || "历史数据未记录"}</p>
+                          </article>
+                        ))
+                      ) : (
+                        <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无训练话轮模式。</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
                     <h3 className="text-sm font-semibold">学习建议</h3>
                     <div className="mt-2 grid gap-2">
                       {insights.frequent_learning_recommendations.length > 0 ? (
@@ -3480,6 +3518,27 @@ export default function AdminDashboardPage() {
                       <p className="mt-2 break-words text-sm leading-6 text-[#6F6257]">
                         {selectedCandidate.related_recommendations.length > 0 ? selectedCandidate.related_recommendations.join("、") : "暂无关联学习建议引用"}
                       </p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">来源报告与话轮模式</h4>
+                      <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                        <p>来源报告：{(selectedCandidate.source_report_ids ?? []).length > 0 ? (selectedCandidate.source_report_ids ?? []).join("、") : "历史数据未记录"}</p>
+                        <p className="mt-1">来源会话：{(selectedCandidate.source_session_ids ?? []).length > 0 ? (selectedCandidate.source_session_ids ?? []).join("、") : "历史数据未记录"}</p>
+                        <div className="mt-2 grid gap-2">
+                          {(selectedCandidate.source_turn_patterns ?? []).length > 0 ? (
+                            selectedCandidate.source_turn_patterns?.map((pattern) => (
+                              <article className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2" key={pattern.pattern_id}>
+                                <p className="font-medium text-[#141413]">{pattern.title}</p>
+                                <p className="font-mono text-[11px] text-[#AE5630]">{pattern.pattern_id}</p>
+                                <p className="mt-1">类型：{pattern.pattern_type} · 支持：{pattern.count} 次 · 报告：{pattern.source_report_count} 份</p>
+                                <p className="mt-1 break-words">触发项：{pattern.trigger_item_ids.join("、") || "历史数据未记录"}</p>
+                              </article>
+                            ))
+                          ) : (
+                            <p className="rounded-md border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-2">历史数据未记录训练话轮模式。</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">候选说明</h4>

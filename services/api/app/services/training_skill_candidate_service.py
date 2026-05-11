@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from google import genai
@@ -28,6 +28,19 @@ class TrainingSkillCandidateMissedItem:
 
 
 @dataclass(frozen=True)
+class TrainingSkillCandidateTurnPattern:
+    pattern_id: str
+    pattern_type: str
+    title: str
+    count: int
+    trigger_item_ids: list[str]
+    case_ids: list[str]
+    session_ids: list[str]
+    source_report_ids: list[str]
+    source_report_count: int
+
+
+@dataclass(frozen=True)
 class TrainingSkillCandidateContext:
     pattern_id: str
     missed_items: list[TrainingSkillCandidateMissedItem]
@@ -35,6 +48,7 @@ class TrainingSkillCandidateContext:
     case_ids: list[str]
     source_report_count: int
     related_recommendations: list[str]
+    turn_patterns: list[TrainingSkillCandidateTurnPattern] = field(default_factory=list)
 
 
 SkillCandidateType = str
@@ -101,9 +115,11 @@ class VertexGeminiTrainingSkillCandidateGenerator:
                     {
                         "pattern_id": context.pattern_id,
                         "missed_items": _missed_item_payloads(context.missed_items),
+                        "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
                         "support_count": context.support_count,
                         "case_ids": context.case_ids,
                         "source_report_count": context.source_report_count,
+                        "source_report_ids": _context_source_report_ids(context),
                         "related_recommendations": context.related_recommendations,
                     },
                     ensure_ascii=False,
@@ -133,9 +149,11 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
                 payload={
                     "pattern_id": context.pattern_id,
                     "missed_items": _missed_item_payloads(context.missed_items),
+                    "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
                     "support_count": context.support_count,
                     "case_ids": context.case_ids,
                     "source_report_count": context.source_report_count,
+                    "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
@@ -159,9 +177,11 @@ class AnthropicTrainingSkillCandidateGenerator:
                 payload={
                     "pattern_id": context.pattern_id,
                     "missed_items": _missed_item_payloads(context.missed_items),
+                    "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
                     "support_count": context.support_count,
                     "case_ids": context.case_ids,
                     "source_report_count": context.source_report_count,
+                    "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
@@ -240,22 +260,34 @@ class TrainingSkillCandidateService:
     def propose_candidates(self, insights: dict[str, Any], min_count: int = 2) -> list[dict[str, Any]]:
         source_report_count = int(insights.get("report_count", 0))
         recurring_missed_items = _recurring_missed_items(insights, min_count)
-        if not recurring_missed_items:
-            return []
-
         related_recommendations = [
             recommendation["reference"]
             for recommendation in insights.get("frequent_learning_recommendations", [])
         ]
-        context = TrainingSkillCandidateContext(
-            pattern_id=_training_pattern_id(recurring_missed_items),
-            missed_items=recurring_missed_items,
-            support_count=max(item.count for item in recurring_missed_items),
-            case_ids=_pattern_case_ids(recurring_missed_items),
-            source_report_count=source_report_count,
-            related_recommendations=related_recommendations,
-        )
-        return [self._generator.generate_candidate(context)]
+        candidates: list[dict[str, Any]] = []
+        if recurring_missed_items:
+            context = TrainingSkillCandidateContext(
+                pattern_id=_training_pattern_id(recurring_missed_items),
+                missed_items=recurring_missed_items,
+                support_count=max(item.count for item in recurring_missed_items),
+                case_ids=_pattern_case_ids(recurring_missed_items),
+                source_report_count=source_report_count,
+                related_recommendations=related_recommendations,
+            )
+            candidates.append(self._generator.generate_candidate(context))
+
+        for turn_pattern in _recurring_turn_patterns(insights, min_count):
+            context = TrainingSkillCandidateContext(
+                pattern_id=turn_pattern.pattern_id,
+                missed_items=[],
+                support_count=turn_pattern.count,
+                case_ids=list(turn_pattern.case_ids),
+                source_report_count=turn_pattern.source_report_count,
+                related_recommendations=related_recommendations,
+                turn_patterns=[turn_pattern],
+            )
+            candidates.append(self._generator.generate_candidate(context))
+        return candidates
 
 
 def _recurring_missed_items(insights: dict[str, Any], min_count: int) -> list[TrainingSkillCandidateMissedItem]:
@@ -269,6 +301,25 @@ def _recurring_missed_items(insights: dict[str, Any], min_count: int) -> list[Tr
         if int(missed_item["count"]) >= min_count
     ]
     return sorted(missed_items, key=lambda item: (-item.count, item.item_id))
+
+
+def _recurring_turn_patterns(insights: dict[str, Any], min_count: int) -> list[TrainingSkillCandidateTurnPattern]:
+    turn_patterns = [
+        TrainingSkillCandidateTurnPattern(
+            pattern_id=str(turn_pattern["pattern_id"]),
+            pattern_type=str(turn_pattern["pattern_type"]),
+            title=str(turn_pattern["title"]),
+            count=int(turn_pattern["count"]),
+            trigger_item_ids=sorted(str(trigger) for trigger in turn_pattern.get("trigger_item_ids", [])),
+            case_ids=sorted(str(case_id) for case_id in turn_pattern.get("case_ids", [])),
+            session_ids=sorted(str(session_id) for session_id in turn_pattern.get("session_ids", [])),
+            source_report_ids=sorted(str(report_id) for report_id in turn_pattern.get("source_report_ids", [])),
+            source_report_count=int(turn_pattern.get("source_report_count", 0)),
+        )
+        for turn_pattern in insights.get("frequent_turn_patterns", [])
+        if int(turn_pattern["count"]) >= min_count
+    ]
+    return sorted(turn_patterns, key=lambda pattern: (-pattern.count, pattern.pattern_id))
 
 
 def _training_pattern_id(missed_items: list[TrainingSkillCandidateMissedItem]) -> str:
@@ -294,14 +345,31 @@ def _missed_item_payloads(missed_items: list[TrainingSkillCandidateMissedItem]) 
     ]
 
 
+def _turn_pattern_payloads(turn_patterns: list[TrainingSkillCandidateTurnPattern]) -> list[dict[str, Any]]:
+    return [
+        {
+            "pattern_id": pattern.pattern_id,
+            "pattern_type": pattern.pattern_type,
+            "title": pattern.title,
+            "count": pattern.count,
+            "trigger_item_ids": pattern.trigger_item_ids,
+            "case_ids": pattern.case_ids,
+            "session_ids": pattern.session_ids,
+            "source_report_ids": pattern.source_report_ids,
+            "source_report_count": pattern.source_report_count,
+        }
+        for pattern in turn_patterns
+    ]
+
+
 def _candidate_from_content(
     context: TrainingSkillCandidateContext,
     content: GeneratedTrainingSkillCandidateContent,
 ) -> dict[str, Any]:
-    skill_type = _skill_type(context.missed_items)
+    skill_type = _skill_type(context)
     stage_scope = _stage_scope(skill_type)
-    trigger_item_ids = [item.item_id for item in context.missed_items]
-    return {
+    trigger_item_ids = _context_trigger_item_ids(context)
+    candidate = {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": trigger_item_ids,
@@ -325,14 +393,16 @@ def _candidate_from_content(
         "support_count": context.support_count,
         "related_recommendations": list(context.related_recommendations),
     }
+    _add_turn_pattern_source_fields(candidate, context)
+    return candidate
 
 
 def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
-    skill_type = _skill_type(context.missed_items)
+    skill_type = _skill_type(context)
     stage_scope = _stage_scope(skill_type)
-    trigger_item_ids = [item.item_id for item in context.missed_items]
-    suggested_strategy = "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。"
-    return {
+    trigger_item_ids = _context_trigger_item_ids(context)
+    suggested_strategy = _suggested_strategy(context)
+    candidate = {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
         "trigger_item_ids": trigger_item_ids,
@@ -356,9 +426,17 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
         "support_count": context.support_count,
         "related_recommendations": context.related_recommendations,
     }
+    _add_turn_pattern_source_fields(candidate, context)
+    return candidate
 
 
 def _candidate_description(context: TrainingSkillCandidateContext) -> str:
+    if context.turn_patterns:
+        turn_pattern_summaries = "、".join(
+            f"{pattern.title}（{pattern.count} 次，涉及 {'、'.join(pattern.session_ids)}）"
+            for pattern in context.turn_patterns
+        )
+        return f"{context.source_report_count} 份报告关联的话轮记录中反复出现 {len(context.turn_patterns)} 类训练过程模式：{turn_pattern_summaries}。"
     missed_item_summaries = "、".join(
         f"{item.item_id}（{item.count} 次，涉及 {'、'.join(item.case_ids)}）"
         for item in context.missed_items
@@ -366,7 +444,23 @@ def _candidate_description(context: TrainingSkillCandidateContext) -> str:
     return f"{context.source_report_count} 份报告中反复出现 {len(context.missed_items)} 类训练漏项：{missed_item_summaries}。"
 
 
-def _skill_type(missed_items: list[TrainingSkillCandidateMissedItem]) -> SkillCandidateType:
+def _suggested_strategy(context: TrainingSkillCandidateContext) -> str:
+    if context.turn_patterns:
+        return "在不透露标准答案的前提下，先识别本轮训练中的偏题、跳步或过早索要答案模式，再用苏格拉底式问题把学生带回当前 OSCE 阶段的证据采集目标。"
+    return "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。"
+
+
+def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:
+    if context.turn_patterns:
+        pattern_types = [pattern.pattern_type for pattern in context.turn_patterns]
+        if any(pattern_type in {"off_topic_redirect"} for pattern_type in pattern_types):
+            return "conversation_repair"
+        if any("answer" in pattern_type or "safety" in pattern_type for pattern_type in pattern_types):
+            return "safety_boundary"
+        if any("before_history" in pattern_type for pattern_type in pattern_types):
+            return "workflow_sequencing"
+        return "conversation_repair"
+    missed_items = context.missed_items
     item_ids = [item.item_id for item in missed_items]
     if any("safety" in item_id or "forbidden" in item_id for item_id in item_ids):
         return "safety_boundary"
@@ -384,6 +478,10 @@ def _skill_type(missed_items: list[TrainingSkillCandidateMissedItem]) -> SkillCa
 
 
 def _stage_scope(skill_type: SkillCandidateType) -> list[str]:
+    if skill_type == "conversation_repair":
+        return ["case_intro", "history_taking"]
+    if skill_type == "workflow_sequencing":
+        return ["case_intro", "history_taking", "physical_exam", "auxiliary_testing"]
     if skill_type == "history_bundle":
         return ["case_intro", "history_taking"]
     if skill_type == "exam_bundle":
@@ -398,7 +496,7 @@ def _stage_scope(skill_type: SkillCandidateType) -> list[str]:
 
 
 def _applies_when(context: TrainingSkillCandidateContext, stage_scope: list[str]) -> dict[str, Any]:
-    trigger_item_ids = [item.item_id for item in context.missed_items]
+    trigger_item_ids = _context_trigger_item_ids(context)
     return {
         "case_ids": list(context.case_ids),
         "stage_scope": list(stage_scope),
@@ -406,6 +504,28 @@ def _applies_when(context: TrainingSkillCandidateContext, stage_scope: list[str]
         "current_missing_evidence": trigger_item_ids,
         "min_support_count": context.support_count,
     }
+
+
+def _context_trigger_item_ids(context: TrainingSkillCandidateContext) -> list[str]:
+    if context.turn_patterns:
+        return sorted({trigger for pattern in context.turn_patterns for trigger in pattern.trigger_item_ids})
+    return [item.item_id for item in context.missed_items]
+
+
+def _context_source_report_ids(context: TrainingSkillCandidateContext) -> list[str]:
+    return sorted({report_id for pattern in context.turn_patterns for report_id in pattern.source_report_ids})
+
+
+def _context_source_session_ids(context: TrainingSkillCandidateContext) -> list[str]:
+    return sorted({session_id for pattern in context.turn_patterns for session_id in pattern.session_ids})
+
+
+def _add_turn_pattern_source_fields(candidate: dict[str, Any], context: TrainingSkillCandidateContext) -> None:
+    if not context.turn_patterns:
+        return
+    candidate["source_report_ids"] = _context_source_report_ids(context)
+    candidate["source_session_ids"] = _context_source_session_ids(context)
+    candidate["source_turn_patterns"] = _turn_pattern_payloads(context.turn_patterns)
 
 
 def _apply_process_proxy(proxy_url: str) -> None:

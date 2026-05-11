@@ -1255,6 +1255,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "metadata": {"license": "CC BY 4.0"},
                 }
             ],
+            "frequent_turn_patterns": [],
         }
     }
 
