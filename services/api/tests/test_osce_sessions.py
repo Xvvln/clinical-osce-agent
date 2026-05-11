@@ -1250,7 +1250,14 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
         "history_message",
         "hint_requested",
     ]
-    assert find_event(events, "hint_requested")["payload"] == {"hint": payload["hint"]}
+    hint_event_payload = find_event(events, "hint_requested")["payload"]
+    assert hint_event_payload == {
+        "hint": payload["hint"],
+        "agent_turn": payload["agent_turn_memory"][-1],
+    }
+    assert hint_event_payload["agent_turn"]["current_intent"] == "socratic_hint"
+    assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
+    assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
 
 
 def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(tmp_path) -> None:
@@ -1295,7 +1302,14 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         "history_message",
         "hint_requested",
     ]
-    assert find_event(events, "hint_requested")["payload"] == {"hint": payload["hint"]}
+    hint_event_payload = find_event(events, "hint_requested")["payload"]
+    assert hint_event_payload == {
+        "hint": payload["hint"],
+        "agent_turn": payload["agent_turn_memory"][-1],
+    }
+    assert hint_event_payload["agent_turn"]["current_intent"] == "socratic_hint"
+    assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
+    assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
 
 
 def test_session_report_can_be_read_after_session_memory_is_cleared(tmp_path) -> None:

@@ -243,7 +243,14 @@ class OsceSessionService:
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["hint"] = graph_state["hint"]
-        self._append_event(session, "hint_requested", {"hint": graph_state["hint"]})
+        self._append_event(
+            session,
+            "hint_requested",
+            {
+                "hint": graph_state["hint"],
+                "agent_turn": _latest_agent_turn(graph_state),
+            },
+        )
         self._append_agent_update_event(session, agent_update)
         return payload
 
