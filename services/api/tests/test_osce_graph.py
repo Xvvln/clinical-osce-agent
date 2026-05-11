@@ -786,3 +786,70 @@ def test_osce_graph_returns_socratic_hint_as_coach_message_without_revealing_dia
     assert result["rubric_scores"] == {}
     for forbidden_term in ["急性阑尾炎", "阑尾炎", "手术", "治疗方案"]:
         assert forbidden_term not in result["hint"]
+
+
+def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() -> None:
+    captured_requests: list[object] = []
+
+    def fake_coach_agent(request: object) -> dict[str, str]:
+        captured_requests.append(request)
+        return {"hint": "先追问疼痛是否转移，再决定下一步查体。"}
+
+    graph = build_osce_graph(coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        {
+            "session_id": "session_demo",
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "hint_requested": True,
+            "hint": "",
+            "messages": [
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始，最初是上腹部隐痛。"},
+            ],
+            "asked_questions": ["什么时候开始疼的？"],
+            "intent_history": ["ask_onset"],
+            "agent_turn_memory": [],
+            "revealed_facts": ["appendicitis_001.hf_01"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["hint"] == "先追问疼痛是否转移，再决定下一步查体。"
+    assert result["messages"][-1] == {"role": "coach", "content": result["hint"]}
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "base_hint") == "先围绕疼痛的部位、性质、程度、伴随症状和既往史继续追问，不要急于下诊断。"
+    assert getattr(captured_requests[0], "prompt_kind") == "socratic_hint"
+    assert "急性阑尾炎" not in str(getattr(captured_requests[0], "model_dump")())
+    assert result["agent_turn_memory"] == [
+        {
+            "turn_id": "turn:1",
+            "student_message": "请求提示",
+            "reply": result["hint"],
+            "reply_role": "coach",
+            "current_intent": "socratic_hint",
+            "turn_policy": "teaching_hint",
+            "turn_analysis": {
+                "current_intent": "socratic_hint",
+                "confidence": 1.0,
+                "is_off_topic": False,
+                "rationale": "学生请求教学提示。",
+            },
+            "agent_path": ["socratic_hint_node", "coach_agent"],
+            "revealed_fact_id": None,
+            "source_references": [],
+            "safety_flags": [],
+        }
+    ]

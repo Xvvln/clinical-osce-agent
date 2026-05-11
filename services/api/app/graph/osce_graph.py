@@ -8,8 +8,9 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.agent_state_service import append_decision_trace, build_pedagogy_state, build_reflection_summary
+from app.services.coach_agent import CoachRequest, create_default_coach_agent, normalize_coach_response, sanitize_coach_hint
+from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
@@ -24,6 +25,7 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 PatientResponder = Callable[[PatientResponderRequest], str]
 TurnIntentAgent = Callable[[TurnIntentRequest], Any]
+CoachAgent = Callable[[CoachRequest], Any]
 SAFETY_BOUNDARY_FLAG = "real_medical_advice_request"
 SAFETY_GUARDRAIL_REPLY = "本系统仅用于 OSCE 教学模拟训练，不能提供真实诊断、具体用药或急救处置建议；如有真实健康问题，请咨询合格医疗专业人员或及时就医。"
 ANSWER_REQUEST_REDIRECT_REPLY = "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
@@ -320,12 +322,46 @@ def reflection_node(state: OsceGraphState) -> dict[str, Any]:
     }
 
 
-def socratic_hint_node(state: OsceGraphState) -> dict[str, Any]:
-    hint = _build_socratic_hint(state)
+def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[str, Any]:
+    case = _load_case(state["case_id"])
+    base_hint = _build_socratic_hint(state)
+    pedagogy_state = build_pedagogy_state(dict(state))
+    forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
+    hint = sanitize_coach_hint(
+        normalize_coach_response(
+            coach_agent(
+                CoachRequest(
+                    case_id=case.case_id,
+                    case_title=case.case_title,
+                    chief_complaint=case.chief_complaint,
+                    stage=state.get("stage", "case_intro"),
+                    prompt_kind="socratic_hint",
+                    base_hint=base_hint,
+                    prior_messages=state.get("messages", []),
+                    pedagogy_state=pedagogy_state,
+                    skill_context=state.get("evolution_candidates", []),
+                    forbidden_terms=[],
+                )
+            )
+        ).hint,
+        forbidden_terms,
+    )
     return {
         "stage": state.get("stage", "case_intro"),
         "hint": hint,
         "messages": [*state.get("messages", []), {"role": "coach", "content": hint}],
+        "agent_turn_memory": _append_agent_turn_memory(
+            state,
+            student_message="请求提示",
+            reply=hint,
+            reply_role="coach",
+            current_intent="socratic_hint",
+            turn_policy="teaching_hint",
+            turn_analysis=_boundary_turn_analysis("socratic_hint", "学生请求教学提示。"),
+            agent_path=["socratic_hint_node", "coach_agent"],
+            revealed_fact_id=None,
+            safety_flags=list(state.get("safety_flags", [])),
+        ),
     }
 
 
@@ -947,9 +983,11 @@ def build_osce_graph(
     llm_scorer: LlmRubricScorer | None = None,
     patient_responder: PatientResponder | None = None,
     turn_intent_agent: TurnIntentAgent | None = None,
+    coach_agent: CoachAgent | None = None,
 ) -> Any:
     active_patient_responder = patient_responder or create_default_gemini_patient_responder()
     active_turn_intent_agent = turn_intent_agent or create_default_turn_intent_agent()
+    active_coach_agent = coach_agent or create_default_coach_agent()
     builder = StateGraph(OsceGraphState)
     builder.add_node(load_case_node)
     builder.add_node("input_router_node", lambda state: input_router_node(state, active_turn_intent_agent))
@@ -958,7 +996,7 @@ def build_osce_graph(
     builder.add_node(physical_exam_node)
     builder.add_node(auxiliary_test_node)
     builder.add_node(diagnosis_submit_node)
-    builder.add_node(socratic_hint_node)
+    builder.add_node("socratic_hint_node", lambda state: socratic_hint_node(state, active_coach_agent))
     builder.add_node(
         "answer_request_redirect_node",
         lambda state: answer_request_redirect_node(state, active_patient_responder),

@@ -44,7 +44,7 @@ def _gemini_patient_api_config() -> dict[str, Any]:
     return _provider_config(
         provider_id="gemini_patient_api",
         label="Gemini Developer API",
-        capability="标准化病人自然语言改写",
+        capability="标准化病人自然语言改写、Coach 教学提示生成",
         enabled=not use_vertex and secret_configured,
         configured=configured,
         secret_configured=secret_configured,
@@ -54,7 +54,7 @@ def _gemini_patient_api_config() -> dict[str, Any]:
         required_env=["OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY"],
         missing_env=[] if configured else ["OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY"],
         integration_status="wired",
-        notes="用于学生端问诊时把病例 canonical_answer 改写为标准化病人口吻；密钥只从环境变量读取。",
+        notes="用于学生端问诊时把病例 canonical_answer 改写为标准化病人口吻，并生成受控 Coach 教学提示；密钥只从环境变量读取。",
     )
 
 
@@ -76,7 +76,7 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
     return _provider_config(
         provider_id="gemini_patient_vertex",
         label="Vertex Gemini 标准化病人",
-        capability="标准化病人自然语言改写",
+        capability="标准化病人自然语言改写、Turn Intent 意图识别、Coach 教学提示生成",
         enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
@@ -254,7 +254,7 @@ def _openai_compatible_config() -> dict[str, Any]:
     return _provider_config(
         provider_id="openai_compatible",
         label="OpenAI 兼容模型",
-        capability="标准化病人、llm_rubric 语义评分、训练模式级候选 Skill 文案生成",
+        capability="标准化病人、Turn Intent 意图识别、Coach 教学提示、llm_rubric 语义评分、训练模式级候选 Skill 文案生成",
         enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
