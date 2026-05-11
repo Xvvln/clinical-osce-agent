@@ -141,6 +141,12 @@ def test_osce_graph_routes_unknown_history_turn_through_patient_agent_and_record
             "reply_role": "patient",
             "current_intent": "unknown_history_intent",
             "turn_policy": "patient_context_redirect",
+            "turn_analysis": {
+                "current_intent": "unknown_history_intent",
+                "confidence": 0.35,
+                "is_off_topic": True,
+                "rationale": "未命中当前病例问诊意图提示，作为患者身份或训练目标引导处理。",
+            },
             "agent_path": ["input_router_node", "patient_response_node"],
             "revealed_fact_id": None,
             "source_references": [],
@@ -196,6 +202,7 @@ def test_osce_graph_routes_answer_boundary_through_reply_agent_and_records_memor
     assert getattr(captured_requests[0], "turn_policy") == "answer_boundary_redirect"
     assert result["agent_turn_memory"][0]["turn_policy"] == "answer_boundary_redirect"
     assert result["agent_turn_memory"][0]["reply_role"] == "coach"
+    assert result["agent_turn_memory"][0]["turn_analysis"]["current_intent"] == "answer_request_redirect"
 
 
 def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
@@ -239,6 +246,73 @@ def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
     assert len(captured_requests) == 1
     assert getattr(captured_requests[0], "canonical_answer") == "24 小时前开始，最初是上腹部隐痛。"
     assert getattr(captured_requests[0], "student_message") == "什么时候开始疼的？"
+
+
+def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> None:
+    captured_intent_requests: list[object] = []
+    captured_patient_requests: list[object] = []
+
+    def fake_turn_intent_agent(request: object) -> dict[str, object]:
+        captured_intent_requests.append(request)
+        return {
+            "current_intent": "ask_onset",
+            "confidence": 0.93,
+            "is_off_topic": False,
+            "rationale": "学生在询问腹痛持续时间。",
+        }
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        turn_intent_agent=fake_turn_intent_agent,
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "腹痛持续多长时间了？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intent"] == "ask_onset"
+    assert result["reply"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert result["revealed_facts"] == ["appendicitis_001.hf_01"]
+    assert len(captured_intent_requests) == 1
+    assert getattr(captured_intent_requests[0], "student_message") == "腹痛持续多长时间了？"
+    assert getattr(captured_intent_requests[0], "keyword_intent") == "unknown_history_intent"
+    assert len(captured_patient_requests) == 1
+    patient_hints = getattr(captured_patient_requests[0], "deterministic_hints")
+    assert patient_hints["turn_analysis"] == {
+        "current_intent": "ask_onset",
+        "confidence": 0.93,
+        "is_off_topic": False,
+        "rationale": "学生在询问腹痛持续时间。",
+    }
+    assert result["agent_turn_memory"][0]["current_intent"] == "ask_onset"
+    assert result["agent_turn_memory"][0]["turn_analysis"] == patient_hints["turn_analysis"]
 
 
 def test_osce_graph_does_not_fallback_when_patient_responder_fails() -> None:
