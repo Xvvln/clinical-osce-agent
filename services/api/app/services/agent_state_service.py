@@ -8,6 +8,9 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
     missed_items = _string_list(state.get("missed_items", []))
     skill_context_ids = _skill_context_ids(state.get("evolution_candidates", []))
     active_goal, next_best_action, evidence_gap, differential_gap = _phase_plan(state)
+    clinical_reasoning_state = build_clinical_reasoning_state(state)
+    if clinical_reasoning_state.get("sequence_flags"):
+        next_best_action = str(clinical_reasoning_state.get("next_best_action", {}).get("message") or next_best_action)
     teaching_plan = _build_teaching_plan(
         state=state,
         stage=stage,
@@ -37,6 +40,7 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
         "reflection_summary_id": _reflection_summary_id(state),
         "teaching_plan": teaching_plan,
         "stage_checkpoint": stage_checkpoint,
+        "clinical_reasoning_state": clinical_reasoning_state,
         "hint_ladder": hint_ladder,
     }
 
@@ -63,6 +67,7 @@ def append_decision_trace(
                 "checkpoint_status": pedagogy_state.get("stage_checkpoint", {}).get("status", ""),
                 "covered_signal_ids": list(pedagogy_state.get("stage_checkpoint", {}).get("covered_signal_ids", [])),
                 "pending_signal_ids": list(pedagogy_state.get("stage_checkpoint", {}).get("pending_signal_ids", [])),
+                "sequence_flags": list(pedagogy_state.get("clinical_reasoning_state", {}).get("sequence_flags", [])),
             },
             "decide": {
                 "active_learning_goal": pedagogy_state["active_learning_goal"],
@@ -101,6 +106,84 @@ def build_reflection_summary(state: dict[str, Any]) -> dict[str, Any]:
         "next_focus": next_focus,
         "reflection_prompts": _build_reflection_prompts(str(state.get("case_id") or "unknown"), missed_items),
         "safety_note": "反思摘要仅用于 OSCE 教学训练，不改变病例标准答案、rubric 或评分规则。",
+    }
+
+
+def build_clinical_reasoning_state(state: dict[str, Any]) -> dict[str, Any]:
+    progress = state.get("training_progress")
+    if not isinstance(progress, dict):
+        progress = {}
+    revealed_facts = _string_list(state.get("revealed_facts", []))
+    requested_exams = _string_list(state.get("requested_exams", []))
+    requested_tests = _string_list(state.get("requested_tests", []))
+    student_hypotheses = _string_list(state.get("student_hypotheses", []))
+    history_covered = _nested_int(progress, "history", "covered", len(revealed_facts))
+    exam_requested = _nested_int(progress, "physical_exam", "requested", len(requested_exams))
+    test_requested = _nested_int(progress, "auxiliary_test", "requested", len(requested_tests))
+    pending_history_fact_ids = _nested_string_list(progress, "history", "pending_fact_ids")
+    pending_exam_codes = _nested_string_list(progress, "physical_exam", "pending_codes")
+    must_pending_exam_codes = _nested_string_list(progress, "physical_exam", "must_pending_codes")
+    pending_test_codes = _nested_string_list(progress, "auxiliary_test", "pending_codes")
+    must_pending_test_codes = _nested_string_list(progress, "auxiliary_test", "must_pending_codes")
+    pending_reasoning_evidence = _nested_string_list(progress, "reasoning", "pending_evidence")
+
+    sequence_flags: list[str] = []
+    if exam_requested > 0 and history_covered == 0:
+        sequence_flags.append("physical_exam_before_history")
+    if test_requested > 0 and history_covered == 0:
+        sequence_flags.append("auxiliary_test_before_history")
+    if test_requested > 0 and exam_requested == 0 and history_covered > 0:
+        sequence_flags.append("auxiliary_test_before_physical_exam")
+    if test_requested > 0 and not student_hypotheses:
+        sequence_flags.append("auxiliary_test_without_hypothesis")
+    if student_hypotheses and history_covered == 0:
+        sequence_flags.append("hypothesis_before_core_history")
+
+    readiness = {
+        "history": _readiness_from_count(history_covered, pending_history_fact_ids),
+        "physical_exam": _readiness_from_count(exam_requested, must_pending_exam_codes),
+        "auxiliary_test": _readiness_from_count(test_requested, must_pending_test_codes, started_label="started"),
+        "reasoning": "ready" if student_hypotheses else "missing",
+    }
+    pedagogical_phase = _clinical_pedagogical_phase(
+        final_submission=state.get("final_submission"),
+        history_covered=history_covered,
+        pending_history_fact_count=len(pending_history_fact_ids),
+        exam_requested=exam_requested,
+        test_requested=test_requested,
+        student_hypotheses=student_hypotheses,
+    )
+    next_best_action, socratic_question, reasoning_rationale = _clinical_next_action(
+        pedagogical_phase=pedagogical_phase,
+        sequence_flags=sequence_flags,
+    )
+    return {
+        "last_action_stage": str(state.get("stage") or "case_intro"),
+        "pedagogical_phase": pedagogical_phase,
+        "readiness": readiness,
+        "safe_pending_points": {
+            "history": {
+                "pending_count": len(pending_history_fact_ids),
+                "pending_categories": _safe_history_categories(history_covered, pending_history_fact_ids),
+            },
+            "physical_exam": {
+                "pending_codes": pending_exam_codes,
+                "must_pending_codes": must_pending_exam_codes,
+            },
+            "auxiliary_test": {
+                "pending_codes": pending_test_codes,
+                "must_pending_codes": must_pending_test_codes,
+            },
+            "reasoning": {
+                "pending_evidence_count": len(pending_reasoning_evidence),
+                "pending_tasks": _pending_reasoning_tasks(student_hypotheses),
+            },
+        },
+        "sequence_flags": sequence_flags,
+        "next_best_action": next_best_action,
+        "socratic_question": socratic_question,
+        "reasoning_rationale": reasoning_rationale,
+        "safety_note": "临床推理状态只暴露安全类别、计数和代码，不泄露标准诊断、隐藏事实原文、检查结果细节或治疗方案。",
     }
 
 
@@ -311,6 +394,141 @@ def _reflection_summary_id(state: dict[str, Any]) -> str | None:
         if isinstance(summary_id, str) and summary_id:
             return summary_id
     return None
+
+
+def _clinical_pedagogical_phase(
+    *,
+    final_submission: Any,
+    history_covered: int,
+    pending_history_fact_count: int = 0,
+    exam_requested: int,
+    test_requested: int,
+    student_hypotheses: list[str],
+) -> str:
+    if final_submission is not None:
+        return "ready_for_reflection"
+    if history_covered == 0:
+        return "needs_history"
+    if test_requested > 0 and exam_requested == 0:
+        return "needs_physical_exam"
+    if pending_history_fact_count > 1 and history_covered < 4:
+        return "needs_history"
+    if exam_requested == 0:
+        return "needs_physical_exam"
+    if test_requested == 0:
+        return "needs_auxiliary_test"
+    if not student_hypotheses:
+        return "needs_reasoning"
+    return "ready_for_submission"
+
+
+def _clinical_next_action(
+    *,
+    pedagogical_phase: str,
+    sequence_flags: list[str],
+) -> tuple[dict[str, str], str, str]:
+    if pedagogical_phase == "needs_history":
+        return (
+            {
+                "action_type": "ask_history",
+                "target_category": "核心病史",
+                "message": "先回到病史采集，补齐起病、部位变化、性质、程度和伴随症状。",
+                "why": "当前证据链缺少核心病史，过早进入工具检查会让后续判断缺少问题表征。",
+            },
+            "如果暂不下诊断，你还需要先问清哪些症状变化，才能判断下一步查体重点？",
+            "病史是后续查体和辅助检查选择的依据。",
+        )
+    if pedagogical_phase == "needs_physical_exam":
+        if "auxiliary_test_before_physical_exam" in sequence_flags:
+            return (
+                {
+                    "action_type": "request_physical_exam",
+                    "target_category": "关键查体",
+                    "message": "你已经查看辅助检查，但还缺少关键体征证据。先回补重点查体，再把体征和检查结果放进同一条证据链。",
+                    "why": "当前已有辅助检查动作，但缺少体征证据，容易把检查结果孤立解读。",
+                },
+                "为什么在解释辅助检查前，需要先确认哪些查体证据能支持或削弱你的判断？",
+                "查体用于把主诉和检查结果连接成可解释的证据链。",
+            )
+        return (
+            {
+                "action_type": "request_physical_exam",
+                "target_category": "关键查体",
+                "message": "已有部分病史线索，下一步先选择关键查体来验证当前线索。",
+                "why": "体征证据能帮助判断病史线索是否一致，再决定是否需要辅助检查。",
+            },
+            "基于已问到的病史，哪个查体结果最能帮助你判断下一步检查方向？",
+            "查体是从症状线索过渡到检查验证的中间证据。",
+        )
+    if pedagogical_phase == "needs_auxiliary_test":
+        return (
+            {
+                "action_type": "request_auxiliary_test",
+                "target_category": "基础辅助检查",
+                "message": "已有病史和查体证据，下一步选择能验证当前假设并排除高风险鉴别的辅助检查。",
+                "why": "辅助检查应服务于已经形成的病史和查体线索，而不是替代前面的证据收集。",
+            },
+            "你准备申请的检查，是为了支持当前假设，还是为了排除某个高风险鉴别？",
+            "辅助检查需要对应明确的临床问题。",
+        )
+    if pedagogical_phase == "needs_reasoning":
+        return (
+            {
+                "action_type": "record_hypothesis",
+                "target_category": "诊断假设",
+                "message": "先把已获得的病史、查体和检查证据整理成诊断假设，再继续查漏补缺。",
+                "why": "没有问题表征和假设，后续检查结果容易变成孤立信息。",
+            },
+            "哪些证据支持你的当前假设，哪些证据还需要排除其他可能？",
+            "诊断推理需要把证据组织成支持和排除两类依据。",
+        )
+    return (
+        {
+            "action_type": "submit_diagnosis",
+            "target_category": "最终诊断与依据",
+            "message": "整理支持证据和排除依据后，再提交最终诊断与推理过程。",
+            "why": "提交前需要确认病史、查体、检查和鉴别思路之间能自洽。",
+        },
+        "提交前，你能分别说出支持当前判断和仍需排除的证据吗？",
+        "完整表达比单独写出诊断更能反映临床思维。",
+    )
+
+
+def _safe_history_categories(history_covered: int, pending_fact_ids: list[str]) -> list[str]:
+    if not pending_fact_ids and history_covered > 0:
+        return []
+    return ["起病时间", "部位变化", "疼痛性质", "疼痛程度", "伴随症状", "既往史"]
+
+
+def _pending_reasoning_tasks(student_hypotheses: list[str]) -> list[str]:
+    if student_hypotheses:
+        return ["evidence_chain_review", "differential_comparison"]
+    return ["problem_representation", "differential_comparison"]
+
+
+def _readiness_from_count(count: int, pending_items: list[str], *, started_label: str = "partial") -> str:
+    if count <= 0:
+        return "missing"
+    if pending_items:
+        return started_label
+    return "ready"
+
+
+def _nested_string_list(source: dict[str, Any], section: str, key: str) -> list[str]:
+    section_value = source.get(section)
+    if not isinstance(section_value, dict):
+        return []
+    return _string_list(section_value.get(key, []))
+
+
+def _nested_int(source: dict[str, Any], section: str, key: str, fallback: int) -> int:
+    section_value = source.get(section)
+    if not isinstance(section_value, dict):
+        return fallback
+    value = section_value.get(key)
+    if isinstance(value, int):
+        return value
+    return fallback
 
 
 def _string_list(value: Any) -> list[str]:

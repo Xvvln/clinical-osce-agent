@@ -82,6 +82,68 @@ def test_agent_strategy_node_builds_teaching_plan_checkpoint_and_lifecycle_trace
     assert "阑尾炎" not in agent_text
 
 
+def test_agent_strategy_node_tracks_auxiliary_test_before_physical_exam_as_reasoning_gap() -> None:
+    result = training_strategy_node(
+        {
+            "case_id": "appendicitis_001",
+            "session_id": "session-skip-exam",
+            "stage": "auxiliary_test",
+            "revealed_facts": ["appendicitis_001.hf_01"],
+            "requested_exams": [],
+            "requested_tests": ["lab.cbc"],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "missed_items": [],
+            "evolution_candidates": [],
+            "training_progress": {
+                "history": {
+                    "covered": 1,
+                    "pending_fact_ids": ["hf_02", "hf_03"],
+                },
+                "physical_exam": {
+                    "requested": 0,
+                    "pending_codes": ["vitals.temperature", "abd.palpation.rebound"],
+                    "must_pending_codes": ["vitals.temperature", "abd.palpation.rebound"],
+                },
+                "auxiliary_test": {
+                    "requested": 1,
+                    "pending_codes": ["lab.crp"],
+                    "must_pending_codes": ["lab.crp"],
+                },
+                "reasoning": {
+                    "pending_evidence": ["abd.palpation.rebound"],
+                    "ready_for_hypothesis": False,
+                },
+            },
+            "agent_decision_trace": [],
+        }
+    )
+
+    clinical_state = result["pedagogy_state"]["clinical_reasoning_state"]
+    assert clinical_state["last_action_stage"] == "auxiliary_test"
+    assert clinical_state["pedagogical_phase"] == "needs_physical_exam"
+    assert "auxiliary_test_before_physical_exam" in clinical_state["sequence_flags"]
+    assert clinical_state["readiness"] == {
+        "history": "partial",
+        "physical_exam": "missing",
+        "auxiliary_test": "started",
+        "reasoning": "missing",
+    }
+    assert clinical_state["safe_pending_points"]["physical_exam"]["must_pending_codes"] == [
+        "vitals.temperature",
+        "abd.palpation.rebound",
+    ]
+    assert clinical_state["next_best_action"]["action_type"] == "request_physical_exam"
+    assert "体征证据" in clinical_state["next_best_action"]["why"]
+    assert "辅助检查" in clinical_state["next_best_action"]["why"]
+    assert "查体" in clinical_state["socratic_question"]
+    assert result["agent_decision_trace"][0]["observe"]["sequence_flags"] == [
+        "auxiliary_test_before_physical_exam",
+        "auxiliary_test_without_hypothesis",
+    ]
+    assert result["agent_decision_trace"][0]["act"]["next_best_action"] == clinical_state["next_best_action"]["message"]
+
+
 def test_reflection_node_does_not_leak_diagnosis() -> None:
     result = reflection_node(
         {

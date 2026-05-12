@@ -861,3 +861,45 @@ def test_template_training_skill_candidate_generator_builds_turn_pattern_candida
         ],
         "min_support_count": 2,
     }
+
+
+def test_template_training_skill_candidate_generator_maps_auxiliary_test_before_physical_exam_to_workflow_skill(monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    candidates = TrainingSkillCandidateService().propose_candidates(
+        {
+            "session_count": 2,
+            "report_count": 2,
+            "frequent_missed_items": [],
+            "frequent_learning_recommendations": [],
+            "frequent_turn_patterns": [
+                {
+                    "pattern_id": "turn_pattern_auxiliary_test_before_physical_exam",
+                    "pattern_type": "auxiliary_test_before_physical_exam",
+                    "title": "有病史线索后跳过查体直接申请辅助检查",
+                    "count": 2,
+                    "trigger_item_ids": [
+                        "event:auxiliary_test_requested",
+                        "sequence:before_physical_exam",
+                    ],
+                    "case_ids": ["appendicitis_001"],
+                    "session_ids": ["session_one", "session_two"],
+                    "source_report_ids": ["session_one_report", "session_two_report"],
+                    "source_report_count": 2,
+                }
+            ],
+        },
+        min_count=2,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["candidate_id"] == "skill_candidate_turn_pattern_auxiliary_test_before_physical_exam"
+    assert candidate["skill_type"] == "workflow_sequencing"
+    assert candidate["stage_scope"] == ["case_intro", "history_taking", "physical_exam", "auxiliary_testing"]
+    assert candidate["applies_when"]["current_missing_evidence"] == [
+        "event:auxiliary_test_requested",
+        "sequence:before_physical_exam",
+    ]
+    assert candidate["source_turn_patterns"][0]["pattern_type"] == "auxiliary_test_before_physical_exam"

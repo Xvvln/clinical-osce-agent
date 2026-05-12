@@ -3,6 +3,7 @@ import os
 from copy import deepcopy
 from typing import Any
 
+import httpx
 import yaml
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -262,6 +263,12 @@ def _require_current_user(auth_token: str | None) -> dict[str, str]:
     return user
 
 
+def _get_optional_current_user(auth_token: str | None) -> dict[str, str] | None:
+    if not auth_token:
+        return None
+    return auth_store.get_user_by_session_token(auth_token)
+
+
 def _is_training_model_config_required() -> bool:
     value = os.getenv(TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME, "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -314,6 +321,43 @@ def _require_runtime_model_config_for_training(user_id: str) -> None:
     has_user_config = _activate_user_runtime_model_config(user_id)
     if _is_training_model_config_required() and not has_user_config:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE)
+
+
+def _model_provider_gateway_error(exc: httpx.HTTPError) -> HTTPException:
+    if isinstance(exc, httpx.HTTPStatusError):
+        detail = _model_provider_response_error_detail(exc.response)
+        message = f"模型服务调用失败：HTTP {exc.response.status_code}"
+        if detail:
+            message = f"{message}：{detail}"
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"模型服务调用失败：{exc.__class__.__name__}")
+
+
+def _model_provider_response_error_detail(response: httpx.Response) -> str:
+    parts: list[str] = []
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error_payload = payload.get("error", payload)
+        if isinstance(error_payload, dict):
+            for key in ("message", "code", "type", "param"):
+                value = error_payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+        elif isinstance(error_payload, str) and error_payload.strip():
+            parts.append(error_payload.strip())
+    elif isinstance(payload, str) and payload.strip():
+        parts.append(payload.strip())
+    if not parts and response.text.strip():
+        parts.append(response.text.strip())
+    compact_parts: list[str] = []
+    for part in parts:
+        compact_part = " ".join(part.split())
+        if compact_part and compact_part not in compact_parts:
+            compact_parts.append(compact_part[:240])
+    return "；".join(compact_parts)
 
 
 def _get_admin_email_set() -> set[str]:
@@ -688,17 +732,24 @@ def startup_config_health_check() -> dict[str, object]:
 
 
 @app.post("/api/model-config/test")
-def test_model_config(request: StudentModelConfigTestRequest) -> dict[str, object]:
+def test_model_config(
+    request: StudentModelConfigTestRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    user = _get_optional_current_user(auth_token)
+    config_request = (
+        _build_user_runtime_model_config_request(user["user_id"], request)
+        if user is not None
+        else {
+            "provider": request.provider,
+            "api_key": request.api_key,
+            "model": request.model,
+            "base_url": request.base_url,
+            "proxy_url": request.proxy_url,
+        }
+    )
     try:
-        return test_student_model_config_connectivity(
-            {
-                "provider": request.provider,
-                "api_key": request.api_key,
-                "model": request.model,
-                "base_url": request.base_url,
-                "proxy_url": request.proxy_url,
-            }
-        )
+        return test_student_model_config_connectivity(config_request)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -1522,7 +1573,10 @@ def send_message(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.handle_message(session_id, request.message)
+    try:
+        session = osce_session_service.handle_message(session_id, request.message)
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -1536,7 +1590,10 @@ def request_physical_exam(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.request_physical_exam(session_id, request.exam_code)
+    try:
+        session = osce_session_service.request_physical_exam(session_id, request.exam_code)
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -1550,7 +1607,10 @@ def request_auxiliary_test(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
+    try:
+        session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -1564,7 +1624,10 @@ def record_hypothesis(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
+    try:
+        session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -1577,7 +1640,10 @@ def request_hint(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.request_hint(session_id)
+    try:
+        session = osce_session_service.request_hint(session_id)
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -1603,11 +1669,14 @@ def submit_diagnosis(
 ) -> dict[str, object]:
     session_payload = _require_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    session = osce_session_service.submit_diagnosis(
-        session_id=session_id,
-        diagnosis=request.diagnosis,
-        reasoning=request.reasoning,
-    )
+    try:
+        session = osce_session_service.submit_diagnosis(
+            session_id=session_id,
+            diagnosis=request.diagnosis,
+            reasoning=request.reasoning,
+        )
+    except httpx.HTTPError as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session

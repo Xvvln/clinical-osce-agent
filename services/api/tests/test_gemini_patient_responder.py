@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from app.services import gemini_patient_responder as module
 from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
@@ -23,6 +25,20 @@ def test_gemini_patient_settings_defaults_to_gemini_31_pro_preview() -> None:
     assert settings.location == "global"
     assert settings.model == "gemini-3.1-pro-preview"
     assert settings.proxy_url == "http://127.0.0.1:7897"
+
+
+def test_patient_responder_prompt_requires_real_patient_voice() -> None:
+    assert "像真实来就诊的患者" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "不要像病历摘要" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "把医学化表达改成生活化表达" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "转移性右下腹痛" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "肚子疼，后来右下腹更明显" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "低热" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "有点发热" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "不要主动引导学生下一步该问什么" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "patient_private_context" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "fact_ids_used" in module.SYSTEM_PROMPT_TEMPLATE
 
 
 def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
@@ -61,6 +77,93 @@ def test_create_configured_patient_responder_falls_back_to_deterministic_without
 
     assert isinstance(responder, module.DeterministicPatientResponder)
     assert reply == "右下腹疼痛明显。"
+
+
+class FakePatientFactIdClient:
+    def __init__(self, response: module.PatientResponderResponse) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        payload: dict[str, object],
+        response_model: object,
+        temperature: float | None = None,
+    ) -> module.PatientResponderResponse:
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "payload": payload,
+                "response_model": response_model,
+                "temperature": temperature,
+            }
+        )
+        return self.response
+
+
+def test_patient_responder_rejects_unapproved_fact_ids_from_model() -> None:
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(reply="我昨天开始疼的。", fact_ids_used=["appendicitis_001.hf_02"])
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    request = module.PatientResponderRequest(
+        case_id="appendicitis_001",
+        case_title="急性腹痛问诊",
+        chief_complaint="腹痛 1 天",
+        student_message="什么时候开始疼？",
+        current_intent="ask_onset",
+        canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+        revealed_fact_id="appendicitis_001.hf_01",
+        answerable_fact_candidates=[
+            {
+                "fact_id": "appendicitis_001.hf_01",
+                "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+            }
+        ],
+        forbidden_terms=["急性阑尾炎"],
+        forbidden_context={"diagnosis_terms": ["急性阑尾炎"]},
+    )
+
+    with pytest.raises(RuntimeError, match="未授权病例事实"):
+        responder(request)
+
+
+def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(reply="我昨天开始疼的。", fact_ids_used=["appendicitis_001.hf_01"])
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="什么时候开始疼？",
+            current_intent="ask_onset",
+            canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+            revealed_fact_id="appendicitis_001.hf_01",
+            answerable_fact_candidates=[
+                {
+                    "fact_id": "appendicitis_001.hf_01",
+                    "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+                }
+            ],
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert reply == "我昨天开始疼的。"
+    assert fake_client.calls[0]["payload"]["answerable_fact_candidates"][0]["fact_id"] == "appendicitis_001.hf_01"
 
 
 def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(monkeypatch) -> None:
@@ -119,6 +222,25 @@ class FakeOpenAICompatiblePatientResponse:
         }
 
 
+class FakeOpenAICompatiblePatientReplyKeyResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"patient_reply":"现在是持续性的胀痛，走路的时候会更疼一些。"}',
+                    },
+                }
+            ],
+        }
+
+
 class FakeOpenAICompatibleHttpClient:
     calls: list[dict[str, object]] = []
 
@@ -134,6 +256,37 @@ class FakeOpenAICompatibleHttpClient:
     def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeOpenAICompatiblePatientResponse:
         self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
         return FakeOpenAICompatiblePatientResponse()
+
+
+class FakeOpenAICompatiblePatientReplyKeyHttpClient(FakeOpenAICompatibleHttpClient):
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeOpenAICompatiblePatientReplyKeyResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeOpenAICompatiblePatientReplyKeyResponse()
+
+
+class FakePlainTextOpenAICompatiblePatientResponse:
+    is_success = True
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "开始时上腹部疼，现在右下腹最疼。",
+                    },
+                }
+            ],
+        }
+
+
+class FakePlainTextOpenAICompatibleHttpClient(FakeOpenAICompatibleHttpClient):
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakePlainTextOpenAICompatiblePatientResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakePlainTextOpenAICompatiblePatientResponse()
 
 
 class FakeAnthropicPatientResponse:
@@ -232,6 +385,80 @@ def test_create_configured_patient_responder_uses_runtime_openai_compatible_conf
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
+
+
+def test_openai_compatible_patient_responder_accepts_patient_reply_key(monkeypatch) -> None:
+    FakeOpenAICompatiblePatientReplyKeyHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "mimo-v2.5-pro",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatiblePatientReplyKeyHttpClient)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+        reply = responder(
+            module.PatientResponderRequest(
+                case_id="appendicitis_001",
+                case_title="急性腹痛问诊",
+                chief_complaint="腹痛 1 天",
+                student_message="右下腹部有多痛？怎么个痛法？",
+                current_intent="ask_character",
+                canonical_answer="现在是持续性胀痛，走路或咳嗽时疼痛加重。",
+                forbidden_terms=["急性阑尾炎"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert reply == "现在是持续性的胀痛，走路的时候会更疼一些。"
+    assert "patient_reply" not in reply
+
+
+def test_openai_compatible_patient_responder_accepts_plain_text_reply_for_single_field_schema(monkeypatch) -> None:
+    FakePlainTextOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "mimo-v2.5-pro",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakePlainTextOpenAICompatibleHttpClient)
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    try:
+        responder = module._create_configured_responder()
+        reply = responder(
+            module.PatientResponderRequest(
+                case_id="appendicitis_001",
+                case_title="急性腹痛问诊",
+                chief_complaint="腹痛 1 天",
+                student_message="哪里最疼？",
+                current_intent="ask_location",
+                canonical_answer="现在右下腹疼痛明显。",
+                forbidden_terms=["急性阑尾炎"],
+            )
+        )
+    finally:
+        runtime_model_config_store.clear()
+
+    assert reply == "开始时上腹部疼，现在右下腹最疼。"
+    assert FakePlainTextOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
 
 
 def test_create_configured_patient_responder_uses_runtime_anthropic_config(monkeypatch) -> None:

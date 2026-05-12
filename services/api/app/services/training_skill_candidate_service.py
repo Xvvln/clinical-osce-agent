@@ -457,7 +457,7 @@ def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:
             return "conversation_repair"
         if any("answer" in pattern_type or "safety" in pattern_type for pattern_type in pattern_types):
             return "safety_boundary"
-        if any("before_history" in pattern_type for pattern_type in pattern_types):
+        if any("before_history" in pattern_type or "before_physical_exam" in pattern_type for pattern_type in pattern_types):
             return "workflow_sequencing"
         return "conversation_repair"
     missed_items = context.missed_items

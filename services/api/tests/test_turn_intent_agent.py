@@ -1,5 +1,8 @@
 import os
 
+import pytest
+from pydantic import ValidationError
+
 from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services import turn_intent_agent as module
@@ -62,6 +65,28 @@ class FakeOpenAICompatibleHttpClient:
         return FakeOpenAICompatibleTurnIntentResponse()
 
 
+class FakePlainTextOpenAICompatibleTurnIntentResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "我现在右下腹最疼。",
+                    },
+                }
+            ],
+        }
+
+
+class FakePlainTextOpenAICompatibleHttpClient(FakeOpenAICompatibleHttpClient):
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakePlainTextOpenAICompatibleTurnIntentResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakePlainTextOpenAICompatibleTurnIntentResponse()
+
+
 class FakeAnthropicTurnIntentResponse:
     def raise_for_status(self) -> None:
         return None
@@ -97,6 +122,11 @@ class FakeAnthropicHttpClient:
         return FakeAnthropicTurnIntentResponse()
 
 
+class FailingTurnIntentAgent:
+    def __call__(self, request: object) -> object:
+        raise RuntimeError("provider unavailable")
+
+
 def _request() -> module.TurnIntentRequest:
     return module.TurnIntentRequest(
         case_id="appendicitis_001",
@@ -107,6 +137,10 @@ def _request() -> module.TurnIntentRequest:
         keyword_intent="unknown_history_intent",
         prior_messages=[],
     )
+
+
+def _request_with_keyword(keyword_intent: str) -> module.TurnIntentRequest:
+    return _request().model_copy(update={"keyword_intent": keyword_intent})
 
 
 def test_create_configured_turn_intent_agent_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
@@ -131,7 +165,27 @@ def test_create_configured_turn_intent_agent_falls_back_to_deterministic_without
     agent = module._create_configured_turn_intent_agent()
 
     assert isinstance(agent, module.DeterministicTurnIntentAgent)
-    assert agent(_request()).current_intent == "unknown_history_intent"
+    response = agent(_request())
+    assert response.current_intent == "unknown_history_intent"
+
+
+def test_deterministic_turn_intent_agent_classifies_unknown_history_kind() -> None:
+    agent = module.DeterministicTurnIntentAgent()
+    examples = [
+        ("你好", "social_greeting", False, []),
+        ("你是谁？", "patient_identity_unclear", False, []),
+        ("你喜欢打游戏吗？", "off_topic", True, []),
+        ("你的身份证号是多少？", "unsupported_case_question", False, []),
+        ("还有没有其他不舒服？", "possible_missed_medical_intent", False, ["ask_associated_nausea", "ask_fever"]),
+    ]
+
+    for message, expected_unknown_kind, expected_off_topic, expected_possible_intents in examples:
+        response = agent(_request().model_copy(update={"student_message": message}))
+
+        assert response.current_intent == "unknown_history_intent"
+        assert response.unknown_kind == expected_unknown_kind
+        assert response.is_off_topic is expected_off_topic
+        assert response.possible_intents[: len(expected_possible_intents)] == expected_possible_intents
 
 
 def test_create_configured_turn_intent_agent_uses_runtime_openai_compatible_config(monkeypatch) -> None:
@@ -160,6 +214,76 @@ def test_create_configured_turn_intent_agent_uses_runtime_openai_compatible_conf
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-proxy"
     assert "hidden_fact" not in str(FakeOpenAICompatibleHttpClient.calls[0]["json"])
+
+
+def test_lazy_turn_intent_agent_raises_when_provider_returns_plain_text(monkeypatch) -> None:
+    FakePlainTextOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "plain-text-model",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakePlainTextOpenAICompatibleHttpClient)
+
+    try:
+        agent = module.LazyTurnIntentAgent()
+        with pytest.raises(ValidationError):
+            agent(_request_with_keyword("ask_location"))
+    finally:
+        runtime_model_config_store.clear()
+
+    assert FakePlainTextOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "plain-text-model"
+
+
+def test_lazy_turn_intent_agent_raises_when_provider_fails(monkeypatch) -> None:
+    monkeypatch.setattr(module, "_create_configured_turn_intent_agent", lambda: FailingTurnIntentAgent())
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        module.LazyTurnIntentAgent()(_request_with_keyword("ask_location"))
+
+
+def test_lazy_turn_intent_agent_rebuilds_when_runtime_config_changes(monkeypatch) -> None:
+    FakeOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatibleHttpClient)
+    agent = module.LazyTurnIntentAgent()
+
+    try:
+        runtime_model_config_store.apply_config(
+            {
+                "provider": "openai_compatible",
+                "api_key": "first-secret",
+                "model": "first-model",
+                "base_url": "https://api.proxy.example/v1",
+                "proxy_url": "direct",
+            }
+        )
+        first_response = agent(_request())
+        runtime_model_config_store.apply_config(
+            {
+                "provider": "openai_compatible",
+                "api_key": "second-secret",
+                "model": "second-model",
+                "base_url": "https://api.proxy.example/v1",
+                "proxy_url": "direct",
+            }
+        )
+        second_response = agent(_request())
+    finally:
+        runtime_model_config_store.clear()
+
+    assert first_response.current_intent == "ask_onset"
+    assert second_response.current_intent == "ask_onset"
+    assert [call["json"]["model"] for call in FakeOpenAICompatibleHttpClient.calls] == ["first-model", "second-model"]
+    assert [call["headers"]["Authorization"] for call in FakeOpenAICompatibleHttpClient.calls] == [
+        "Bearer first-secret",
+        "Bearer second-secret",
+    ]
 
 
 def test_create_configured_turn_intent_agent_uses_runtime_anthropic_config(monkeypatch) -> None:

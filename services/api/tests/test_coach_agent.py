@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from app.services import anthropic_chat_client as anthropic_module
 from app.services import coach_agent as module
 from app.services import openai_compatible_chat_client as openai_module
@@ -76,6 +78,11 @@ class FakeAnthropicHttpClient:
         return FakeAnthropicCoachResponse()
 
 
+class FailingCoachAgent:
+    def __call__(self, request: object) -> object:
+        raise RuntimeError("provider unavailable")
+
+
 def _request() -> module.CoachRequest:
     return module.CoachRequest(
         case_id="appendicitis_001",
@@ -103,6 +110,13 @@ def test_create_configured_coach_agent_falls_back_to_deterministic_without_exter
 
     assert isinstance(agent, module.DeterministicCoachAgent)
     assert agent(_request()).hint == "先围绕疼痛的部位、性质、程度、伴随症状和既往史继续追问，不要急于下诊断。"
+
+
+def test_lazy_coach_agent_raises_when_provider_fails(monkeypatch) -> None:
+    monkeypatch.setattr(module, "_create_configured_coach_agent", lambda: FailingCoachAgent())
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        module.LazyCoachAgent()(_request())
 
 
 def test_create_configured_coach_agent_uses_runtime_openai_compatible_config(monkeypatch) -> None:

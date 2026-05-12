@@ -37,9 +37,14 @@ class TrainingInsightService:
                 if event["event_type"] == "report_generated" and event["payload"].get("report_id")
             ]
             history_fact_disclosure_count = 0
+            physical_exam_request_count = 0
             for event in events:
                 if event["event_type"] != "report_generated":
-                    for pattern in _turn_patterns_from_training_event(event, history_fact_disclosure_count):
+                    for pattern in _turn_patterns_from_training_event(
+                        event,
+                        history_fact_disclosure_count,
+                        physical_exam_request_count,
+                    ):
                         pattern_id = pattern["pattern_id"]
                         turn_pattern_counts[pattern_id] += 1
                         turn_pattern_types[pattern_id] = pattern["pattern_type"]
@@ -51,6 +56,8 @@ class TrainingInsightService:
                     agent_turn = event["payload"].get("agent_turn")
                     if isinstance(agent_turn, dict) and agent_turn.get("turn_policy") == "history_fact_disclosure":
                         history_fact_disclosure_count += 1
+                    if event["event_type"] == "physical_exam_requested":
+                        physical_exam_request_count += 1
                     continue
                 report_count += 1
                 payload = event["payload"]
@@ -148,6 +155,7 @@ def _source_reference_kind_rank(reference: str) -> int:
 def _turn_patterns_from_training_event(
     event: dict[str, Any],
     history_fact_disclosure_count: int,
+    physical_exam_request_count: int,
 ) -> list[dict[str, Any]]:
     patterns: list[dict[str, Any]] = []
     payload = event.get("payload", {})
@@ -209,6 +217,19 @@ def _turn_patterns_from_training_event(
                 "pattern_type": "test_before_history",
                 "title": "未完成核心病史前直接申请辅助检查",
                 "trigger_item_ids": ["event:auxiliary_test_requested", "sequence:before_history_fact_disclosure"],
+            }
+        )
+    elif (
+        history_fact_disclosure_count > 0
+        and physical_exam_request_count == 0
+        and event.get("event_type") == "auxiliary_test_requested"
+    ):
+        patterns.append(
+            {
+                "pattern_id": "turn_pattern_auxiliary_test_before_physical_exam",
+                "pattern_type": "auxiliary_test_before_physical_exam",
+                "title": "有病史线索后跳过查体直接申请辅助检查",
+                "trigger_item_ids": ["event:auxiliary_test_requested", "sequence:before_physical_exam"],
             }
         )
     return patterns

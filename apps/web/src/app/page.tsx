@@ -27,6 +27,8 @@ type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
 type OsceDockSide = "left" | "right";
 
+type BackendConnectionStatus = "checking" | "online" | "offline";
+
 type ApiConfigProvider = "custom_backend" | "gemini" | "vertex_gemini_adc" | "vertex_gemini_api_key" | "openai_compatible" | "anthropic";
 
 type StudentApiConfig = Readonly<{
@@ -667,6 +669,7 @@ const OSCE_DOCK_MARGIN = 20;
 const OSCE_DOCK_BUTTON_SIZE = 56;
 const OSCE_DOCK_DRAG_THRESHOLD = 4;
 const PATIENT_REPLY_TYPEWRITER_DELAY_MS = 14;
+const BACKEND_HEALTH_CHECK_INTERVAL_MS = 30000;
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1409,6 +1412,14 @@ async function requestJson<TResponse>(path: string, init: RequestInit): Promise<
   return (await response.json()) as TResponse;
 }
 
+async function checkBackendConnection(): Promise<boolean> {
+  const response = await fetch("/api/health/config", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  return response.ok;
+}
+
 function isApiConfigProvider(value: unknown): value is ApiConfigProvider {
   return apiConfigProviderOptions.some((option) => option.id === value);
 }
@@ -1433,6 +1444,36 @@ function createDefaultStudentApiConfig(): StudentApiConfig {
     baseUrl: "",
     proxyUrl: "",
   };
+}
+
+function getBackendConnectionStatusLabel(status: BackendConnectionStatus): string {
+  if (status === "online") {
+    return "后端状态：在线";
+  }
+  if (status === "offline") {
+    return "后端状态：离线";
+  }
+  return "后端状态：检测中";
+}
+
+function getBackendStatusHaloClass(status: BackendConnectionStatus): string {
+  if (status === "online") {
+    return "bg-[#65B87B]";
+  }
+  if (status === "offline") {
+    return "bg-red-500";
+  }
+  return "bg-[#D7A64F]";
+}
+
+function getBackendStatusLightClass(status: BackendConnectionStatus): string {
+  if (status === "online") {
+    return "bg-[#4F9F68] shadow-[0_0_12px_rgba(79,159,104,0.78)]";
+  }
+  if (status === "offline") {
+    return "bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.65)]";
+  }
+  return "bg-[#D7A64F] shadow-[0_0_12px_rgba(215,166,79,0.65)]";
 }
 
 function createStudentApiConfigFromRuntime(runtimeConfig: StudentApiConfigRuntimeResponse): StudentApiConfig {
@@ -1678,11 +1719,6 @@ function PendingThinkingIndicator() {
   );
 }
 
-function getPendingCoverageLabel(title: string, itemIndex: number): string {
-  const normalizedTitle = title.replace(/覆盖$/, "") || "素材";
-  return `${normalizedTitle}待覆盖 ${itemIndex + 1}`;
-}
-
 function CoverageMapSection({ items, title }: Readonly<{ items: readonly CoverageMapItem[]; title: string }>) {
   const coveredCount = items.filter((item) => item.status === "covered").length;
 
@@ -1696,8 +1732,8 @@ function CoverageMapSection({ items, title }: Readonly<{ items: readonly Coverag
       </div>
       <div className="mt-3 grid gap-2">
         {items.length > 0 ? (
-          items.map((item, itemIndex) => {
-            const visibleLabel = item.status === "covered" ? item.label : getPendingCoverageLabel(title, itemIndex);
+          items.map((item) => {
+            const visibleLabel = item.label;
             return (
               <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs" key={item.id}>
                 <div className="flex items-center justify-between gap-3">
@@ -1798,6 +1834,7 @@ function HomeContent() {
   const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
+  const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>("checking");
   const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     focus: false,
@@ -1854,6 +1891,33 @@ function HomeContent() {
   const osceDockContainerRef = useRef<HTMLDivElement | null>(null);
   const procedureActionContainerRef = useRef<HTMLDivElement | null>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function refreshBackendConnectionStatus(): Promise<void> {
+      try {
+        const isOnline = await checkBackendConnection();
+        if (isMounted) {
+          setBackendConnectionStatus(isOnline ? "online" : "offline");
+        }
+      } catch {
+        if (isMounted) {
+          setBackendConnectionStatus("offline");
+        }
+      }
+    }
+
+    void refreshBackendConnectionStatus();
+    const intervalId = window.setInterval(() => {
+      void refreshBackendConnectionStatus();
+    }, BACKEND_HEALTH_CHECK_INTERVAL_MS);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isStudentRuntimeApiConfigEnabled || isCheckingAuth) {
@@ -2340,6 +2404,9 @@ function HomeContent() {
     : isVertexGeminiApiKeyConfig
       ? "Vertex API Key 模式无需填写"
       : selectedApiConfigProviderOption.defaultBaseUrl;
+  const backendConnectionStatusLabel = getBackendConnectionStatusLabel(backendConnectionStatus);
+  const backendStatusLightClass = getBackendStatusLightClass(backendConnectionStatus);
+  const backendStatusHaloClass = getBackendStatusHaloClass(backendConnectionStatus);
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
     let baseMessages: ChatMessage[] = preparedPatientOpeningUtterance
@@ -2888,14 +2955,6 @@ function HomeContent() {
               ) : (
                 <p className="mt-1 text-muted-foreground">尚未选择病例，请先进入病例库选择训练场景。</p>
               )}
-              <button
-                className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-center text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!preparedPatientProfile}
-                onClick={() => setIsPatientProfileOpen(true)}
-                type="button"
-              >
-                患者信息
-              </button>
             </div>
 
             <Link
@@ -3041,6 +3100,14 @@ function HomeContent() {
                   onClick={handleHintRequest}
                   type="button"
                 >{isRequestingHint ? "提示生成中" : "请求提示"}</button>
+                <button
+                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!preparedPatientProfile}
+                  onClick={() => setIsPatientProfileOpen(true)}
+                  type="button"
+                >
+                  患者信息
+                </button>
                 <button
                   aria-expanded={openProcedureActionGroup === "physical_exam"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
@@ -3710,7 +3777,7 @@ function HomeContent() {
             <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
               <p className="font-medium text-foreground">管理员图谱</p>
               <p className="mt-1 text-muted-foreground">
-                查看本次训练素材覆盖状态；未覆盖项只显示通用占位，避免提前泄露隐藏结果。
+                查看本次训练素材覆盖状态；会展示结构化素材内容，方便答辩和调试训练路径。
               </p>
               <button
                 className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
@@ -3822,7 +3889,7 @@ function HomeContent() {
           </section>
         ) : null}
         <button
-          aria-label="打开 OSCE 快捷入口"
+          aria-label={`打开 OSCE 快捷入口，${backendConnectionStatusLabel}`}
           aria-pressed={isOsceDockOpen}
           className="relative flex size-14 touch-none cursor-grab items-center justify-center rounded-full border border-brand/35 bg-[#FFF8E8] text-brand shadow-[0_14px_32px_rgba(174,86,48,0.22)] transition hover:border-brand hover:bg-[#FFEED8] active:cursor-grabbing focus:ring-2 focus:ring-brand/20"
           onClick={handleOsceDockButtonClick}
@@ -3834,12 +3901,15 @@ function HomeContent() {
         >
           <span className="pointer-events-none absolute inset-1.5 rounded-full border border-brand/20 bg-background/80" />
           <span className="relative z-10 flex size-8 items-center justify-center rounded-full bg-brand text-base font-semibold text-white">临</span>
-          <span className="pointer-events-none absolute right-2 top-2 size-2 rounded-full bg-[#86B993]" />
+          <span className="pointer-events-none absolute right-1.5 top-1.5 flex size-3 items-center justify-center" title={backendConnectionStatusLabel}>
+            <span className={`absolute size-3 rounded-full opacity-45 motion-safe:animate-ping ${backendStatusHaloClass}`} />
+            <span className={`relative size-2 rounded-full motion-safe:animate-pulse ${backendStatusLightClass}`} />
+          </span>
         </button>
       </div>
       {selectedProcedureResult ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setSelectedProcedureResult(null)}>
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">已查看结果</p>
@@ -3861,15 +3931,15 @@ function HomeContent() {
         </div>
       ) : null}
       {isCoverageMapOpen && session ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="max-h-[82vh] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsCoverageMapOpen(false)}>
+          <div className="max-h-[82vh] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">管理员图谱</p>
-                <h2 className="mt-1 text-base font-semibold">管理员图谱 · 素材覆盖</h2>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  用于答辩和调试训练路径覆盖，不参与评分决策；未覆盖项不会展示隐藏结果文本。
-                </p>
+                    <h2 className="mt-1 text-base font-semibold">管理员图谱 · 素材覆盖</h2>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      用于答辩和调试训练路径覆盖，会显示结构化素材内容；不参与评分决策。
+                    </p>
               </div>
               <button
                 aria-label="关闭素材覆盖图谱"
@@ -3887,8 +3957,8 @@ function HomeContent() {
         </div>
       ) : null}
       {isPatientProfileOpen && preparedPatientProfile ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsPatientProfileOpen(false)}>
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-base font-semibold">患者信息</p>
@@ -3921,15 +3991,12 @@ function HomeContent() {
                 <dd className="mt-1 font-medium">{preparedPatientProfile.hospital_department}</dd>
               </div>
             </dl>
-            <p className="mt-4 rounded-lg border border-[#B5812A]/30 bg-[#FFF8E8] p-3 text-xs leading-5 text-[#8A5A00]">
-              以上为 OSCE 教学模拟开局信息，不包含隐藏病史、查体、检查或标准诊断。
-            </p>
           </div>
         </div>
       ) : null}
       {isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsApiConfigHelpOpen(false)}>
+          <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">系统与配置</p>
@@ -4061,8 +4128,8 @@ function HomeContent() {
       </div>
       </div>
       {!isCheckingAuth && isAuthDialogOpen ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur">
-          <section className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur" onClick={() => setIsAuthDialogOpen(false)}>
+          <section className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">登录 / 注册</h2>

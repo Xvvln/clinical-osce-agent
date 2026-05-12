@@ -26,6 +26,17 @@ class RuntimeModelConfig:
     project: str = ""
     location: str = "global"
 
+    def cache_key(self) -> tuple[str, str, str, str, str, str, str]:
+        return (
+            self.provider,
+            self.api_key,
+            self.model,
+            self.base_url,
+            self.proxy_url,
+            self.project,
+            self.location,
+        )
+
     def to_config_dict(self) -> dict[str, str]:
         return {
             "provider": self.provider,
@@ -155,6 +166,12 @@ class RuntimeModelConfigStore:
     def get_active_config(self) -> RuntimeModelConfig | None:
         with self._lock:
             return self._active_config
+
+    def active_config_cache_key(self) -> tuple[str, ...]:
+        active_config = self.get_active_config()
+        if active_config is None:
+            return ("env",)
+        return ("runtime", *active_config.cache_key())
 
     def get_openai_compatible_settings(self) -> OpenAICompatibleSettings | None:
         active_config = self.get_active_config()

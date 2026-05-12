@@ -128,12 +128,47 @@ def _strip_json_fence(content: str) -> str:
 
 def _single_text_field_payload(content: str, *, response_model: type[BaseModel]) -> dict[str, str] | None:
     fields = response_model.model_fields
-    if len(fields) != 1 or not content:
+    if not content:
         return None
-    field_name, field_info = next(iter(fields.items()))
-    if field_info.annotation is not str:
+    text_fields = [
+        field_name
+        for field_name, field_info in fields.items()
+        if field_info.annotation is str and field_info.is_required()
+    ]
+    if len(text_fields) != 1:
         return None
-    return {field_name: content}
+    field_name = text_fields[0]
+    if field_name not in {"reply", "hint"}:
+        return None
+    try:
+        alias_payload = _single_text_alias_payload(content, field_name=field_name)
+    except json.JSONDecodeError:
+        return {field_name: content}
+    if alias_payload is not None:
+        return alias_payload
+    return None
+
+
+def _single_text_alias_payload(content: str, *, field_name: str) -> dict[str, str] | None:
+    parsed_content = json.loads(content)
+    if isinstance(parsed_content, str) and parsed_content:
+        return {field_name: parsed_content}
+    if not isinstance(parsed_content, dict):
+        return None
+
+    alias_keys = _single_text_alias_keys(field_name)
+    for alias_key in alias_keys:
+        value = parsed_content.get(alias_key)
+        if isinstance(value, str) and value.strip():
+            return {field_name: value.strip()}
+    return None
+
+
+def _single_text_alias_keys(field_name: str) -> list[str]:
+    return {
+        "reply": ["patient_reply", "patient_response", "reply_text", "message", "content", "text"],
+        "hint": ["coach_hint", "hint_text", "message", "content", "text"],
+    }.get(field_name, [f"{field_name}_text", "message", "content", "text"])
 
 
 __all__ = [

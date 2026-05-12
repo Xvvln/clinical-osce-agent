@@ -118,10 +118,20 @@ test("home history input disables browser autofill history", () => {
 test("home evidence and coverage map hide raw backend evidence ids", () => {
   assert.match(pageSource, /function getEvidenceItem\(factId: string, trainingProgress: TrainingProgress \| null, fallbackIndex: number\): EvidenceItem/);
   assert.match(pageSource, /trainingProgress\?\.coverage_map\.history/);
-  assert.match(pageSource, /getPendingCoverageLabel\(title, itemIndex\)/);
+  assert.match(pageSource, /const visibleLabel = item\.label;/);
+  assert.doesNotMatch(pageSource, /getPendingCoverageLabel\(title, itemIndex\)/);
   assert.doesNotMatch(pageSource, /label: factId, detail: "后端已披露该结构化事实。"/);
   assert.doesNotMatch(pageSource, /未覆盖素材：\$\{item\.id\}/);
   assert.doesNotMatch(pageSource, /未覆盖项只显示素材 ID/);
+  assert.doesNotMatch(pageSource, /未覆盖项只显示通用占位/);
+});
+
+test("home dialogue speaker labels render as plain text labels", () => {
+  assert.match(pageSource, /<p className=\{isStudent \? "text-white\/80" : isCoach \? "text-\[#8A5A00\]" : "text-muted-foreground"\}>[\s\S]*?\{message\.label\}/);
+  assert.doesNotMatch(pageSource, /const messageLabelClass = isStudent/);
+  assert.doesNotMatch(pageSource, /border-white\/45 bg-transparent/);
+  assert.doesNotMatch(pageSource, /border-border bg-transparent/);
+  assert.doesNotMatch(pageSource, /<p className=\{messageLabelClass\}>[\s\S]*?\{message\.label\}/);
 });
 
 test("home page replaces the Next dev ball with a polished OSCE floating dock", () => {
@@ -131,7 +141,6 @@ test("home page replaces the Next dev ball with a polished OSCE floating dock", 
   assert.match(pageSource, /const \[osceDockMenuGroup, setOsceDockMenuGroup\] = useState<OsceDockMenuGroup \| null>\(null\);/);
   assert.match(pageSource, /const \[isApiConfigHelpOpen, setIsApiConfigHelpOpen\] = useState\(false\);/);
   assert.match(pageSource, /const osceDockSubmenuAlignmentClass = osceDockPosition\.side === "right" \? "right-full mr-2" : "left-full ml-2";/);
-  assert.match(pageSource, /aria-label="打开 OSCE 快捷入口"/);
   assert.match(pageSource, /function selectOsceDockMenuGroup\(nextGroup: OsceDockMenuGroup\): void/);
   assert.match(pageSource, /setOsceDockMenuGroup\(\(currentGroup\) => \(currentGroup === nextGroup \? null : nextGroup\)\);/);
   assert.match(pageSource, /function closeOsceDock\(\): void/);
@@ -165,7 +174,16 @@ test("home page replaces the Next dev ball with a polished OSCE floating dock", 
   assert.match(pageSource, /absolute inset-1\.5 rounded-full border border-brand\/20 bg-background\/80/);
   assert.match(pageSource, /relative z-10 flex size-8 items-center justify-center rounded-full bg-brand text-base font-semibold text-white/);
   assert.match(pageSource, />\s*临\s*<\/span>/);
-  assert.match(pageSource, /absolute right-2 top-2 size-2 rounded-full bg-\[#86B993\]/);
+  assert.match(pageSource, /type BackendConnectionStatus = "checking" \| "online" \| "offline";/);
+  assert.match(pageSource, /const \[backendConnectionStatus, setBackendConnectionStatus\] = useState<BackendConnectionStatus>\("checking"\);/);
+  assert.match(pageSource, /fetch\("\/api\/health\/config", \{[\s\S]*?cache: "no-store",[\s\S]*?credentials: "same-origin",[\s\S]*?\}\)/);
+  assert.match(pageSource, /const backendStatusLightClass = getBackendStatusLightClass\(backendConnectionStatus\);/);
+  assert.match(pageSource, /const backendStatusHaloClass = getBackendStatusHaloClass\(backendConnectionStatus\);/);
+  assert.match(pageSource, /aria-label=\{`打开 OSCE 快捷入口，\$\{backendConnectionStatusLabel\}`\}/);
+  assert.match(pageSource, /absolute right-1\.5 top-1\.5 flex size-3 items-center justify-center/);
+  assert.match(pageSource, /motion-safe:animate-ping/);
+  assert.match(pageSource, /motion-safe:animate-pulse/);
+  assert.doesNotMatch(pageSource, /absolute right-2 top-2 size-2 rounded-full bg-\[#86B993\]/);
   assert.doesNotMatch(pageSource, /absolute inset-2 rounded-full border-2 border-white\/80 bg-transparent/);
   assert.doesNotMatch(pageSource, /relative z-10">OSCE<\/span>/);
 });
@@ -906,10 +924,25 @@ test("home current case card can show student-visible patient profile modal", ()
   assert.match(pageSource, /type StudentVisiblePatientProfile = Readonly<\{/);
   assert.match(pageSource, /patient_profile: StudentVisiblePatientProfile;/);
   assert.match(pageSource, /const \[isPatientProfileOpen, setIsPatientProfileOpen\] = useState\(false\);/);
-  assert.match(pageSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
-  assert.match(pageSource, />\s*患者信息\s*<\/button>/);
+  const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
+  const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
+  const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
+  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  const quickActionRowSource = pageSource.slice(quickActionRowIndex, inputComposerIndex);
+  assert.doesNotMatch(leftAsideSource, />\s*患者信息\s*<\/button>/);
+  assert.match(quickActionRowSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
+  assert.match(quickActionRowSource, />\s*患者信息\s*<\/button>/);
   assert.match(pageSource, /aria-label="关闭患者信息弹窗"/);
-  assert.match(pageSource, /以上为 OSCE 教学模拟开局信息，不包含隐藏病史、查体、检查或标准诊断。/);
+  assert.doesNotMatch(pageSource, /以上为 OSCE 教学模拟开局信息，不包含隐藏病史、查体、检查或标准诊断。/);
+});
+
+
+test("home floating dialogs close from backdrop clicks while preserving inner clicks", () => {
+  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setSelectedProcedureResult\(null\)\}>[\s\S]*?<div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
+  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsCoverageMapOpen\(false\)\}>[\s\S]*?<div className="max-h-\[82vh\] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
+  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsPatientProfileOpen\(false\)\}>[\s\S]*?<div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
+  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsApiConfigHelpOpen\(false\)\}>[\s\S]*?<div className="max-h-\[86vh\] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
 });
 
 
@@ -985,7 +1018,8 @@ test("home workspace keeps backend progress data and exposes compact admin cover
   assert.match(pageSource, /onClick=\{\(\) => setIsCoverageMapOpen\(true\)\}/);
   assert.match(pageSource, /管理员图谱 · 素材覆盖/);
   assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
-  assert.match(pageSource, /item\.status === "covered" \? item\.label : getPendingCoverageLabel\(title, itemIndex\)/);
+  assert.match(pageSource, /const visibleLabel = item\.label;/);
+  assert.doesNotMatch(pageSource, /item\.status === "covered" \? item\.label : getPendingCoverageLabel\(title, itemIndex\)/);
   assert.doesNotMatch(pageSource, /item\.status === "covered" \? item\.label : `未覆盖素材：\$\{item\.id\}`/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.history/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.physical_exam/);

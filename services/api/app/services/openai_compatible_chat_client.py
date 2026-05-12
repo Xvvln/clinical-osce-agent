@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -56,7 +56,7 @@ class OpenAICompatibleChatClient:
             }
         )
         content = _extract_message_content(response.json())
-        return response_model.model_validate_json(content)
+        return _validate_response_content(content, response_model=response_model)
 
     def _post_chat_completion(self, payload: dict[str, Any]) -> httpx.Response:
         client_options: dict[str, Any] = {
@@ -111,6 +111,71 @@ def _extract_message_content(payload: dict[str, Any]) -> str:
         if text_chunks:
             return "".join(text_chunks)
     raise RuntimeError("OpenAI compatible response missing text content")
+
+
+def _validate_response_content(content: str, *, response_model: type[ResponseModelT]) -> ResponseModelT:
+    normalized_content = _strip_json_fence(content.strip())
+    try:
+        return response_model.model_validate_json(normalized_content)
+    except ValidationError as exc:
+        single_text_payload = _single_text_field_payload(normalized_content, response_model=response_model)
+        if single_text_payload is None:
+            raise exc
+        return response_model.model_validate(single_text_payload)
+
+
+def _strip_json_fence(content: str) -> str:
+    if not content.startswith("```"):
+        return content
+    lines = content.splitlines()
+    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
+        return content
+    return "\n".join(lines[1:-1]).strip()
+
+
+def _single_text_field_payload(content: str, *, response_model: type[BaseModel]) -> dict[str, str] | None:
+    fields = response_model.model_fields
+    if not content:
+        return None
+    text_fields = [
+        field_name
+        for field_name, field_info in fields.items()
+        if field_info.annotation is str and field_info.is_required()
+    ]
+    if len(text_fields) != 1:
+        return None
+    field_name = text_fields[0]
+    if field_name not in {"reply", "hint"}:
+        return None
+    try:
+        alias_payload = _single_text_alias_payload(content, field_name=field_name)
+    except json.JSONDecodeError:
+        return {field_name: content}
+    if alias_payload is not None:
+        return alias_payload
+    return None
+
+
+def _single_text_alias_payload(content: str, *, field_name: str) -> dict[str, str] | None:
+    parsed_content = json.loads(content)
+    if isinstance(parsed_content, str) and parsed_content:
+        return {field_name: parsed_content}
+    if not isinstance(parsed_content, dict):
+        return None
+
+    alias_keys = _single_text_alias_keys(field_name)
+    for alias_key in alias_keys:
+        value = parsed_content.get(alias_key)
+        if isinstance(value, str) and value.strip():
+            return {field_name: value.strip()}
+    return None
+
+
+def _single_text_alias_keys(field_name: str) -> list[str]:
+    return {
+        "reply": ["patient_reply", "patient_response", "reply_text", "message", "content", "text"],
+        "hint": ["coach_hint", "hint_text", "message", "content", "text"],
+    }.get(field_name, [f"{field_name}_text", "message", "content", "text"])
 
 
 __all__ = [

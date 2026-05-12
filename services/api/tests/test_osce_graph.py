@@ -8,6 +8,39 @@ def canonical_patient_responder(request: object) -> str:
     return str(getattr(request, "canonical_answer"))
 
 
+def silent_coach_agent(request: object) -> dict[str, object]:
+    return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+
+
+def base_hint_state(**overrides: object) -> dict[str, object]:
+    state: dict[str, object] = {
+        "session_id": "session_demo",
+        "case_id": "appendicitis_001",
+        "stage": "history_taking",
+        "case_title": "右下腹痛教学病例",
+        "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+        "hint_requested": True,
+        "hint": "",
+        "messages": [],
+        "asked_questions": [],
+        "intent_history": [],
+        "agent_turn_memory": [],
+        "revealed_facts": [],
+        "requested_exams": [],
+        "requested_tests": [],
+        "student_hypotheses": [],
+        "final_submission": None,
+        "rubric_scores": {},
+        "missed_items": [],
+        "retrieved_sources": [],
+        "feedback_report": None,
+        "safety_flags": [],
+        "evolution_candidates": [],
+    }
+    state.update(overrides)
+    return state
+
+
 def test_osce_graph_loads_case_intro_state() -> None:
     graph = build_osce_graph()
 
@@ -82,14 +115,23 @@ def test_osce_graph_routes_history_question_and_returns_patient_reply() -> None:
     ]
 
 
-def test_osce_graph_routes_unknown_history_turn_through_patient_agent_and_records_memory() -> None:
-    captured_requests: list[object] = []
+def test_osce_graph_routes_patient_identity_unknown_kind_without_forced_coach_hint() -> None:
+    captured_patient_requests: list[object] = []
+    captured_coach_requests: list[object] = []
 
     def fake_patient_responder(request: object) -> str:
-        captured_requests.append(request)
-        return "我是这次因为腹痛来就诊的患者，您可以继续问我疼痛是什么时候开始的。"
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
 
-    graph = build_osce_graph(patient_responder=fake_patient_responder)
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {
+            "should_emit": True,
+            "hint": "可以先从起病时间、疼痛部位、性质、程度和伴随症状开始问。",
+            "trigger_kind": "off_topic_redirect",
+        }
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=fake_coach_agent)
 
     result = graph.invoke(
         {
@@ -120,7 +162,10 @@ def test_osce_graph_routes_unknown_history_turn_through_patient_agent_and_record
 
     assert result["stage"] == "history_taking"
     assert result["current_intent"] == "unknown_history_intent"
-    assert result["reply"] == "我是这次因为腹痛来就诊的患者，您可以继续问我疼痛是什么时候开始的。"
+    assert result["reply"] == "我是这次来看肚子疼的病人。"
+    assert "转移性右下腹痛" not in result["reply"]
+    assert "低热" not in result["reply"]
+    assert "就诊的患者" not in result["reply"]
     assert result["messages"] == [
         {"role": "student", "content": "你是谁？"},
         {"role": "patient", "content": result["reply"]},
@@ -129,40 +174,161 @@ def test_osce_graph_routes_unknown_history_turn_through_patient_agent_and_record
     assert result["intent_history"] == ["unknown_history_intent"]
     assert result["revealed_facts"] == []
     assert "急性阑尾炎" not in result["reply"]
-    assert len(captured_requests) == 1
-    assert getattr(captured_requests[0], "turn_policy") == "patient_context_redirect"
-    assert getattr(captured_requests[0], "current_intent") == "unknown_history_intent"
-    assert getattr(captured_requests[0], "deterministic_hints")["keyword_intent"] == "unknown_history_intent"
-    assert result["agent_turn_memory"] == [
-        {
-            "turn_id": "turn:1",
-            "student_message": "你是谁？",
-            "reply": result["reply"],
-            "reply_role": "patient",
-            "current_intent": "unknown_history_intent",
-            "turn_policy": "patient_context_redirect",
-            "turn_analysis": {
-                "current_intent": "unknown_history_intent",
-                "confidence": 0.35,
-                "is_off_topic": True,
-                "rationale": "未命中当前病例问诊意图提示，作为患者身份或训练目标引导处理。",
-            },
-            "agent_path": ["input_router_node", "patient_response_node"],
-            "revealed_fact_id": None,
-            "source_references": [],
-            "safety_flags": [],
-        }
-    ]
+    assert len(captured_patient_requests) == 1
+    assert getattr(captured_patient_requests[0], "turn_policy") == "patient_identity_redirect"
+    assert getattr(captured_patient_requests[0], "current_intent") == "unknown_history_intent"
+    assert getattr(captured_patient_requests[0], "deterministic_hints")["keyword_intent"] == "unknown_history_intent"
+    assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "patient_identity_unclear"
+    assert len(captured_coach_requests) == 1
+    assert getattr(captured_coach_requests[0], "prompt_kind") == "passive_turn_review"
+    assert getattr(captured_coach_requests[0], "base_hint") == ""
+    assert result["agent_turn_memory"][0]["reply_role"] == "patient"
+    assert result["agent_turn_memory"][0]["turn_policy"] == "patient_identity_redirect"
+    assert result["agent_turn_memory"][1]["reply_role"] == "coach"
+    assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_silent"
+    assert result["agent_turn_memory"][1]["agent_path"] == ["input_router_node", "patient_response_node", "coach_agent"]
 
 
-def test_osce_graph_routes_answer_boundary_through_reply_agent_and_records_memory() -> None:
-    captured_requests: list[object] = []
+def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint() -> None:
+    captured_patient_requests: list[object] = []
+    captured_coach_requests: list[object] = []
 
     def fake_patient_responder(request: object) -> str:
-        captured_requests.append(request)
-        return "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据。"
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
 
-    graph = build_osce_graph(patient_responder=fake_patient_responder)
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {
+            "should_emit": False,
+            "hint": "",
+            "trigger_kind": "none",
+        }
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "还有没有其他不舒服？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intent"] == "unknown_history_intent"
+    assert result["reply"] == "这个问题有点宽泛，我不太确定你具体想问哪方面。"
+    assert result["messages"][-1] == {
+        "role": "coach",
+        "content": "这个问题可能和问诊有关，但还不够具体。可以追问起病时间、疼痛部位、疼痛性质、疼痛程度或伴随症状。",
+    }
+    assert getattr(captured_patient_requests[0], "turn_policy") == "possible_missed_medical_intent"
+    assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "possible_missed_medical_intent"
+    assert getattr(captured_patient_requests[0], "deterministic_hints")["possible_intents"][:2] == ["ask_associated_nausea", "ask_fever"]
+    assert len(captured_coach_requests) == 1
+    assert getattr(captured_coach_requests[0], "base_hint") == (
+        "这个问题可能和问诊有关，但还不够具体。可以追问起病时间、疼痛部位、疼痛性质、疼痛程度或伴随症状。"
+    )
+    assert result["agent_turn_memory"][0]["turn_analysis"]["unknown_kind"] == "possible_missed_medical_intent"
+    assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_hint"
+
+
+def test_osce_graph_answers_patient_profile_gender_without_falling_back_to_unknown() -> None:
+    captured_patient_requests: list[object] = []
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=silent_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "你是男的女的？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intent"] == "ask_patient_gender"
+    assert result["reply"] == "我是男的。"
+    assert result["revealed_facts"] == []
+    assert result["asked_questions"] == []
+    assert result["messages"] == [
+        {"role": "student", "content": "你是男的女的？"},
+        {"role": "patient", "content": "我是男的。"},
+    ]
+    assert len(captured_patient_requests) == 1
+    patient_request = captured_patient_requests[0]
+    assert getattr(patient_request, "turn_policy") == "patient_profile_disclosure"
+    assert getattr(patient_request, "answerable_fact_candidates") == [
+        {
+            "fact_id": "appendicitis_001.profile.gender",
+            "topic": "患者公开画像",
+            "slot": "gender",
+            "canonical_answer": "我是男的。",
+            "variants": ["男的"],
+            "trigger_intents": ["ask_patient_gender"],
+            "source_reference": "case:appendicitis_001.patient_profile.gender",
+        }
+    ]
+    assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == ["appendicitis_001.profile.gender"]
+    assert result["agent_turn_memory"][0]["turn_policy"] == "patient_profile_disclosure"
+    assert result["agent_turn_memory"][0]["source_references"] == []
+
+
+def test_osce_graph_routes_answer_boundary_through_coach_agent_and_records_memory() -> None:
+    captured_requests: list[object] = []
+
+    def failing_patient_responder(request: object) -> str:
+        raise AssertionError("answer boundary should not use patient responder")
+
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {
+            "should_emit": True,
+            "hint": "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据。",
+            "trigger_kind": "answer_boundary",
+        }
+
+    graph = build_osce_graph(patient_responder=failing_patient_responder, coach_agent=fake_coach_agent)
 
     result = graph.invoke(
         {
@@ -199,7 +365,8 @@ def test_osce_graph_routes_answer_boundary_through_reply_agent_and_records_memor
     assert result["asked_questions"] == []
     assert result["revealed_facts"] == []
     assert len(captured_requests) == 1
-    assert getattr(captured_requests[0], "turn_policy") == "answer_boundary_redirect"
+    assert getattr(captured_requests[0], "prompt_kind") == "answer_boundary_redirect"
+    assert getattr(captured_requests[0], "base_hint") == "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
     assert result["agent_turn_memory"][0]["turn_policy"] == "answer_boundary_redirect"
     assert result["agent_turn_memory"][0]["reply_role"] == "coach"
     assert result["agent_turn_memory"][0]["turn_analysis"]["current_intent"] == "answer_request_redirect"
@@ -244,8 +411,41 @@ def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
     assert "24 小时前开始" not in result["reply"]
     assert result["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert len(captured_requests) == 1
-    assert getattr(captured_requests[0], "canonical_answer") == "24 小时前开始，最初是上腹部隐痛。"
-    assert getattr(captured_requests[0], "student_message") == "什么时候开始疼的？"
+    patient_request = captured_requests[0]
+    assert getattr(patient_request, "canonical_answer") == "24 小时前开始，最初是上腹部隐痛。"
+    assert getattr(patient_request, "student_message") == "什么时候开始疼的？"
+    assert getattr(patient_request, "answerable_fact_candidates") == [
+        {
+            "fact_id": "appendicitis_001.hf_01",
+            "topic": "现病史",
+            "slot": "onset",
+            "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+            "variants": ["昨天这个点开始的", "差不多一天前开始"],
+            "trigger_intents": ["ask_onset", "ask_when_started"],
+            "source_reference": "case:appendicitis_001.history.appendicitis_001.hf_01",
+        }
+    ]
+    patient_private_context = getattr(patient_request, "patient_private_context")
+    assert patient_private_context["case_id"] == "appendicitis_001"
+    assert patient_private_context["patient_profile"]["age"] == "22岁"
+    assert patient_private_context["patient_profile"]["gender"] == "男"
+    assert patient_private_context["history"]["present_illness_summary"] == (
+        "患者 24 小时前无明显诱因出现上腹部隐痛，伴恶心，未呕吐，约 8 小时前疼痛转移并固定于右下腹，程度较前加重，行走时加重，伴低热。"
+    )
+    assert "appendicitis_001.hf_05" in {
+        fact["fact_id"] for fact in patient_private_context["history"]["hidden_facts"]
+    }
+    assert "diagnosis" not in patient_private_context
+    forbidden_context = getattr(patient_request, "forbidden_context")
+    assert forbidden_context["diagnosis_terms"] == [
+        "急性阑尾炎",
+        "阑尾炎",
+        "Acute appendicitis",
+        "acute appendicitis",
+    ]
+    assert forbidden_context["blocked_reference_types"] == ["diagnosis", "rubric", "treatment", "dosage"]
+    assert "rubric" not in patient_private_context
+    assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == ["appendicitis_001.hf_01"]
 
 
 def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> None:
@@ -313,6 +513,152 @@ def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> No
     }
     assert result["agent_turn_memory"][0]["current_intent"] == "ask_onset"
     assert result["agent_turn_memory"][0]["turn_analysis"] == patient_hints["turn_analysis"]
+
+
+def test_osce_graph_passively_reviews_regular_history_turn_without_visible_hint() -> None:
+    captured_coach_requests: list[object] = []
+
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+
+    graph = build_osce_graph(patient_responder=canonical_patient_responder, coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "什么时候开始疼的？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["reply"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert result["messages"] == [
+        {"role": "student", "content": "什么时候开始疼的？"},
+        {"role": "patient", "content": "24 小时前开始，最初是上腹部隐痛。"},
+    ]
+    assert len(captured_coach_requests) == 1
+    assert getattr(captured_coach_requests[0], "prompt_kind") == "passive_turn_review"
+    assert getattr(captured_coach_requests[0], "base_hint") == ""
+    assert result["agent_turn_memory"][-1]["reply_role"] == "coach"
+    assert result["agent_turn_memory"][-1]["reply"] == ""
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_silent"
+
+
+def test_osce_graph_passive_coach_suppresses_unforced_model_hint_after_successful_fact_disclosure() -> None:
+    captured_coach_requests: list[object] = []
+
+    def noisy_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {
+            "should_emit": True,
+            "hint": "模型误判想打断学生，但这轮已经成功问到病史事实。",
+            "trigger_kind": "model_overreach",
+        }
+
+    graph = build_osce_graph(patient_responder=canonical_patient_responder, coach_agent=noisy_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "什么时候开始疼的？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert len(captured_coach_requests) == 1
+    assert getattr(captured_coach_requests[0], "base_hint") == ""
+    assert result["messages"] == [
+        {"role": "student", "content": "什么时候开始疼的？"},
+        {"role": "patient", "content": "24 小时前开始，最初是上腹部隐痛。"},
+    ]
+    assert result["agent_turn_memory"][-1]["reply"] == ""
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_silent"
+
+
+def test_osce_graph_forces_passive_coach_hint_when_backend_detects_off_topic_even_if_model_suppresses_it() -> None:
+    captured_coach_requests: list[object] = []
+
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+
+    graph = build_osce_graph(patient_responder=canonical_patient_responder, coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "你喜欢打游戏吗？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert len(captured_coach_requests) == 1
+    assert getattr(captured_coach_requests[0], "base_hint") == (
+        "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。"
+    )
+    assert result["messages"][-1] == {
+        "role": "coach",
+        "content": "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。",
+    }
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_hint"
 
 
 def test_osce_graph_does_not_fallback_when_patient_responder_fails() -> None:
@@ -832,6 +1178,10 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() 
     assert len(captured_requests) == 1
     assert getattr(captured_requests[0], "base_hint") == "先围绕疼痛的部位、性质、程度、伴随症状和既往史继续追问，不要急于下诊断。"
     assert getattr(captured_requests[0], "prompt_kind") == "socratic_hint"
+    clinical_state = getattr(captured_requests[0], "clinical_reasoning_state")
+    assert clinical_state["pedagogical_phase"] == "needs_physical_exam"
+    assert clinical_state["next_best_action"]["action_type"] == "request_physical_exam"
+    assert "查体" in clinical_state["socratic_question"]
     assert "急性阑尾炎" not in str(getattr(captured_requests[0], "model_dump")())
     assert result["agent_turn_memory"] == [
         {
@@ -853,3 +1203,186 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() 
             "safety_flags": [],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("state_updates", "expected_fragments"),
+    [
+        (
+            {
+                "messages": [
+                    {"role": "student", "content": "什么时候开始疼的？"},
+                    {"role": "patient", "content": "24 小时前开始。"},
+                ],
+                "asked_questions": ["什么时候开始疼的？"],
+                "revealed_facts": ["appendicitis_001.hf_01"],
+                "training_progress": {
+                    "history": {"covered": 1, "pending_fact_ids": ["hf_02", "hf_03", "hf_04", "hf_05"]},
+                    "physical_exam": {"requested": 0, "must_pending_codes": ["abd.palpation.rebound"]},
+                    "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                },
+            },
+            ["病史线索还偏少", "继续补齐"],
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "student", "content": "什么时候开始疼的？"},
+                    {"role": "patient", "content": "24 小时前开始。"},
+                    {"role": "student", "content": "后来转移了吗？"},
+                    {"role": "patient", "content": "后来右下腹更明显。"},
+                ],
+                "asked_questions": ["什么时候开始疼的？", "后来转移了吗？", "有没有恶心？"],
+                "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_02", "appendicitis_001.hf_05"],
+                "training_progress": {
+                    "history": {"covered": 3, "pending_fact_ids": ["hf_03", "hf_04"]},
+                    "physical_exam": {"requested": 0, "must_pending_codes": ["abd.palpation.rebound"]},
+                    "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                },
+            },
+            ["病史链还不完整", "聚焦追问"],
+        ),
+        (
+            {
+                "asked_questions": ["什么时候开始疼的？", "哪里疼？", "怎么疼？", "多疼？", "有没有恶心？"],
+                "revealed_facts": [
+                    "appendicitis_001.hf_01",
+                    "appendicitis_001.hf_02",
+                    "appendicitis_001.hf_03",
+                    "appendicitis_001.hf_04",
+                    "appendicitis_001.hf_05",
+                ],
+                "training_progress": {
+                    "history": {"covered": 5, "pending_fact_ids": ["hf_06"]},
+                    "physical_exam": {"requested": 0, "must_pending_codes": ["abd.palpation.rebound"]},
+                    "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                },
+            },
+            ["少量缺口", "关键查体"],
+        ),
+        (
+            {
+                "asked_questions": ["核心病史已问完"],
+                "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_02", "appendicitis_001.hf_03"],
+                "training_progress": {
+                    "history": {"covered": 6, "pending_fact_ids": []},
+                    "physical_exam": {"requested": 0, "must_pending_codes": ["abd.palpation.rebound"]},
+                    "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                },
+            },
+            ["关键查体", "验证当前线索"],
+        ),
+        (
+            {
+                "stage": "physical_exam",
+                "asked_questions": ["核心病史已问完"],
+                "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_02", "appendicitis_001.hf_03"],
+                "requested_exams": ["abd.palpation.rebound"],
+                "training_progress": {
+                    "history": {"covered": 6, "pending_fact_ids": []},
+                    "physical_exam": {"requested": 1, "must_pending_codes": []},
+                    "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                },
+            },
+            ["辅助检查", "验证当前假设"],
+        ),
+        (
+            {
+                "stage": "auxiliary_test",
+                "asked_questions": ["核心病史已问完"],
+                "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_02", "appendicitis_001.hf_03"],
+                "requested_exams": ["abd.palpation.rebound"],
+                "requested_tests": ["lab.cbc"],
+                "training_progress": {
+                    "history": {"covered": 6, "pending_fact_ids": []},
+                    "physical_exam": {"requested": 1, "must_pending_codes": []},
+                    "auxiliary_test": {"requested": 1, "must_pending_codes": []},
+                    "reasoning": {"pending_evidence": ["abd.palpation.rebound"]},
+                },
+            },
+            ["诊断假设", "证据整理"],
+        ),
+        (
+            {
+                "stage": "hypothesis",
+                "asked_questions": ["核心病史已问完"],
+                "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_02", "appendicitis_001.hf_03"],
+                "requested_exams": ["abd.palpation.rebound"],
+                "requested_tests": ["lab.cbc"],
+                "student_hypotheses": ["考虑急腹症，需要结合病史、查体和检查整理证据链。"],
+                "training_progress": {
+                    "history": {"covered": 6, "pending_fact_ids": []},
+                    "physical_exam": {"requested": 1, "must_pending_codes": []},
+                    "auxiliary_test": {"requested": 1, "must_pending_codes": []},
+                    "reasoning": {"pending_evidence": []},
+                },
+            },
+            ["提交", "支持证据"],
+        ),
+    ],
+)
+def test_osce_graph_active_coach_hint_covers_progress_depths(state_updates: dict[str, object], expected_fragments: list[str]) -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    result = graph.invoke(base_hint_state(**state_updates))
+
+    assert len(captured_requests) == 1
+    assert result["hint"] == getattr(captured_requests[0], "base_hint")
+    for expected_fragment in expected_fragments:
+        assert expected_fragment in result["hint"]
+    for forbidden_term in ["急性阑尾炎", "阑尾炎", "治疗方案", "用药剂量"]:
+        assert forbidden_term not in result["hint"]
+
+
+def test_osce_graph_hint_explains_sequence_gap_after_auxiliary_test_before_physical_exam() -> None:
+    graph = build_osce_graph()
+
+    result = graph.invoke(
+        {
+            "session_id": "session_demo",
+            "case_id": "appendicitis_001",
+            "stage": "auxiliary_test",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "hint_requested": True,
+            "hint": "",
+            "messages": [
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始。"},
+            ],
+            "asked_questions": ["什么时候开始疼的？"],
+            "intent_history": ["ask_onset"],
+            "agent_turn_memory": [],
+            "revealed_facts": ["appendicitis_001.hf_01"],
+            "requested_exams": [],
+            "requested_tests": ["lab.cbc"],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+            "training_progress": {
+                "physical_exam": {
+                    "must_pending_codes": ["abd.palpation.rebound"],
+                },
+                "auxiliary_test": {
+                    "requested": 1,
+                },
+            },
+        }
+    )
+
+    assert "辅助检查" in result["hint"]
+    assert "查体" in result["hint"]
+    assert "为什么" in result["hint"] or "想一想" in result["hint"]
+    assert "急性阑尾炎" not in result["hint"]
+    assert "阑尾炎" not in result["hint"]

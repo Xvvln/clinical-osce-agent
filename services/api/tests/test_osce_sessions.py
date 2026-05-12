@@ -1,4 +1,5 @@
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app import main
@@ -19,6 +20,21 @@ AGENT_EVENT_TYPES = {"agent_decision_traced", "agent_reflection_recorded"}
 
 def canonical_patient_responder(request: object) -> str:
     return str(getattr(request, "canonical_answer"))
+
+
+def failing_openai_patient_responder(request: object) -> str:
+    http_request = httpx.Request("POST", "https://token-plan-cn.xiaomimimo.com/v1/chat/completions")
+    http_response = httpx.Response(
+        status_code=401,
+        request=http_request,
+        json={
+            "error": {
+                "message": "Invalid API Key",
+                "code": "invalid_key",
+            }
+        },
+    )
+    raise httpx.HTTPStatusError("401 Invalid API Key", request=http_request, response=http_response)
 
 
 def assert_training_progress_hides_diagnosis(progress: dict[str, object]) -> None:
@@ -94,6 +110,23 @@ def test_create_session_uses_persisted_user_runtime_model_config_after_runtime_c
     assert create_response.json()["case_id"] == "appendicitis_001"
 
 
+def test_message_provider_auth_error_returns_readable_gateway_error() -> None:
+    osce_session_service.osce_graph = build_osce_graph(patient_responder=failing_openai_patient_responder)
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.post(
+            f"/api/sessions/{session_id}/message",
+            json={"message": "什么时候开始疼的？"},
+        )
+
+    assert create_response.status_code == 200
+    assert response.status_code == 502
+    assert response.json()["detail"] == "模型服务调用失败：HTTP 401：Invalid API Key；invalid_key"
+
+
 def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str, str]) -> None:
     create_response = client.post(
         "/api/sessions",
@@ -102,6 +135,16 @@ def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str,
 
     assert create_response.status_code == 200
     assert create_response.json()["student_id"] == authenticated_user["user_id"]
+
+
+def test_create_session_returns_patient_opening_utterance_in_patient_voice() -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert create_response.status_code == 200
+    payload = create_response.json()
+    assert payload["patient_opening_utterance"] == "医生您好，我这次主要是肚子疼，后来右下腹更明显，有点想吐，也有点发热。"
+    assert "转移性右下腹痛" not in payload["patient_opening_utterance"]
+    assert "低热" not in payload["patient_opening_utterance"]
 
 
 def test_session_teaching_focus_returns_dynamic_runtime_patterns(authenticated_user: dict[str, str]) -> None:
@@ -1236,8 +1279,8 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
     assert hint_response.status_code == 200
     payload = hint_response.json()
     assert payload["stage"] == "history_taking"
-    assert payload["hint"] == "已获得部分病史，下一步选择关键查体来验证当前线索。"
-    assert payload["hint"] == payload["training_progress"]["next_focus"]
+    assert payload["hint"] == "病史线索还偏少，先继续补齐起病、部位变化、性质、程度和伴随症状，再决定查体。"
+    assert payload["training_progress"]["next_focus"] == "已获得部分病史，下一步选择关键查体来验证当前线索。"
     assert payload["messages"][-1] == {"role": "coach", "content": payload["hint"]}
     assert payload["final_submission"] is None
     assert payload["rubric_scores"] == {}

@@ -19,9 +19,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负责把 canonical_answer 改写成自然、简短的 OSCE 训练回复。
 
 硬性规则：
-- 只能表达 canonical_answer 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
+- patient_private_context 是完整但受控的标准化病人私有上下文，只用于保持身份、语气和病史一致，不得整段复述。
+- answerable_fact_candidates 是本轮允许披露的病例事实；只能表达 canonical_answer 和 answerable_fact_candidates 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
+- 输出 JSON 必须包含 reply 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
+- forbidden_context 中的诊断、rubric、治疗、剂量、处置边界均不得泄露。
 - 不得主动说出 forbidden_terms 中的任何词。
+- 语气要像真实来就诊的患者，不要像病历摘要、教科书或医生交班。
+- 可以把医学化表达改成生活化表达，但不能改变事实：例如“转移性右下腹痛”可说成“肚子疼，后来右下腹更明显”，“低热”可说成“有点发热”。
+- 不要照抄 chief_complaint 或 case_title 里的医学化表述，优先围绕 canonical_answer 作答。
 - 如果 canonical_answer 表示病例未提供信息，就只表达“不清楚/没被告知/不太确定”的患者口吻。
+- 不要主动引导学生下一步该问什么，不说“你可以继续问”“建议你”“应该先问”。
 - 如果 turn_policy 是 answer_boundary_redirect 或 safety_boundary_redirect，用教学边界口吻提醒继续按 OSCE 流程训练，不要扮演真实医生给建议。
 - 回答必须是第一人称患者语气，中文，简短，不超过 80 个汉字。
 - 不输出用药剂量、治疗方案、手术方案或处置建议。
@@ -36,7 +43,10 @@ class PatientResponderRequest(BaseModel):
     current_intent: str
     canonical_answer: str
     revealed_fact_id: str | None = None
+    patient_private_context: dict[str, Any] = Field(default_factory=dict)
+    answerable_fact_candidates: list[dict[str, Any]] = Field(default_factory=list)
     forbidden_terms: list[str] = Field(default_factory=list)
+    forbidden_context: dict[str, Any] = Field(default_factory=dict)
     prior_messages: list[dict[str, str]] = Field(default_factory=list)
     turn_policy: str = "history_fact_disclosure"
     deterministic_hints: dict[str, Any] = Field(default_factory=dict)
@@ -44,6 +54,7 @@ class PatientResponderRequest(BaseModel):
 
 class PatientResponderResponse(BaseModel):
     reply: str = Field(..., min_length=1, max_length=120)
+    fact_ids_used: list[str] = Field(default_factory=list)
 
 
 class GeminiPatientSettings(BaseSettings):
@@ -89,9 +100,10 @@ class GeminiPatientResponder:
                 temperature=self._settings.temperature,
             ),
         )
-        reply = PatientResponderResponse.model_validate_json(response.text).reply.strip()
-        _assert_no_forbidden_terms(reply, request.forbidden_terms)
-        return reply
+        return _validated_patient_reply(
+            PatientResponderResponse.model_validate_json(response.text),
+            request,
+        )
 
 
 class OpenAICompatiblePatientResponder:
@@ -106,9 +118,7 @@ class OpenAICompatiblePatientResponder:
             response_model=PatientResponderResponse,
             temperature=0.4,
         )
-        reply = response.reply.strip()
-        _assert_no_forbidden_terms(reply, request.forbidden_terms)
-        return reply
+        return _validated_patient_reply(response, request)
 
 
 class AnthropicPatientResponder:
@@ -123,9 +133,7 @@ class AnthropicPatientResponder:
             response_model=PatientResponderResponse,
             temperature=0.4,
         )
-        reply = response.reply.strip()
-        _assert_no_forbidden_terms(reply, request.forbidden_terms)
-        return reply
+        return _validated_patient_reply(response, request)
 
 
 class DeterministicPatientResponder:
@@ -143,10 +151,13 @@ class DeterministicPatientResponder:
 class LazyGeminiPatientResponder:
     def __init__(self) -> None:
         self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | AnthropicPatientResponder | DeterministicPatientResponder | None = None
+        self._cache_key: tuple[str, ...] | None = None
 
     def __call__(self, request: PatientResponderRequest) -> str:
-        if self._responder is None:
+        cache_key = runtime_model_config_store.active_config_cache_key()
+        if self._responder is None or self._cache_key != cache_key:
             self._responder = _create_configured_responder()
+            self._cache_key = cache_key
         return self._responder(request)
 
 
@@ -233,6 +244,29 @@ def _assert_no_forbidden_terms(reply: str, forbidden_terms: list[str]) -> None:
     leaked_terms = [term for term in forbidden_terms if term and term in reply]
     if leaked_terms:
         raise RuntimeError(f"标准化病人回答包含禁止泄露词：{leaked_terms}")
+
+
+def _validated_patient_reply(response: PatientResponderResponse, request: PatientResponderRequest) -> str:
+    reply = response.reply.strip()
+    _assert_no_forbidden_terms(reply, request.forbidden_terms)
+    _assert_used_fact_ids_are_answerable(response.fact_ids_used, request.answerable_fact_candidates)
+    return reply
+
+
+def _assert_used_fact_ids_are_answerable(
+    fact_ids_used: list[str],
+    answerable_fact_candidates: list[dict[str, Any]],
+) -> None:
+    if not fact_ids_used:
+        return
+    allowed_fact_ids = {
+        str(candidate.get("fact_id"))
+        for candidate in answerable_fact_candidates
+        if isinstance(candidate, dict) and candidate.get("fact_id")
+    }
+    unauthorized_fact_ids = [fact_id for fact_id in fact_ids_used if fact_id not in allowed_fact_ids]
+    if unauthorized_fact_ids:
+        raise RuntimeError(f"标准化病人回答声明使用了未授权病例事实：{unauthorized_fact_ids}")
 
 
 def _apply_process_proxy(proxy_url: str) -> None:

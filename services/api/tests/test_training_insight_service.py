@@ -207,3 +207,76 @@ def test_training_insight_service_summarizes_repeated_agent_turn_patterns_from_t
             "source_report_count": 2,
         }
     ]
+
+
+def test_training_insight_service_summarizes_auxiliary_test_before_physical_exam_pattern(tmp_path) -> None:
+    database_path = tmp_path / "training_events.sqlite3"
+    store = TrainingEventStore(database_path)
+    for session_id in ["session_one", "session_two"]:
+        store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id="student_demo",
+            event_type="history_message",
+            payload={
+                "message": "什么时候开始疼的？",
+                "reply": "24 小时前开始。",
+                "agent_turn": {
+                    "turn_id": "turn:1",
+                    "student_message": "什么时候开始疼的？",
+                    "reply": "24 小时前开始。",
+                    "reply_role": "patient",
+                    "current_intent": "ask_onset",
+                    "turn_policy": "history_fact_disclosure",
+                    "turn_analysis": {
+                        "current_intent": "ask_onset",
+                        "confidence": 0.93,
+                        "is_off_topic": False,
+                        "rationale": "学生开始采集病史。",
+                    },
+                    "agent_path": ["input_router_node", "patient_response_node"],
+                    "revealed_fact_id": "appendicitis_001.hf_01",
+                    "source_references": ["case:appendicitis_001.history.appendicitis_001.hf_01"],
+                    "safety_flags": [],
+                },
+            },
+        )
+        store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id="student_demo",
+            event_type="auxiliary_test_requested",
+            payload={"test_code": "lab.cbc", "result": "白细胞升高"},
+        )
+        store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id="student_demo",
+            event_type="report_generated",
+            payload={
+                "report_id": f"{session_id}_report",
+                "total_score": 58,
+                "missed_items": ["pe_rebound"],
+                "knowledge_recommendations": [],
+                "source_reference_items": [],
+            },
+        )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_one", "session_two"])
+
+    assert insights["frequent_turn_patterns"] == [
+        {
+            "pattern_id": "turn_pattern_auxiliary_test_before_physical_exam",
+            "pattern_type": "auxiliary_test_before_physical_exam",
+            "title": "有病史线索后跳过查体直接申请辅助检查",
+            "count": 2,
+            "trigger_item_ids": [
+                "event:auxiliary_test_requested",
+                "sequence:before_physical_exam",
+            ],
+            "case_ids": ["appendicitis_001"],
+            "session_ids": ["session_one", "session_two"],
+            "source_report_ids": ["session_one_report", "session_two_report"],
+            "source_report_count": 2,
+        }
+    ]

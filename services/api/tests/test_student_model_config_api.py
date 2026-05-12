@@ -493,3 +493,39 @@ def test_runtime_model_config_can_reuse_saved_secret_without_echoing_it(tmp_path
     assert second_response.json()["api_key_saved"] is True
     assert runtime_model_config_store.get_active_config().api_key == "student-openai-secret"
     assert "student-openai-secret" not in second_response.text
+
+
+def test_authenticated_connectivity_test_reuses_saved_secret_without_echoing_it(tmp_path, monkeypatch) -> None:
+    _FakeOpenAICompatibleProbeClient.requested_urls = []
+    _FakeOpenAICompatibleProbeClient.requested_headers = []
+    _FakeOpenAICompatibleProbeClient.requested_bodies = []
+    monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeOpenAICompatibleProbeClient)
+
+    client = _authenticated_client(tmp_path, monkeypatch, "student-retest@example.test")
+    save_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "saved-model",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        },
+    )
+    runtime_model_config_store.clear()
+    test_response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "",
+            "model": "saved-model",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        },
+    )
+
+    assert save_response.status_code == 200
+    assert test_response.status_code == 200
+    assert test_response.json()["ok"] is True
+    assert _FakeOpenAICompatibleProbeClient.requested_headers == [{"Authorization": "Bearer student-openai-secret"}]
+    assert "student-openai-secret" not in test_response.text
