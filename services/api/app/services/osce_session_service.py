@@ -11,6 +11,7 @@ import yaml
 from app.graph.osce_graph import build_osce_graph, reflection_node, training_strategy_node
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
+from app.services.patient_language_service import build_patient_opening_utterance
 from app.services.report_store import ReportStore, report_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_skill_store import TrainingSkillStore, training_skill_store
@@ -425,6 +426,7 @@ def _graph_state_from_session(
     hint_requested: bool = False,
 ) -> dict[str, Any]:
     case = load_case_node(session.case_id)
+    training_progress = _serialize_training_progress(session, case)
     return {
         "session_id": session.session_id,
         "case_id": session.case_id,
@@ -437,7 +439,8 @@ def _graph_state_from_session(
         "report_requested": report_requested,
         "hint_requested": hint_requested,
         "hint": "",
-        "training_progress_next_focus": _serialize_training_progress(session, case)["next_focus"],
+        "training_progress": training_progress,
+        "training_progress_next_focus": training_progress["next_focus"],
         "exam_code": exam_code,
         "exam_name_cn": "",
         "exam_result": "",
@@ -502,6 +505,12 @@ def _refresh_agent_state(session: OsceSession, use_reflection: bool = False) -> 
 def _latest_agent_turn(graph_state: dict[str, Any]) -> dict[str, Any]:
     turn_memory = graph_state.get("agent_turn_memory", [])
     if isinstance(turn_memory, list) and turn_memory:
+        for agent_turn in reversed(turn_memory):
+            if not isinstance(agent_turn, dict):
+                continue
+            if str(agent_turn.get("turn_policy", "")).startswith("passive_review_"):
+                continue
+            return agent_turn
         latest_turn = turn_memory[-1]
         if isinstance(latest_turn, dict):
             return latest_turn
@@ -542,6 +551,7 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
         "course_module": case.course_module,
         "difficulty": case.difficulty,
         "chief_complaint": case.chief_complaint,
+        "patient_opening_utterance": build_patient_opening_utterance(case.chief_complaint),
         "enabled": True,
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
@@ -945,6 +955,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "stage": session.stage,
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
+        "patient_opening_utterance": build_patient_opening_utterance(case.chief_complaint),
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
         "teaching_focus": _serialize_teaching_focus(case),

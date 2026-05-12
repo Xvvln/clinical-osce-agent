@@ -91,6 +91,39 @@ test("student action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("sources page", sourcesSource, ["返回工作台"]);
 });
 
+test("home page renders backend patient opening utterance instead of raw chief complaint", () => {
+  assert.match(pageSource, /patient_opening_utterance: string;/);
+  assert.match(pageSource, /patientOpeningUtterance: string;/);
+  assert.match(pageSource, /patient_opening_utterance: string;/);
+  assert.match(pageSource, /patientOpeningUtterance: caseSummary\.patient_opening_utterance,/);
+  assert.match(pageSource, /const preparedPatientOpeningUtterance = session\?\.patient_opening_utterance \?\? selectedCase\?\.patientOpeningUtterance \?\? null;/);
+  assert.match(pageSource, /id: "patient-opening"/);
+  assert.match(pageSource, /text: preparedPatientOpeningUtterance,/);
+  assert.doesNotMatch(pageSource, /id: "chief-complaint"/);
+  assert.doesNotMatch(pageSource, /`医生您好，我这次主要是\$\{session\.chief_complaint\}。`/);
+});
+
+test("home chat keeps patient streaming before coach process hints", () => {
+  assert.match(pageSource, /function getVisibleApiMessagesDuringPendingReply\(/);
+  assert.match(pageSource, /const pendingReplyIndex = messages\.findIndex/);
+  assert.match(pageSource, /message\.role === "coach"/);
+  assert.match(pageSource, /pendingPatientMessage\?\.finalText/);
+  assert.match(pageSource, /getVisibleApiMessagesDuringPendingReply\(session\.messages, pendingPatientMessage\)/);
+});
+
+test("home history input disables browser autofill history", () => {
+  assert.match(pageSource, /id="history-question"[\s\S]*?autoComplete="off"[\s\S]*?autoCorrect="off"[\s\S]*?spellCheck=\{false\}/);
+});
+
+test("home evidence and coverage map hide raw backend evidence ids", () => {
+  assert.match(pageSource, /function getEvidenceItem\(factId: string, trainingProgress: TrainingProgress \| null, fallbackIndex: number\): EvidenceItem/);
+  assert.match(pageSource, /trainingProgress\?\.coverage_map\.history/);
+  assert.match(pageSource, /getPendingCoverageLabel\(title, itemIndex\)/);
+  assert.doesNotMatch(pageSource, /label: factId, detail: "后端已披露该结构化事实。"/);
+  assert.doesNotMatch(pageSource, /未覆盖素材：\$\{item\.id\}/);
+  assert.doesNotMatch(pageSource, /未覆盖项只显示素材 ID/);
+});
+
 test("home page replaces the Next dev ball with a polished OSCE floating dock", () => {
   assert.match(pageSource, /type OsceDockMenuGroup = "training" \| "system";/);
   assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);
@@ -211,12 +244,14 @@ test("home production deployment hides student runtime API config entry", () => 
 test("home page keeps agent pedagogy details behind a collapsible panel", () => {
   assert.match(pageSource, /type TeachingPlan = Readonly<\{/);
   assert.match(pageSource, /type StageCheckpoint = Readonly<\{/);
+  assert.match(pageSource, /type ClinicalReasoningState = Readonly<\{/);
   assert.match(pageSource, /type HintLadderStep = Readonly<\{/);
   assert.match(pageSource, /type PedagogyState = Readonly<\{/);
   assert.match(pageSource, /type AgentDecisionTraceItem = Readonly<\{/);
   assert.match(pageSource, /type ReflectionSummary = Readonly<\{/);
   assert.match(pageSource, /teaching_plan: TeachingPlan;/);
   assert.match(pageSource, /stage_checkpoint: StageCheckpoint;/);
+  assert.match(pageSource, /clinical_reasoning_state: ClinicalReasoningState;/);
   assert.match(pageSource, /hint_ladder: readonly HintLadderStep\[];/);
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
@@ -231,6 +266,9 @@ test("home page keeps agent pedagogy details behind a collapsible panel", () => 
   assert.match(pageSource, /session\.pedagogy_state\.safety_mode/);
   assert.match(pageSource, /session\.pedagogy_state\.teaching_plan\.selected_strategy/);
   assert.match(pageSource, /session\.pedagogy_state\.stage_checkpoint\.status/);
+  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.pedagogical_phase/);
+  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.sequence_flags/);
+  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.next_best_action\.why/);
   assert.match(pageSource, /session\.pedagogy_state\.hint_ladder\.map/);
   assert.match(pageSource, /trace\.observe\.checkpoint_status/);
   assert.match(pageSource, /trace\.decide\.selected_strategy/);
@@ -484,6 +522,12 @@ test("home workspace exposes OSCE workflow navigation and next-step guidance", (
   assert.match(pageSource, /label: "查看报告"/);
   assert.match(pageSource, /function getWorkflowStepStatus\(stepKey: WorkflowStepDefinition\["key"\], session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): StageStatus/);
   assert.match(pageSource, /function getNextWorkflowSuggestion\(session: OsceSession \| null, feedbackReport: FeedbackReport \| null\): string/);
+  assert.match(pageSource, /const pedagogicalPhase = session\.pedagogy_state\?\.clinical_reasoning_state\?\.pedagogical_phase;/);
+  assert.match(pageSource, /pedagogicalPhase === "needs_physical_exam"[\s\S]*?return 2;/);
+  assert.match(pageSource, /const clinicalReasoningState = session\.pedagogy_state\?\.clinical_reasoning_state;/);
+  assert.match(pageSource, /已识别训练顺序缺口/);
+  assert.match(pageSource, /const hasClinicalSequenceGap = Boolean\(session\?\.pedagogy_state\.clinical_reasoning_state\.sequence_flags\.length\);/);
+  assert.match(pageSource, /const trainingSuggestion = hasClinicalSequenceGap \? workflowSuggestion : session\?\.training_progress\.next_focus \?\? workflowSuggestion;/);
   assert.match(pageSource, /"请先询问起病、部位、性质、程度和伴随症状。"/);
   assert.match(pageSource, /<Panel title="训练导航" description="当前病例、阶段和下一步。">/);
   assert.match(pageSource, /<p className="text-sm font-semibold text-brand">下一步建议<\/p>/);
@@ -522,12 +566,14 @@ test("home workspace starts without a default case and only prepares a case afte
   assert.match(pageSource, /aria-label="关闭训练准备提示"/);
   assert.match(pageSource, /<div className="flex justify-center">[\s\S]*?<div className="relative w-full max-w-xl rounded-xl/);
   assert.match(pageSource, /text-center/);
-  assert.match(pageSource, /\{!session && !isCasePreparationPromptDismissed \? \([\s\S]*<CaseSelectionPrompt[\s\S]*selectedCase=\{selectedCase\}[\s\S]*onDismiss=\{\(\) => setIsCasePreparationPromptDismissed\(true\)\}[\s\S]*\/>[\s\S]*\) : null\}/);
+  assert.match(pageSource, /\{!selectedCase && !isCasePreparationPromptDismissed \? \([\s\S]*<CaseSelectionPrompt[\s\S]*onDismiss=\{\(\) => setIsCasePreparationPromptDismissed\(true\)\}[\s\S]*\/>[\s\S]*\) : null\}/);
+  assert.doesNotMatch(pageSource, /<CaseSelectionPrompt[\s\S]*selectedCase=\{selectedCase\}/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
   assert.match(pageSource, /const preparedOpeningTaskCard = session\?\.opening_task_card \?\? selectedCase\?\.openingTaskCard \?\? null;/);
+  assert.match(pageSource, /const preparedPatientOpeningUtterance = session\?\.patient_opening_utterance \?\? selectedCase\?\.patientOpeningUtterance \?\? null;/);
   assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>/);
-  assert.match(pageSource, /let baseMessages: ChatMessage\[\] = \[\];/);
-  assert.match(pageSource, /if \(!session\) \{\s*baseMessages = \[\];\s*\}/);
+  assert.match(pageSource, /let baseMessages: ChatMessage\[\] = preparedPatientOpeningUtterance/);
+  assert.match(pageSource, /id: "patient-opening"/);
   assert.doesNotMatch(pageSource, /speaker: "patient"[\s\S]{0,240}请先选择一个病例；进入病例后/);
 });
 
@@ -555,12 +601,20 @@ test("home case card points users to the case selection page", () => {
   assert.match(pageSource, />当前选择<\/p>/);
   assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
-  assert.match(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-\[#141413\] bg-\[#141413\] px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
+  assert.match(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-border bg-muted\/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground/);
+  assert.doesNotMatch(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-\[#141413\] bg-\[#141413\]/);
   assert.doesNotMatch(pageSource, /className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
   assert.doesNotMatch(pageSource, /const \[isCaseSelectorOpen, setIsCaseSelectorOpen\]/);
   assert.doesNotMatch(pageSource, /caseOptionsState\.map\(\(caseOption\) =>/);
   assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例信息与选择"/);
   assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例选择"/);
+});
+
+test("home dialogue header shows the selected case prominently", () => {
+  assert.match(pageSource, /<p className="text-xs font-medium text-muted-foreground">当前病例<\/p>/);
+  assert.match(pageSource, /<h2 className="mt-1 text-lg font-semibold leading-6 text-foreground">[\s\S]*?\{session\?\.case_title \?\? selectedCase\?\.title \?\? "请先选择病例"\}[\s\S]*?<\/h2>/);
+  assert.match(pageSource, /className="rounded-lg border border-border bg-muted\/70 px-3 py-2 text-xs leading-5 text-muted-foreground"/);
+  assert.doesNotMatch(pageSource, /<p className="text-sm font-semibold">医患对话<\/p>[\s\S]*?<p className="mt-1 text-xs text-muted-foreground">/);
 });
 
 
@@ -786,7 +840,7 @@ test("home workspace highlights safety guardrail replies", () => {
 test("home workspace auto-scrolls to the newest dialogue and keeps status in the dialogue header", () => {
   assert.match(pageSource, /const chatScrollContainerRef = useRef<HTMLDivElement \| null>\(null\);/);
   assert.match(pageSource, /useEffect\(\(\) => \{[\s\S]*?chatScrollContainer\.scrollTo\(\{[\s\S]*?top: chatScrollContainer\.scrollHeight,[\s\S]*?behavior: "smooth",[\s\S]*?\}\);[\s\S]*?\}, \[chatMessages\.length, optimisticHistoryMessage\?\.text, pendingPatientMessage\?\.text, statusText, errorText\]\);/);
-  assert.match(pageSource, /<div className="max-w-sm rounded-lg border border-brand\/20 bg-brand\/5 px-3 py-2 text-xs leading-5 text-brand">[\s\S]*?\{statusText\}[\s\S]*?\{errorText \? <p className="mt-1 text-red-600">\{errorText\}<\/p> : null\}/);
+  assert.match(pageSource, /<div className="rounded-lg border border-border bg-muted\/70 px-3 py-2 text-xs leading-5 text-muted-foreground">[\s\S]*?\{statusText\}[\s\S]*?\{errorText \? <p className="mt-1 text-red-600">\{errorText\}<\/p> : null\}/);
   const dialogueHeaderIndex = pageSource.indexOf('<div className="border-b border-border p-4">');
   const dialogueBodyIndex = pageSource.indexOf('<div className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar"', dialogueHeaderIndex);
   assert.notEqual(dialogueHeaderIndex, -1);
@@ -801,25 +855,28 @@ test("home inquiry submit shows optimistic student message and neutral streaming
   assert.match(pageSource, /function getReplyMessageMetadata\(session: OsceSession, replyText: string\): Pick<ChatMessage, "speaker" \| "label">/);
   assert.match(pageSource, /const matchingReplyMessage = \[\.\.\.session\.messages\]\.reverse\(\)\.find/);
   assert.match(pageSource, /matchingReplyMessage\?\.role === "coach"[\s\S]*?speaker: "coach",[\s\S]*?label: getCoachMessageLabel\(replyText\),/);
-  assert.match(pageSource, /message\.speaker === pendingPatientMessage\.speaker && message\.text === pendingPatientMessage\.finalText/);
-  assert.doesNotMatch(pageSource, /message\.speaker === "patient" && message\.text === pendingPatientMessage\.finalText/);
+  assert.match(pageSource, /let didReplacePendingPatientMessage = false;/);
+  assert.match(pageSource, /return pendingPatientMessage;/);
+  assert.match(pageSource, /if \(pendingPatientMessage && !didReplacePendingPatientMessage\)/);
+  assert.doesNotMatch(pageSource, /baseMessages = baseMessages\.filter\(/);
   assert.match(pageSource, /function PendingThinkingIndicator\(\)/);
-  assert.match(pageSource, /aria-label="判断中"/);
-  assert.match(pageSource, />判断中<\/span>/);
-  assert.doesNotMatch(pageSource, /aria-label="思考中"/);
+  assert.match(pageSource, /aria-label="标准化病人思考中"/);
+  assert.match(pageSource, />思考中<\/span>/);
+  assert.doesNotMatch(pageSource, /aria-label="判断中"/);
   assert.match(globalsSource, /@keyframes clinical-osce-thinking-dot/);
   assert.match(globalsSource, /\.clinical-osce-thinking-dot/);
   assert.match(pageSource, /async function animatePendingPatientReply\(messageId: string, replyText: string\): Promise<void>/);
   assert.match(pageSource, /window\.setTimeout\(resolve, PATIENT_REPLY_TYPEWRITER_DELAY_MS\)/);
   assert.match(pageSource, /replyText\.slice\(0, index\)/);
   assert.match(pageSource, /setOptimisticHistoryMessage\(\{[\s\S]*?id: optimisticQuestionId,[\s\S]*?speaker: "student",[\s\S]*?label: "学生",[\s\S]*?text: message,[\s\S]*?\}\);/);
-  assert.match(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "coach",[\s\S]*?label: "判断中",[\s\S]*?text: "判断中",[\s\S]*?\}\);/);
-  assert.doesNotMatch(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "patient",[\s\S]*?label: "标准化病人",[\s\S]*?text: "思考中"/);
-  assert.doesNotMatch(pageSource, /text: "思考中\.\.\."/);
+  assert.match(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "patient",[\s\S]*?label: "标准化病人",[\s\S]*?text: "",[\s\S]*?\}\);/);
+  assert.doesNotMatch(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "coach",[\s\S]*?label: "判断中"/);
+  assert.doesNotMatch(pageSource, /text: "判断中"/);
   assert.match(pageSource, /message\.isPending && !message\.finalText \? <PendingThinkingIndicator \/> : message\.text/);
   assert.match(pageSource, /setStatusText\("正在处理问诊"\);/);
   assert.match(pageSource, /const replyMessageMetadata = getReplyMessageMetadata\(updatedSession, replyText\);/);
   assert.match(pageSource, /const replyStatusLabel = replyMessageMetadata\.speaker === "coach" \? replyMessageMetadata\.label : "标准化病人回复";/);
+  assert.match(pageSource, /if \(replyMessageMetadata\.speaker === "coach"\) \{[\s\S]*?setPendingPatientMessage\(\(currentMessage\) => currentMessage\?\.id === pendingPatientReplyId \? null : currentMessage\);[\s\S]*?setSession\(updatedSession\);/);
   assert.match(pageSource, /\.\.\.replyMessageMetadata,[\s\S]*?finalText: replyText,/);
   assert.match(pageSource, /await animatePendingPatientReply\(pendingPatientReplyId, updatedSession\.reply \?\? ""\);/);
   assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{updatedSession\.current_intent \?\? "未识别意图"\}`\);/);
@@ -928,7 +985,8 @@ test("home workspace keeps backend progress data and exposes compact admin cover
   assert.match(pageSource, /onClick=\{\(\) => setIsCoverageMapOpen\(true\)\}/);
   assert.match(pageSource, /管理员图谱 · 素材覆盖/);
   assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
-  assert.match(pageSource, /item\.status === "covered" \? item\.label : `未覆盖素材：\$\{item\.id\}`/);
+  assert.match(pageSource, /item\.status === "covered" \? item\.label : getPendingCoverageLabel\(title, itemIndex\)/);
+  assert.doesNotMatch(pageSource, /item\.status === "covered" \? item\.label : `未覆盖素材：\$\{item\.id\}`/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.history/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.physical_exam/);
   assert.match(pageSource, /trainingProgress\.coverage_map\.auxiliary_test/);

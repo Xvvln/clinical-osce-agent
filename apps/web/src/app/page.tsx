@@ -271,6 +271,25 @@ type StageCheckpoint = Readonly<{
   safety_note: string;
 }>;
 
+type ClinicalReasoningNextBestAction = Readonly<{
+  action_type: string;
+  target_category: string;
+  message: string;
+  why: string;
+}>;
+
+type ClinicalReasoningState = Readonly<{
+  last_action_stage: string;
+  pedagogical_phase: string;
+  readiness: Readonly<Record<string, string>>;
+  safe_pending_points: Readonly<Record<string, unknown>>;
+  sequence_flags: readonly string[];
+  next_best_action: ClinicalReasoningNextBestAction;
+  socratic_question: string;
+  reasoning_rationale: string;
+  safety_note: string;
+}>;
+
 type HintLadderStep = Readonly<{
   action_type: string;
   level: number;
@@ -292,6 +311,7 @@ type PedagogyState = Readonly<{
   reflection_summary_id: string | null;
   teaching_plan: TeachingPlan;
   stage_checkpoint: StageCheckpoint;
+  clinical_reasoning_state: ClinicalReasoningState;
   hint_ladder: readonly HintLadderStep[];
 }>;
 
@@ -301,6 +321,7 @@ type AgentTraceObserve = Readonly<{
   checkpoint_status: string;
   covered_signal_ids: readonly string[];
   pending_signal_ids: readonly string[];
+  sequence_flags?: readonly string[];
 }>;
 
 type AgentTraceDecide = Readonly<{
@@ -372,6 +393,7 @@ type OsceSession = Readonly<{
   stage: string;
   case_title: string;
   chief_complaint: string;
+  patient_opening_utterance: string;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
   teaching_focus: CaseTeachingFocus;
@@ -477,6 +499,7 @@ type CaseOption = Readonly<{
   module: string;
   difficulty: string;
   chiefComplaint: string;
+  patientOpeningUtterance: string;
   enabled: boolean;
   patientProfile: StudentVisiblePatientProfile;
   openingTaskCard: OpeningTaskCard;
@@ -491,6 +514,7 @@ type CaseSummary = Readonly<{
   course_module: string;
   difficulty: string;
   chief_complaint: string;
+  patient_opening_utterance: string;
   enabled: boolean;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
@@ -606,6 +630,8 @@ const appendicitisOpeningTaskCard: OpeningTaskCard = {
   ],
 };
 
+const appendicitisPatientOpeningUtterance = "医生您好，我这次主要是肚子疼，后来右下腹更明显，有点想吐，也有点发热。";
+
 const emptyTeachingFocus: CaseTeachingFocus = {
   learning_objectives: [],
   common_error_patterns: [],
@@ -618,6 +644,7 @@ const defaultCaseOption: CaseOption = {
   module: "腹痛",
   difficulty: "初级",
   chiefComplaint: "转移性右下腹痛 24 小时，伴恶心、低热",
+  patientOpeningUtterance: appendicitisPatientOpeningUtterance,
   enabled: true,
   patientProfile: appendicitisPatientProfile,
   openingTaskCard: appendicitisOpeningTaskCard,
@@ -707,6 +734,7 @@ const caseOptions: readonly CaseOption[] = [
     module: "发热",
     difficulty: "初级",
     chiefComplaint: "发热、咳嗽 3 天，右侧胸痛 1 天。",
+    patientOpeningUtterance: "",
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
@@ -720,6 +748,7 @@ const caseOptions: readonly CaseOption[] = [
     module: "心悸",
     difficulty: "中级",
     chiefComplaint: "心慌、手抖 2 个月，消瘦 1 个月。",
+    patientOpeningUtterance: "",
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
@@ -733,6 +762,7 @@ const caseOptions: readonly CaseOption[] = [
     module: "胸痛",
     difficulty: "中级",
     chiefComplaint: "胸骨后压榨性胸痛 2 小时，伴大汗。",
+    patientOpeningUtterance: "",
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
@@ -746,6 +776,7 @@ const caseOptions: readonly CaseOption[] = [
     module: "呼吸困难",
     difficulty: "中级",
     chiefComplaint: "活动后气短 2 周，加重伴夜间憋醒 3 天。",
+    patientOpeningUtterance: "",
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
@@ -846,6 +877,23 @@ function getActiveWorkflowStepIndex(session: OsceSession | null, feedbackReport:
     return 6;
   }
 
+  const pedagogicalPhase = session.pedagogy_state?.clinical_reasoning_state?.pedagogical_phase;
+  if (pedagogicalPhase === "needs_history") {
+    return 1;
+  }
+  if (pedagogicalPhase === "needs_physical_exam") {
+    return 2;
+  }
+  if (pedagogicalPhase === "needs_auxiliary_test") {
+    return 3;
+  }
+  if (pedagogicalPhase === "needs_reasoning") {
+    return 4;
+  }
+  if (pedagogicalPhase === "ready_for_submission") {
+    return 5;
+  }
+
   if (session.student_hypotheses.length > 0) {
     return 5;
   }
@@ -891,6 +939,12 @@ function getNextWorkflowSuggestion(session: OsceSession | null, feedbackReport: 
 
   if (session.final_submission) {
     return "诊断已提交，请查看评分报告，也可前往训练记录页复盘。";
+  }
+
+  const clinicalReasoningState = session.pedagogy_state?.clinical_reasoning_state;
+  if (clinicalReasoningState?.next_best_action?.message) {
+    const sequenceNote = clinicalReasoningState.sequence_flags.length > 0 ? "已识别训练顺序缺口：" : "";
+    return `${sequenceNote}${clinicalReasoningState.next_best_action.message}`;
   }
 
   if (session.student_hypotheses.length > 0) {
@@ -1002,6 +1056,27 @@ function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<
   };
 }
 
+function getVisibleApiMessagesDuringPendingReply(
+  messages: readonly ApiMessage[],
+  pendingPatientMessage: ChatMessage | null,
+): readonly ApiMessage[] {
+  if (!pendingPatientMessage?.finalText) {
+    return messages;
+  }
+
+  const pendingReplyIndex = messages.findIndex(
+    (message) =>
+      message.content === pendingPatientMessage.finalText
+      && (message.role === "patient" || message.role === "coach"),
+  );
+
+  if (pendingReplyIndex === -1) {
+    return messages.filter((message) => message.role !== "coach");
+  }
+
+  return messages.slice(0, pendingReplyIndex + 1);
+}
+
 function hasMessageWithSpeakerAndText(
   messages: readonly ChatMessage[],
   speaker: ChatMessage["speaker"],
@@ -1010,8 +1085,58 @@ function hasMessageWithSpeakerAndText(
   return messages.some((message) => message.speaker === speaker && message.text === text);
 }
 
-function getEvidenceItem(factId: string): EvidenceItem {
-  return evidenceByFactId[factId] ?? { label: factId, detail: "后端已披露该结构化事实。" };
+function getShortEvidenceId(factId: string): string {
+  const separatorIndex = factId.lastIndexOf(".");
+  return separatorIndex === -1 ? factId : factId.slice(separatorIndex + 1);
+}
+
+function getEvidenceLabelFromDetail(detail: string, fallbackIndex: number): string {
+  if (/恶心|呕|发热|腹泻|尿/.test(detail)) {
+    return "伴随症状";
+  }
+  if (/过敏/.test(detail)) {
+    return "过敏史";
+  }
+  if (/既往|手术|高血压|糖尿病|心脏病/.test(detail)) {
+    return "既往史";
+  }
+  if (/上腹|右下腹|部位|转移|固定/.test(detail)) {
+    return "疼痛部位";
+  }
+  if (/持续|胀痛|隐痛|加重/.test(detail)) {
+    return "疼痛性质";
+  }
+  if (/VAS|程度|分/.test(detail)) {
+    return "疼痛程度";
+  }
+  if (/担心|希望|害怕/.test(detail)) {
+    return "就诊想法";
+  }
+
+  return `问诊线索 ${fallbackIndex + 1}`;
+}
+
+function getEvidenceItem(factId: string, trainingProgress: TrainingProgress | null, fallbackIndex: number): EvidenceItem {
+  const knownEvidenceItem = evidenceByFactId[factId];
+  if (knownEvidenceItem) {
+    return knownEvidenceItem;
+  }
+
+  const shortFactId = getShortEvidenceId(factId);
+  const coveredHistoryItem = trainingProgress?.coverage_map.history.find(
+    (item) => item.id === factId || item.id === shortFactId,
+  );
+  if (coveredHistoryItem) {
+    return {
+      label: getEvidenceLabelFromDetail(coveredHistoryItem.label, fallbackIndex),
+      detail: coveredHistoryItem.label,
+    };
+  }
+
+  return {
+    label: `问诊线索 ${fallbackIndex + 1}`,
+    detail: "已收集该结构化问诊事实。",
+  };
 }
 
 function getSourceReferenceLabel(reference: string): string {
@@ -1235,6 +1360,7 @@ function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
     module: caseSummary.course_module,
     difficulty: caseSummary.difficulty,
     chiefComplaint: caseSummary.chief_complaint,
+    patientOpeningUtterance: caseSummary.patient_opening_utterance,
     enabled: caseSummary.enabled,
     patientProfile: caseSummary.patient_profile,
     openingTaskCard: caseSummary.opening_task_card,
@@ -1539,8 +1665,8 @@ function handleStudentRailScroll(event: UIEvent<HTMLElement>): void {
 
 function PendingThinkingIndicator() {
   return (
-    <span aria-label="判断中" className="inline-flex items-center gap-1">
-      <span>判断中</span>
+    <span aria-label="标准化病人思考中" className="inline-flex items-center gap-1">
+      <span>思考中</span>
       <span aria-hidden="true" className="inline-flex gap-0.5">
         {[0, 1, 2].map((dotIndex) => (
           <span className="clinical-osce-thinking-dot" key={dotIndex} style={{ animationDelay: `${dotIndex * 140}ms` }}>
@@ -1550,6 +1676,11 @@ function PendingThinkingIndicator() {
       </span>
     </span>
   );
+}
+
+function getPendingCoverageLabel(title: string, itemIndex: number): string {
+  const normalizedTitle = title.replace(/覆盖$/, "") || "素材";
+  return `${normalizedTitle}待覆盖 ${itemIndex + 1}`;
 }
 
 function CoverageMapSection({ items, title }: Readonly<{ items: readonly CoverageMapItem[]; title: string }>) {
@@ -1565,8 +1696,8 @@ function CoverageMapSection({ items, title }: Readonly<{ items: readonly Coverag
       </div>
       <div className="mt-3 grid gap-2">
         {items.length > 0 ? (
-          items.map((item) => {
-            const visibleLabel = item.status === "covered" ? item.label : `未覆盖素材：${item.id}`;
+          items.map((item, itemIndex) => {
+            const visibleLabel = item.status === "covered" ? item.label : getPendingCoverageLabel(title, itemIndex);
             return (
               <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs" key={item.id}>
                 <div className="flex items-center justify-between gap-3">
@@ -1603,7 +1734,7 @@ function CoverageMap({ trainingProgress }: Readonly<{ trainingProgress: Training
   );
 }
 
-function CaseSelectionPrompt({ onDismiss, selectedCase }: Readonly<{ onDismiss: () => void; selectedCase: CaseOption | null }>) {
+function CaseSelectionPrompt({ onDismiss }: Readonly<{ onDismiss: () => void }>) {
   return (
     <div className="flex justify-center">
       <div className="relative w-full max-w-xl rounded-xl border border-brand/20 bg-brand/5 p-4 text-center shadow-xs">
@@ -1616,13 +1747,9 @@ function CaseSelectionPrompt({ onDismiss, selectedCase }: Readonly<{ onDismiss: 
           ×
         </button>
         <p className="text-xs font-medium text-brand">训练准备提示</p>
-        <p className="mt-2 text-sm font-semibold text-foreground">
-          {selectedCase ? `已选择${selectedCase.title}` : "请先选择一个病例"}
-        </p>
+        <p className="mt-2 text-sm font-semibold text-foreground">请先选择一个病例</p>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          {selectedCase
-            ? "发送第一句问诊或点击训练操作后，系统才会创建新的 OSCE 训练会话。"
-            : "进入病例后，系统会显示开局任务卡；在首次训练动作前不会创建训练记录。"}
+          进入病例后，系统会显示开局任务卡；在首次训练动作前不会创建训练记录。
         </p>
         <Link
           className="mt-3 inline-flex items-center justify-center rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
@@ -2195,6 +2322,7 @@ function HomeContent() {
   const pendingAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => !requestedTestCodeSet.has(testOption.test_code));
   const completedAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => requestedTestCodeSet.has(testOption.test_code));
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
+  const preparedPatientOpeningUtterance = session?.patient_opening_utterance ?? selectedCase?.patientOpeningUtterance ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
   const preparedTeachingFocus = session?.teaching_focus ?? selectedCase?.teachingFocus ?? null;
   const preparedDynamicTeachingFocus = session?.dynamic_teaching_focus ?? null;
@@ -2214,25 +2342,36 @@ function HomeContent() {
       : selectedApiConfigProviderOption.defaultBaseUrl;
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
-    let baseMessages: ChatMessage[] = [];
-    if (!session) {
-      baseMessages = [];
-    } else {
+    let baseMessages: ChatMessage[] = preparedPatientOpeningUtterance
+      ? [
+          {
+            id: "patient-opening",
+            speaker: "patient",
+            label: "标准化病人",
+            text: preparedPatientOpeningUtterance,
+          },
+        ]
+      : [];
+    if (session) {
       baseMessages = [
-        {
-          id: "chief-complaint",
-          speaker: "patient",
-          label: "标准化病人",
-          text: `医生您好，我这次主要是${session.chief_complaint}。`,
-        },
-        ...session.messages.map(mapApiMessage),
+        ...baseMessages,
+        ...getVisibleApiMessagesDuringPendingReply(session.messages, pendingPatientMessage).map(mapApiMessage),
       ];
     }
 
+    let didReplacePendingPatientMessage = false;
     if (pendingPatientMessage?.finalText) {
-      baseMessages = baseMessages.filter(
-        (message) => !(message.speaker === pendingPatientMessage.speaker && message.text === pendingPatientMessage.finalText),
-      );
+      baseMessages = baseMessages.map((message) => {
+        if (
+          !didReplacePendingPatientMessage
+          && message.speaker === pendingPatientMessage.speaker
+          && message.text === pendingPatientMessage.finalText
+        ) {
+          didReplacePendingPatientMessage = true;
+          return pendingPatientMessage;
+        }
+        return message;
+      });
     }
 
     const nextMessages = [...baseMessages];
@@ -2242,12 +2381,12 @@ function HomeContent() {
     ) {
       nextMessages.push(optimisticHistoryMessage);
     }
-    if (pendingPatientMessage) {
+    if (pendingPatientMessage && !didReplacePendingPatientMessage) {
       nextMessages.push(pendingPatientMessage);
     }
 
     return nextMessages;
-  }, [optimisticHistoryMessage, pendingPatientMessage, session]);
+  }, [optimisticHistoryMessage, pendingPatientMessage, preparedPatientOpeningUtterance, session]);
 
   useEffect(() => {
     const chatScrollContainer = chatScrollContainerRef.current;
@@ -2260,10 +2399,13 @@ function HomeContent() {
     });
   }, [chatMessages.length, optimisticHistoryMessage?.text, pendingPatientMessage?.text, statusText, errorText]);
 
-  const evidenceItems = useMemo(
-    () => session?.revealed_facts.map(getEvidenceItem) ?? [],
-    [session?.revealed_facts],
-  );
+  const evidenceItems = useMemo(() => {
+    if (!session) {
+      return [];
+    }
+
+    return session.revealed_facts.map((factId, itemIndex) => getEvidenceItem(factId, session.training_progress, itemIndex));
+  }, [session]);
 
   const requestedItems = useMemo(
     () => [
@@ -2303,7 +2445,8 @@ function HomeContent() {
     () => getNextWorkflowSuggestion(session, feedbackReport),
     [feedbackReport, session],
   );
-  const trainingSuggestion = session?.training_progress.next_focus ?? workflowSuggestion;
+  const hasClinicalSequenceGap = Boolean(session?.pedagogy_state.clinical_reasoning_state.sequence_flags.length);
+  const trainingSuggestion = hasClinicalSequenceGap ? workflowSuggestion : session?.training_progress.next_focus ?? workflowSuggestion;
   const osceDockStyle: CSSProperties = osceDockPosition.isReady
     ? {
         left: `${osceDockPosition.x}px`,
@@ -2502,9 +2645,9 @@ function HomeContent() {
     });
     setPendingPatientMessage({
       id: pendingPatientReplyId,
-      speaker: "coach",
-      label: "判断中",
-      text: "判断中",
+      speaker: "patient",
+      label: "标准化病人",
+      text: "",
       isPending: true,
     });
     setStatusText("正在处理问诊");
@@ -2520,6 +2663,13 @@ function HomeContent() {
       const replyText = updatedSession.reply ?? "";
       const replyMessageMetadata = getReplyMessageMetadata(updatedSession, replyText);
       const replyStatusLabel = replyMessageMetadata.speaker === "coach" ? replyMessageMetadata.label : "标准化病人回复";
+      if (replyMessageMetadata.speaker === "coach") {
+        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
+        setSession(updatedSession);
+        setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
+        setStatusText(`已收到${replyStatusLabel}：${updatedSession.current_intent ?? "未识别意图"}`);
+        return;
+      }
       setPendingPatientMessage((currentMessage) =>
         currentMessage?.id === pendingPatientReplyId
           ? {
@@ -2749,7 +2899,7 @@ function HomeContent() {
             </div>
 
             <Link
-              className="mx-auto flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926]"
+              className="mx-auto flex w-fit items-center justify-center rounded-md border border-border bg-muted/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent"
               href="/cases"
             >
               选择病例
@@ -2837,12 +2987,12 @@ function HomeContent() {
             <div className="border-b border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold">医患对话</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="text-xs font-medium text-muted-foreground">当前病例</p>
+                  <h2 className="mt-1 text-lg font-semibold leading-6 text-foreground">
                     {session?.case_title ?? selectedCase?.title ?? "请先选择病例"}
-                  </p>
+                  </h2>
                 </div>
-                <div className="max-w-sm rounded-lg border border-brand/20 bg-brand/5 px-3 py-2 text-xs leading-5 text-brand">
+                <div className="rounded-lg border border-border bg-muted/70 px-3 py-2 text-xs leading-5 text-muted-foreground">
                   <p>{statusText}</p>
                   {errorText ? <p className="mt-1 text-red-600">{errorText}</p> : null}
                 </div>
@@ -2850,8 +3000,8 @@ function HomeContent() {
             </div>
 
             <div className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar" ref={chatScrollContainerRef}>
-              {!session && !isCasePreparationPromptDismissed ? (
-                <CaseSelectionPrompt selectedCase={selectedCase} onDismiss={() => setIsCasePreparationPromptDismissed(true)} />
+              {!selectedCase && !isCasePreparationPromptDismissed ? (
+                <CaseSelectionPrompt onDismiss={() => setIsCasePreparationPromptDismissed(true)} />
               ) : null}
               <OpeningTaskCardMessage openingTaskCard={preparedOpeningTaskCard} />
               {chatMessages.map((message) => {
@@ -3042,8 +3192,11 @@ function HomeContent() {
                     className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
                     disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSending}
                     id="history-question"
+                    autoComplete="off"
+                    autoCorrect="off"
                     onChange={(event) => setInputValue(event.target.value)}
                     placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"
+                    spellCheck={false}
                     value={inputValue}
                   />
                   <button
@@ -3287,6 +3440,29 @@ function HomeContent() {
                     </div>
                     <p className="mt-2 break-words text-[11px] text-muted-foreground">
                       待补证据：{session.pedagogy_state.stage_checkpoint.pending_signal_ids.join("、") || "暂无"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <p className="font-semibold text-foreground">临床推理状态</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <p className="text-muted-foreground">教学焦点</p>
+                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.clinical_reasoning_state.pedagogical_phase}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">最后动作</p>
+                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.clinical_reasoning_state.last_action_stage}</p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.clinical_reasoning_state.next_best_action.message}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      为什么：{session.pedagogy_state.clinical_reasoning_state.next_best_action.why}
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      反问：{session.pedagogy_state.clinical_reasoning_state.socratic_question}
+                    </p>
+                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
+                      顺序标记：{session.pedagogy_state.clinical_reasoning_state.sequence_flags.join("、") || "暂无"}
                     </p>
                   </div>
                   <div className="rounded-lg border border-border bg-background p-3">
@@ -3534,7 +3710,7 @@ function HomeContent() {
             <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
               <p className="font-medium text-foreground">管理员图谱</p>
               <p className="mt-1 text-muted-foreground">
-                查看本次训练素材覆盖状态；未覆盖项只显示素材 ID，避免提前泄露隐藏结果。
+                查看本次训练素材覆盖状态；未覆盖项只显示通用占位，避免提前泄露隐藏结果。
               </p>
               <button
                 className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
