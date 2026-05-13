@@ -298,7 +298,7 @@ class OsceSessionService:
         session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
         if stored_report is not None:
-            return _ensure_personal_skill_report_defaults(stored_report)
+            return _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, report_requested=True))
@@ -543,13 +543,14 @@ def _personal_skill_payload_for_report(
     )
 
 
-def _ensure_personal_skill_report_defaults(report: dict[str, Any]) -> dict[str, Any]:
-    if "personal_skill_candidate" in report and "ai_reflection_review" in report:
-        return report
+def _ensure_personal_skill_report_defaults(
+    report: dict[str, Any],
+    candidate_store: Any | None = None,
+) -> dict[str, Any]:
     normalized_report = dict(report)
-    normalized_report.setdefault(
-        "personal_skill_candidate",
-        {
+    personal_skill_candidate = dict(
+        normalized_report.get("personal_skill_candidate")
+        or {
             "status": "legacy_report",
             "reason": "personal_skill_not_recorded",
             "scope": "personal",
@@ -557,18 +558,36 @@ def _ensure_personal_skill_report_defaults(report: dict[str, Any]) -> dict[str, 
             "skill_id": None,
             "web_check_status": "not_configured",
             "external_evidence_checks": [],
-        },
+        }
     )
-    normalized_report.setdefault(
-        "ai_reflection_review",
-        {
+    candidate_id = str(personal_skill_candidate.get("candidate_id") or "")
+    if candidate_id and candidate_store is not None:
+        stored_candidate = candidate_store.get_candidate(candidate_id)
+        if stored_candidate is not None:
+            personal_skill_candidate.setdefault("description", stored_candidate.get("description", ""))
+            personal_skill_candidate.setdefault("suggested_strategy", stored_candidate.get("suggested_strategy", ""))
+    personal_skill_candidate.setdefault("scope", "personal")
+    personal_skill_candidate.setdefault("candidate_id", None)
+    personal_skill_candidate.setdefault("skill_id", None)
+    personal_skill_candidate.setdefault("rag_evidence_items", [])
+    personal_skill_candidate.setdefault("web_check_status", "not_configured")
+    personal_skill_candidate.setdefault("external_evidence_checks", [])
+    normalized_report["personal_skill_candidate"] = personal_skill_candidate
+
+    ai_reflection_review = dict(
+        normalized_report.get("ai_reflection_review")
+        or {
             "status": "legacy_report",
             "reason": "ai_reflection_not_recorded",
             "summary": "该历史报告生成时尚未记录 AI 复盘回顾。",
-            "source_references": [],
-            "source_reference_items": [],
-        },
+        }
     )
+    ai_reflection_review.setdefault("mistake_patterns", [])
+    ai_reflection_review.setdefault("teacher_feedback", "")
+    ai_reflection_review.setdefault("next_focus", "")
+    ai_reflection_review.setdefault("source_references", [])
+    ai_reflection_review.setdefault("source_reference_items", [])
+    normalized_report["ai_reflection_review"] = ai_reflection_review
     return normalized_report
 
 

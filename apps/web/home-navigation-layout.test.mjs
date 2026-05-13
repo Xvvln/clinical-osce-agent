@@ -259,6 +259,15 @@ test("home production deployment hides student runtime API config entry", () => 
   assert.match(webDockerfileSource, /NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=\$\{NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE\}/);
 });
 
+test("student report shows readable personal skill content, not only ids", () => {
+  assert.match(reportModelSource, /description\?: string;/);
+  assert.match(reportModelSource, /suggested_strategy\?: string;/);
+  assert.match(reportSource, /候选说明/);
+  assert.match(reportSource, /教学策略/);
+  assert.match(reportSource, /candidate\.description/);
+  assert.match(reportSource, /candidate\.suggested_strategy/);
+});
+
 test("home page keeps agent pedagogy details behind a collapsible panel", () => {
   assert.match(pageSource, /type TeachingPlan = Readonly<\{/);
   assert.match(pageSource, /type StageCheckpoint = Readonly<\{/);
@@ -484,10 +493,10 @@ test("report page renders evidence graph coverage from backend report", () => {
 test("report page renders AI reflection review and personal training skill status", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
   assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
-  assert.match(reportModelSource, /ai_reflection_review\?: AiReflectionReview;/);
-  assert.match(reportModelSource, /personal_skill_candidate\?: PersonalTrainingSkillCandidate;/);
-  assert.match(reportModelSource, /ai_reflection_review: report\.ai_reflection_review \?\? DEFAULT_AI_REFLECTION_REVIEW,/);
-  assert.match(reportModelSource, /personal_skill_candidate: report\.personal_skill_candidate \?\? DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE,/);
+  assert.match(reportModelSource, /ai_reflection_review\?: Partial<AiReflectionReview>;/);
+  assert.match(reportModelSource, /personal_skill_candidate\?: Partial<PersonalTrainingSkillCandidate>;/);
+  assert.match(reportModelSource, /ai_reflection_review: normalizeAiReflectionReview\(report\.ai_reflection_review\),/);
+  assert.match(reportModelSource, /personal_skill_candidate: normalizePersonalTrainingSkillCandidate\(report\.personal_skill_candidate\),/);
   assert.match(reportSource, /function AiReflectionReviewSection/);
   assert.match(reportSource, /function PersonalTrainingSkillSection/);
   assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} \/>/);

@@ -1420,6 +1420,8 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert personal_candidate["source_session_id"] == session_id
     assert personal_candidate["review"]["status"] == "approved"
     assert personal_candidate["approval_agent_review"]["agent_id"] == "skill_auto_approval_agent"
+    assert personal_candidate["description"]
+    assert personal_candidate["suggested_strategy"]
     assert len(personal_candidate["approval_dialogue"]) >= 1
     assert personal_candidate["web_check_status"] == "not_configured"
     assert personal_candidate["external_evidence_checks"] == []

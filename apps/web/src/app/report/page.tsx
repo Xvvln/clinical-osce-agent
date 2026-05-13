@@ -863,6 +863,18 @@ function PersonalTrainingSkillSection({ candidate }: Readonly<{ candidate: Perso
         </div>
       </div>
       {candidate.title ? <p className="mt-3 text-sm font-semibold text-foreground">{candidate.title}</p> : null}
+      {candidate.description || candidate.suggested_strategy ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-border bg-muted/25 p-3">
+            <h3 className="text-xs font-semibold">候选说明</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{candidate.description || "暂无候选说明。"}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-muted/25 p-3">
+            <h3 className="text-xs font-semibold">教学策略</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{candidate.suggested_strategy || "暂无教学策略。"}</p>
+          </div>
+        </div>
+      ) : null}
       {(candidate.trigger_item_ids ?? []).length > 0 ? (
         <div className="mt-3">
           <h3 className="text-xs font-semibold">关联训练点</h3>

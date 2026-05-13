@@ -60,6 +60,8 @@ export type PersonalTrainingSkillCandidate = Readonly<{
   candidate_id: string | null;
   skill_id: string | null;
   title?: string;
+  description?: string;
+  suggested_strategy?: string;
   scope: string;
   owner_student_id?: string;
   source_session_id?: string;
@@ -146,8 +148,8 @@ export type FeedbackReportPayload = Readonly<{
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
   evidence_graph_summary?: EvidenceGraphSummary | null;
-  ai_reflection_review?: AiReflectionReview;
-  personal_skill_candidate?: PersonalTrainingSkillCandidate;
+  ai_reflection_review?: Partial<AiReflectionReview>;
+  personal_skill_candidate?: Partial<PersonalTrainingSkillCandidate>;
   feedback_summary: string;
 }>;
 
@@ -170,7 +172,29 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,
-    ai_reflection_review: report.ai_reflection_review ?? DEFAULT_AI_REFLECTION_REVIEW,
-    personal_skill_candidate: report.personal_skill_candidate ?? DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE,
+    ai_reflection_review: normalizeAiReflectionReview(report.ai_reflection_review),
+    personal_skill_candidate: normalizePersonalTrainingSkillCandidate(report.personal_skill_candidate),
+  };
+}
+
+function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiReflectionReview {
+  return {
+    ...DEFAULT_AI_REFLECTION_REVIEW,
+    ...review,
+    mistake_patterns: review?.mistake_patterns ?? [],
+    source_references: review?.source_references ?? [],
+    source_reference_items: review?.source_reference_items ?? [],
+  };
+}
+
+function normalizePersonalTrainingSkillCandidate(candidate?: Partial<PersonalTrainingSkillCandidate>): PersonalTrainingSkillCandidate {
+  return {
+    ...DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE,
+    ...candidate,
+    candidate_id: candidate?.candidate_id ?? null,
+    skill_id: candidate?.skill_id ?? null,
+    scope: candidate?.scope ?? "personal",
+    rag_evidence_items: candidate?.rag_evidence_items ?? [],
+    external_evidence_checks: candidate?.external_evidence_checks ?? [],
   };
 }
