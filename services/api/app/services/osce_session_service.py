@@ -14,6 +14,7 @@ from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.patient_language_service import build_patient_opening_utterance
 from app.services.report_store import ReportStore, report_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
+from app.services.training_skill_candidate_store import TrainingSkillCandidateStore, training_skill_candidate_store
 from app.services.training_skill_store import TrainingSkillStore, training_skill_store
 from app.services.vertex_gemini_scorer import create_default_vertex_gemini_scorer
 from app.validators.case_validator import validate_case
@@ -55,7 +56,9 @@ class OsceSessionService:
         report_store: ReportStore = report_store,
         training_event_store: TrainingEventStore = training_event_store,
         training_skill_store: TrainingSkillStore = training_skill_store,
+        training_skill_candidate_store: TrainingSkillCandidateStore = training_skill_candidate_store,
         session_store: OsceSessionStore = osce_session_store,
+        personal_skill_service: Any | None = None,
         graph: Any | None = None,
         patient_responder: Any | None = None,
     ) -> None:
@@ -67,7 +70,9 @@ class OsceSessionService:
         self.report_store = report_store
         self.training_event_store = training_event_store
         self.training_skill_store = training_skill_store
+        self.training_skill_candidate_store = training_skill_candidate_store
         self.session_store = session_store
+        self.personal_skill_service = personal_skill_service
 
     def list_cases(self) -> list[dict[str, Any]]:
         return [_serialize_case_summary(load_case_node(case_path.stem)) for case_path in sorted(CASES_DIR.glob("*.json"))]
@@ -93,6 +98,7 @@ class OsceSessionService:
             self.training_skill_store.list_enabled_skills(),
             case,
             graph_state["stage"],
+            student_id,
         )
         session = OsceSession(
             session_id=str(uuid4()),
@@ -106,17 +112,24 @@ class OsceSessionService:
         self._append_event(session, "session_created", {"stage": session.stage})
         self._append_agent_update_event(session, agent_update)
         for skill in enabled_skills:
+            skill_event_payload = {
+                "skill_id": skill["skill_id"],
+                "title": skill["title"],
+                "suggested_strategy": skill["suggested_strategy"],
+                "skill_type": skill.get("skill_type", "reasoning_bridge"),
+                "stage_scope": list(skill.get("stage_scope", [])),
+                "effect_status": skill.get("effect_status", "insufficient_samples"),
+            }
+            if skill.get("scope") and skill.get("scope") != "global":
+                skill_event_payload["scope"] = skill["scope"]
+            if skill.get("source_session_id"):
+                skill_event_payload["source_session_id"] = skill["source_session_id"]
+            if skill.get("owner_student_id"):
+                skill_event_payload["owner_student_id"] = skill["owner_student_id"]
             self._append_event(
                 session,
                 "training_skill_applied",
-                {
-                    "skill_id": skill["skill_id"],
-                    "title": skill["title"],
-                    "suggested_strategy": skill["suggested_strategy"],
-                    "skill_type": skill.get("skill_type", "reasoning_bridge"),
-                    "stage_scope": list(skill.get("stage_scope", [])),
-                    "effect_status": skill.get("effect_status", "insufficient_samples"),
-                },
+                skill_event_payload,
             )
         return _serialize_session(session, case)
 
@@ -285,14 +298,16 @@ class OsceSessionService:
         session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
         if stored_report is not None:
-            return stored_report
+            return _ensure_personal_skill_report_defaults(stored_report)
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, report_requested=True))
         _apply_graph_state(session, graph_state)
         agent_update = _refresh_agent_state(session, use_reflection=True)
-        self._save_session(session)
         if session.feedback_report is not None:
+            case = load_case_node(session.case_id)
+            session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+            self._save_session(session)
             self.report_store.save_report(session.feedback_report)
             self._append_event(
                 session,
@@ -304,9 +319,13 @@ class OsceSessionService:
                     "knowledge_recommendations": session.feedback_report["knowledge_recommendations"],
                     "source_references": session.feedback_report["source_references"],
                     "source_reference_items": session.feedback_report["source_reference_items"],
+                    "personal_skill_candidate": session.feedback_report["personal_skill_candidate"],
+                    "ai_reflection_review": session.feedback_report["ai_reflection_review"],
                 },
             )
             self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
+        else:
+            self._save_session(session)
         return session.feedback_report
 
     def delete_session(self, session_id: str) -> bool:
@@ -500,6 +519,57 @@ def _refresh_agent_state(session: OsceSession, use_reflection: bool = False) -> 
     if "reflection_summary" in agent_update:
         session.reflection_summary = agent_update["reflection_summary"]
     return agent_update
+
+
+def _personal_skill_payload_for_report(
+    service: OsceSessionService,
+    session: OsceSession,
+    case: Case,
+) -> dict[str, Any]:
+    from app.services.personal_training_skill_service import build_not_ready_personal_skill_payload, personal_training_skill_service
+
+    if session.final_submission is None:
+        return build_not_ready_personal_skill_payload()
+    if session.feedback_report is None:
+        return build_not_ready_personal_skill_payload()
+    active_personal_skill_service = service.personal_skill_service or personal_training_skill_service
+    return active_personal_skill_service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=session.feedback_report,
+        candidate_store=service.training_skill_candidate_store,
+        skill_store=service.training_skill_store,
+        event_store=service.training_event_store,
+    )
+
+
+def _ensure_personal_skill_report_defaults(report: dict[str, Any]) -> dict[str, Any]:
+    if "personal_skill_candidate" in report and "ai_reflection_review" in report:
+        return report
+    normalized_report = dict(report)
+    normalized_report.setdefault(
+        "personal_skill_candidate",
+        {
+            "status": "legacy_report",
+            "reason": "personal_skill_not_recorded",
+            "scope": "personal",
+            "candidate_id": None,
+            "skill_id": None,
+            "web_check_status": "not_configured",
+            "external_evidence_checks": [],
+        },
+    )
+    normalized_report.setdefault(
+        "ai_reflection_review",
+        {
+            "status": "legacy_report",
+            "reason": "ai_reflection_not_recorded",
+            "summary": "该历史报告生成时尚未记录 AI 复盘回顾。",
+            "source_references": [],
+            "source_reference_items": [],
+        },
+    )
+    return normalized_report
 
 
 def _latest_agent_turn(graph_state: dict[str, Any]) -> dict[str, Any]:
@@ -840,13 +910,19 @@ def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
 
 
-def _enabled_skills_for_case(skills: list[dict[str, Any]], case: Case, stage: str = "case_intro") -> list[dict[str, Any]]:
+def _enabled_skills_for_case(
+    skills: list[dict[str, Any]],
+    case: Case,
+    stage: str = "case_intro",
+    student_id: str = "",
+) -> list[dict[str, Any]]:
     case_id = case.case_id
     rubric_item_ids = _rubric_item_ids(case_id)
     return [
         skill
         for skill in skills
         if _enabled_skill_applies_to_case(skill, case_id, rubric_item_ids)
+        and _enabled_skill_applies_to_student(skill, student_id)
         and _enabled_skill_applies_to_stage(skill, stage)
         and _enabled_skill_matches_current_missing_evidence(skill, rubric_item_ids)
         and _enabled_skill_context_matches_case(skill, case)
@@ -873,6 +949,12 @@ def _enabled_skill_applies_to_case(skill: dict[str, Any], case_id: str, rubric_i
     if trigger_item_id.startswith("training_pattern_"):
         return any(item_id in trigger_item_id for item_id in rubric_item_ids)
     return False
+
+
+def _enabled_skill_applies_to_student(skill: dict[str, Any], student_id: str) -> bool:
+    if str(skill.get("scope", "global")) != "personal":
+        return True
+    return bool(student_id) and str(skill.get("owner_student_id", "")) == student_id
 
 
 def _enabled_skill_applies_to_stage(skill: dict[str, Any], stage: str) -> bool:

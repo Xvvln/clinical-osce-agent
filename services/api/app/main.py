@@ -604,7 +604,7 @@ def _load_admin_sources() -> list[dict[str, Any]]:
     return sources if isinstance(sources, list) else []
 
 
-def _get_enabled_skill_summaries() -> list[dict[str, object]]:
+def _get_enabled_skill_summaries(user_id: str) -> list[dict[str, object]]:
     return [
         {
             "skill_id": skill["skill_id"],
@@ -614,7 +614,14 @@ def _get_enabled_skill_summaries() -> list[dict[str, object]]:
             "effect_status": skill.get("effect_status", "insufficient_samples"),
         }
         for skill in osce_session_service.training_skill_store.list_enabled_skills()
+        if _enabled_skill_visible_to_user(skill, user_id)
     ]
+
+
+def _enabled_skill_visible_to_user(skill: dict[str, Any], user_id: str) -> bool:
+    if str(skill.get("scope", "global")) != "personal":
+        return True
+    return str(skill.get("owner_student_id", "")) == user_id
 
 
 def _get_applied_skill_count(user_id: str, sessions: list[dict[str, object]]) -> int:
@@ -627,7 +634,7 @@ def _get_applied_skill_count(user_id: str, sessions: list[dict[str, object]]) ->
 
 
 def _build_skill_accumulation(user_id: str, sessions: list[dict[str, object]]) -> dict[str, object]:
-    enabled_skills = _get_enabled_skill_summaries()
+    enabled_skills = _get_enabled_skill_summaries(user_id)
     enabled_skill_count = len(enabled_skills)
     applied_skill_count = _get_applied_skill_count(user_id, sessions)
 

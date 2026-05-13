@@ -481,6 +481,25 @@ test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportSource, /证据图谱仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。/);
 });
 
+test("report page renders AI reflection review and personal training skill status", () => {
+  assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
+  assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
+  assert.match(reportModelSource, /ai_reflection_review\?: AiReflectionReview;/);
+  assert.match(reportModelSource, /personal_skill_candidate\?: PersonalTrainingSkillCandidate;/);
+  assert.match(reportModelSource, /ai_reflection_review: report\.ai_reflection_review \?\? DEFAULT_AI_REFLECTION_REVIEW,/);
+  assert.match(reportModelSource, /personal_skill_candidate: report\.personal_skill_candidate \?\? DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE,/);
+  assert.match(reportSource, /function AiReflectionReviewSection/);
+  assert.match(reportSource, /function PersonalTrainingSkillSection/);
+  assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} \/>/);
+  assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} \/>/);
+  assert.match(reportSource, /AI 复盘回顾/);
+  assert.match(reportSource, /个人训练 Skill/);
+  assert.match(reportSource, /review\.source_reference_items\.map/);
+  assert.match(reportSource, /candidate\.rag_evidence_items\.map/);
+  assert.match(reportSource, /candidate\.web_check_status/);
+  assert.match(reportSource, /联网核查状态/);
+});
+
 test("home personal center links to the learning profile page", () => {
   const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
   const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);

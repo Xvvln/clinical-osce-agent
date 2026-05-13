@@ -11,6 +11,7 @@ from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_event_store import TrainingEventStore
+from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
 
 
@@ -305,6 +306,9 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
     osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
     osce_session_service._sessions.clear()
     current_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     current_session_id = current_response.json()["session_id"]
@@ -339,13 +343,11 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["recent_sessions"][0]["session_id"] != other_response.json()["session_id"]
     assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 15}
     assert profile["weakest_dimension"] == {"key": "differential_diagnosis", "label": "鉴别诊断", "average": 0}
-    assert profile["skill_accumulation"] == {
-        "status": "planned",
-        "description": "Step 8 接入已审核教学 Skill、错误模式和个性化提示策略。",
-        "enabled_skill_count": 0,
-        "applied_skill_count": 0,
-        "enabled_skills": [],
-    }
+    assert profile["skill_accumulation"]["status"] == "active"
+    assert profile["skill_accumulation"]["enabled_skill_count"] == 1
+    assert profile["skill_accumulation"]["applied_skill_count"] == 0
+    assert profile["skill_accumulation"]["enabled_skills"][0]["skill_id"].startswith("skill_personal_")
+    assert profile["skill_accumulation"]["enabled_skills"][0]["effect_status"] == "insufficient_samples"
     assert profile["learning_path"][0] == {
         "task_type": "redo_same_case",
         "case_id": "appendicitis_001",
@@ -584,6 +586,9 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
     database_path = tmp_path / "training_events.sqlite3"
     osce_session_service.training_event_store = TrainingEventStore(database_path)
     osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
     create_response = client.post(
         "/api/sessions",
         json={"case_id": "appendicitis_001", "student_id": "student_demo"},
@@ -1380,6 +1385,102 @@ def test_session_report_can_be_read_after_session_memory_is_cleared(tmp_path) ->
     assert loaded_response.json() == generated_report
 
 
+def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_session(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
+    )
+
+    report_response = client.get(f"/api/sessions/{session_id}/report")
+    report = report_response.json()
+    personal_candidate = report["personal_skill_candidate"]
+
+    assert report_response.status_code == 200
+    assert report["ai_reflection_review"]["status"] == "generated"
+    assert report["ai_reflection_review"]["source_references"]
+    assert personal_candidate["scope"] == "personal"
+    assert personal_candidate["owner_student_id"] == authenticated_user["user_id"]
+    assert personal_candidate["source_session_id"] == session_id
+    assert personal_candidate["review"]["status"] == "approved"
+    assert personal_candidate["approval_agent_review"]["agent_id"] == "skill_auto_approval_agent"
+    assert len(personal_candidate["approval_dialogue"]) >= 1
+    assert personal_candidate["web_check_status"] == "not_configured"
+    assert personal_candidate["external_evidence_checks"] == []
+    assert personal_candidate["rag_evidence_items"]
+
+    candidate_id = personal_candidate["candidate_id"]
+    skill_id = personal_candidate["skill_id"]
+    stored_candidate = osce_session_service.training_skill_candidate_store.get_candidate(candidate_id)
+    enabled_skill = osce_session_service.training_skill_store.get_skill(skill_id)
+    assert stored_candidate is not None
+    assert stored_candidate["candidate_id"] == candidate_id
+    assert enabled_skill is not None
+    assert enabled_skill["scope"] == "personal"
+    assert enabled_skill["owner_student_id"] == authenticated_user["user_id"]
+
+    next_session_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    next_session = next_session_response.json()
+    next_events = TrainingEventStore(tmp_path / "training_events.sqlite3").list_session_events(
+        next_session["session_id"]
+    )
+    skill_events = [event for event in next_events if event["event_type"] == "training_skill_applied"]
+
+    assert next_session_response.status_code == 200
+    assert next_session["evolution_candidates"] == [
+        f"{enabled_skill['title']}：{enabled_skill['suggested_strategy']}"
+    ]
+    assert skill_events[0]["payload"]["skill_id"] == skill_id
+    assert skill_events[0]["payload"]["scope"] == "personal"
+    assert skill_events[0]["payload"]["source_session_id"] == session_id
+
+    other_user = main.auth_store.create_user("other-personal-skill@example.test", "safe-password-456", "学生乙")
+    assert other_user is not None
+    other_token = main.auth_store.create_session(other_user["user_id"])
+    with TestClient(app) as other_client:
+        other_client.cookies.set(AUTH_COOKIE_NAME, other_token)
+        other_session_response = other_client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert other_session_response.status_code == 200
+    assert other_session_response.json()["evolution_candidates"] == []
+
+
+def test_incomplete_training_report_does_not_generate_personal_skill(tmp_path) -> None:
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    report_response = client.get(f"/api/sessions/{session_id}/report")
+
+    assert report_response.status_code == 200
+    assert report_response.json()["personal_skill_candidate"]["status"] == "not_complete"
+    assert report_response.json()["ai_reflection_review"]["status"] == "not_ready"
+    assert osce_session_service.training_skill_store.list_enabled_skills() == []
+
+
 def test_osce_session_state_can_be_read_after_session_memory_is_cleared(tmp_path) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     create_response = client.post(
@@ -1453,6 +1554,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "physical_exam_requested",
         "auxiliary_test_requested",
         "diagnosis_submitted",
+        "personal_training_skill_generated",
         "report_generated",
     ]
     assert filtered_business_events[0]["case_id"] == "appendicitis_001"
@@ -1477,7 +1579,9 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "diagnosis": "急性阑尾炎",
         "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
     }
-    report_event_payload = filtered_business_events[6]["payload"]
+    assert filtered_business_events[6]["payload"]["scope"] == "personal"
+    assert filtered_business_events[6]["payload"]["skill_id"].startswith("skill_personal_")
+    report_event_payload = filtered_business_events[7]["payload"]
     assert {
         "report_id": report_event_payload["report_id"],
         "total_score": report_event_payload["total_score"],

@@ -1,8 +1,10 @@
 import {
   normalizeFeedbackReport,
+  type AiReflectionReview,
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type PersonalTrainingSkillCandidate,
   type SourceReferenceItem,
 } from "./report-model";
 
@@ -45,11 +47,15 @@ const nextReport = {
 const normalizedLegacyReport = normalizeFeedbackReport(legacyReport);
 const legacyLlmFeedbackItems: readonly LlmReasoningFeedbackItem[] = normalizedLegacyReport.llm_reasoning_feedback;
 const legacyKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedLegacyReport.knowledge_recommendations;
+const legacyAiReflectionReview: AiReflectionReview = normalizedLegacyReport.ai_reflection_review;
+const legacyPersonalTrainingSkillCandidate: PersonalTrainingSkillCandidate = normalizedLegacyReport.personal_skill_candidate;
 const normalizedNextReport = normalizeFeedbackReport(nextReport);
 const nextKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedNextReport.knowledge_recommendations;
 const nextSourceReferenceItems: readonly SourceReferenceItem[] = normalizedNextReport.source_reference_items;
 
 void legacyLlmFeedbackItems;
 void legacyKnowledgeRecommendations;
+void legacyAiReflectionReview;
+void legacyPersonalTrainingSkillCandidate;
 void nextKnowledgeRecommendations;
 void nextSourceReferenceItems;

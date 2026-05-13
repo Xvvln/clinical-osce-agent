@@ -1,14 +1,19 @@
 import pytest
 
 from app import main
+from app.services.osce_session_service import osce_session_service
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.user_model_config_store import UserModelConfigStore
 
 
 @pytest.fixture(autouse=True)
 def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     test_user_model_config_store = UserModelConfigStore(tmp_path / "user_model_configs.sqlite3")
+    test_skill_candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     monkeypatch.setattr(main, "user_model_config_store", test_user_model_config_store)
+    monkeypatch.setattr(main, "training_skill_candidate_store", test_skill_candidate_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_skill_candidate_store", test_skill_candidate_store, raising=False)
     runtime_model_config_store.clear()
     for env_name in [
         "CLINICAL_OSCE_DEPLOYMENT_MODE",

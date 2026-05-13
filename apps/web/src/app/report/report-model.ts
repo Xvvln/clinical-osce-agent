@@ -28,6 +28,73 @@ export type ExplanationSourceItem = Readonly<{
   source_references: readonly string[];
 }>;
 
+export type AiReflectionReview = Readonly<{
+  status: string;
+  reason?: string;
+  summary: string;
+  mistake_patterns: readonly string[];
+  teacher_feedback: string;
+  next_focus: string;
+  source_references: readonly string[];
+  source_reference_items: readonly SourceReferenceItem[];
+  generated_by?: string;
+  safety_note?: string;
+}>;
+
+export type PersonalTrainingSkillApprovalDialogueTurn = Readonly<{
+  round: number;
+  agent_id: string;
+  decision: string;
+  revision_status: string;
+  changed_fields: readonly unknown[];
+  rag_reference_count: number;
+  web_check_status: string;
+  blocking_failures: readonly unknown[];
+  candidate_safety_violations: readonly string[];
+  candidate_context_violations: readonly string[];
+}>;
+
+export type PersonalTrainingSkillCandidate = Readonly<{
+  status: string;
+  reason?: string;
+  candidate_id: string | null;
+  skill_id: string | null;
+  title?: string;
+  scope: string;
+  owner_student_id?: string;
+  source_session_id?: string;
+  source_report_ids?: readonly string[];
+  trigger_item_ids?: readonly string[];
+  review?: Readonly<Record<string, unknown>>;
+  approval_agent_review?: Readonly<Record<string, unknown>>;
+  approval_dialogue?: readonly PersonalTrainingSkillApprovalDialogueTurn[];
+  rag_evidence_items: readonly SourceReferenceItem[];
+  web_check_status: string;
+  external_evidence_checks: readonly unknown[];
+}>;
+
+export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
+  status: "legacy_report",
+  reason: "ai_reflection_not_recorded",
+  summary: "该历史报告生成时尚未记录 AI 复盘回顾。",
+  mistake_patterns: [],
+  teacher_feedback: "",
+  next_focus: "",
+  source_references: [],
+  source_reference_items: [],
+};
+
+export const DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE: PersonalTrainingSkillCandidate = {
+  status: "legacy_report",
+  reason: "personal_skill_not_recorded",
+  candidate_id: null,
+  skill_id: null,
+  scope: "personal",
+  rag_evidence_items: [],
+  web_check_status: "not_configured",
+  external_evidence_checks: [],
+};
+
 export type EvidenceGraphNodeItem = Readonly<{
   node_id: string;
   node_type: string;
@@ -79,6 +146,8 @@ export type FeedbackReportPayload = Readonly<{
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
   evidence_graph_summary?: EvidenceGraphSummary | null;
+  ai_reflection_review?: AiReflectionReview;
+  personal_skill_candidate?: PersonalTrainingSkillCandidate;
   feedback_summary: string;
 }>;
 
@@ -89,6 +158,8 @@ export type FeedbackReport = FeedbackReportPayload &
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
     evidence_graph_summary: EvidenceGraphSummary | null;
+    ai_reflection_review: AiReflectionReview;
+    personal_skill_candidate: PersonalTrainingSkillCandidate;
   }>;
 
 export function normalizeFeedbackReport(report: FeedbackReportPayload): FeedbackReport {
@@ -99,5 +170,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,
+    ai_reflection_review: report.ai_reflection_review ?? DEFAULT_AI_REFLECTION_REVIEW,
+    personal_skill_candidate: report.personal_skill_candidate ?? DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE,
   };
 }

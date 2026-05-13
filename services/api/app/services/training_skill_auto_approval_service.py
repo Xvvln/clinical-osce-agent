@@ -127,13 +127,18 @@ class TrainingSkillAutoApprovalSettingsStore:
 class TrainingSkillApprovalAgent:
     agent_id = AUTO_APPROVAL_AGENT_ID
 
-    def review_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+    def review_candidate(
+        self,
+        candidate: dict[str, Any],
+        *,
+        protected_terms: list[str] | None = None,
+    ) -> dict[str, Any]:
         reviewed_candidate = deepcopy(candidate)
         changed_fields: list[dict[str, Any]] = []
 
         for field in ["title", "description", "suggested_strategy"]:
             before = str(reviewed_candidate.get(field, ""))
-            after = _sanitize_training_text(before)
+            after = _sanitize_training_text(before, protected_terms or [])
             if field == "suggested_strategy":
                 after = _ensure_safety_suffix(after)
             if after != before:
@@ -173,12 +178,15 @@ class TrainingSkillApprovalAgent:
         return reviewed_candidate
 
 
-def _sanitize_training_text(text: str) -> str:
+def _sanitize_training_text(text: str, protected_terms: list[str] | None = None) -> str:
     sanitized = text
     for forbidden_term in FORBIDDEN_CANDIDATE_TERMS:
         sanitized = sanitized.replace(forbidden_term, SAFE_TERM_REPLACEMENTS[forbidden_term])
     for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items():
         sanitized = re.sub(pattern, SAFE_PATTERN_REPLACEMENTS[violation_id], sanitized)
+    for protected_term in protected_terms or []:
+        if protected_term:
+            sanitized = sanitized.replace(protected_term, "本病例标准答案")
     return sanitized.strip()
 
 

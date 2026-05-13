@@ -5,12 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   normalizeFeedbackReport,
+  type AiReflectionReview,
   type EvidenceGraphSummary,
   type ExplanationSourceItem,
   type FeedbackReport,
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type PersonalTrainingSkillCandidate,
   type RubricScoreItem,
   type SourceReferenceItem,
 } from "./report-model";
@@ -180,6 +182,35 @@ function getRecommendationKindLabel(reference: string): string {
   }
 
   return "学习建议";
+}
+
+function getAiReflectionStatusLabel(status: string): string {
+  if (status === "generated") {
+    return "已生成";
+  }
+  if (status === "not_ready") {
+    return "待完整训练";
+  }
+  if (status === "legacy_report") {
+    return "历史报告";
+  }
+  return status;
+}
+
+function getPersonalSkillStatusLabel(status: string): string {
+  if (status === "approved") {
+    return "已自动启用";
+  }
+  if (status === "not_complete") {
+    return "待完成训练";
+  }
+  if (status === "blocked_by_regression") {
+    return "回归阻塞";
+  }
+  if (status === "legacy_report") {
+    return "历史报告";
+  }
+  return status;
 }
 
 function getSourceReferenceGroupKey(reference: string): string {
@@ -681,6 +712,8 @@ export default function ReportPage() {
                 <ReportList title="已完成亮点" items={report.strengths} />
                 <ReportList title="推理问题" items={report.reasoning_errors} />
                 <ReportList title="下一轮训练重点" items={report.next_recommendations} />
+                <AiReflectionReviewSection review={report.ai_reflection_review} />
+                <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} />
                 <KnowledgeRecommendations items={report.knowledge_recommendations} />
                 <LlmReasoningFeedback items={report.llm_reasoning_feedback} />
                 <DefenseEvidenceChainSection explanationItems={report.explanation_source_items} sourceReferenceItems={report.source_reference_items} />
@@ -734,6 +767,147 @@ function ReportList({
       ) : (
         <p className="mt-3 text-sm leading-6 text-muted-foreground">暂无内容。</p>
       )}
+    </section>
+  );
+}
+
+function AiReflectionReviewSection({ review }: Readonly<{ review: AiReflectionReview }>) {
+  return (
+    <section className="rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">AI 复盘回顾</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            基于本轮评分报告、已披露证据和来源引用生成教学复盘，不改变病例事实、rubric 或评分。
+          </p>
+        </div>
+        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {getAiReflectionStatusLabel(review.status)}
+        </span>
+      </div>
+      <p className="mt-4 rounded-xl border border-border bg-muted/35 p-4 text-sm leading-6 text-foreground">{review.summary}</p>
+      {review.teacher_feedback || review.next_focus ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-border bg-muted/25 p-3">
+            <h3 className="text-xs font-semibold">老师式点评</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.teacher_feedback || "暂无点评。"}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-muted/25 p-3">
+            <h3 className="text-xs font-semibold">下一轮聚焦</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.next_focus || "暂无下一轮聚焦。"}</p>
+          </div>
+        </div>
+      ) : null}
+      {review.mistake_patterns.length > 0 ? (
+        <div className="mt-3">
+          <h3 className="text-xs font-semibold">错误模式</h3>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {review.mistake_patterns.map((pattern) => (
+              <span className="rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground" key={pattern}>
+                {pattern}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3">
+        <h3 className="text-xs font-semibold">复盘来源</h3>
+        {review.source_reference_items.length > 0 ? (
+          <ul className="mt-2 grid gap-2 md:grid-cols-2">
+            {review.source_reference_items.map((sourceItem) => (
+              <li className="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground" key={sourceItem.reference}>
+                <span className="font-medium text-foreground">{sourceItem.title}</span>
+                <span className="mt-1 block break-all font-mono">{sourceItem.reference}</span>
+                <span className="mt-1 block">类型：{sourceItem.source_type}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 text-sm leading-6 text-muted-foreground">
+            历史报告暂无 AI 复盘来源链。
+          </p>
+        )}
+      </div>
+      {review.safety_note ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{review.safety_note}</p> : null}
+    </section>
+  );
+}
+
+function PersonalTrainingSkillSection({ candidate }: Readonly<{ candidate: PersonalTrainingSkillCandidate }>) {
+  const approvalDialogue = candidate.approval_dialogue ?? [];
+  return (
+    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">个人训练 Skill</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            完整训练后生成个人级训练策略，后续同一学生的新 session 会被 Coach 用作针对性提示上下文。
+          </p>
+        </div>
+        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {getPersonalSkillStatusLabel(candidate.status)}
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="rounded-xl border border-border bg-muted/25 p-3">
+          <p className="text-xs text-muted-foreground">候选</p>
+          <p className="mt-1 break-all font-mono text-[11px] text-foreground">{candidate.candidate_id ?? "尚未生成"}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-muted/25 p-3">
+          <p className="text-xs text-muted-foreground">Skill</p>
+          <p className="mt-1 break-all font-mono text-[11px] text-foreground">{candidate.skill_id ?? "尚未启用"}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-muted/25 p-3">
+          <p className="text-xs text-muted-foreground">联网核查状态</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{candidate.web_check_status}</p>
+        </div>
+      </div>
+      {candidate.title ? <p className="mt-3 text-sm font-semibold text-foreground">{candidate.title}</p> : null}
+      {(candidate.trigger_item_ids ?? []).length > 0 ? (
+        <div className="mt-3">
+          <h3 className="text-xs font-semibold">关联训练点</h3>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {candidate.trigger_item_ids?.map((triggerItemId) => (
+              <span className="rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground" key={triggerItemId}>
+                {triggerItemId}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3">
+        <h3 className="text-xs font-semibold">RAG 证据来源</h3>
+        {candidate.rag_evidence_items.length > 0 ? (
+          <ul className="mt-2 grid gap-2 md:grid-cols-2">
+            {candidate.rag_evidence_items.map((sourceItem) => (
+              <li className="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground" key={sourceItem.reference}>
+                <span className="font-medium text-foreground">{sourceItem.title}</span>
+                <span className="mt-1 block break-all font-mono">{sourceItem.reference}</span>
+                <span className="mt-1 block">类型：{sourceItem.source_type}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 text-sm leading-6 text-muted-foreground">
+            暂无结构化 RAG 证据来源，或该报告为旧报告。
+          </p>
+        )}
+      </div>
+      {approvalDialogue.length > 0 ? (
+        <div className="mt-3">
+          <h3 className="text-xs font-semibold">审批 Agent 记录</h3>
+          <div className="mt-2 grid gap-2">
+            {approvalDialogue.map((turn) => (
+              <article className="rounded-lg border border-border bg-muted/25 p-3 text-xs leading-5 text-muted-foreground" key={`${turn.agent_id}-${turn.round}`}>
+                <p className="font-medium text-foreground">
+                  第 {turn.round} 轮 · {turn.agent_id} · {turn.decision} · {turn.revision_status}
+                </p>
+                <p className="mt-1">RAG 引用 {turn.rag_reference_count} 条 · 联网核查状态 {turn.web_check_status}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

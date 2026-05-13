@@ -263,6 +263,26 @@ type TrainingSkillApprovalAgentReview = Readonly<{
   regression_passed?: boolean;
 }>;
 
+type TrainingSkillApprovalDialogueTurn = Readonly<{
+  round: number;
+  agent_id: string;
+  decision: string;
+  revision_status: string;
+  changed_fields: readonly TrainingSkillApprovalAgentChangedField[];
+  rag_reference_count: number;
+  web_check_status: string;
+  blocking_failures: readonly unknown[];
+  candidate_safety_violations: readonly string[];
+  candidate_context_violations: readonly string[];
+}>;
+
+type TrainingSkillExternalEvidenceCheck = Readonly<{
+  source: string;
+  status: string;
+  summary?: string;
+  references?: readonly string[];
+}>;
+
 type TrainingSkillTeachingAction = Readonly<{
   action_type: string;
   level: number;
@@ -276,6 +296,9 @@ type TrainingSkillCandidateDetail = Readonly<{
   trigger_item_id: string;
   trigger_item_ids: readonly string[];
   case_ids: readonly string[];
+  scope?: string;
+  owner_student_id?: string;
+  source_session_id?: string;
   skill_type: string;
   stage_scope: readonly string[];
   applies_when: Readonly<Record<string, unknown>>;
@@ -292,6 +315,10 @@ type TrainingSkillCandidateDetail = Readonly<{
   source_report_ids?: readonly string[];
   source_session_ids?: readonly string[];
   source_turn_patterns?: readonly FrequentTurnPattern[];
+  approval_dialogue?: readonly TrainingSkillApprovalDialogueTurn[];
+  rag_evidence_items?: readonly AdminSourceReferenceItem[];
+  web_check_status?: string;
+  external_evidence_checks?: readonly TrainingSkillExternalEvidenceCheck[];
   related_recommendations: readonly string[];
   review: TrainingSkillCandidateReview;
   approval_agent_review?: TrainingSkillApprovalAgentReview;
@@ -3507,6 +3534,16 @@ export default function AdminDashboardPage() {
                         <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{(selectedCandidate.trigger_item_ids ?? []).join("、") || selectedCandidate.trigger_item_id}</p>
                       </div>
                     </div>
+                    {selectedCandidate.scope || selectedCandidate.owner_student_id || selectedCandidate.source_session_id ? (
+                      <div>
+                        <h4 className="text-sm font-semibold">个人 Skill 范围</h4>
+                        <div className="mt-2 grid gap-2 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257] md:grid-cols-3">
+                          <p>范围：{selectedCandidate.scope ?? "global"}</p>
+                          <p className="break-all">学生：{selectedCandidate.owner_student_id ?? "未限定"}</p>
+                          <p className="break-all">来源 session：{selectedCandidate.source_session_id ?? "未记录"}</p>
+                        </div>
+                      </div>
+                    ) : null}
                     <div>
                       <h4 className="text-sm font-semibold">应用条件</h4>
                       <pre className="mt-2 whitespace-pre-wrap rounded-md border border-[#E6DFD2] bg-white p-3 text-[11px] leading-5 text-[#6F6257]">
@@ -3548,6 +3585,41 @@ export default function AdminDashboardPage() {
                       <h4 className="text-sm font-semibold">教学策略</h4>
                       <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.suggested_strategy}</p>
                     </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">RAG 证据来源</h4>
+                      <div className="mt-2 grid gap-2">
+                        {(selectedCandidate.rag_evidence_items ?? []).length > 0 ? (
+                          selectedCandidate.rag_evidence_items?.map((sourceItem) => (
+                            <article className="rounded-md border border-[#E6DFD2] bg-white p-2 text-xs leading-5 text-[#6F6257]" key={sourceItem.reference}>
+                              <p className="font-medium text-[#141413]">{sourceItem.title}</p>
+                              <p className="break-all font-mono text-[11px] text-[#AE5630]">{sourceItem.reference}</p>
+                              <p className="mt-1">类型：{sourceItem.source_type}</p>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="rounded-md border border-dashed border-[#E6DFD2] bg-white p-2 text-sm text-[#6F6257]">暂无个人 Skill RAG 证据来源。</p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold">联网核查状态</h4>
+                      <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                        <p>状态：{selectedCandidate.web_check_status ?? "not_configured"}</p>
+                        <div className="mt-2 grid gap-2">
+                          {(selectedCandidate.external_evidence_checks ?? []).length > 0 ? (
+                            selectedCandidate.external_evidence_checks?.map((check) => (
+                              <article className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2" key={`${check.source}-${check.status}`}>
+                                <p className="font-medium text-[#141413]">{check.source} · {check.status}</p>
+                                {check.summary ? <p className="mt-1">{check.summary}</p> : null}
+                                <p className="mt-1 break-words">引用：{(check.references ?? []).join("、") || "无"}</p>
+                              </article>
+                            ))
+                          ) : (
+                            <p className="rounded-md border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-2">当前实现未配置真实联网核查，仅保留审计字段。</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                     {selectedCandidate.approval_agent_review ? (
                       <div>
                         <h4 className="text-sm font-semibold">审批 Agent 修订记录</h4>
@@ -3581,6 +3653,24 @@ export default function AdminDashboardPage() {
                         </div>
                       </div>
                     ) : null}
+                    <div>
+                      <h4 className="text-sm font-semibold">审批多轮记录</h4>
+                      <div className="mt-2 grid gap-2">
+                        {(selectedCandidate.approval_dialogue ?? []).length > 0 ? (
+                          selectedCandidate.approval_dialogue?.map((turn) => (
+                            <article className="rounded-md border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={`${turn.agent_id}-${turn.round}`}>
+                              <p className="font-medium text-[#141413]">
+                                第 {turn.round} 轮 · {turn.agent_id} · {turn.decision} · {turn.revision_status}
+                              </p>
+                              <p className="mt-1">RAG 引用 {turn.rag_reference_count} 条 · 联网核查状态 {turn.web_check_status}</p>
+                              <p className="mt-1">阻塞：{turn.blocking_failures.length} · 安全违规：{turn.candidate_safety_violations.length} · 上下文违规：{turn.candidate_context_violations.length}</p>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="rounded-md border border-dashed border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">暂无审批多轮记录。</p>
+                        )}
+                      </div>
+                    </div>
                     <div>
                       <h4 className="text-sm font-semibold">教学动作计划</h4>
                       <div className="mt-2 grid gap-2">

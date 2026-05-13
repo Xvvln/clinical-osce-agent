@@ -223,7 +223,10 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
         if event["event_type"] == "training_skill_applied"
     ]
     assert applied_events
-    assert applied_events[0]["payload"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
+    assert any(
+        event["payload"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
+        for event in applied_events
+    )
 
 
 def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
@@ -2606,18 +2609,20 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         assert later_session_response.status_code == 200
         later_session = later_session_response.json()
         later_session_id = later_session["session_id"]
-        assert later_session["evolution_candidates"] == [
-            f"{candidate['title']}：{candidate['suggested_strategy']}"
-        ]
+        assert f"{candidate['title']}：{candidate['suggested_strategy']}" in later_session["evolution_candidates"]
 
         hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert hint_response.status_code == 200
         assert "本轮训练重点" in hint_response.json()["hint"]
         profile_response = client.get("/api/me/profile")
         assert profile_response.status_code == 200
-        assert profile_response.json()["profile"]["skill_accumulation"]["enabled_skill_count"] == 1
-        assert profile_response.json()["profile"]["skill_accumulation"]["applied_skill_count"] == 1
-        assert profile_response.json()["profile"]["skill_accumulation"]["enabled_skills"][0]["effect_status"] == "insufficient_samples"
+        skill_accumulation = profile_response.json()["profile"]["skill_accumulation"]
+        assert skill_accumulation["enabled_skill_count"] >= 1
+        assert skill_accumulation["applied_skill_count"] >= 1
+        assert any(
+            skill["skill_id"] == skill_id and skill["effect_status"] == "insufficient_samples"
+            for skill in skill_accumulation["enabled_skills"]
+        )
 
         admin_login = client.post(
             "/api/auth/login",
@@ -2630,11 +2635,11 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         later_business_events = [
             event for event in later_events if event["event_type"] not in {"agent_decision_traced", "agent_reflection_recorded"}
         ]
-        assert [event["event_type"] for event in later_business_events][:2] == [
-            "session_created",
-            "training_skill_applied",
-        ]
-        assert later_business_events[1]["payload"]["skill_id"] == skill_id
+        assert later_business_events[0]["event_type"] == "session_created"
+        assert any(
+            event["event_type"] == "training_skill_applied" and event["payload"]["skill_id"] == skill_id
+            for event in later_business_events
+        )
         assert any(event["event_type"] == "agent_decision_traced" for event in later_events)
 
 

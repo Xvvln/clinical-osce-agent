@@ -572,6 +572,28 @@ test("admin dashboard exposes auto skill application controls and agent revision
   assert.match(adminPageSource, /protected_fields/);
 });
 
+test("admin dashboard shows personal skill scope, approval dialogue and RAG evidence", () => {
+  assert.match(adminPageSource, /type TrainingSkillApprovalDialogueTurn = Readonly<\{/);
+  assert.match(adminPageSource, /type TrainingSkillExternalEvidenceCheck = Readonly<\{/);
+  assert.match(adminPageSource, /scope\?: string;/);
+  assert.match(adminPageSource, /owner_student_id\?: string;/);
+  assert.match(adminPageSource, /source_session_id\?: string;/);
+  assert.match(adminPageSource, /approval_dialogue\?: readonly TrainingSkillApprovalDialogueTurn\[];/);
+  assert.match(adminPageSource, /rag_evidence_items\?: readonly AdminSourceReferenceItem\[];/);
+  assert.match(adminPageSource, /web_check_status\?: string;/);
+  assert.match(adminPageSource, /external_evidence_checks\?: readonly TrainingSkillExternalEvidenceCheck\[];/);
+  assert.match(adminPageSource, /个人 Skill 范围/);
+  assert.match(adminPageSource, /selectedCandidate\.scope/);
+  assert.match(adminPageSource, /selectedCandidate\.owner_student_id/);
+  assert.match(adminPageSource, /selectedCandidate\.source_session_id/);
+  assert.match(adminPageSource, /审批多轮记录/);
+  assert.match(adminPageSource, /selectedCandidate\.approval_dialogue/);
+  assert.match(adminPageSource, /RAG 证据来源/);
+  assert.match(adminPageSource, /selectedCandidate\.rag_evidence_items/);
+  assert.match(adminPageSource, /联网核查状态/);
+  assert.match(adminPageSource, /selectedCandidate\.web_check_status/);
+});
+
 test("admin review actions only send candidate id", () => {
   assert.match(adminPageSource, /body: JSON\.stringify\(\{ candidate_id: candidateId \}\)/);
   assert.doesNotMatch(adminPageSource, /reviewer_id: "local-admin"/);

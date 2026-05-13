@@ -99,7 +99,7 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     success_metrics = candidate.get("success_metrics")
     if not isinstance(success_metrics, list) or not success_metrics:
         success_metrics = build_success_metrics()
-    return {
+    skill = {
         "skill_id": f"skill_{candidate['trigger_item_id']}",
         "source_candidate_id": candidate["candidate_id"],
         "trigger_item_id": candidate["trigger_item_id"],
@@ -120,6 +120,22 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "support_count": candidate["support_count"],
         "related_recommendations": list(candidate.get("related_recommendations", [])),
     }
+    scope = str(candidate.get("scope", "global"))
+    if scope != "global":
+        skill["scope"] = scope
+        skill["owner_student_id"] = str(candidate.get("owner_student_id", ""))
+        skill["source_session_id"] = str(candidate.get("source_session_id", ""))
+        skill["source_session_ids"] = list(candidate.get("source_session_ids", []))
+        skill["source_report_ids"] = list(candidate.get("source_report_ids", []))
+    if scope != "global" or candidate.get("rag_evidence_items"):
+        skill["rag_evidence_items"] = list(candidate.get("rag_evidence_items", []))
+    if scope != "global" or candidate.get("approval_dialogue"):
+        skill["approval_dialogue"] = list(candidate.get("approval_dialogue", []))
+    if scope != "global" or (candidate.get("web_check_status") and candidate.get("web_check_status") != "not_configured"):
+        skill["web_check_status"] = str(candidate.get("web_check_status", "not_configured"))
+    if scope != "global" or candidate.get("external_evidence_checks"):
+        skill["external_evidence_checks"] = list(candidate.get("external_evidence_checks", []))
+    return skill
 
 
 training_skill_store = TrainingSkillStore()
