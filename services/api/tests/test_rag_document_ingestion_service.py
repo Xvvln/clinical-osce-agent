@@ -1,4 +1,18 @@
+import tomllib
+from pathlib import Path
+
 from app.services.rag_document_ingestion_service import chunk_rag_document
+
+
+def test_document_parser_stack_is_a_default_backend_dependency() -> None:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    dependencies = pyproject["project"]["dependencies"]
+    optional_dependencies = pyproject["project"].get("optional-dependencies", {})
+
+    assert any(dependency.startswith("unstructured[all-docs]") for dependency in dependencies)
+    assert "documents" not in optional_dependencies
 
 
 def test_markdown_document_chunking_preserves_sections_and_overlap() -> None:
@@ -38,4 +52,3 @@ def test_markdown_document_chunking_preserves_sections_and_overlap() -> None:
     assert all(chunk.document_id == "kbdoc:appendicitis_001:test" for chunk in chunks)
     assert all(chunk.text.strip() for chunk in chunks)
     assert chunks[1].text[:18] in chunks[0].text
-
