@@ -39,6 +39,7 @@ class CoachRequest(BaseModel):
     pedagogy_state: dict[str, Any] = Field(default_factory=dict)
     clinical_reasoning_state: dict[str, Any] = Field(default_factory=dict)
     skill_context: list[str] = Field(default_factory=list)
+    retrieved_knowledge_context: list[dict[str, Any]] = Field(default_factory=list)
     forbidden_terms: list[str] = Field(default_factory=list)
 
 

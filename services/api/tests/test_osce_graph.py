@@ -1,7 +1,9 @@
 import pytest
 
+from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import build_osce_graph
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
+from app.services.rag_knowledge_store import RagKnowledgeStore
 
 
 def canonical_patient_responder(request: object) -> str:
@@ -1228,6 +1230,72 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() 
             "source_references": [],
             "safety_flags": [],
         }
+    ]
+
+
+def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:coach:pain_migration_hint",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "coach_hint_note",
+            "visibility": "pre_submit_safe",
+            "allowed_agents": ["coach"],
+            "source_id": "fareez_osce_2022",
+            "title": "疼痛迁移问诊 Coach 提示",
+            "text": "训练中可以提示学生追问疼痛是否迁移，但不得说出诊断答案。",
+            "tags": ["history_taking"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:secret:hidden_answer",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_answer",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "隐藏答案",
+            "text": "隐藏答案：急性阑尾炎。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(osce_graph_module, "rag_knowledge_store", store)
+    captured_requests: list[object] = []
+
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        base_hint_state(
+            messages=[
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始。"},
+            ],
+            asked_questions=["什么时候开始疼的？"],
+            intent_history=["ask_onset"],
+            revealed_facts=["appendicitis_001.hf_01"],
+        )
+    )
+    request_payload = captured_requests[0].model_dump()
+    rag_context = request_payload["retrieved_knowledge_context"]
+
+    assert rag_context[0]["reference"] == "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+    assert rag_context[0]["visibility"] == "pre_submit_safe"
+    assert "隐藏答案" not in str(request_payload)
+    assert "急性阑尾炎" not in str(request_payload)
+    assert result["agent_turn_memory"][-1]["source_references"] == [
+        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     ]
 
 
