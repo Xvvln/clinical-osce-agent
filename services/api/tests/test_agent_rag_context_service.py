@@ -143,3 +143,23 @@ def test_retrieve_agent_context_uses_retrieval_index_before_deterministic_keywor
     assert [item["reference"] for item in results] == [
         "rag_knowledge:case:appendicitis_001:coach:sequence_bridge"
     ]
+
+
+def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_diagnosis(tmp_path) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
+
+    results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["腹痛问诊 起病 部位 迁移 伴随症状"],
+        allowed_visibilities={"pre_submit_safe"},
+        forbidden_terms=["急性阑尾炎"],
+        store=store,
+    )
+
+    assert results
+    assert results[0]["reference"] == (
+        "rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence"
+    )
+    assert results[0]["source_id"] == "aafp_acute_abdominal_pain_2023"
+    assert "急性阑尾炎" not in str(results)

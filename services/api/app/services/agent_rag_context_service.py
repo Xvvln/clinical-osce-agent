@@ -20,7 +20,11 @@ def retrieve_agent_context(
 ) -> list[dict[str, Any]]:
     knowledge_store = store or rag_knowledge_store
     database_path = getattr(knowledge_store, "database_path", None)
-    if isinstance(database_path, Path) and not database_path.exists():
+    if (
+        isinstance(database_path, Path)
+        and not database_path.exists()
+        and not getattr(knowledge_store, "seed_defaults", False)
+    ):
         return []
 
     normalized_case_ids = {str(case_id).strip() for case_id in case_ids if str(case_id).strip()}

@@ -1211,26 +1211,41 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() 
     assert clinical_state["next_best_action"]["action_type"] == "request_physical_exam"
     assert "查体" in clinical_state["socratic_question"]
     assert "急性阑尾炎" not in str(getattr(captured_requests[0], "model_dump")())
-    assert result["agent_turn_memory"] == [
-        {
-            "turn_id": "turn:1",
-            "student_message": "请求提示",
-            "reply": result["hint"],
-            "reply_role": "coach",
+    assert len(result["agent_turn_memory"]) == 1
+    agent_turn = result["agent_turn_memory"][0]
+    assert {
+        "turn_id": agent_turn["turn_id"],
+        "student_message": agent_turn["student_message"],
+        "reply": agent_turn["reply"],
+        "reply_role": agent_turn["reply_role"],
+        "current_intent": agent_turn["current_intent"],
+        "turn_policy": agent_turn["turn_policy"],
+        "turn_analysis": agent_turn["turn_analysis"],
+        "agent_path": agent_turn["agent_path"],
+        "revealed_fact_id": agent_turn["revealed_fact_id"],
+        "safety_flags": agent_turn["safety_flags"],
+    } == {
+        "turn_id": "turn:1",
+        "student_message": "请求提示",
+        "reply": result["hint"],
+        "reply_role": "coach",
+        "current_intent": "socratic_hint",
+        "turn_policy": "teaching_hint",
+        "turn_analysis": {
             "current_intent": "socratic_hint",
-            "turn_policy": "teaching_hint",
-            "turn_analysis": {
-                "current_intent": "socratic_hint",
-                "confidence": 1.0,
-                "is_off_topic": False,
-                "rationale": "学生请求教学提示。",
-            },
-            "agent_path": ["socratic_hint_node", "coach_agent"],
-            "revealed_fact_id": None,
-            "source_references": [],
-            "safety_flags": [],
-        }
+            "confidence": 1.0,
+            "is_off_topic": False,
+            "rationale": "学生请求教学提示。",
+        },
+        "agent_path": ["socratic_hint_node", "coach_agent"],
+        "revealed_fact_id": None,
+        "safety_flags": [],
+    }
+    assert "rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence" in agent_turn[
+        "source_references"
     ]
+    assert agent_turn["knowledge_references"] == agent_turn["source_references"]
+    assert agent_turn["retrieved_knowledge_context"]
 
 
 def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, monkeypatch) -> None:

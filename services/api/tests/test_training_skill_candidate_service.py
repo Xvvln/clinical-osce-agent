@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -493,7 +494,11 @@ def test_training_skill_candidate_service_uses_injected_generator_once_for_train
         generator=FakeTrainingSkillCandidateGenerator(),
     ).propose_candidates(insights, min_count=2)
 
-    assert captured_contexts == [
+    assert len(captured_contexts) == 1
+    assert "rag_knowledge:case:appendicitis_001:skill_generation:appendicitis_differential_chain" in {
+        item["reference"] for item in captured_contexts[0].retrieved_knowledge_context
+    }
+    assert replace(captured_contexts[0], retrieved_knowledge_context=[]) == (
         TrainingSkillCandidateContext(
             pattern_id="training_pattern_rs_exclude_reasoning_core",
             missed_items=[
@@ -516,7 +521,7 @@ def test_training_skill_candidate_service_uses_injected_generator_once_for_train
                 "knowledge:appendicitis_001.rp_03",
             ],
         )
-    ]
+    )
     assert candidates == [
         {
             "candidate_id": "llm_candidate_training_pattern_rs_exclude_reasoning_core",
@@ -643,41 +648,47 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
 
     candidates = TrainingSkillCandidateService().propose_candidates(insights, min_count=2)
 
-    assert candidates == [
-        {
-            "candidate_id": "skill_candidate_training_pattern_rs_exclude_reasoning_core",
-            "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
-            "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+    assert len(candidates) == 1
+    candidate = dict(candidates[0])
+    knowledge_references = candidate.pop("knowledge_references")
+    retrieved_knowledge_context = candidate.pop("retrieved_knowledge_context")
+    assert "rag_knowledge:case:appendicitis_001:skill_generation:appendicitis_differential_chain" in (
+        knowledge_references
+    )
+    assert {item["reference"] for item in retrieved_knowledge_context} == set(knowledge_references)
+    assert candidate == {
+        "candidate_id": "skill_candidate_training_pattern_rs_exclude_reasoning_core",
+        "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
+        "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+        "case_ids": ["appendicitis_001", "pneumonia_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["case_intro", "diagnosis_submission"],
+        "effect_status": "insufficient_samples",
+        "applies_when": {
             "case_ids": ["appendicitis_001", "pneumonia_001"],
-            "skill_type": "reasoning_bridge",
             "stage_scope": ["case_intro", "diagnosis_submission"],
-            "effect_status": "insufficient_samples",
-            "applies_when": {
-                "case_ids": ["appendicitis_001", "pneumonia_001"],
-                "stage_scope": ["case_intro", "diagnosis_submission"],
-                "trigger_item_ids": ["rs_exclude", "reasoning_core"],
-                "current_missing_evidence": ["rs_exclude", "reasoning_core"],
-                "min_support_count": 3,
-            },
-            "title": "OSCE 训练模式纠偏提示",
-            "description": "3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。",
-            "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
-            "teaching_action_plan": _expected_action_plan(
-                ["case_intro", "diagnosis_submission"],
-                ["rs_exclude", "reasoning_core"],
-                "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
-            ),
-            "prohibited_content_policy": _expected_policy(),
-            "success_metrics": _expected_success_metrics(),
-            "status": "draft",
-            "source_report_count": 3,
-            "support_count": 3,
-            "related_recommendations": [
-                "rubric:appendicitis_001_rubric.item.reasoning_core",
-                "knowledge:appendicitis_001.rp_03",
-            ],
-        }
-    ]
+            "trigger_item_ids": ["rs_exclude", "reasoning_core"],
+            "current_missing_evidence": ["rs_exclude", "reasoning_core"],
+            "min_support_count": 3,
+        },
+        "title": "OSCE 训练模式纠偏提示",
+        "description": "3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。",
+        "suggested_strategy": "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
+        "teaching_action_plan": _expected_action_plan(
+            ["case_intro", "diagnosis_submission"],
+            ["rs_exclude", "reasoning_core"],
+            "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。",
+        ),
+        "prohibited_content_policy": _expected_policy(),
+        "success_metrics": _expected_success_metrics(),
+        "status": "draft",
+        "source_report_count": 3,
+        "support_count": 3,
+        "related_recommendations": [
+            "rubric:appendicitis_001_rubric.item.reasoning_core",
+            "knowledge:appendicitis_001.rp_03",
+        ],
+    }
 
 
 def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_metadata(monkeypatch) -> None:
@@ -806,7 +817,11 @@ def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_m
         generator=FakeTrainingSkillCandidateGenerator(),
     ).propose_candidates(insights, min_count=2)
 
-    assert captured_contexts == [
+    assert len(captured_contexts) == 1
+    assert "rag_knowledge:case:appendicitis_001:skill_generation:appendicitis_differential_chain" in {
+        item["reference"] for item in captured_contexts[0].retrieved_knowledge_context
+    }
+    assert replace(captured_contexts[0], retrieved_knowledge_context=[]) == (
         TrainingSkillCandidateContext(
             pattern_id="turn_pattern_off_topic_redirect",
             missed_items=[],
@@ -831,7 +846,7 @@ def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_m
                 )
             ],
         )
-    ]
+    )
     assert candidates == [
         {
             "candidate_id": "llm_candidate_turn_pattern_off_topic_redirect",

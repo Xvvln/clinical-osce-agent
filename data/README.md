@@ -1,6 +1,6 @@
 # data 目录说明
 
-本目录保存 Clinical OSCE Agent 的数据资产。它同时包含三类内容：当前系统直接使用的结构化教学病例、用于评分与反馈的数据契约，以及尚未完全加工的公开原始数据。运行时默认读取 `cases/`、`rubrics/`、`schemas/` 和 `attribution/`；`raw/` 主要是后续扩展病例库与知识库的素材来源。
+本目录保存 Clinical OSCE Agent 的数据资产。它同时包含三类内容：当前系统直接使用的结构化教学病例、用于评分与反馈的数据契约，以及尚未完全加工的公开原始数据。运行时默认读取 `cases/`、`rubrics/`、`schemas/`、`attribution/` 和 `rag_knowledge/`；`raw/` 主要是后续扩展病例库与知识库的素材来源。
 
 ## 目录结构
 
@@ -10,6 +10,7 @@
 | `rubrics/` | 每个病例对应的评分量表 YAML | 当前报告与评分系统直接使用 |
 | `schemas/` | 病例和 rubric 的 JSON Schema | 用于校验数据结构 |
 | `attribution/source_registry/` | 数据来源、许可、用途和风险登记 | 当前来源引用与合规说明使用 |
+| `rag_knowledge/` | 公开来源改写后的 RAG 知识库默认种子 | 当前 Coach / 复盘 / Skill grounding 可读取 |
 | `raw/` | 下载的公开原始数据 | 作为素材库保存，不被运行时直接读取 |
 | `processed/` | 清洗、抽取、转写后的中间数据 | 预留目录，目前为空 |
 | `runtime/` | 本地 SQLite 运行时产物 | 本机调试生成，不应作为源数据提交 |
@@ -56,6 +57,17 @@
 ### `attribution/source_registry/`
 
 `sources.json` 是数据来源登记清单，用于记录来源名称、来源地址、许可、允许用途、转换方式、归属要求和风险说明。病例中的 `source_attribution.source_id` 必须能在这里找到对应条目。
+
+### `rag_knowledge/`
+
+`default_items.json` 是默认 RAG knowledge item 种子。当前条目来自 AAFP、Merck Manual Professional 和 NCBI StatPearls 等公开网页的人工检索与短文本改写，用于给 Coach Agent、训练后复盘、Skill 生成和审批提供可追溯教学上下文。
+
+使用边界：
+
+- `pre_submit_safe` 条目不得包含标准诊断、隐藏事实、治疗方案或用药剂量，只能辅助学生组织问诊、查体和检查选择思路。
+- `post_submit_review` 条目可以包含诊断相关复盘内容，但只能在提交诊断后用于复盘、Skill 生成或审批。
+- 默认种子只在运行时知识库首次初始化或缺失条目时插入，不覆盖管理员后续编辑的同 ID 条目。
+- 这些知识条目不参与标准诊断裁判、rubric 评分或病例事实披露。
 
 ## 原始数据使用现状
 

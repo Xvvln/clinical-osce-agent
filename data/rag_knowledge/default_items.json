@@ -1,0 +1,80 @@
+[
+  {
+    "knowledge_id": "case:appendicitis_001:coach:abdominal_pain_history_sequence",
+    "scope": "case",
+    "case_id": "appendicitis_001",
+    "content_kind": "coach_hint_note",
+    "visibility": "pre_submit_safe",
+    "allowed_agents": ["coach"],
+    "source_id": "aafp_acute_abdominal_pain_2023",
+    "title": "急腹痛问诊顺序：先建立疼痛时间线",
+    "text": "提交诊断前，Coach 只提示学生先补齐疼痛起病、部位、性质、程度、迁移或放射、伴随恶心呕吐发热、排尿排便、既往腹部手术和危险信号等线索，再决定查体与检查；不要提前给出诊断名称或标准答案。",
+    "tags": ["acute_abdominal_pain", "history_taking", "coach_hint", "pre_submit"],
+    "version": 1
+  },
+  {
+    "knowledge_id": "case:appendicitis_001:coach:peritoneal_exam_sequence",
+    "scope": "case",
+    "case_id": "appendicitis_001",
+    "content_kind": "coach_hint_note",
+    "visibility": "pre_submit_safe",
+    "allowed_agents": ["coach"],
+    "source_id": "aafp_acute_abdominal_pain_2023",
+    "title": "急腹痛查体顺序：从全身状态到局部腹膜刺激",
+    "text": "提交诊断前，Coach 可引导学生先观察生命体征、一般状态和疼痛姿势，再按腹部视诊、听诊、叩诊、轻深触诊推进；局部压痛、反跳痛、肌紧张、咳嗽或震动痛用于判断是否存在腹膜刺激，但不应直接透露诊断。",
+    "tags": ["acute_abdominal_pain", "physical_exam", "peritoneal_irritation", "coach_hint"],
+    "version": 1
+  },
+  {
+    "knowledge_id": "case:appendicitis_001:coach:basic_tests_reasoning",
+    "scope": "case",
+    "case_id": "appendicitis_001",
+    "content_kind": "coach_hint_note",
+    "visibility": "pre_submit_safe",
+    "allowed_agents": ["coach"],
+    "source_id": "aafp_acute_abdominal_pain_2023",
+    "title": "急腹痛辅助检查：基础炎症与排除性证据",
+    "text": "提交诊断前，Coach 可提示学生用血常规、CRP、尿常规等基础检查补强或排除证据链；这些检查可帮助判断炎症、泌尿系统线索或其他鉴别方向，但单项指标不能单独确认或排除某个诊断。",
+    "tags": ["acute_abdominal_pain", "auxiliary_test", "evidence_chain", "coach_hint"],
+    "version": 1
+  },
+  {
+    "knowledge_id": "global:acute_abdomen:urgent_red_flags",
+    "scope": "global",
+    "case_id": "",
+    "content_kind": "coach_hint_note",
+    "visibility": "pre_submit_safe",
+    "allowed_agents": ["coach"],
+    "source_id": "statpearls_acute_abdomen_2025",
+    "title": "急腹症安全边界：先识别不稳定与腹膜炎线索",
+    "text": "急腹痛教学中，学生应先关注不稳定生命体征、腹膜炎体征、疼痛与体征不相称、意识或循环异常等危险信号。OSCE 模拟中只能用于训练识别和追问逻辑，不输出真实处置或给药细节。",
+    "tags": ["acute_abdomen", "safety_boundary", "red_flags", "coach_hint"],
+    "version": 1
+  },
+  {
+    "knowledge_id": "case:appendicitis_001:reflection:appendicitis_reasoning_review",
+    "scope": "case",
+    "case_id": "appendicitis_001",
+    "content_kind": "reflection_note",
+    "visibility": "post_submit_review",
+    "allowed_agents": ["reflection", "skill_generation", "skill_approval"],
+    "source_id": "merck_appendicitis_professional",
+    "title": "急性阑尾炎复盘：疼痛迁移、局部压痛和腹膜刺激",
+    "text": "提交诊断后，复盘 Agent 可说明急性阑尾炎的经典推理链通常围绕上腹或脐周痛向右下腹迁移、恶心呕吐或食欲下降、低热、右下腹局部压痛及反跳痛等线索展开；也要提醒学生这些表现可不典型，不能只依赖单一体征。",
+    "tags": ["appendicitis", "reflection", "reasoning_chain", "post_submit"],
+    "version": 1
+  },
+  {
+    "knowledge_id": "case:appendicitis_001:skill_generation:appendicitis_differential_chain",
+    "scope": "case",
+    "case_id": "appendicitis_001",
+    "content_kind": "skill_generation_note",
+    "visibility": "post_submit_review",
+    "allowed_agents": ["skill_generation", "skill_approval", "reflection"],
+    "source_id": "statpearls_appendicitis_2025",
+    "title": "急性阑尾炎 Skill 生成：把鉴别诊断串成证据链",
+    "text": "提交诊断后，Skill 生成可围绕急性阑尾炎与胃肠炎、泌尿系结石或感染、炎症性肠病、右侧结肠炎、胆胰疾病及性别相关下腹痛鉴别之间的证据链训练展开；生成内容应训练问诊、查体、检查选择和排除性证据表达，不泄露病例隐藏事实或具体处置内容。",
+    "tags": ["appendicitis", "differential_diagnosis", "skill_generation", "evidence_chain"],
+    "version": 1
+  }
+]

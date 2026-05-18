@@ -1508,7 +1508,13 @@ def test_admin_can_list_source_registry_entries(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["sources"]) == 5
+    assert len(payload["sources"]) >= 9
+    assert {source["source_id"] for source in payload["sources"]} >= {
+        "aafp_acute_abdominal_pain_2023",
+        "merck_appendicitis_professional",
+        "statpearls_appendicitis_2025",
+        "statpearls_acute_abdomen_2025",
+    }
     assert payload["sources"][0] == {
         "source_id": "fareez_osce_2022",
         "source_name": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",

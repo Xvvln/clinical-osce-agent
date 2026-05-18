@@ -53,5 +53,49 @@
     "transformation": "clone repository for module design reference",
     "attribution_required": true,
     "risk_note": "仅借鉴患者模拟、意图识别、评测设计，不直接照搬产品形态。"
+  },
+  {
+    "source_id": "aafp_acute_abdominal_pain_2023",
+    "source_name": "AAFP Acute Abdominal Pain in Adults: Evaluation and Diagnosis",
+    "source_url": "https://www.aafp.org/pubs/afp/issues/2023/0600/acute-abdominal-pain-adults.html",
+    "license": "AAFP article; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase acute abdominal pain history, examination, laboratory and imaging principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于教学模拟中的问诊、查体、检查选择和来源追溯，不作为真实诊疗建议。"
+  },
+  {
+    "source_id": "merck_appendicitis_professional",
+    "source_name": "Merck Manual Professional Edition: Appendicitis",
+    "source_url": "https://www.merckmanuals.com/professional/gastrointestinal-disorders/acute-abdomen-and-surgical-gastroenterology/appendicitis",
+    "license": "Merck Manual page; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase appendicitis presentation, signs and diagnostic uncertainty into post-submit review notes",
+    "attribution_required": true,
+    "risk_note": "含诊断相关表述，只能用于提交后复盘、Skill 生成和审批，不得进入提交前 Coach 标准答案提示。"
+  },
+  {
+    "source_id": "statpearls_appendicitis_2025",
+    "source_name": "NCBI Bookshelf StatPearls: Appendicitis",
+    "source_url": "https://www.ncbi.nlm.nih.gov/books/NBK493193/",
+    "license": "NCBI Bookshelf / StatPearls; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase appendicitis evaluation and differential diagnosis content into post-submit teaching notes",
+    "attribution_required": true,
+    "risk_note": "用于教学复盘和 Skill 生成，不替代医学教师审核或真实诊疗。"
+  },
+  {
+    "source_id": "statpearls_acute_abdomen_2025",
+    "source_name": "NCBI Bookshelf StatPearls: Acute Abdomen",
+    "source_url": "https://www.ncbi.nlm.nih.gov/books/NBK459328/",
+    "license": "NCBI Bookshelf / StatPearls; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase acute abdomen evaluation and red-flag triage principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于识别危险信号和训练边界提示，不输出真实处置、用药剂量或治疗方案。"
   }
 ]

@@ -8,11 +8,21 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "rag_knowledge.sqlite3"
+DEFAULT_SEED_PATH = ROOT_DIR / "data" / "rag_knowledge" / "default_items.json"
+DEFAULT_SEED_UPDATED_BY = "system:default_rag_knowledge_seed"
 
 
 class RagKnowledgeStore:
-    def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
+    def __init__(
+        self,
+        database_path: Path = DEFAULT_DATABASE_PATH,
+        *,
+        seed_defaults: bool = False,
+        seed_path: Path = DEFAULT_SEED_PATH,
+    ) -> None:
         self.database_path = database_path
+        self.seed_defaults = seed_defaults
+        self.seed_path = seed_path
 
     def upsert_item(self, item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
         self._initialize()
@@ -115,6 +125,69 @@ class RagKnowledgeStore:
                 )
                 """
             )
+            if self.seed_defaults:
+                _seed_default_items(connection, self.seed_path)
+
+
+def _seed_default_items(connection: sqlite3.Connection, seed_path: Path) -> None:
+    if not seed_path.exists():
+        return
+    payload = json.loads(seed_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        return
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        normalized_item = _normalize_item(item, updated_by=DEFAULT_SEED_UPDATED_BY)
+        existing_row = connection.execute(
+            "SELECT item_json FROM rag_knowledge_items WHERE knowledge_id = ?",
+            (normalized_item["knowledge_id"],),
+        ).fetchone()
+        if existing_row is not None:
+            existing_item = json.loads(existing_row[0])
+            if existing_item.get("updated_by") != DEFAULT_SEED_UPDATED_BY:
+                continue
+            connection.execute(
+                """
+                UPDATE rag_knowledge_items
+                SET scope = ?,
+                    case_id = ?,
+                    visibility = ?,
+                    item_json = ?,
+                    updated_at = ?
+                WHERE knowledge_id = ?
+                """,
+                (
+                    normalized_item["scope"],
+                    normalized_item["case_id"],
+                    normalized_item["visibility"],
+                    json.dumps(normalized_item, ensure_ascii=False),
+                    normalized_item["updated_at"],
+                    normalized_item["knowledge_id"],
+                ),
+            )
+            continue
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO rag_knowledge_items (
+                knowledge_id,
+                scope,
+                case_id,
+                visibility,
+                item_json,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_item["knowledge_id"],
+                normalized_item["scope"],
+                normalized_item["case_id"],
+                normalized_item["visibility"],
+                json.dumps(normalized_item, ensure_ascii=False),
+                normalized_item["updated_at"],
+            ),
+        )
 
 
 def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
@@ -141,4 +214,4 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-rag_knowledge_store = RagKnowledgeStore()
+rag_knowledge_store = RagKnowledgeStore(seed_defaults=True)

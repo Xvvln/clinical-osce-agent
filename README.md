@@ -105,6 +105,9 @@ clinical-osce-agent/
 | MedCaseReasoning | 诊断推理依据、鉴别诊断 reasoning point 提炼参考 | 以数据集卡说明为准；复杂病例报告需二次教学化加工 |
 | CaseReportCollective | 后续扩展病例筛选与结构化参考 | CC BY 4.0；当前只作为扩展来源，不直接进入 MVP 主数据 |
 | EasyMED | 标准化病人、意图识别和评测模块设计参考 | 仅做架构参考，不直接照搬产品形态 |
+| AAFP Acute Abdominal Pain in Adults | 急腹痛问诊、查体、基础检查和影像选择的教学知识库种子 | 仅人工网页检索后改写为短教学提示，用于 Coach / 复盘 / Skill grounding，不作为真实诊疗建议 |
+| Merck Manual Professional: Appendicitis | 训练提交后急性阑尾炎复盘知识库种子 | 含诊断相关内容，仅用于提交后复盘、Skill 生成和审批，不进入提交前 Coach 标准答案提示 |
+| NCBI StatPearls: Appendicitis / Acute Abdomen | 急性阑尾炎推理链、急腹症危险信号和安全边界教学知识库种子 | 仅用于 OSCE 教学模拟和来源追溯，不替代医学教师审核或真实临床指南 |
 
 当前仓库中的教学病例是面向 OSCE 训练目标进行结构化加工后的演示病例，用于医学教育模拟和系统评测，不代表正式临床指南或真实诊疗建议。若后续引入新的公开数据或教师审核病例，应同步更新来源台账、许可说明、风险说明和项目开发文档。
 
