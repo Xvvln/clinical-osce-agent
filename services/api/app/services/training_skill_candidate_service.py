@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol
 
 from google import genai
@@ -13,6 +11,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
+from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -462,63 +461,14 @@ def _retrieve_skill_generation_knowledge_context(
     *,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
-    database_path = getattr(rag_knowledge_store, "database_path", None)
-    if isinstance(database_path, Path) and not database_path.exists():
-        return []
-
-    case_ids = {str(case_id) for case_id in context.case_ids if str(case_id)}
-    scored_items: list[tuple[int, str, dict[str, Any]]] = []
-    for item in rag_knowledge_store.list_items():
-        if not _skill_generation_can_read_knowledge_item(item, case_ids):
-            continue
-        score = _score_knowledge_item_for_skill_generation(context, item)
-        if score <= 0:
-            continue
-        knowledge_id = str(item.get("knowledge_id", "")).strip()
-        scored_items.append((score, knowledge_id, item))
-
-    return [
-        _serialize_skill_generation_knowledge_item(item)
-        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))[:limit]
-    ]
-
-
-def _skill_generation_can_read_knowledge_item(item: dict[str, Any], case_ids: set[str]) -> bool:
-    visibility = str(item.get("visibility", "")).strip()
-    if visibility not in SKILL_GENERATION_RAG_VISIBILITIES:
-        return False
-    allowed_agents = [str(agent).strip() for agent in item.get("allowed_agents", []) if str(agent).strip()]
-    if allowed_agents and "skill_generation" not in allowed_agents:
-        return False
-    item_case_id = str(item.get("case_id", "")).strip()
-    if item_case_id and item_case_id not in case_ids:
-        return False
-    if str(item.get("scope", "")).strip() == "case" and not item_case_id:
-        return False
-    return True
-
-
-def _score_knowledge_item_for_skill_generation(context: TrainingSkillCandidateContext, item: dict[str, Any]) -> int:
-    haystack = " ".join(
-        [
-            str(item.get("knowledge_id", "")),
-            str(item.get("title", "")),
-            str(item.get("text", "")),
-            " ".join(str(tag) for tag in item.get("tags", []) if str(tag)),
-        ]
-    ).lower()
-    return sum(1 for term in _skill_generation_rag_terms(context) if term.lower() in haystack)
-
-
-def _skill_generation_rag_terms(context: TrainingSkillCandidateContext) -> list[str]:
-    raw_terms = [
+    query_terms = [
         context.pattern_id,
         *[item.item_id for item in context.missed_items],
         *[case_id for case_id in context.case_ids],
         *context.related_recommendations,
     ]
     for turn_pattern in context.turn_patterns:
-        raw_terms.extend(
+        query_terms.extend(
             [
                 turn_pattern.pattern_id,
                 turn_pattern.pattern_type,
@@ -526,40 +476,14 @@ def _skill_generation_rag_terms(context: TrainingSkillCandidateContext) -> list[
                 *turn_pattern.trigger_item_ids,
             ]
         )
-    terms: set[str] = set()
-    for raw_term in raw_terms:
-        normalized = str(raw_term).strip()
-        if not normalized:
-            continue
-        terms.add(normalized)
-        terms.update(token for token in re.split(r"[\s,，。；;:：、()（）]+", normalized) if token)
-        terms.update(_cjk_ngrams(normalized, min_size=2, max_size=6))
-    return sorted(terms, key=lambda term: (-len(term), term))
-
-
-def _cjk_ngrams(text: str, *, min_size: int, max_size: int) -> set[str]:
-    compact_text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9_]+", "", text)
-    if len(compact_text) < min_size:
-        return set()
-    return {
-        compact_text[start : start + size]
-        for size in range(min_size, min(max_size, len(compact_text)) + 1)
-        for start in range(0, len(compact_text) - size + 1)
-    }
-
-
-def _serialize_skill_generation_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
-    knowledge_id = str(item.get("knowledge_id", "")).strip()
-    return {
-        "reference": f"rag_knowledge:{knowledge_id}",
-        "knowledge_id": knowledge_id,
-        "title": str(item.get("title", "")).strip(),
-        "snippet": str(item.get("text", "")).strip(),
-        "source_id": str(item.get("source_id", "")).strip(),
-        "case_id": str(item.get("case_id", "")).strip(),
-        "visibility": str(item.get("visibility", "")).strip(),
-        "allowed_agents": [str(agent) for agent in item.get("allowed_agents", []) if str(agent)],
-    }
+    return retrieve_agent_context(
+        agent_role="skill_generation",
+        case_ids=context.case_ids,
+        query_terms=query_terms,
+        allowed_visibilities=SKILL_GENERATION_RAG_VISIBILITIES,
+        limit=limit,
+        store=rag_knowledge_store,
+    )
 
 
 def _add_knowledge_context_source_fields(candidate: dict[str, Any], context: TrainingSkillCandidateContext) -> None:
