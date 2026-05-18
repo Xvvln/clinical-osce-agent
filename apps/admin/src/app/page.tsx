@@ -557,6 +557,58 @@ type AdminSourcesResponse = Readonly<{
   sources: readonly AdminSourceRegistryEntry[];
 }>;
 
+type AdminRagKnowledgeItem = Readonly<{
+  knowledge_id: string;
+  scope: string;
+  case_id: string;
+  content_kind: string;
+  visibility: string;
+  allowed_agents: readonly string[];
+  source_id: string;
+  title: string;
+  text: string;
+  tags: readonly string[];
+  version: number;
+  updated_by: string;
+  updated_at: string;
+}>;
+
+type AdminRagKnowledgeItemPayload = Readonly<{
+  knowledge_id: string;
+  scope: string;
+  case_id: string;
+  content_kind: string;
+  visibility: string;
+  allowed_agents: readonly string[];
+  source_id: string;
+  title: string;
+  text: string;
+  tags: readonly string[];
+  version: number;
+}>;
+
+type AdminRagKnowledgeItemForm = Readonly<{
+  knowledge_id: string;
+  scope: string;
+  case_id: string;
+  content_kind: string;
+  visibility: string;
+  allowed_agents: string;
+  source_id: string;
+  title: string;
+  text: string;
+  tags: string;
+  version: number;
+}>;
+
+type AdminRagKnowledgeItemsResponse = Readonly<{
+  knowledge_items: readonly AdminRagKnowledgeItem[];
+}>;
+
+type AdminRagKnowledgeItemResponse = Readonly<{
+  knowledge_item: AdminRagKnowledgeItem;
+}>;
+
 type AdminModelConfigResponse = Readonly<{
   providers: readonly AdminModelProviderConfig[];
   policy: AdminModelConfigPolicy;
@@ -696,6 +748,22 @@ type AdminAuditEventsResponse = Readonly<{
   pagination: AdminPagination;
 }>;
 
+type AdminWorkspaceSectionId =
+  | "system"
+  | "resources"
+  | "training"
+  | "insights"
+  | "evaluation"
+  | "skillLoop"
+  | "audit";
+
+type AdminWorkspaceSection = Readonly<{
+  id: AdminWorkspaceSectionId;
+  label: string;
+  eyebrow: string;
+  targetId: string;
+}>;
+
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
 const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。";
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
@@ -710,8 +778,33 @@ const EMPTY_ADMIN_CASE_EDIT_FORM: AdminCaseFieldUpdatePayload = {
   chief_complaint: "",
   safety_notes: "",
 };
+const EMPTY_ADMIN_RAG_KNOWLEDGE_FORM: AdminRagKnowledgeItemForm = {
+  knowledge_id: "",
+  scope: "case",
+  case_id: "",
+  content_kind: "teaching_note",
+  visibility: "pre_submit_safe",
+  allowed_agents: "coach,skill_approval",
+  source_id: "",
+  title: "",
+  text: "",
+  tags: "",
+  version: 1,
+};
 const ADMIN_CASE_COURSE_MODULES = ["腹痛", "胸痛", "发热", "头痛", "咳嗽", "呼吸困难", "心悸", "消瘦", "黄疸", "水肿"];
 const ADMIN_CASE_DIFFICULTIES = ["初级", "中级", "高级"];
+const ADMIN_RAG_KNOWLEDGE_SCOPES = ["global", "case", "skill", "source"];
+const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ["pre_submit_safe", "post_submit_review", "admin_only", "source_only", "secret_scoring_only"];
+const adminWorkspaceSections: readonly AdminWorkspaceSection[] = [
+  { id: "system", label: "配置", eyebrow: "模型与检索", targetId: "admin-system" },
+  { id: "resources", label: "资源", eyebrow: "教学资源", targetId: "admin-resources" },
+  { id: "training", label: "训练", eyebrow: "训练证据", targetId: "admin-training" },
+  { id: "insights", label: "洞察", eyebrow: "错误模式", targetId: "admin-insights" },
+  { id: "evaluation", label: "评测", eyebrow: "质量评测", targetId: "admin-evaluation" },
+  { id: "audit", label: "审计", eyebrow: "审核追踪", targetId: "admin-audit" },
+  { id: "skillLoop", label: "Skill", eyebrow: "Skill 进化", targetId: "admin-skill-loop" },
+];
+const ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX = 96;
 
 class AdminApiError extends Error {
   readonly status: number;
@@ -871,6 +964,29 @@ function buildAdminCaseFieldUpdatePayload(form: AdminCaseFieldUpdatePayload): Ad
   };
 }
 
+function splitAdminCsvInput(value: string): readonly string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRagKnowledgeItemPayload {
+  return {
+    knowledge_id: form.knowledge_id.trim(),
+    scope: form.scope,
+    case_id: form.case_id.trim(),
+    content_kind: form.content_kind.trim(),
+    visibility: form.visibility,
+    allowed_agents: splitAdminCsvInput(form.allowed_agents),
+    source_id: form.source_id.trim(),
+    title: form.title.trim(),
+    text: form.text.trim(),
+    tags: splitAdminCsvInput(form.tags),
+    version: form.version,
+  };
+}
+
 function buildAdminRubricItemEditValues(rubric: AdminRubricDetail): Record<string, string> {
   return Object.fromEntries(
     rubric.dimensions.flatMap((dimension) => dimension.items.map((item) => [item.item_id, item.description])),
@@ -904,6 +1020,24 @@ async function getAdminSources(): Promise<readonly AdminSourceRegistryEntry[]> {
   return payload.sources;
 }
 
+async function getAdminRagKnowledgeItems(): Promise<readonly AdminRagKnowledgeItem[]> {
+  const response = await fetch("/api/admin/rag/knowledge", { method: "GET" });
+  await assertAdminResponseOk(response, "读取 RAG 知识库");
+  const payload = (await response.json()) as AdminRagKnowledgeItemsResponse;
+  return payload.knowledge_items;
+}
+
+async function upsertAdminRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload): Promise<AdminRagKnowledgeItem> {
+  const response = await fetch("/api/admin/rag/knowledge", {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  await assertAdminResponseOk(response, "保存 RAG 知识条目");
+  const responsePayload = (await response.json()) as AdminRagKnowledgeItemResponse;
+  return responsePayload.knowledge_item;
+}
+
 async function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
   const response = await fetch("/api/admin/model-config", { method: "GET" });
   await assertAdminResponseOk(response, "读取模型 API 配置");
@@ -912,7 +1046,7 @@ async function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
 
 async function getAdminRetrievalEval(): Promise<AdminRetrievalEval> {
   const response = await fetch("/api/admin/retrieval-eval", { method: "GET" });
-  await assertAdminResponseOk(response, "读取 RAG 召回评测");
+  await assertAdminResponseOk(response, "读取 RAG 检索评测");
   const payload = (await response.json()) as AdminRetrievalEvalResponse;
   return payload.retrieval_eval;
 }
@@ -1350,6 +1484,79 @@ function hasNextAdminPage(pagination: AdminPagination, itemCount: number): boole
   return pagination.offset + itemCount < pagination.total;
 }
 
+function getAdminWorkspacePanelClassName(_panelId: AdminWorkspaceSectionId, _activeSectionId: AdminWorkspaceSectionId, className: string): string {
+  return className;
+}
+
+function getAdminWorkspaceGroupClassName(_activeSectionId: AdminWorkspaceSectionId, className: string): string {
+  return className;
+}
+
+function AdminWorkspaceNavigator({
+  activeSectionId,
+  isCollapsed,
+  onSectionSelect,
+  onToggle,
+}: Readonly<{
+  activeSectionId: AdminWorkspaceSectionId;
+  isCollapsed: boolean;
+  onSectionSelect: (section: AdminWorkspaceSection) => void;
+  onToggle: () => void;
+}>) {
+  return (
+    <aside className="xl:sticky xl:top-4 xl:self-start">
+      <div className="rounded-[28px] border border-white/70 bg-white/75 p-2 shadow-[0_18px_50px_rgb(73_49_34_/_0.12)] backdrop-blur-xl">
+        <div className={["flex items-start gap-2 px-3 pt-2", isCollapsed ? "justify-center xl:px-1" : "justify-between"].join(" ")}>
+          <div className={isCollapsed ? "sr-only" : ""}>
+            <p className="text-xs font-semibold text-[#141413]">管理目录</p>
+            <p className="mt-1 hidden text-[11px] leading-4 text-[#8A7D6F] xl:block">按结构化追溯链跳转</p>
+          </div>
+          <button
+            aria-expanded={!isCollapsed}
+            aria-label={isCollapsed ? "展开管理后台模块导航" : "收起管理后台模块导航"}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full border border-[#E6DFD2] bg-white/80 text-sm font-semibold text-[#8A7D6F] shadow-sm transition hover:border-[#AE5630]/25 hover:bg-[#AE5630]/10 hover:text-[#AE5630]"
+            onClick={onToggle}
+            type="button"
+          >
+            <span aria-hidden="true">{isCollapsed ? "›" : "‹"}</span>
+          </button>
+        </div>
+        <nav aria-label="管理后台模块导航" className="admin-panel-scrollbar mt-2 flex gap-2 overflow-x-auto pb-1 xl:grid xl:overflow-visible xl:pb-0">
+          {adminWorkspaceSections.map((section) => {
+            const isActive = activeSectionId === section.id;
+            return (
+              <a
+                className={[
+                  "min-w-fit rounded-2xl text-sm transition whitespace-nowrap",
+                  isCollapsed ? "px-2 py-2 text-center" : "px-3 py-2 text-left",
+                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#AE5630]",
+                  isActive
+                    ? "border border-[#AE5630]/25 bg-[#AE5630]/10 text-[#AE5630] shadow-[inset_0_0_0_1px_rgba(174,86,48,0.16)]"
+                    : "border border-[#E6DFD2] bg-white/70 text-[#141413] hover:bg-[#F1ECE2]",
+                ].join(" ")}
+                href={`#${section.targetId}`}
+                key={section.id}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onSectionSelect(section);
+                }}
+                title={`${section.label}：${section.eyebrow}`}
+              >
+                <span className="font-semibold">{section.label}</span>
+                {isCollapsed ? null : (
+                  <span className={["ml-2 text-[11px] xl:ml-0 xl:mt-0.5 xl:block", isActive ? "text-[#AE5630]/75" : "text-[#8A7D6F]"].join(" ")}>
+                    {section.eyebrow}
+                  </span>
+                )}
+              </a>
+            );
+          })}
+        </nav>
+      </div>
+    </aside>
+  );
+}
+
 export default function AdminDashboardPage() {
   const [cases, setCases] = useState<readonly AdminCaseSummary[]>([]);
   const [selectedCaseRaw, setSelectedCaseRaw] = useState<AdminCaseRaw | null>(null);
@@ -1359,6 +1566,10 @@ export default function AdminDashboardPage() {
   const [isCaseEditBusy, setIsCaseEditBusy] = useState(false);
   const [busyRubricItemId, setBusyRubricItemId] = useState<string | null>(null);
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
+  const [ragKnowledgeItems, setRagKnowledgeItems] = useState<readonly AdminRagKnowledgeItem[]>([]);
+  const [ragKnowledgeForm, setRagKnowledgeForm] = useState<AdminRagKnowledgeItemForm>(EMPTY_ADMIN_RAG_KNOWLEDGE_FORM);
+  const [isRagKnowledgeBusy, setIsRagKnowledgeBusy] = useState(false);
+  const [ragKnowledgeStatusText, setRagKnowledgeStatusText] = useState("");
   const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
   const [retrievalEval, setRetrievalEval] = useState<AdminRetrievalEval | null>(null);
   const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>([]);
@@ -1403,6 +1614,8 @@ export default function AdminDashboardPage() {
   const [adminLoginErrorText, setAdminLoginErrorText] = useState<string | null>(null);
   const [isAdminLoginDialogOpen, setIsAdminLoginDialogOpen] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [activeAdminWorkspaceSectionId, setActiveAdminWorkspaceSectionId] = useState<AdminWorkspaceSectionId>("system");
+  const [isAdminNavigatorCollapsed, setIsAdminNavigatorCollapsed] = useState(false);
 
   const filteredCases = cases.filter((caseItem) =>
     includesSearchText(
@@ -1426,9 +1639,10 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
+    const [nextCases, nextSources, nextRagKnowledgeItems, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
+      getAdminRagKnowledgeItems(),
       getAdminModelConfig(),
       getAdminRetrievalEval(),
       getAdminSessions(initialListQuery),
@@ -1443,6 +1657,7 @@ export default function AdminDashboardPage() {
     ]);
     setCases(nextCases);
     setSources(nextSources);
+    setRagKnowledgeItems(nextRagKnowledgeItems);
     setModelConfig(nextModelConfig);
     setRetrievalEval(nextRetrievalEval);
     setSessions(nextSessionPage.sessions);
@@ -1497,6 +1712,64 @@ export default function AdminDashboardPage() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    function updateActiveAdminWorkspaceSection() {
+      let nextActiveSectionId = adminWorkspaceSections[0].id;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      const activeSectionCandidates: AdminWorkspaceSection[] = [];
+
+      if (window.scrollY > 0 && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+        nextActiveSectionId = adminWorkspaceSections[adminWorkspaceSections.length - 1].id;
+        setActiveAdminWorkspaceSectionId((currentSectionId) => (currentSectionId === nextActiveSectionId ? currentSectionId : nextActiveSectionId));
+        return;
+      }
+
+      const viewportAnchor = ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX;
+      for (const section of adminWorkspaceSections) {
+        const element = document.getElementById(section.targetId);
+        if (!element) {
+          continue;
+        }
+        const elementRect = element.getBoundingClientRect();
+        if (elementRect.bottom < 0 || elementRect.top > window.innerHeight) {
+          continue;
+        }
+        if (elementRect.top <= viewportAnchor && elementRect.bottom > viewportAnchor) {
+          activeSectionCandidates.push(section);
+        }
+        const distance = Math.abs(elementRect.top - viewportAnchor);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          nextActiveSectionId = section.id;
+        }
+      }
+
+      if (activeSectionCandidates.length > 0) {
+        nextActiveSectionId = activeSectionCandidates[activeSectionCandidates.length - 1].id;
+      }
+
+      setActiveAdminWorkspaceSectionId((currentSectionId) => (currentSectionId === nextActiveSectionId ? currentSectionId : nextActiveSectionId));
+    }
+
+    updateActiveAdminWorkspaceSection();
+    window.addEventListener("scroll", updateActiveAdminWorkspaceSection, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", updateActiveAdminWorkspaceSection);
+    };
+  }, []);
+
+  function handleAdminWorkspaceSectionSelect(section: AdminWorkspaceSection) {
+    setActiveAdminWorkspaceSectionId(section.id);
+    const element = document.getElementById(section.targetId);
+    if (!element) {
+      return;
+    }
+    const targetTop = element.getBoundingClientRect().top + window.scrollY - ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX;
+    window.history.replaceState(null, "", `#${section.targetId}`);
+    window.scrollTo({ left: 0, top: Math.max(0, targetTop), behavior: "auto" });
+  }
 
   async function handleAdminLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1589,6 +1862,37 @@ export default function AdminDashboardPage() {
       }
     } finally {
       setIsCaseImportBusy(false);
+    }
+  }
+
+  async function handleUpsertRagKnowledgeItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsRagKnowledgeBusy(true);
+    setRagKnowledgeStatusText("");
+    try {
+      const savedItem = await upsertAdminRagKnowledgeItem(buildAdminRagKnowledgePayload(ragKnowledgeForm));
+      setRagKnowledgeItems(await getAdminRagKnowledgeItems());
+      setRagKnowledgeForm((current) => ({
+        ...EMPTY_ADMIN_RAG_KNOWLEDGE_FORM,
+        case_id: current.case_id,
+        content_kind: current.content_kind,
+        knowledge_id: savedItem.knowledge_id,
+        scope: current.scope,
+        source_id: current.source_id,
+        visibility: current.visibility,
+      }));
+      setRagKnowledgeStatusText(`已保存知识条目：${savedItem.knowledge_id}`);
+      setStatusText(`已保存 RAG 知识条目：${savedItem.knowledge_id}`);
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setRagKnowledgeStatusText(message);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsRagKnowledgeBusy(false);
     }
   }
 
@@ -1946,12 +2250,23 @@ export default function AdminDashboardPage() {
   }
 
   const canReviewSelectedCandidate = selectedCandidate?.review.status === "ready_for_review";
+  const adminWorkspaceLayoutClassName = [
+    "mt-5 grid gap-4 transition-[grid-template-columns] duration-200",
+    isAdminNavigatorCollapsed ? "xl:grid-cols-[76px_minmax(0,1fr)]" : "xl:grid-cols-[220px_minmax(0,1fr)]",
+  ].join(" ");
+  const adminWorkspaceFrameClassName = "min-w-0 space-y-5";
+  const adminModuleShellClassName = "scroll-mt-6 rounded-[1.5rem] border border-[#E6DFD2] bg-white/60 p-4 shadow-sm";
+  const adminPanelCardClassName = "rounded-2xl border border-[#E6DFD2] bg-white/80 p-4 shadow-sm";
+  const adminWidePanelCardClassName = `${adminPanelCardClassName} xl:col-span-2`;
+  const adminEvidenceGridClassName = "mt-4 grid gap-5";
+  const adminTrainingColumnClassName = "grid gap-5 xl:grid-cols-2";
+  const adminDecisionColumnClassName = "grid gap-5";
 
   return (
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_20%_20%,rgba(174,86,48,0.10),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.75),rgba(250,249,245,0.35))]" />
       <div className={isAdminLoginDialogOpen ? "pointer-events-none blur-sm" : ""}>
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-[100rem]">
         <header className="rounded-[2rem] border border-[#E6DFD2] bg-white/75 p-6 shadow-sm backdrop-blur">
           <p className="text-xs font-medium uppercase tracking-[0.28em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
           <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1974,7 +2289,7 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
-        <section className="mt-5 grid gap-3 md:grid-cols-5">
+        <section className="mt-5 grid scroll-mt-6 gap-3 md:grid-cols-5" id="admin-overview">
           <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
             <p className="text-xs text-[#8A7D6F]">总览 · 训练 Session</p>
             <p className="mt-2 text-3xl font-semibold">{sessions.length}</p>
@@ -1997,12 +2312,27 @@ export default function AdminDashboardPage() {
           </article>
         </section>
 
-        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm" id="model-config">
+        <div className={adminWorkspaceLayoutClassName}>
+          <AdminWorkspaceNavigator
+            activeSectionId={activeAdminWorkspaceSectionId}
+            isCollapsed={isAdminNavigatorCollapsed}
+            onSectionSelect={handleAdminWorkspaceSectionSelect}
+            onToggle={() => setIsAdminNavigatorCollapsed((currentValue) => !currentValue)}
+          />
+          <div className={adminWorkspaceFrameClassName} id="admin-workspace-frame">
+        <section className={getAdminWorkspacePanelClassName("system", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-system">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">系统状态</h2>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">模型接入、RAG 检索和评分边界集中核对。</p>
+            </div>
+            <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">只读核查</p>
+          </div>
+        <section className={`mt-4 ${adminPanelCardClassName}`} id="model-config">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Model Configuration</p>
-              <h2 className="mt-1 text-xl font-semibold">模型 / API 配置</h2>
-              <p className="mt-2 text-sm leading-6 text-[#6F6257]">统一查看 Gemini、Vertex 和 OpenAI 兼容模型的启用状态；密钥不落库，可来自环境变量、本地 .env 或本次运行时内存配置。</p>
+              <h3 className="text-lg font-semibold">模型配置</h3>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">查看当前服务商、模型、密钥状态和运行时配置来源。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
               {modelConfig ? `配置来源：${modelConfig.policy.configuration_source}` : "读取中"}
@@ -2026,7 +2356,8 @@ export default function AdminDashboardPage() {
                   <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.secrets_persisted ? "持久化" : "不落库"}</p>
                 </article>
               </div>
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">密钥不落库：管理员端只展示配置状态，不回显完整 API Key。</p>
+              <div className="admin-panel-scrollbar mt-4 grid max-h-[28rem] gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
                 {modelConfig.providers.map((provider) => (
                   <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={provider.provider_id}>
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -2043,15 +2374,19 @@ export default function AdminDashboardPage() {
                       <p>认证：{provider.auth_mode}</p>
                       <p>密钥：{provider.secret_configured ? "已配置" : "未配置 / 使用 ADC"}</p>
                       <p>状态：{provider.integration_status}</p>
-                      {provider.base_url ? <p className="break-words">Base URL：{provider.base_url}</p> : null}
-                      {provider.project ? <p className="break-words">Project：{provider.project}</p> : null}
-                      {provider.location ? <p>Location：{provider.location}</p> : null}
-                      {provider.proxy_url ? <p className="break-words">Proxy：{provider.proxy_url}</p> : null}
-                      {provider.persist_directory ? <p className="break-words">Persist：{provider.persist_directory}</p> : null}
-                      {provider.collection ? <p className="break-words">Collection：{provider.collection}</p> : null}
                     </div>
-                    {provider.index_manifest?.status ? (
-                      <div className="mt-3 border-t border-[#E6DFD2] pt-3 text-xs leading-5 text-[#6F6257]">
+                    <details className="mt-3 rounded-xl border border-[#E6DFD2] bg-white px-3 py-2 text-xs leading-5 text-[#6F6257]">
+                      <summary className="cursor-pointer font-medium text-[#141413]">查看连接与索引细节</summary>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {provider.base_url ? <p className="break-words">地址：{provider.base_url}</p> : null}
+                        {provider.project ? <p className="break-words">项目：{provider.project}</p> : null}
+                        {provider.location ? <p>区域：{provider.location}</p> : null}
+                        {provider.proxy_url ? <p className="break-words">代理：{provider.proxy_url}</p> : null}
+                        {provider.persist_directory ? <p className="break-words">持久化目录：{provider.persist_directory}</p> : null}
+                        {provider.collection ? <p className="break-words">集合：{provider.collection}</p> : null}
+                      </div>
+                      {provider.index_manifest?.status ? (
+                        <div className="mt-3 border-t border-[#E6DFD2] pt-3">
                         <div className="grid gap-2 sm:grid-cols-2">
                           <p>索引状态：{formatChromaIndexStatus(provider.index_manifest.status)}</p>
                           <p>需重建：{provider.index_manifest.rebuild_required ? "是" : "否"}</p>
@@ -2060,12 +2395,13 @@ export default function AdminDashboardPage() {
                         </div>
                         <p className="mt-2 break-all text-[11px] text-[#8A7D6F]">Manifest：{provider.index_manifest.manifest_path}</p>
                       </div>
-                    ) : null}
-                    <p className="mt-3 text-xs leading-5 text-[#6F6257]">{provider.notes}</p>
+                      ) : null}
+                      <p className="mt-3">{provider.notes}</p>
+                      <p className="mt-2 text-[11px] leading-5 text-[#8A7D6F]">环境变量：{provider.required_env.join("、")}</p>
+                    </details>
                     {provider.missing_env.length > 0 ? (
                       <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">缺少：{provider.missing_env.join("、")}</p>
                     ) : null}
-                    <p className="mt-2 text-[11px] leading-5 text-[#8A7D6F]">环境变量：{provider.required_env.join("、")}</p>
                   </article>
                 ))}
               </div>
@@ -2075,13 +2411,12 @@ export default function AdminDashboardPage() {
           )}
         </section>
 
-        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+        <section className={`mt-5 ${adminPanelCardClassName}`}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Retrieval Evaluation</p>
-              <h2 className="mt-1 text-xl font-semibold">RAG 召回评测</h2>
-              <p className="mt-2 text-sm leading-6 text-[#6F6257]">
-                用标注查询验证反馈解释来源覆盖；RAG 只服务于反馈解释、学习推荐、引用展示和可追溯性。
+              <h3 className="text-lg font-semibold">RAG 检索评测</h3>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">
+                用标注查询验证知识点、学习材料和相似病例召回；结构化追溯覆盖另由报告和系统评测验证。
               </p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
@@ -2092,11 +2427,11 @@ export default function AdminDashboardPage() {
             <>
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
-                  <p className="text-xs text-[#8A7D6F]">Recall@3</p>
+                  <p className="text-xs text-[#8A7D6F]">前三召回</p>
                   <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.recall_at_3)}</p>
                 </article>
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
-                  <p className="text-xs text-[#8A7D6F]">Recall@5</p>
+                  <p className="text-xs text-[#8A7D6F]">前五召回</p>
                   <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.recall_at_5)}</p>
                 </article>
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
@@ -2108,7 +2443,7 @@ export default function AdminDashboardPage() {
                   <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.ndcg_at_5)}</p>
                 </article>
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
-                  <p className="text-xs text-[#8A7D6F]">Source Coverage</p>
+                  <p className="text-xs text-[#8A7D6F]">检索目标覆盖</p>
                   <p className="mt-1 text-2xl font-semibold">{formatRetrievalMetric(retrievalEval.metrics.source_coverage)}</p>
                 </article>
               </div>
@@ -2118,7 +2453,7 @@ export default function AdminDashboardPage() {
                     <h3 className="text-sm font-semibold">标注查询与 Top5 命中</h3>
                     <p className="break-all text-xs text-[#8A7D6F]">{retrievalEval.gold_set.path}</p>
                   </div>
-                  <div className="mt-3 grid gap-2">
+                  <div className="admin-panel-scrollbar mt-3 grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
                     {retrievalEval.results.map((result) => (
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={result.query_id}>
                         <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
@@ -2132,26 +2467,26 @@ export default function AdminDashboardPage() {
                     ))}
                   </div>
                 </article>
-                <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
-                  <h3 className="text-sm font-semibold">边界说明</h3>
+                <details className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                  <summary className="cursor-pointer text-sm font-semibold">查看检索使用边界</summary>
                   <p className="mt-3 text-xs leading-6 text-[#6F6257]">ChromaDB 是本地可选持久向量检索；具体启用状态以服务端配置为准。</p>
                   <p className="mt-3 text-xs leading-6 text-[#6F6257]">{retrievalEval.boundary.chroma_scope}</p>
                   <p className="mt-2 text-xs leading-6 text-[#6F6257]">{retrievalEval.boundary.scoring_boundary}</p>
                   <p className="mt-2 text-xs leading-6 text-[#8A7D6F]">用途：{retrievalEval.boundary.rag_usage}</p>
-                </article>
+                </details>
               </div>
             </>
           ) : (
-            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 RAG 召回评测。</p>
+            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 RAG 检索评测。</p>
           )}
         </section>
+        </section>
 
-        <section className="mt-5 rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+        <section className={getAdminWorkspacePanelClassName("resources", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-resources">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Case Ledger</p>
-              <h2 className="mt-1 text-xl font-semibold">病例与来源台账</h2>
-              <p className="mt-2 text-sm leading-6 text-[#6F6257]">只读核对病例、Rubric 引用、来源追踪与医学安全边界，不在管理端直接修改医学事实。</p>
+              <h2 className="text-xl font-semibold">病例与来源台账</h2>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">只读核对病例、Rubric 引用、来源追踪与医学安全边界。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{filteredCases.length}/{cases.length} 个病例</p>
           </div>
@@ -2163,8 +2498,8 @@ export default function AdminDashboardPage() {
             type="search"
             value={caseSearchText}
           />
-          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <div className="grid max-h-80 gap-2 overflow-y-auto pr-1">
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
+            <div className="admin-panel-scrollbar grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
               {filteredCases.length > 0 ? (
                 filteredCases.map((caseItem) => (
                   <button
@@ -2187,7 +2522,7 @@ export default function AdminDashboardPage() {
               )}
             </div>
             {selectedCaseRaw ? (
-              <article className="rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+              <article className="admin-panel-scrollbar max-h-[42rem] overflow-y-auto rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4 pr-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] text-[#AE5630]">{selectedCaseRaw.case_id}</p>
@@ -2418,13 +2753,182 @@ export default function AdminDashboardPage() {
           <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
+                <p className="text-xs font-semibold text-[#AE5630]">RAG 知识库</p>
+                <h3 className="mt-1 text-sm font-semibold">全局知识库 / 病例知识库</h3>
+                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">知识条目只服务 Coach、复盘、Skill 审批和可追溯解释，不参与评分裁判；需要绑定来源时使用 source_id。</p>
+              </div>
+              <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragKnowledgeItems.length} 条知识</p>
+            </div>
+            <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  知识 ID
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, knowledge_id: event.target.value }))}
+                    placeholder="留空由后端确定性生成"
+                    value={ragKnowledgeForm.knowledge_id}
+                  />
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  知识范围
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, scope: event.target.value }))}
+                    value={ragKnowledgeForm.scope}
+                  >
+                    {ADMIN_RAG_KNOWLEDGE_SCOPES.map((scope) => (
+                      <option key={scope} value={scope}>{scope}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  关联病例
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, case_id: event.target.value }))}
+                    value={ragKnowledgeForm.case_id}
+                  >
+                    <option value="">不绑定病例</option>
+                    {cases.map((caseItem) => (
+                      <option key={caseItem.case_id} value={caseItem.case_id}>{caseItem.case_title}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  内容类型
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, content_kind: event.target.value }))}
+                    value={ragKnowledgeForm.content_kind}
+                  />
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  可见性
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, visibility: event.target.value }))}
+                    value={ragKnowledgeForm.visibility}
+                  >
+                    {ADMIN_RAG_KNOWLEDGE_VISIBILITIES.map((visibility) => (
+                      <option key={visibility} value={visibility}>{visibility}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  source_id
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, source_id: event.target.value }))}
+                    value={ragKnowledgeForm.source_id}
+                  >
+                    <option value="">不绑定来源</option>
+                    {sources.map((source) => (
+                      <option key={source.source_id} value={source.source_id}>{source.source_id}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
+                  allowed_agents
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, allowed_agents: event.target.value }))}
+                    placeholder="coach,skill_approval,reflection"
+                    value={ragKnowledgeForm.allowed_agents}
+                  />
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  版本
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    min={1}
+                    onChange={(event) => {
+                      const nextVersion = Number(event.target.value);
+                      setRagKnowledgeForm((current) => ({ ...current, version: Number.isFinite(nextVersion) && nextVersion > 0 ? nextVersion : 1 }));
+                    }}
+                    type="number"
+                    value={ragKnowledgeForm.version}
+                  />
+                </label>
+              </div>
+              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                标题
+                <input
+                  className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, title: event.target.value }))}
+                  value={ragKnowledgeForm.title}
+                />
+              </label>
+              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                正文
+                <textarea
+                  className="min-h-28 rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal leading-6 text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, text: event.target.value }))}
+                  value={ragKnowledgeForm.text}
+                />
+              </label>
+              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                标签
+                <input
+                  className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, tags: event.target.value }))}
+                  placeholder="abdominal_pain,history_taking"
+                  value={ragKnowledgeForm.tags}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isRagKnowledgeBusy}
+                  type="submit"
+                >
+                  {isRagKnowledgeBusy ? "保存中" : "保存知识条目"}
+                </button>
+                <p className="text-xs leading-5 text-[#8A7D6F]">secret_scoring_only 不允许暴露给 coach、reflection、skill_approval 或 skill_generation。</p>
+              </div>
+              {ragKnowledgeStatusText ? (
+                <p className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">{ragKnowledgeStatusText}</p>
+              ) : null}
+            </form>
+            <div className="admin-panel-scrollbar mt-3 grid max-h-96 gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
+              {ragKnowledgeItems.length > 0 ? (
+                ragKnowledgeItems.map((item) => (
+                  <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={item.knowledge_id}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-mono text-[11px] text-[#AE5630]">{item.knowledge_id}</p>
+                        <h4 className="mt-1 text-sm font-semibold text-[#141413]">{item.title}</h4>
+                      </div>
+                      <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{item.visibility}</span>
+                    </div>
+                    <p className="mt-2">{item.text}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{item.scope}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{item.case_id || "全局"}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{item.content_kind}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{item.source_id || "未绑定"}</span>
+                    </div>
+                    <p className="mt-2">allowed_agents：{item.allowed_agents.length > 0 ? item.allowed_agents.join("、") : "未开放给 agent"}</p>
+                    <p className="mt-1">标签：{item.tags.length > 0 ? item.tags.join("、") : "无"}</p>
+                    <p className="mt-1 text-[#8A7D6F]">更新：{item.updated_by || "未知"} · {item.updated_at}</p>
+                  </article>
+                ))
+              ) : (
+                <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无 RAG 知识条目。</p>
+              )}
+            </div>
+          </section>
+
+          <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
                 <p className="text-xs font-semibold text-[#AE5630]">数据来源登记表</p>
                 <h3 className="mt-1 text-sm font-semibold">公开来源与许可核对</h3>
                 <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">核对 source_id、source_url、allowed_usage、attribution_required 和 risk_note，确保病例来源链路可追踪。</p>
               </div>
               <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{sources.length} 条来源</p>
             </div>
-            <div className="mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1 md:grid-cols-2">
+            <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1 md:grid-cols-2">
               {sources.length > 0 ? (
                 sources.map((source) => (
                   <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={source.source_id}>
@@ -2449,13 +2953,20 @@ export default function AdminDashboardPage() {
           </section>
         </section>
 
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-          <div className="grid gap-5">
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+        <section className={getAdminWorkspaceGroupClassName(activeAdminWorkspaceSectionId, adminModuleShellClassName)}>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">训练记录</h2>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">Session、评分报告、日志和智能体轨迹集中查看。</p>
+            </div>
+            <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">证据链</p>
+          </div>
+        <div className={adminEvidenceGridClassName}>
+          <div className={adminTrainingColumnClassName} id="admin-training">
+            <section className={adminPanelCardClassName}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Training Sessions</p>
-                  <h2 className="mt-1 text-xl font-semibold">训练 Session</h2>
+                  <h3 className="text-lg font-semibold">训练 Session</h3>
                 </div>
                 <div className="flex gap-2">
                   <input
@@ -2526,7 +3037,7 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
               </div>
-              <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {sessions.length > 0 ? (
                   sessions.map((session) => (
                     <button
@@ -2552,11 +3063,10 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminPanelCardClassName}>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Reports</p>
-                  <h2 className="mt-1 text-xl font-semibold">跨 Session 报告列表</h2>
+                  <h3 className="text-lg font-semibold">评分报告</h3>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {formatAdminPaginationRange(reportPagination, reports.length)} 份报告
@@ -2604,7 +3114,7 @@ export default function AdminDashboardPage() {
                   导出当前报告页 JSON
                 </button>
               </div>
-              <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {reports.length > 0 ? (
                   reports.map((report) => (
                     <button
@@ -2630,7 +3140,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminWidePanelCardClassName}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xl font-semibold">评分报告</h2>
                 {selectedReport ? (
@@ -2644,7 +3154,7 @@ export default function AdminDashboardPage() {
                 ) : null}
               </div>
               {selectedReport ? (
-                <div className="mt-4 grid gap-4">
+                <div className="admin-panel-scrollbar mt-4 grid max-h-[42rem] gap-4 overflow-y-auto pr-1">
                   <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
                     <p className="text-xs text-[#8A7D6F]">{selectedReport.report_id}</p>
                     <p className="mt-2 text-3xl font-semibold">{selectedReport.total_score} 分</p>
@@ -2676,7 +3186,7 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-sm font-semibold">证据图谱覆盖</h3>
+                    <h3 className="text-sm font-semibold">结构化证据覆盖</h3>
                     {selectedReport.evidence_graph_summary && selectedReport.evidence_graph_summary.total_evidence_node_count > 0 ? (
                       <div className="mt-2 grid gap-3">
                         <p className="rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">
@@ -2730,16 +3240,16 @@ export default function AdminDashboardPage() {
                       </div>
                     ) : (
                       <p className="mt-2 rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-sm text-[#6F6257]">
-                        当前报告暂无证据图谱覆盖数据。
+                        当前报告暂无结构化证据覆盖数据。
                       </p>
                     )}
                   </div>
                   <div>
-                    <h3 className="text-sm font-semibold">RAG 来源引用</h3>
+                    <h3 className="text-sm font-semibold">结构化来源引用</h3>
                     <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3">
-                      <h4 className="text-sm font-semibold text-[#141413]">答辩证据链</h4>
+                      <h4 className="text-sm font-semibold text-[#141413]">结构化追溯链</h4>
                       <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">
-                        评分项 → 证据 → 来源；用于展示反馈解释如何回到 rubric 和本轮证据，不参与评分裁判。
+                        结构化评分依据用于展示反馈解释如何回到 rubric 和本轮证据，不参与评分裁判。
                       </p>
                       <div className="mt-3 grid gap-2">
                         {getReportExplanationSourceItems(selectedReport).length > 0 ? (
@@ -2804,9 +3314,9 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminWidePanelCardClassName}>
               <h2 className="text-xl font-semibold">训练日志</h2>
-              <div className="mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {trainingEvents.length > 0 ? (
                   trainingEvents.map((event) => (
                     <div className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`${event.created_at}-${event.event_type}`}>
@@ -2824,9 +3334,9 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminWidePanelCardClassName}>
               <h2 className="text-xl font-semibold">受控话轮记忆</h2>
-              <div className="mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1">
                 {agentTurnEvents.length > 0 ? (
                   agentTurnEvents.map((event) => {
                     const turnPayload = getAgentTurnPayload(event);
@@ -2874,9 +3384,9 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminWidePanelCardClassName}>
               <h2 className="text-xl font-semibold">智能体决策轨迹</h2>
-              <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
                 {agentDecisionEvents.length > 0 ? (
                   agentDecisionEvents.map((event) => {
                     const decisionPayload = getAgentDecisionPayload(event);
@@ -2922,7 +3432,7 @@ export default function AdminDashboardPage() {
                 )}
               </div>
               <h3 className="mt-4 text-sm font-semibold">反思轨迹</h3>
-              <div className="mt-2 grid max-h-60 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-2 grid max-h-60 gap-2 overflow-y-auto pr-1">
                 {agentReflectionEvents.length > 0 ? (
                   agentReflectionEvents.map((event) => (
                     <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={`agent-reflection-${event.created_at}`}>
@@ -2940,19 +3450,19 @@ export default function AdminDashboardPage() {
             </section>
           </div>
 
-          <div className="grid gap-5">
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+          <div className={adminDecisionColumnClassName}>
+            <section className={getAdminWorkspacePanelClassName("insights", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-insights">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Error Patterns</p>
-                  <h2 className="mt-1 text-xl font-semibold">错误模式统计</h2>
+                  <h2 className="text-xl font-semibold">错误模式统计</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">聚合训练报告中的高频漏项、话轮模式和来源引用。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {insights ? `${insights.report_count} 份报告` : "待读取"}
                 </p>
               </div>
               {insights ? (
-                <div className="mt-4 grid gap-4">
+                <div className="admin-panel-scrollbar mt-4 grid max-h-[36rem] gap-4 overflow-y-auto pr-1">
                   <div>
                     <h3 className="text-sm font-semibold">常见漏项</h3>
                     <div className="mt-2 grid gap-2">
@@ -3008,7 +3518,7 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-sm font-semibold">高频 RAG 来源</h3>
+                    <h3 className="text-sm font-semibold">高频结构化来源</h3>
                     <div className="mt-2 grid gap-2">
                       {insights.frequent_source_references.length > 0 ? (
                         insights.frequent_source_references.map((sourceReference) => {
@@ -3028,7 +3538,7 @@ export default function AdminDashboardPage() {
                           );
                         })
                       ) : (
-                        <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无高频 RAG 来源。</p>
+                        <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无高频结构化来源。</p>
                       )}
                     </div>
                   </div>
@@ -3038,17 +3548,16 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={adminPanelCardClassName}>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Teaching Focus</p>
-                  <h2 className="mt-1 text-xl font-semibold">动态教学重点模式</h2>
-                  <p className="mt-2 text-sm leading-6 text-[#6F6257]">由病例结构、Rubric 和当前会话进度派生，避免把演示文案写死到单个病例。</p>
+                  <h2 className="text-xl font-semibold">教学重点</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">由病例结构、Rubric 和当前会话进度派生，避免把演示文案写死到单个病例。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{teachingFocusPatterns.length} 个模式</p>
               </div>
               <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-                <div className="grid max-h-80 gap-2 overflow-y-auto pr-1">
+                <div className="admin-panel-scrollbar grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
                   {teachingFocusPatterns.length > 0 ? (
                     teachingFocusPatterns.map((pattern) => (
                       <button
@@ -3090,7 +3599,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={getAdminWorkspacePanelClassName("evaluation", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-evaluation">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-xl font-semibold">系统评测</h2>
                 <button
@@ -3105,8 +3614,7 @@ export default function AdminDashboardPage() {
               <article className="mt-4 rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Evaluation Metrics</p>
-                    <h3 className="mt-1 text-sm font-semibold">系统评测图表摘要</h3>
+                    <h3 className="text-sm font-semibold">系统评测</h3>
                   </div>
                   <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                     最近耗时 {evaluationChartSummary.latestDurationMs} ms
@@ -3240,7 +3748,7 @@ export default function AdminDashboardPage() {
                           {result.session_id} · {getPassLabel(result.passed)} · 实际 {result.actual_total_score} / 期望 {result.expected_total_score}
                         </p>
                         <p className="mt-2 text-[#8A7D6F]">
-                          RAG 引用覆盖：{result.rag_source_coverage_passed ? "通过" : "未通过"} · rubric 覆盖率 {Math.round(result.rag_rubric_reference_coverage_ratio * 100)}% · 来源 {result.source_reference_count} 条 · 类型 {result.source_reference_types.length > 0 ? result.source_reference_types.join("、") : "无"}
+                          结构化追溯覆盖：{result.rag_source_coverage_passed ? "通过" : "未通过"} · rubric 覆盖率 {Math.round(result.rag_rubric_reference_coverage_ratio * 100)}% · 来源 {result.source_reference_count} 条 · 类型 {result.source_reference_types.length > 0 ? result.source_reference_types.join("、") : "无"}
                         </p>
                         {result.missing_rubric_references.length > 0 ? (
                           <p className="mt-1 font-mono text-[11px] text-[#AE5630]">缺失引用：{result.missing_rubric_references.join("、")}</p>
@@ -3264,11 +3772,11 @@ export default function AdminDashboardPage() {
               ) : null}
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={getAdminWorkspacePanelClassName("audit", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-audit">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Audit Log</p>
-                  <h2 className="mt-1 text-xl font-semibold">独立审核审计日志</h2>
+                  <h2 className="text-xl font-semibold">审核审计</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">按时间线查看候选 Skill、自动审批和管理员操作记录。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {formatAdminPaginationRange(auditPagination, auditEvents.length)} 条事件
@@ -3319,7 +3827,7 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
               </div>
-              <div className="mt-4 grid max-h-80 gap-2 overflow-y-auto pr-1">
+              <div className="admin-panel-scrollbar mt-4 grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
                 {auditEvents.length > 0 ? (
                   auditEvents.map((event) => (
                     <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={`${event.session_id}-${event.event_type}-${event.created_at}`}>
@@ -3339,11 +3847,11 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-skill-loop">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8A7D6F]">Skill Effects</p>
-                  <h2 className="mt-1 text-xl font-semibold">Skill 效果统计</h2>
+                  <h2 className="text-xl font-semibold">Skill 效果统计</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">展示启用 Skill 后的应用次数、样本状态和描述性效果。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {skillEffects?.label ?? "待读取"}
@@ -3380,7 +3888,7 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-5 shadow-sm">
+            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, adminPanelCardClassName)}>
               <div className="flex items-start justify-between gap-3">
                 <h2 className="text-xl font-semibold">候选 Skill 审核</h2>
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -3463,7 +3971,7 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
               </div>
-              <div className="mt-4 grid gap-2">
+              <div className="admin-panel-scrollbar mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1">
                 {candidates.length > 0 ? (
                   candidates.map((candidate) => (
                     <button
@@ -3515,7 +4023,7 @@ export default function AdminDashboardPage() {
                       </p>
                     )}
                   </div>
-                  <div className="mt-4 grid gap-3">
+                  <div className="admin-panel-scrollbar mt-4 grid max-h-[42rem] gap-3 overflow-y-auto pr-1">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <p className="text-xs text-[#8A7D6F]">模式类型</p>
@@ -3707,7 +4215,7 @@ export default function AdminDashboardPage() {
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">审核审计事件</h4>
-                      <div className="mt-2 grid max-h-64 gap-2 overflow-auto pr-1">
+                      <div className="admin-panel-scrollbar mt-2 grid max-h-64 gap-2 overflow-auto pr-1">
                         {candidateAuditEvents.length > 0 ? (
                           candidateAuditEvents.map((event) => (
                             <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={`${event.event_type}-${event.created_at}`}>
@@ -3732,6 +4240,9 @@ export default function AdminDashboardPage() {
                 <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个候选 Skill。</p>
               )}
             </section>
+          </div>
+        </div>
+        </section>
           </div>
         </div>
         </div>

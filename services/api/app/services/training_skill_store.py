@@ -13,7 +13,27 @@ from app.services.training_skill_policy import (
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
+CASES_DIR = ROOT_DIR / "data" / "cases"
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skills.sqlite3"
+
+STAGE_SCOPE_LABELS = {
+    "case_intro": "训练开始",
+    "history_taking": "问诊阶段",
+    "physical_exam": "查体阶段",
+    "auxiliary_testing": "辅助检查阶段",
+    "auxiliary_test": "辅助检查阶段",
+    "diagnosis_submission": "诊断提交前",
+    "diagnosis": "诊断整理阶段",
+    "feedback": "复盘阶段",
+    "feedback_review": "复盘阶段",
+}
+
+EFFECT_STATUS_LABELS = {
+    "insufficient_samples": "样本不足",
+    "improving": "观察到改善",
+    "neutral": "效果待观察",
+    "declining": "需要复核",
+}
 
 
 class TrainingSkillStore:
@@ -47,13 +67,31 @@ class TrainingSkillStore:
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row[0])
+        skill = json.loads(row[0])
+        hydrated_skill = _hydrate_skill_student_metadata(skill)
+        if hydrated_skill != skill:
+            with sqlite3.connect(self.database_path) as connection:
+                connection.execute(
+                    "UPDATE training_skills SET skill_json = ? WHERE skill_id = ?",
+                    (json.dumps(hydrated_skill, ensure_ascii=False), skill_id),
+                )
+        return hydrated_skill
 
     def list_enabled_skills(self) -> list[dict[str, Any]]:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:
-            rows = connection.execute("SELECT skill_json FROM training_skills ORDER BY id").fetchall()
-        return [json.loads(row[0]) for row in rows]
+            rows = connection.execute("SELECT skill_id, skill_json FROM training_skills ORDER BY id").fetchall()
+            skills: list[dict[str, Any]] = []
+            for skill_id, skill_json in rows:
+                skill = json.loads(skill_json)
+                hydrated_skill = _hydrate_skill_student_metadata(skill)
+                if hydrated_skill != skill:
+                    connection.execute(
+                        "UPDATE training_skills SET skill_json = ? WHERE skill_id = ?",
+                        (json.dumps(hydrated_skill, ensure_ascii=False), skill_id),
+                    )
+                skills.append(hydrated_skill)
+        return skills
 
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +173,85 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         skill["web_check_status"] = str(candidate.get("web_check_status", "not_configured"))
     if scope != "global" or candidate.get("external_evidence_checks"):
         skill["external_evidence_checks"] = list(candidate.get("external_evidence_checks", []))
-    return skill
+    return _hydrate_skill_student_metadata(skill)
+
+
+def _hydrate_skill_student_metadata(skill: dict[str, Any]) -> dict[str, Any]:
+    hydrated_skill = dict(skill)
+    support_count = _safe_int(hydrated_skill.get("support_count"))
+    source_report_count = _safe_int(hydrated_skill.get("source_report_count"))
+    effect_status = str(hydrated_skill.get("effect_status", "insufficient_samples"))
+    description = _non_empty_string(hydrated_skill.get("description"))
+    suggested_strategy = _non_empty_string(hydrated_skill.get("suggested_strategy"))
+
+    hydrated_skill["student_visible_summary"] = _non_empty_string(
+        hydrated_skill.get("student_visible_summary")
+    ) or description
+    hydrated_skill["learning_action"] = _non_empty_string(hydrated_skill.get("learning_action")) or suggested_strategy
+    hydrated_skill["activation_summary"] = _non_empty_string(
+        hydrated_skill.get("activation_summary")
+    ) or _build_activation_summary(hydrated_skill)
+    hydrated_skill["source_summary"] = _non_empty_string(
+        hydrated_skill.get("source_summary")
+    ) or _build_source_summary(source_report_count, support_count)
+    hydrated_skill["effect_status_label"] = _non_empty_string(
+        hydrated_skill.get("effect_status_label")
+    ) or EFFECT_STATUS_LABELS.get(effect_status, effect_status)
+    hydrated_skill["scope_label"] = _non_empty_string(hydrated_skill.get("scope_label")) or _scope_label(
+        hydrated_skill
+    )
+    return hydrated_skill
+
+
+def _build_activation_summary(skill: dict[str, Any]) -> str:
+    case_ids = [str(case_id) for case_id in skill.get("case_ids", []) if str(case_id)]
+    case_summary = "适用于所有当前开放病例"
+    if case_ids:
+        case_summary = f"适用于{'、'.join(_case_title(case_id) for case_id in case_ids)}"
+
+    stage_scope = [str(stage) for stage in skill.get("stage_scope", []) if str(stage)]
+    stage_summary = "匹配训练阶段时"
+    if stage_scope:
+        stage_summary = f"{'、'.join(STAGE_SCOPE_LABELS.get(stage, stage) for stage in stage_scope)}时"
+
+    trigger_item_ids = [str(item_id) for item_id in skill.get("trigger_item_ids", []) if str(item_id)]
+    if not trigger_item_ids and str(skill.get("trigger_item_id", "")):
+        trigger_item_ids = [str(skill["trigger_item_id"])]
+    if trigger_item_ids:
+        return f"{case_summary}；{stage_summary}，当当前缺口命中 {len(trigger_item_ids)} 个关联训练点时触发。"
+    return f"{case_summary}；{stage_summary}，当训练状态匹配该 Skill 条件时触发。"
+
+
+def _build_source_summary(source_report_count: int, support_count: int) -> str:
+    if source_report_count > 0:
+        return f"来自 {source_report_count} 份报告，累计支持 {support_count} 次。"
+    return f"来自训练事件聚合，累计支持 {support_count} 次。"
+
+
+def _scope_label(skill: dict[str, Any]) -> str:
+    return "个人 Skill" if str(skill.get("scope", "global")) == "personal" else "全局 Skill"
+
+
+def _case_title(case_id: str) -> str:
+    case_path = CASES_DIR / f"{case_id}.json"
+    if not case_path.exists():
+        return case_id
+    payload = json.loads(case_path.read_text(encoding="utf-8"))
+    title = payload.get("case_title")
+    return str(title) if title else case_id
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _non_empty_string(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 training_skill_store = TrainingSkillStore()

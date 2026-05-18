@@ -93,6 +93,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/teaching-focus\/patterns\/\$\{encodeURIComponent\(focusId\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/retrieval-eval"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge", \{/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /临境 OSCE 智能体（TraceOSCE）管理后台/);
@@ -111,9 +113,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /训练话轮模式/);
   assert.match(adminPageSource, /insights\.frequent_turn_patterns/);
   assert.match(adminPageSource, /学习建议/);
-  assert.match(adminPageSource, /证据图谱覆盖/);
-  assert.match(adminPageSource, /答辩证据链/);
-  assert.match(adminPageSource, /评分项 → 证据 → 来源/);
+  assert.match(adminPageSource, /结构化证据覆盖/);
+  assert.match(adminPageSource, /结构化追溯链/);
+  assert.match(adminPageSource, /结构化评分依据/);
   assert.match(adminPageSource, /getReportExplanationSourceItems\(selectedReport\)/);
   assert.match(adminPageSource, /explanationItem\.source_references\.filter\(\(reference\) => reference\.startsWith\("rubric:"\)\)/);
   assert.match(adminPageSource, /explanationItem\.source_references\.filter\(\(reference\) => reference\.startsWith\("evidence:"\)\)/);
@@ -167,12 +169,24 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /modelConfig\.policy\.deployment_mode/);
   assert.match(adminPageSource, /Runtime 写入/);
   assert.match(adminPageSource, /modelConfig\.policy\.runtime_write_supported \? "允许本次运行时配置" : "仅环境变量配置"/);
-  assert.match(adminPageSource, /RAG 召回评测/);
-  assert.match(adminPageSource, /Recall@3/);
+  assert.match(adminPageSource, /RAG 检索评测/);
+  assert.match(adminPageSource, /结构化追溯覆盖/);
+  assert.match(adminPageSource, /RAG 知识库/);
+  assert.match(adminPageSource, /全局知识库 \/ 病例知识库/);
+  assert.match(adminPageSource, /pre_submit_safe/);
+  assert.match(adminPageSource, /secret_scoring_only/);
+  assert.match(adminPageSource, /allowed_agents/);
+  assert.match(adminPageSource, /source_id/);
+  assert.match(adminPageSource, /不参与评分裁判/);
+  assert.match(adminPageSource, /检索目标覆盖/);
+  assert.match(adminPageSource, /前三召回/);
   assert.match(adminPageSource, /MRR@5/);
   assert.match(adminPageSource, /nDCG@5/);
   assert.match(adminPageSource, /ChromaDB 是本地可选持久向量检索/);
-  assert.match(adminPageSource, /Gemini、Vertex 和 OpenAI 兼容模型/);
+  assert.doesNotMatch(adminPageSource, /用标注查询验证反馈解释来源覆盖/);
+  assert.doesNotMatch(adminPageSource, /RAG 引用覆盖/);
+  assert.doesNotMatch(adminPageSource, /评分项 → 证据 → 来源/);
+  assert.match(adminPageSource, /查看当前服务商、模型、密钥状态和运行时配置来源/);
   assert.match(adminPageSource, /provider\.label/);
   assert.match(adminPageSource, /provider\.integration_status/);
   assert.match(adminPageSource, /provider\.persist_directory/);
@@ -201,6 +215,122 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /candidateAuditEvents\.length > 0/);
   assert.match(adminPageSource, /setAuditEvents\(nextAuditPage\.events\)/);
   assert.match(adminPageSource, /setCandidateAuditEvents\(await getTrainingSkillCandidateEvents\(candidateId\)\)/);
+});
+
+test("admin dashboard organizes the long workspace with a report-style side navigator", () => {
+  assert.match(adminPageSource, /type AdminWorkspaceSectionId =/);
+  assert.match(adminPageSource, /const adminWorkspaceSections: readonly AdminWorkspaceSection\[] =/);
+  assert.match(adminPageSource, /function getAdminWorkspacePanelClassName/);
+  assert.match(adminPageSource, /function getAdminWorkspaceGroupClassName/);
+  assert.match(adminPageSource, /function AdminWorkspaceNavigator/);
+  assert.match(adminPageSource, /id="admin-workspace-frame"/);
+  assert.match(adminPageSource, /const adminWorkspaceLayoutClassName = \[/);
+  assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-5"/);
+  assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5"/);
+  assert.match(adminPageSource, /const adminWidePanelCardClassName = `\$\{adminPanelCardClassName\} xl:col-span-2`/);
+  assert.doesNotMatch(adminPageSource, /label: "总览"/);
+  assert.doesNotMatch(adminPageSource, /function AdminWorkspaceInspector/);
+  assert.match(adminPageSource, /const \[isAdminNavigatorCollapsed, setIsAdminNavigatorCollapsed\]/);
+  assert.match(adminPageSource, /isAdminNavigatorCollapsed \? "xl:grid-cols-\[76px_minmax\(0,1fr\)\]" : "xl:grid-cols-\[220px_minmax\(0,1fr\)\]"/);
+  assert.match(adminPageSource, /<aside className="xl:sticky xl:top-4 xl:self-start">/);
+  assert.match(adminPageSource, /xl:sticky xl:top-4/);
+  assert.doesNotMatch(adminPageSource, /position: fixed/);
+  assert.match(adminPageSource, /aria-label="管理后台模块导航"/);
+  assert.match(adminPageSource, /aria-expanded=\{!isCollapsed\}/);
+  assert.match(adminPageSource, /const \[activeAdminWorkspaceSectionId, setActiveAdminWorkspaceSectionId\]/);
+  assert.match(adminPageSource, /adminWorkspaceLayoutClassName/);
+  assert.match(adminPageSource, /管理目录/);
+  assert.match(adminPageSource, /backdrop-blur-xl/);
+  assert.match(adminPageSource, /展开管理后台模块导航/);
+  assert.match(adminPageSource, /收起管理后台模块导航/);
+  assert.doesNotMatch(adminPageSource, /xl:flex-wrap xl:justify-end/);
+  assert.doesNotMatch(adminPageSource, /window\.scrollTo\(\{ left: 0, top: targetTop \}\)/);
+  assert.match(adminPageSource, /window\.addEventListener\("scroll", updateActiveAdminWorkspaceSection/);
+  assert.match(adminPageSource, /window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 2/);
+  assert.match(adminPageSource, /admin-panel-scrollbar/);
+  assert.match(adminGlobalsSource, /\.admin-panel-scrollbar/);
+  assert.match(adminGlobalsSource, /overflow-x: clip;/);
+  assert.match(adminGlobalsSource, /scrollbar-gutter: stable;/);
+  for (const label of ["配置", "资源", "训练", "洞察", "评测", "Skill", "审计"]) {
+    assert.match(adminPageSource, new RegExp(`label: "${label}"`));
+  }
+  for (const targetId of [
+    "admin-system",
+    "admin-resources",
+    "admin-training",
+    "admin-insights",
+    "admin-evaluation",
+    "admin-audit",
+    "admin-skill-loop",
+  ]) {
+    assert.match(adminPageSource, new RegExp(`targetId: "${targetId}"`));
+    assert.match(adminPageSource, new RegExp(`id="${targetId}"`));
+  }
+  assert.ok(adminPageSource.indexOf('targetId: "admin-audit"') < adminPageSource.indexOf('targetId: "admin-skill-loop"'));
+  assert.match(adminPageSource, /const activeSectionCandidates: AdminWorkspaceSection\[] = \[]/);
+  assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
+  assert.match(adminPageSource, /教学资源/);
+  assert.match(adminPageSource, /训练证据/);
+  assert.match(adminPageSource, /质量评测/);
+  assert.match(adminPageSource, /Skill 进化/);
+});
+
+test("admin side navigator keeps clicked modules selected instead of drifting to the next module", () => {
+  assert.match(adminPageSource, /const ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX = 96;/);
+  assert.doesNotMatch(adminPageSource, /const viewportAnchor = Math\.min\(window\.innerHeight \* 0\.32, 240\);/);
+  assert.match(adminPageSource, /const viewportAnchor = ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX;/);
+  assert.match(adminPageSource, /function handleAdminWorkspaceSectionSelect\(section: AdminWorkspaceSection\)/);
+  assert.match(adminPageSource, /const targetTop = element\.getBoundingClientRect\(\)\.top \+ window\.scrollY - ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX;/);
+  assert.match(adminPageSource, /window\.scrollTo\(\{ left: 0, top: Math\.max\(0, targetTop\), behavior: "auto" \}\);/);
+  assert.match(adminPageSource, /event\.preventDefault\(\);\s+onSectionSelect\(section\);/s);
+  assert.doesNotMatch(adminPageSource, /<section className=\{getAdminWorkspaceGroupClassName\(activeAdminWorkspaceSectionId, adminModuleShellClassName\)\} id="admin-training">/);
+  assert.match(adminPageSource, /<div className=\{adminTrainingColumnClassName\} id="admin-training">/);
+  assert.match(adminPageSource, /const activeSectionCandidates: AdminWorkspaceSection\[] = \[]/);
+  assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
+});
+
+test("admin dashboard keeps module content compact and student-facing copy Chinese", () => {
+  for (const englishHeading of [
+    "System Readiness",
+    "Model Configuration",
+    "Retrieval Evaluation",
+    "Case Ledger",
+    "Training Evidence",
+    "Training Sessions",
+    "Reports",
+    "Error Patterns",
+    "Teaching Focus",
+    "Evaluation Metrics",
+    "Audit Log",
+    "Skill Effects",
+  ]) {
+    assert.doesNotMatch(adminPageSource, new RegExp(`>${englishHeading}<`));
+  }
+
+  for (const chineseHeading of [
+    "系统状态",
+    "模型配置",
+    "RAG 检索评测",
+    "病例与来源台账",
+    "训练记录",
+    "评分报告",
+    "错误模式统计",
+    "教学重点",
+    "系统评测",
+    "审核审计",
+    "Skill 效果统计",
+  ]) {
+    assert.match(adminPageSource, new RegExp(`>${chineseHeading}<`));
+  }
+
+  assert.match(adminPageSource, /const adminModuleShellClassName =/);
+  assert.match(adminPageSource, /const adminPanelCardClassName =/);
+  assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5";/);
+  assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName = .*xl:grid-cols/);
+  assert.match(adminPageSource, /max-h-\[28rem\]/);
+  assert.match(adminPageSource, /<details className="mt-3 rounded-xl/);
+  assert.match(adminPageSource, />查看连接与索引细节</);
+  assert.match(adminPageSource, />查看检索使用边界</);
 });
 
 test("admin action buttons keep Chinese labels on one line", () => {
@@ -276,6 +406,12 @@ test("admin dashboard shows a read-only case rubric and source ledger", () => {
   assert.match(adminPageSource, /type AdminCaseRawResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRubricResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminSourcesResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagKnowledgeItem = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagKnowledgeItemsResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagKnowledgeItemResponse = Readonly<\{/);
+  assert.match(adminPageSource, /knowledge_items: readonly AdminRagKnowledgeItem\[];/);
+  assert.match(adminPageSource, /const \[ragKnowledgeItems, setRagKnowledgeItems\]/);
+  assert.match(adminPageSource, /const \[ragKnowledgeForm, setRagKnowledgeForm\]/);
   assert.match(adminPageSource, /fetch\("\/api\/cases"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/cases\/\$\{caseId\}\/raw`/);
   assert.doesNotMatch(adminPageSource, /fetch\(`\/api\/cases\/\$\{caseId\}\/raw`/);
@@ -472,7 +608,7 @@ test("admin dashboard renders a system evaluation chart summary", () => {
   assert.match(adminPageSource, /type EvaluationChartSummary = Readonly<\{/);
   assert.match(adminPageSource, /function buildEvaluationChartSummary\(/);
   assert.match(adminPageSource, /const evaluationChartSummary = buildEvaluationChartSummary\(evaluations, selectedEvaluation\)/);
-  assert.match(adminPageSource, /系统评测图表摘要/);
+  assert.match(adminPageSource, />系统评测</);
   assert.match(adminPageSource, /批次数/);
   assert.match(adminPageSource, /总用例/);
   assert.match(adminPageSource, /通过率/);

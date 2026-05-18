@@ -33,22 +33,24 @@ def recommend_knowledge_items(report: dict[str, Any]) -> list[dict[str, str]]:
 def _recommend_missing_evidence(item_score: dict[str, Any]) -> list[dict[str, str]]:
     recommendations: list[dict[str, str]] = []
     for evidence in item_score.get("missing_evidence", []):
-        for document in search_retrieval_documents(evidence, limit=5):
-            if document.source_type != "knowledge" or document.reference != f"knowledge:{evidence}":
-                continue
+        document = _resolve_knowledge_document(evidence)
+        if document is not None:
             recommendations.append(
                 {
-                    "reference": document.reference,
-                    "title": document.title,
-                    "reason": f"关联本轮缺失证据：{document.snippet}",
+                    "reference": document["reference"],
+                    "title": document["title"],
+                    "reason": f"关联本轮缺失证据：{document['snippet']}",
                 }
             )
-            break
     return recommendations
 
 
 def _recommend_similar_cases(case_id: str) -> list[dict[str, str]]:
     current_case = _load_case_payload(case_id)
+    retrieved_cases = _recommend_retrieved_similar_cases(current_case)
+    if retrieved_cases:
+        return retrieved_cases
+
     current_module = current_case.get("course_module", "")
     candidates = [
         payload
@@ -73,6 +75,60 @@ def _recommend_similar_cases(case_id: str) -> list[dict[str, str]]:
         }
         for payload in candidates[:2]
     ]
+
+
+def _resolve_knowledge_document(evidence_id: str) -> dict[str, str] | None:
+    for payload in _load_case_payloads():
+        diagnosis = payload.get("diagnosis", {})
+        title = f"{diagnosis.get('main_diagnosis', payload['case_title'])}诊断依据"
+        for point in diagnosis.get("reasoning_points", []):
+            if point.get("point_id") != evidence_id:
+                continue
+            return {
+                "reference": f"knowledge:{evidence_id}",
+                "title": title,
+                "snippet": point.get("statement", evidence_id),
+            }
+    return None
+
+
+def _recommend_retrieved_similar_cases(current_case: dict[str, Any]) -> list[dict[str, str]]:
+    query = _similar_case_query(current_case)
+    if not query:
+        return []
+
+    try:
+        documents = search_retrieval_documents(query, limit=8)
+    except Exception:
+        return []
+
+    current_case_reference = f"case:{current_case['case_id']}"
+    recommendations: list[dict[str, str]] = []
+    for document in documents:
+        if document.source_type != "case" or document.reference == current_case_reference:
+            continue
+        recommendations.append(
+            {
+                "reference": document.reference,
+                "title": document.title,
+                "reason": "与当前病例在主诉、标签或训练目标上相近，可用于下一轮对照训练。",
+            }
+        )
+        if len(recommendations) >= 2:
+            break
+    return recommendations
+
+
+def _similar_case_query(current_case: dict[str, Any]) -> str:
+    query_parts = [
+        current_case.get("chief_complaint", ""),
+        current_case.get("course_module", ""),
+        " ".join(current_case.get("tags", [])),
+    ]
+    diagnosis = current_case.get("diagnosis", {})
+    if isinstance(diagnosis, dict):
+        query_parts.append(str(diagnosis.get("main_diagnosis", "")))
+    return " ".join(str(part) for part in query_parts if part).strip()
 
 
 def _load_case_payload(case_id: str) -> dict[str, Any]:

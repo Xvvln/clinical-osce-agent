@@ -1195,36 +1195,54 @@ def _apply_passive_coach_review(
         current_intent=current_intent,
         revealed_fact_id=revealed_fact_id,
     )
-    coach_response = normalize_coach_response(
-        coach_agent(
-            CoachRequest(
-                case_id=case.case_id,
-                case_title=case.case_title,
-                chief_complaint=case.chief_complaint,
-                stage=state.get("stage", "case_intro"),
-                prompt_kind="passive_turn_review",
-                base_hint=base_hint,
-                prior_messages=messages,
-                pedagogy_state={
-                    **(
-                        pedagogy_state := build_pedagogy_state(
-                            {
-                                **dict(state),
-                                "current_intent": current_intent,
-                                "turn_analysis": turn_analysis,
-                                "messages": messages,
-                            }
-                        )
-                    ),
-                    "patient_reply": patient_reply,
-                    "revealed_fact_id": revealed_fact_id,
-                },
-                clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                skill_context=state.get("evolution_candidates", []),
-                forbidden_terms=forbidden_terms,
+    pedagogy_state = build_pedagogy_state(
+        {
+            **dict(state),
+            "current_intent": current_intent,
+            "turn_analysis": turn_analysis,
+            "messages": messages,
+        }
+    )
+    try:
+        coach_response = normalize_coach_response(
+            coach_agent(
+                CoachRequest(
+                    case_id=case.case_id,
+                    case_title=case.case_title,
+                    chief_complaint=case.chief_complaint,
+                    stage=state.get("stage", "case_intro"),
+                    prompt_kind="passive_turn_review",
+                    base_hint=base_hint,
+                    prior_messages=messages,
+                    pedagogy_state={
+                        **pedagogy_state,
+                        "patient_reply": patient_reply,
+                        "revealed_fact_id": revealed_fact_id,
+                    },
+                    clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
+                    skill_context=state.get("evolution_candidates", []),
+                    forbidden_terms=forbidden_terms,
+                )
             )
         )
-    )
+    except Exception as exc:
+        unavailable_turn_analysis = {
+            **turn_analysis,
+            "coach_unavailable": True,
+            "coach_error_type": exc.__class__.__name__,
+        }
+        return messages, _append_agent_turn_memory(
+            {**dict(state), "agent_turn_memory": agent_turn_memory},
+            student_message=student_message,
+            reply="",
+            reply_role="coach",
+            current_intent=current_intent,
+            turn_policy="passive_review_unavailable",
+            turn_analysis=unavailable_turn_analysis,
+            agent_path=["input_router_node", "patient_response_node", "coach_agent_unavailable"],
+            revealed_fact_id=None,
+            safety_flags=list(state.get("safety_flags", [])),
+        )
     forced_hint = base_hint.strip()
     response_hint = coach_response.hint.strip()
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)

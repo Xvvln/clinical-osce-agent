@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from copy import deepcopy
@@ -25,6 +26,7 @@ from app.services.deployment_config import (
 from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
+from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.startup_config_service import build_startup_config_self_check
@@ -62,6 +64,24 @@ ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_generated",
     "admin_skill_candidate_rejected",
 }
+RAG_KNOWLEDGE_SCOPES = {"global", "case", "skill", "source"}
+RAG_KNOWLEDGE_VISIBILITIES = {
+    "pre_submit_safe",
+    "post_submit_review",
+    "admin_only",
+    "source_only",
+    "secret_scoring_only",
+}
+RAG_KNOWLEDGE_AGENT_ROLES = {
+    "admin",
+    "coach",
+    "reflection",
+    "retrieval_eval",
+    "scoring",
+    "skill_approval",
+    "skill_generation",
+}
+RAG_GENERATIVE_AGENT_ROLES = {"coach", "reflection", "skill_approval", "skill_generation"}
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
 SOURCE_REGISTRY_PATH = RUBRICS_DIR.parent / "attribution" / "source_registry" / "sources.json"
@@ -230,6 +250,22 @@ class AdminRubricItemUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: str = Field(..., min_length=1)
+
+
+class AdminRagKnowledgeItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_id: str = ""
+    scope: str = ""
+    case_id: str = ""
+    content_kind: str = ""
+    visibility: str = ""
+    allowed_agents: list[str] = Field(default_factory=list)
+    source_id: str = ""
+    title: str = ""
+    text: str = ""
+    tags: list[str] = Field(default_factory=list)
+    version: int = Field(default=1, ge=1)
 
 
 class AdminEvaluationRunRequest(BaseModel):
@@ -404,6 +440,20 @@ def _require_owned_session(session_id: str, auth_token: str | None) -> dict[str,
     if session is None or session.get("student_id") != user["user_id"]:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+def _require_open_owned_session(session_id: str, auth_token: str | None) -> dict[str, object]:
+    session = _require_owned_session(session_id, auth_token)
+    if _is_completed_training_session(session):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="训练已结束，请查看报告。")
+    return session
+
+
+def _is_completed_training_session(session: dict[str, object]) -> bool:
+    return bool(session.get("final_submission")) or bool(session.get("feedback_report")) or session.get("stage") in {
+        "diagnosis_submission",
+        "feedback",
+    }
 
 
 def _append_admin_skill_candidate_review_event(
@@ -604,18 +654,100 @@ def _load_admin_sources() -> list[dict[str, Any]]:
     return sources if isinstance(sources, list) else []
 
 
+def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> dict[str, Any]:
+    item = request.model_dump()
+    item["scope"] = item["scope"].strip()
+    item["case_id"] = item["case_id"].strip()
+    item["content_kind"] = item["content_kind"].strip()
+    item["visibility"] = item["visibility"].strip()
+    item["source_id"] = item["source_id"].strip()
+    item["title"] = item["title"].strip()
+    item["text"] = item["text"].strip()
+    item["allowed_agents"] = [str(agent).strip() for agent in item["allowed_agents"] if str(agent).strip()]
+    item["tags"] = [str(tag).strip() for tag in item["tags"] if str(tag).strip()]
+    knowledge_id = str(item.get("knowledge_id", "")).strip()
+    if not knowledge_id:
+        knowledge_id = _generate_admin_rag_knowledge_id(item)
+    item["knowledge_id"] = knowledge_id
+    _validate_admin_rag_knowledge_item(item)
+    return item
+
+
+def _generate_admin_rag_knowledge_id(item: dict[str, Any]) -> str:
+    case_part = item["case_id"] if item["case_id"] else "global"
+    digest = hashlib.sha1(
+        f"{item['scope']}|{case_part}|{item['content_kind']}|{item['title']}|{item['text']}".encode("utf-8")
+    ).hexdigest()[:12]
+    return f"kb:{item['scope']}:{case_part}:{item['content_kind']}:{digest}"
+
+
+def _validate_admin_rag_knowledge_item(item: dict[str, Any]) -> None:
+    if item["scope"] not in RAG_KNOWLEDGE_SCOPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge scope")
+    if item["visibility"] not in RAG_KNOWLEDGE_VISIBILITIES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge visibility")
+    if not item["content_kind"] or not item["title"] or not item["text"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="knowledge content requires kind, title and text",
+        )
+    unknown_agent_roles = sorted(set(item["allowed_agents"]) - RAG_KNOWLEDGE_AGENT_ROLES)
+    if unknown_agent_roles:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge agent role")
+    if item["scope"] == "case" and not _admin_case_exists(item["case_id"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="case knowledge requires a valid case_id")
+    if item["case_id"] and not _admin_case_exists(item["case_id"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="case_id is not registered")
+    if item["source_id"] and item["source_id"] not in _admin_source_ids():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source_id is not registered")
+    if item["visibility"] == "secret_scoring_only" and set(item["allowed_agents"]) & RAG_GENERATIVE_AGENT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="secret scoring knowledge cannot be exposed to generative agents",
+        )
+
+
+def _admin_case_exists(case_id: str) -> bool:
+    if not case_id or "/" in case_id or "\\" in case_id or ".." in case_id:
+        return False
+    return (CASES_DIR / f"{case_id}.json").exists()
+
+
+def _admin_source_ids() -> set[str]:
+    return {
+        str(source.get("source_id", "")).strip()
+        for source in _load_admin_sources()
+        if str(source.get("source_id", "")).strip()
+    }
+
+
 def _get_enabled_skill_summaries(user_id: str) -> list[dict[str, object]]:
     return [
-        {
-            "skill_id": skill["skill_id"],
-            "title": skill["title"],
-            "student_visible_summary": "已启用教学策略，后续训练会在适用病例、阶段和当前缺口匹配时生效。",
-            "support_count": skill["support_count"],
-            "effect_status": skill.get("effect_status", "insufficient_samples"),
-        }
+        _serialize_enabled_skill_for_profile(skill)
         for skill in osce_session_service.training_skill_store.list_enabled_skills()
         if _enabled_skill_visible_to_user(skill, user_id)
     ]
+
+
+def _serialize_enabled_skill_for_profile(skill: dict[str, Any]) -> dict[str, object]:
+    support_count = int(skill.get("support_count") or 0)
+    source_report_count = int(skill.get("source_report_count") or 0)
+    effect_status = str(skill.get("effect_status", "insufficient_samples"))
+
+    return {
+        "skill_id": str(skill["skill_id"]),
+        "title": str(skill["title"]),
+        "student_visible_summary": str(skill["student_visible_summary"]),
+        "description": str(skill["description"]),
+        "learning_action": str(skill["learning_action"]),
+        "activation_summary": str(skill["activation_summary"]),
+        "source_summary": str(skill["source_summary"]),
+        "effect_status_label": str(skill["effect_status_label"]),
+        "scope_label": str(skill["scope_label"]),
+        "support_count": support_count,
+        "source_report_count": source_report_count,
+        "effect_status": effect_status,
+    }
 
 
 def _enabled_skill_visible_to_user(skill: dict[str, Any], user_id: str) -> bool:
@@ -1158,6 +1290,54 @@ def get_admin_retrieval_eval(
     return {"retrieval_eval": run_retrieval_eval()}
 
 
+@app.get("/api/admin/rag/knowledge")
+def list_admin_rag_knowledge_items(
+    scope: str = Query(default=""),
+    case_id: str = Query(default=""),
+    visibility: str = Query(default=""),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {
+        "knowledge_items": rag_knowledge_store.list_items(
+            scope=scope.strip(),
+            case_id=case_id.strip(),
+            visibility=visibility.strip(),
+        )
+    }
+
+
+@app.post("/api/admin/rag/knowledge")
+def upsert_admin_rag_knowledge_item(
+    request: AdminRagKnowledgeItemRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    item = _build_admin_rag_knowledge_item(request)
+    return {"knowledge_item": rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])}
+
+
+@app.get("/api/admin/rag/knowledge/{knowledge_id:path}")
+def get_admin_rag_knowledge_item(
+    knowledge_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    item = rag_knowledge_store.get_item(knowledge_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="knowledge item not found")
+    return {"knowledge_item": item}
+
+
+@app.delete("/api/admin/rag/knowledge/{knowledge_id:path}")
+def delete_admin_rag_knowledge_item(
+    knowledge_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"knowledge_id": knowledge_id, "deleted": rag_knowledge_store.delete_item(knowledge_id)}
+
+
 @app.post("/api/admin/demo/seed")
 def seed_admin_demo_data(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -1578,7 +1758,7 @@ def send_message(
     request: MessageRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.handle_message(session_id, request.message)
@@ -1595,7 +1775,7 @@ def request_physical_exam(
     request: PhysicalExamRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_physical_exam(session_id, request.exam_code)
@@ -1612,7 +1792,7 @@ def request_auxiliary_test(
     request: AuxiliaryTestRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
@@ -1629,7 +1809,7 @@ def record_hypothesis(
     request: HypothesisRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
@@ -1645,7 +1825,7 @@ def request_hint(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_hint(session_id)
@@ -1674,7 +1854,7 @@ def submit_diagnosis(
     request: SubmitDiagnosisRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_owned_session(session_id, auth_token)
+    session_payload = _require_open_owned_session(session_id, auth_token)
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.submit_diagnosis(

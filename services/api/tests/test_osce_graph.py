@@ -564,6 +564,32 @@ def test_osce_graph_passively_reviews_regular_history_turn_without_visible_hint(
     assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_silent"
 
 
+def test_osce_graph_passive_coach_failure_does_not_drop_patient_reply() -> None:
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise RuntimeError("coach quota exhausted")
+
+    graph = build_osce_graph(patient_responder=canonical_patient_responder, coach_agent=failing_coach_agent)
+
+    result = graph.invoke(
+        base_hint_state(
+            hint_requested=False,
+            student_message="什么时候开始疼的？",
+            current_intent="",
+            reply="",
+        )
+    )
+
+    assert result["reply"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert result["messages"] == [
+        {"role": "student", "content": "什么时候开始疼的？"},
+        {"role": "patient", "content": "24 小时前开始，最初是上腹部隐痛。"},
+    ]
+    assert result["agent_turn_memory"][-1]["reply_role"] == "coach"
+    assert result["agent_turn_memory"][-1]["reply"] == ""
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_unavailable"
+    assert result["agent_turn_memory"][-1]["turn_analysis"]["coach_error_type"] == "RuntimeError"
+
+
 def test_osce_graph_passive_coach_suppresses_unforced_model_hint_after_successful_fact_disclosure() -> None:
     captured_coach_requests: list[object] = []
 

@@ -125,6 +125,24 @@ export type EvidenceGraphSummary = Readonly<{
   scoring_boundary: string;
 }>;
 
+export type ReportCoverageMapItem = Readonly<{
+  id: string;
+  label: string;
+  status: "covered" | "pending";
+}>;
+
+export type ReportCoverageMapPayload = Readonly<{
+  history: readonly ReportCoverageMapItem[];
+  physical_exam: readonly ReportCoverageMapItem[];
+  auxiliary_test: readonly ReportCoverageMapItem[];
+  reasoning: readonly ReportCoverageMapItem[];
+}>;
+
+export type ReportTrainingProgressSnapshot = Readonly<{
+  coverage_map: ReportCoverageMapPayload;
+  next_focus?: string;
+}>;
+
 export type RubricScoreItem = Readonly<{
   score: number;
   max_score: number;
@@ -148,6 +166,7 @@ export type FeedbackReportPayload = Readonly<{
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
   evidence_graph_summary?: EvidenceGraphSummary | null;
+  training_progress_snapshot?: ReportTrainingProgressSnapshot | null;
   ai_reflection_review?: Partial<AiReflectionReview>;
   personal_skill_candidate?: Partial<PersonalTrainingSkillCandidate>;
   feedback_summary: string;
@@ -160,6 +179,7 @@ export type FeedbackReport = FeedbackReportPayload &
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
     evidence_graph_summary: EvidenceGraphSummary | null;
+    training_progress_snapshot: ReportTrainingProgressSnapshot | null;
     ai_reflection_review: AiReflectionReview;
     personal_skill_candidate: PersonalTrainingSkillCandidate;
   }>;
@@ -172,6 +192,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,
+    training_progress_snapshot: report.training_progress_snapshot ?? null,
     ai_reflection_review: normalizeAiReflectionReview(report.ai_reflection_review),
     personal_skill_candidate: normalizePersonalTrainingSkillCandidate(report.personal_skill_candidate),
   };

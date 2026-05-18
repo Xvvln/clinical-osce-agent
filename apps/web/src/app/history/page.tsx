@@ -9,6 +9,10 @@ type PersistedSessionSummary = Readonly<{
   stage: string;
   created_at: string;
   updated_at: string;
+  is_completed: boolean;
+  can_continue: boolean;
+  has_report: boolean;
+  completion_status: "in_progress" | "diagnosis_submitted" | "report_ready";
 }>;
 
 type PersistedSessionListResponse = Readonly<{
@@ -25,6 +29,23 @@ function formatSavedAt(savedAt: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function getTrainingSessionStatusLabel(session: PersistedSessionSummary): string {
+  if (session.completion_status === "report_ready") {
+    return "报告已生成";
+  }
+  if (session.completion_status === "diagnosis_submitted") {
+    return "已提交诊断";
+  }
+  return "训练中";
+}
+
+function getTrainingSessionStatusClass(session: PersistedSessionSummary): string {
+  if (session.is_completed) {
+    return "border-brand/20 bg-brand/10 text-brand";
+  }
+  return "border-border bg-background text-muted-foreground";
 }
 
 async function getCurrentUserSessions(): Promise<readonly PersistedSessionSummary[]> {
@@ -93,8 +114,6 @@ export default function HistoryPage() {
     }
   }
 
-  const workbenchHref = backendSessions[0] ? `/?session_id=${backendSessions[0].session_id}` : "/";
-
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
@@ -111,7 +130,7 @@ export default function HistoryPage() {
             </div>
             <Link
               className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-              href={workbenchHref}
+              href="/"
             >
               返回工作台
             </Link>
@@ -141,8 +160,8 @@ export default function HistoryPage() {
                     <h2 className="mt-2 text-base font-semibold tracking-tight">病例：{session.case_id}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">当前阶段：{session.stage}</p>
                   </div>
-                  <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-                    后端持久化
+                  <span className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${getTrainingSessionStatusClass(session)}`}>
+                    {getTrainingSessionStatusLabel(session)}
                   </span>
                 </div>
                 <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -150,24 +169,30 @@ export default function HistoryPage() {
                     更新时间：{formatSavedAt(session.updated_at)} · 创建时间：{formatSavedAt(session.created_at)}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Link
-                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs transition hover:bg-accent"
-                      href={`/api/me/sessions/${session.session_id}`}
-                    >
-                      查看状态
-                    </Link>
-                    <Link
-                      className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs transition hover:bg-accent"
-                      href={`/?session_id=${session.session_id}`}
-                    >
-                      继续训练
-                    </Link>
-                    <Link
-                      className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
-                      href={`/report?session_id=${session.session_id}`}
-                    >
-                      打开报告
-                    </Link>
+                    {session.can_continue ? (
+                      <Link
+                        className="w-fit rounded-md border border-border bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs transition hover:bg-accent"
+                        href={`/?session_id=${session.session_id}`}
+                      >
+                        继续训练
+                      </Link>
+                    ) : (
+                      <span className="w-fit rounded-md border border-border bg-muted px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground">
+                        训练已结束
+                      </span>
+                    )}
+                    {session.is_completed || session.has_report ? (
+                      <Link
+                        className="w-fit rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
+                        href={`/report?session_id=${session.session_id}`}
+                      >
+                        打开报告
+                      </Link>
+                    ) : (
+                      <span className="w-fit rounded-md border border-border bg-muted px-3 py-2 text-xs font-medium whitespace-nowrap text-muted-foreground">
+                        提交诊断后可查看报告
+                      </span>
+                    )}
                     <button
                       className="w-fit rounded-md border border-destructive/30 bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-destructive shadow-xs transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={deletingSessionId !== null}

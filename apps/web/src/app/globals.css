@@ -145,6 +145,33 @@
     background-clip: content-box;
   }
 
+  .report-card-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    scrollbar-color: #d8d4cc transparent;
+  }
+
+  .report-card-scrollbar::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
+  .report-card-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .report-card-scrollbar::-webkit-scrollbar-thumb {
+    background: #d8d4cc;
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+  }
+
+  .report-card-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #c9c4bb;
+    background-clip: content-box;
+  }
+
   @keyframes clinical-osce-thinking-dot {
     0%,
     80%,

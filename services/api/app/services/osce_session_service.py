@@ -298,7 +298,27 @@ class OsceSessionService:
         session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
         if stored_report is not None:
-            return _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
+            report = _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
+            if session is None:
+                return report
+            case = load_case_node(session.case_id)
+            report = _ensure_report_training_progress_snapshot(report, session, case)
+            if session.final_submission is not None and _report_needs_completed_session_hydration(report):
+                session.feedback_report = report
+                agent_update = _refresh_agent_state(session, use_reflection=True)
+                session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+                session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
+                self._save_session(session)
+                self.report_store.save_report(session.feedback_report)
+                self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
+                self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
+                return session.feedback_report
+            if report.get("training_progress_snapshot") != stored_report.get("training_progress_snapshot"):
+                if session.feedback_report is not None:
+                    session.feedback_report = report
+                    self._save_session(session)
+                self.report_store.save_report(report)
+            return report
         if session is None:
             return None
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, report_requested=True))
@@ -306,23 +326,11 @@ class OsceSessionService:
         agent_update = _refresh_agent_state(session, use_reflection=True)
         if session.feedback_report is not None:
             case = load_case_node(session.case_id)
+            session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
             session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
             self._save_session(session)
             self.report_store.save_report(session.feedback_report)
-            self._append_event(
-                session,
-                "report_generated",
-                {
-                    "report_id": session.feedback_report["report_id"],
-                    "total_score": session.feedback_report["total_score"],
-                    "missed_items": session.feedback_report["missed_items"],
-                    "knowledge_recommendations": session.feedback_report["knowledge_recommendations"],
-                    "source_references": session.feedback_report["source_references"],
-                    "source_reference_items": session.feedback_report["source_reference_items"],
-                    "personal_skill_candidate": session.feedback_report["personal_skill_candidate"],
-                    "ai_reflection_review": session.feedback_report["ai_reflection_review"],
-                },
-            )
+            self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
             self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
         else:
             self._save_session(session)
@@ -541,6 +549,40 @@ def _personal_skill_payload_for_report(
         skill_store=service.training_skill_store,
         event_store=service.training_event_store,
     )
+
+
+def _ensure_report_training_progress_snapshot(
+    report: dict[str, Any],
+    session: OsceSession,
+    case: Case,
+) -> dict[str, Any]:
+    if report.get("training_progress_snapshot"):
+        return report
+    return {
+        **report,
+        "training_progress_snapshot": _serialize_training_progress(session, case),
+    }
+
+
+def _report_needs_completed_session_hydration(report: dict[str, Any]) -> bool:
+    ai_reflection_review = report.get("ai_reflection_review")
+    personal_skill_candidate = report.get("personal_skill_candidate")
+    ai_status = ai_reflection_review.get("status") if isinstance(ai_reflection_review, dict) else None
+    skill_status = personal_skill_candidate.get("status") if isinstance(personal_skill_candidate, dict) else None
+    return ai_status != "generated" or skill_status in {None, "legacy_report", "not_complete"}
+
+
+def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "report_id": report.get("report_id"),
+        "total_score": report.get("total_score"),
+        "missed_items": report.get("missed_items", []),
+        "knowledge_recommendations": report.get("knowledge_recommendations", []),
+        "source_references": report.get("source_references", []),
+        "source_reference_items": report.get("source_reference_items", []),
+        "personal_skill_candidate": report.get("personal_skill_candidate"),
+        "ai_reflection_review": report.get("ai_reflection_review"),
+    }
 
 
 def _ensure_personal_skill_report_defaults(

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 import yaml
 
 from app import main
@@ -15,12 +16,23 @@ from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResu
 from app.services.osce_session_service import OsceSession, OsceSessionService, osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
+from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_service import TemplateTrainingSkillCandidateGenerator, TrainingSkillCandidateService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_skill_auto_approval_service import TrainingSkillAutoApprovalSettingsStore
+
+
+@pytest.fixture(autouse=True)
+def isolate_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "training_skill_auto_approval_settings_store",
+        TrainingSkillAutoApprovalSettingsStore(tmp_path / "training_skill_auto_approval.sqlite3"),
+        raising=False,
+    )
 
 
 @contextmanager
@@ -125,6 +137,10 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/sources"),
             unauthenticated_client.get("/api/admin/model-config"),
             unauthenticated_client.get("/api/admin/retrieval-eval"),
+            unauthenticated_client.get("/api/admin/rag/knowledge"),
+            unauthenticated_client.post("/api/admin/rag/knowledge", json={}),
+            unauthenticated_client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
+            unauthenticated_client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.get("/api/admin/reports"),
             unauthenticated_client.get("/api/admin/sessions"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
@@ -174,6 +190,10 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/sources"),
             client.get("/api/admin/model-config"),
             client.get("/api/admin/retrieval-eval"),
+            client.get("/api/admin/rag/knowledge"),
+            client.post("/api/admin/rag/knowledge", json={}),
+            client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
+            client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.get("/api/admin/reports"),
             client.get("/api/admin/sessions"),
             client.get("/api/admin/sessions/missing_session/report"),
@@ -261,6 +281,104 @@ def test_admin_can_toggle_training_skill_auto_approval_settings(tmp_path, monkey
     assert updated_settings["updated_by"] == "admin@example.test"
     assert isinstance(updated_settings["updated_at"], str)
     assert persisted_response.json()["settings"] == updated_settings
+
+
+def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "rag_knowledge_store", RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3"), raising=False)
+
+    payload = {
+        "knowledge_id": "case:appendicitis_001:teaching:history_migration",
+        "scope": "case",
+        "case_id": "appendicitis_001",
+        "content_kind": "teaching_note",
+        "visibility": "pre_submit_safe",
+        "allowed_agents": ["coach", "skill_approval"],
+        "source_id": "fareez_osce_2022",
+        "title": "右下腹痛问诊中的疼痛迁移",
+        "text": "追问疼痛是否从上腹或脐周转移到右下腹，用于训练疼痛演变采集。",
+        "tags": ["abdominal_pain", "history_taking"],
+        "version": 1,
+    }
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        create_response = client.post("/api/admin/rag/knowledge", json=payload)
+        list_response = client.get("/api/admin/rag/knowledge?case_id=appendicitis_001&visibility=pre_submit_safe")
+        detail_response = client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
+        delete_response = client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
+        empty_detail_response = client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
+
+    assert create_response.status_code == 200
+    created_item = create_response.json()["knowledge_item"]
+    assert created_item == {
+        **payload,
+        "updated_by": "admin@example.test",
+        "updated_at": created_item["updated_at"],
+    }
+    assert created_item["updated_at"]
+
+    assert list_response.status_code == 200
+    assert list_response.json()["knowledge_items"] == [created_item]
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["knowledge_item"] == created_item
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "knowledge_id": "case:appendicitis_001:teaching:history_migration",
+        "deleted": True,
+    }
+    assert empty_detail_response.status_code == 404
+
+
+def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "rag_knowledge_store", RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3"), raising=False)
+    base_payload = {
+        "knowledge_id": "case:appendicitis_001:teaching:history_migration",
+        "scope": "case",
+        "case_id": "appendicitis_001",
+        "content_kind": "teaching_note",
+        "visibility": "pre_submit_safe",
+        "allowed_agents": ["coach"],
+        "source_id": "fareez_osce_2022",
+        "title": "右下腹痛问诊中的疼痛迁移",
+        "text": "追问疼痛演变。",
+        "tags": ["history_taking"],
+        "version": 1,
+    }
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        missing_case_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={**base_payload, "case_id": ""},
+        )
+        unknown_source_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={**base_payload, "source_id": "unknown_source"},
+        )
+        secret_for_coach_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={**base_payload, "visibility": "secret_scoring_only", "allowed_agents": ["coach"]},
+        )
+        empty_content_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={
+                "scope": "global",
+                "content_kind": "",
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach"],
+                "title": "",
+                "text": "",
+            },
+        )
+
+    assert missing_case_response.status_code == 400
+    assert missing_case_response.json()["detail"] == "case knowledge requires a valid case_id"
+    assert unknown_source_response.status_code == 400
+    assert unknown_source_response.json()["detail"] == "source_id is not registered"
+    assert secret_for_coach_response.status_code == 400
+    assert secret_for_coach_response.json()["detail"] == "secret scoring knowledge cannot be exposed to generative agents"
+    assert empty_content_response.status_code == 400
+    assert empty_content_response.json()["detail"] == "knowledge content requires kind, title and text"
 
 
 def test_admin_can_list_dynamic_teaching_focus_patterns(tmp_path, monkeypatch) -> None:
@@ -2503,6 +2621,12 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "title": "临床推理链纠偏提示",
         "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
         "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "student_visible_summary": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
+        "learning_action": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "activation_summary": "适用于所有当前开放病例；训练开始时，当当前缺口命中 1 个关联训练点时触发。",
+        "source_summary": "来自 2 份报告，累计支持 2 次。",
+        "effect_status_label": "样本不足",
+        "scope_label": "全局 Skill",
         "teaching_action_plan": expected_training_skill_action_plan(
             ["case_intro"],
             [],

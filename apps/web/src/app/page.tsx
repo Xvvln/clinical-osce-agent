@@ -19,7 +19,7 @@ type WorkflowStepDefinition = Readonly<{
   label: string;
 }>;
 
-type RightPanelKey = "focus" | "agent" | "evidence" | "hypotheses" | "report";
+type RightPanelKey = "evidence" | "hypotheses" | "report";
 
 type OsceDockMenuGroup = "training" | "system";
 
@@ -865,6 +865,10 @@ function getStageStatus(stageKey: string, currentStage: string | undefined): Sta
   }
 
   return "locked";
+}
+
+function isCompletedOsceSession(session: OsceSession | null): boolean {
+  return Boolean(session?.final_submission || session?.feedback_report || session?.stage === "diagnosis_submission" || session?.stage === "feedback");
 }
 
 function getActiveWorkflowStepIndex(session: OsceSession | null, feedbackReport: FeedbackReport | null): number {
@@ -1837,8 +1841,6 @@ function HomeContent() {
   const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>("checking");
   const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
-    focus: false,
-    agent: false,
     evidence: true,
     hypotheses: true,
     report: true,
@@ -2105,7 +2107,7 @@ function HomeContent() {
 
         setSession(nextSession);
         setSelectedCaseId(nextSession.case_id);
-        setStatusText("已恢复后端训练会话，可以继续训练。");
+        setStatusText(isCompletedOsceSession(nextSession) ? "该训练已提交诊断，训练已结束。可以查看评分报告或重新选择病例开始新训练。" : "已恢复后端训练会话，可以继续训练。");
         setErrorText(null);
       } catch (error) {
         if (!isMounted) {
@@ -2379,6 +2381,7 @@ function HomeContent() {
   );
   const physicalExamOptions = session?.physical_exam_options ?? selectedCase?.physicalExamOptions ?? [];
   const auxiliaryTestOptions = session?.auxiliary_test_options ?? selectedCase?.auxiliaryTestOptions ?? [];
+  const isCurrentSessionCompleted = isCompletedOsceSession(session);
   const requestedExamCodeSet = useMemo(() => new Set(session?.requested_exams ?? []), [session?.requested_exams]);
   const requestedTestCodeSet = useMemo(() => new Set(session?.requested_tests ?? []), [session?.requested_tests]);
   const pendingPhysicalExamOptions = physicalExamOptions.filter((examOption) => !requestedExamCodeSet.has(examOption.exam_code));
@@ -2388,8 +2391,6 @@ function HomeContent() {
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientOpeningUtterance = session?.patient_opening_utterance ?? selectedCase?.patientOpeningUtterance ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
-  const preparedTeachingFocus = session?.teaching_focus ?? selectedCase?.teachingFocus ?? null;
-  const preparedDynamicTeachingFocus = session?.dynamic_teaching_focus ?? null;
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
   const isVertexGeminiApiKeyConfig = studentApiConfig.provider === "vertex_gemini_api_key";
@@ -2508,12 +2509,6 @@ function HomeContent() {
   );
   const reportDimensionMaxScores = useMemo(() => getDimensionMaxScoresFromRubricScores(feedbackReport?.rubric_scores), [feedbackReport?.rubric_scores]);
 
-  const workflowSuggestion = useMemo(
-    () => getNextWorkflowSuggestion(session, feedbackReport),
-    [feedbackReport, session],
-  );
-  const hasClinicalSequenceGap = Boolean(session?.pedagogy_state.clinical_reasoning_state.sequence_flags.length);
-  const trainingSuggestion = hasClinicalSequenceGap ? workflowSuggestion : session?.training_progress.next_focus ?? workflowSuggestion;
   const osceDockStyle: CSSProperties = osceDockPosition.isReady
     ? {
         left: `${osceDockPosition.x}px`,
@@ -2534,7 +2529,7 @@ function HomeContent() {
     () => [
       `当前阶段：${formatStage(session?.stage)}`,
       `已问问题：${session?.asked_questions.length ?? 0} 个`,
-      `已披露线索：${session?.revealed_facts.length ?? 0} 条`,
+      `已披露线索：${session?.revealed_facts.length ?? 0} / ${session?.training_progress.history.total ?? 0} 条`,
       `最终诊断：${session?.final_submission?.diagnosis ?? "尚未提交"}`,
       `安全边界：${session?.safety_flags.length ?? 0} 次`,
     ],
@@ -2542,6 +2537,7 @@ function HomeContent() {
       session?.asked_questions.length,
       session?.final_submission?.diagnosis,
       session?.revealed_facts.length,
+      session?.training_progress.history.total,
       session?.safety_flags.length,
       session?.stage,
     ],
@@ -2725,6 +2721,12 @@ function HomeContent() {
         setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         return;
       }
+      if (isCompletedOsceSession(activeSession)) {
+        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
 
       const updatedSession = await sendHistoryMessage(activeSession.session_id, message);
       const replyText = updatedSession.reply ?? "";
@@ -2773,6 +2775,11 @@ function HomeContent() {
       if (!activeSession) {
         return;
       }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
       const shouldShowPhysicalExamSequenceReminder = activeSession.training_progress.history.covered === 0;
       const updatedSession = await requestPhysicalExam(activeSession.session_id, examCode);
       const nextProcedureResult = {
@@ -2809,6 +2816,11 @@ function HomeContent() {
     try {
       const activeSession = await ensureActiveSession();
       if (!activeSession) {
+        return;
+      }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
       const shouldShowAuxiliaryTestSequenceReminder = activeSession.training_progress.physical_exam.requested === 0;
@@ -2851,6 +2863,11 @@ function HomeContent() {
       if (!activeSession) {
         return;
       }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
 
       const updatedSession = await recordHypothesis(activeSession.session_id, hypothesis);
       setSession(updatedSession);
@@ -2875,6 +2892,11 @@ function HomeContent() {
     try {
       const activeSession = await ensureActiveSession();
       if (!activeSession) {
+        return;
+      }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
 
@@ -2910,6 +2932,11 @@ function HomeContent() {
       if (!activeSession) {
         return;
       }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
 
       const submittedSession = await submitDiagnosis(activeSession.session_id, diagnosis, reasoning);
       const report = await getSessionReport(submittedSession.session_id);
@@ -2938,7 +2965,7 @@ function HomeContent() {
           </p>
         </div>
 
-        <Panel title="训练导航" description="当前病例、阶段和下一步。">
+        <Panel title="训练导航" description="当前病例和训练阶段。">
           <div className="space-y-4">
             <div className="rounded-lg border border-border bg-muted/60 p-3 text-xs leading-5">
               <p className="text-muted-foreground">当前选择</p>
@@ -2978,10 +3005,6 @@ function HomeContent() {
               ))}
             </div>
 
-            <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
-              <p className="text-sm font-semibold text-brand">下一步建议</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{trainingSuggestion}</p>
-            </div>
           </div>
         </Panel>
         </div>
@@ -3089,6 +3112,7 @@ function HomeContent() {
               <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
                 <button
                   className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                  disabled={isCurrentSessionCompleted}
                   onClick={() => setInputValue("什么时候开始疼的？")}
                   type="button"
                 >
@@ -3096,7 +3120,7 @@ function HomeContent() {
                 </button>
                 <button
                   className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingHint}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingHint}
                   onClick={handleHintRequest}
                   type="button"
                 >{isRequestingHint ? "提示生成中" : "请求提示"}</button>
@@ -3111,7 +3135,7 @@ function HomeContent() {
                 <button
                   aria-expanded={openProcedureActionGroup === "physical_exam"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || physicalExamOptions.length === 0}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || physicalExamOptions.length === 0}
                   onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "physical_exam" ? null : "physical_exam")}
                   type="button"
                 >
@@ -3123,7 +3147,7 @@ function HomeContent() {
                 <button
                   aria-expanded={openProcedureActionGroup === "auxiliary_test"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || auxiliaryTestOptions.length === 0}
+                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || auxiliaryTestOptions.length === 0}
                   onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "auxiliary_test" ? null : "auxiliary_test")}
                   type="button"
                 >
@@ -3134,6 +3158,7 @@ function HomeContent() {
                 </button>
                 <button
                   className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
+                  disabled={isCurrentSessionCompleted}
                   onClick={() => setIsDiagnosisComposerOpen((isOpen) => !isOpen)}
                   type="button"
                 >{isDiagnosisComposerOpen ? "收起诊断" : "填写诊断"}</button>
@@ -3150,7 +3175,7 @@ function HomeContent() {
                         pendingPhysicalExamOptions.map((examOption) => (
                           <button
                             className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingExam}
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingExam}
                             key={examOption.exam_code}
                             onClick={() => {
                               setOpenProcedureActionGroup(null);
@@ -3202,7 +3227,7 @@ function HomeContent() {
                         pendingAuxiliaryTestOptions.map((testOption) => (
                           <button
                             className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingTest}
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingTest}
                             key={testOption.test_code}
                             onClick={() => {
                               setOpenProcedureActionGroup(null);
@@ -3257,7 +3282,7 @@ function HomeContent() {
                 <div className="flex items-center gap-2">
                   <input
                     className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSending}
                     id="history-question"
                     autoComplete="off"
                     autoCorrect="off"
@@ -3268,7 +3293,7 @@ function HomeContent() {
                   />
                   <button
                     className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || !inputValue.trim() || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || !inputValue.trim() || isSending}
                     type="submit"
                   >
                     {isSending ? "发送中" : "发送问诊"}
@@ -3284,7 +3309,7 @@ function HomeContent() {
                       </label>
                       <input
                         className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
+                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                         id="diagnosis-input"
                         onChange={(event) => setDiagnosisValue(event.target.value)}
                         placeholder="最终诊断"
@@ -3295,7 +3320,7 @@ function HomeContent() {
                       </label>
                       <input
                         className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
+                        disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                         id="differential-diagnosis-input"
                         onChange={(event) => setDifferentialDiagnosisValue(event.target.value)}
                         placeholder="至少 2 个合理鉴别诊断"
@@ -3307,7 +3332,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="supporting-evidence-input"
                       onChange={(event) => setSupportingEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -3320,7 +3345,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="exclusion-evidence-input"
                       onChange={(event) => setExclusionEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -3333,7 +3358,7 @@ function HomeContent() {
                     </label>
                     <textarea
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSubmittingDiagnosis}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="next-step-input"
                       onChange={(event) => setNextStepValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
@@ -3346,6 +3371,7 @@ function HomeContent() {
                       disabled={
                         !authUser ||
                         !isTrainingModelConfigReady ||
+                        isCurrentSessionCompleted ||
                         isCreating ||
                         !diagnosisValue.trim() ||
                         !differentialDiagnosisValue.trim() ||
@@ -3366,219 +3392,6 @@ function HomeContent() {
           </div>
 
           <aside className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar" onScroll={handleStudentRailScroll}>
-            <CollapsiblePanel
-              title="教学重点与问诊提示"
-              description="展开查看训练重点、误区和推荐问诊。"
-              isOpen={rightPanelOpenStates.focus}
-              maxContentHeightClass="max-h-80"
-              onToggle={() => toggleRightPanel("focus")}
-            >
-              <div className="space-y-3 text-xs leading-5">
-                {session?.inquiry_guidance.priority ? (
-                  <p className="rounded-lg border border-[#B5812A]/30 bg-[#FFF8E8] p-3 text-[#8A5A00]">
-                    {session?.inquiry_guidance.priority}
-                  </p>
-                ) : (
-                  <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-muted-foreground">
-                    创建训练会话后，这里会展示推荐问诊顺序和示例问题。
-                  </p>
-                )}
-                {session ? (
-                  <>
-                    <div className="flex flex-wrap gap-2">
-                      {session.inquiry_guidance.suggested_questions.map((question) => (
-                        <button
-                          className="rounded-md border border-border bg-background px-3 py-1.5 text-left text-xs font-medium shadow-xs transition hover:bg-accent"
-                          key={question}
-                          onClick={() => setInputValue(question)}
-                          type="button"
-                        >
-                          {question}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {session.inquiry_guidance.categories.map((category) => (
-                        <span className="rounded-full bg-muted px-2 py-1 text-[11px] text-muted-foreground" key={category}>
-                          {category}
-                        </span>
-                      ))}
-                    </div>
-                  </>
-                ) : null}
-
-                {preparedDynamicTeachingFocus && preparedDynamicTeachingFocus.patterns.length > 0 ? (
-                  <div className="space-y-2">
-                    {preparedDynamicTeachingFocus.patterns.map((pattern) => (
-                      <div className="rounded-lg border border-brand/20 bg-brand/5 p-3" key={pattern.focus_id}>
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="font-semibold text-foreground">{pattern.title}</p>
-                          <span className="rounded-full border border-brand/20 bg-background px-2 py-0.5 text-[11px] text-brand">
-                            {pattern.severity}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-muted-foreground">{pattern.description}</p>
-                        <p className="mt-2 text-brand">{pattern.training_suggestion}</p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">生成依据：{pattern.why_now}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {preparedTeachingFocus && (
-                  preparedTeachingFocus.learning_objectives.length > 0
-                  || preparedTeachingFocus.common_error_patterns.length > 0
-                  || preparedTeachingFocus.recommended_training_path.length > 0
-                ) ? (
-                  <div className="space-y-3 rounded-lg border border-border bg-background p-3">
-                    {preparedTeachingFocus.learning_objectives.length > 0 ? (
-                      <div>
-                        <p className="font-semibold text-brand">学习目标</p>
-                        <ul className="mt-1 space-y-1 text-muted-foreground">
-                          {preparedTeachingFocus.learning_objectives.map((objective) => (
-                            <li key={objective}>· {objective}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {preparedTeachingFocus.common_error_patterns.length > 0 ? (
-                      <div>
-                        <p className="font-semibold text-brand">常见误区</p>
-                        <div className="mt-2 space-y-2">
-                          {preparedTeachingFocus.common_error_patterns.map((pattern) => (
-                            <div className="rounded-lg border border-dashed border-brand/20 bg-brand/5 p-2" key={pattern.pattern_id}>
-                              <p className="font-medium text-foreground">{pattern.title}</p>
-                              <p className="mt-1 text-muted-foreground">{pattern.focus}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    {preparedTeachingFocus.recommended_training_path.length > 0 ? (
-                      <div>
-                        <p className="font-semibold text-brand">训练路径</p>
-                        <ol className="mt-1 space-y-1 text-muted-foreground">
-                          {preparedTeachingFocus.recommended_training_path.map((step, index) => (
-                            <li key={step}>{index + 1}. {step}</li>
-                          ))}
-                        </ol>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </CollapsiblePanel>
-
-            <CollapsiblePanel
-              title="智能体教学详情"
-              description="展开查看教学策略、阶段检查点和决策轨迹。"
-              isOpen={rightPanelOpenStates.agent}
-              maxContentHeightClass="max-h-96"
-              onToggle={() => toggleRightPanel("agent")}
-            >
-              {session?.pedagogy_state ? (
-                <div className="space-y-3 text-xs leading-5">
-                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Active Goal</p>
-                    <p className="mt-1 font-semibold text-foreground">{session.pedagogy_state.active_learning_goal}</p>
-                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.next_best_action}</p>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">教学模式</p>
-                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.coaching_mode}</p>
-                    </div>
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <p className="text-muted-foreground">教学安全边界</p>
-                      <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.safety_mode}</p>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="font-semibold text-foreground">阶段检查点</p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <p className="text-muted-foreground">状态</p>
-                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.status}</p>
-                      </div>
-                      <div>
-                        <p className="text-muted-foreground">准备度</p>
-                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.stage_checkpoint.readiness}</p>
-                      </div>
-                    </div>
-                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
-                      待补证据：{session.pedagogy_state.stage_checkpoint.pending_signal_ids.join("、") || "暂无"}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="font-semibold text-foreground">临床推理状态</p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <p className="text-muted-foreground">教学焦点</p>
-                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.clinical_reasoning_state.pedagogical_phase}</p>
-                      </div>
-                      <div>
-                        <p className="text-muted-foreground">最后动作</p>
-                        <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.clinical_reasoning_state.last_action_stage}</p>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.clinical_reasoning_state.next_best_action.message}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      为什么：{session.pedagogy_state.clinical_reasoning_state.next_best_action.why}
-                    </p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      反问：{session.pedagogy_state.clinical_reasoning_state.socratic_question}
-                    </p>
-                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
-                      顺序标记：{session.pedagogy_state.clinical_reasoning_state.sequence_flags.join("、") || "暂无"}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="font-semibold text-foreground">教学计划</p>
-                    <p className="mt-1 font-mono text-[11px] text-foreground">{session.pedagogy_state.teaching_plan.selected_strategy}</p>
-                    <p className="mt-2 text-muted-foreground">{session.pedagogy_state.teaching_plan.strategy_reason}</p>
-                    <p className="mt-2 break-words text-[11px] text-muted-foreground">
-                      来源：{session.pedagogy_state.teaching_plan.source_references.join("、") || "当前阶段规则"}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="font-semibold text-foreground">Hint Ladder</p>
-                    <div className="mt-2 space-y-2">
-                      {session.pedagogy_state.hint_ladder.map((hint) => (
-                        <div className="rounded-md bg-muted px-2 py-1" key={`${hint.action_type}-${hint.level}`}>
-                          <p className="font-mono text-[11px] text-muted-foreground">Level {hint.level} · {hint.disclosure_policy}</p>
-                          <p className="mt-1 text-foreground">{hint.message_template}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-3">
-                    <p className="font-semibold text-foreground">最近决策轨迹</p>
-                    <div className="mt-2 space-y-2">
-                      {session.agent_decision_trace.slice(-3).map((trace) => (
-                        <div className="rounded-md bg-muted px-2 py-1" key={trace.trace_id}>
-                          <p className="font-mono text-[11px] text-muted-foreground">{trace.node} · {trace.stage}</p>
-                          <p className="mt-1 text-foreground">{trace.decision}</p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            observe: {trace.observe.checkpoint_status} · decide: {trace.decide.selected_strategy}
-                          </p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            act: Level {trace.act.hint_ladder_levels.join("/")} · reflect: {trace.reflect.safety_mode}
-                          </p>
-                        </div>
-                      ))}
-                      {session.agent_decision_trace.length === 0 ? (
-                        <p className="text-muted-foreground">暂无决策轨迹。</p>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-                  智能体还未形成可展示的教学状态。
-                </p>
-              )}
-            </CollapsiblePanel>
-
             <CollapsiblePanel
               title="已收集线索"
               description="来自问诊节点的结构化事实。"
@@ -3615,7 +3428,7 @@ function HomeContent() {
                   </label>
                   <input
                     className="min-w-0 rounded-md border border-border bg-background px-3 py-2 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                    disabled={!session || isRecordingHypothesis}
+                    disabled={!session || isCurrentSessionCompleted || isRecordingHypothesis}
                     id="hypothesis-input"
                     onChange={(event) => setHypothesisValue(event.target.value)}
                     placeholder="例如：急性阑尾炎"
@@ -3623,7 +3436,7 @@ function HomeContent() {
                   />
                   <button
                     className="rounded-md border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!session || !hypothesisValue.trim() || isRecordingHypothesis}
+                    disabled={!session || isCurrentSessionCompleted || !hypothesisValue.trim() || isRecordingHypothesis}
                     onClick={handleHypothesisSubmit}
                     type="button"
                   >{isRecordingHypothesis ? "记录中" : "记录假设"}</button>
@@ -3657,9 +3470,6 @@ function HomeContent() {
                     {item}
                   </p>
                 ))}
-                <p className="rounded-md border border-brand/20 bg-brand/5 px-3 py-2 text-xs leading-5 text-brand">
-                  本报告仅用于教学复盘，评分依据来自病例、rubric 与来源引用。
-                </p>
               </div>
               {feedbackReport ? (
                 <div className="mt-3 space-y-4 rounded-xl border border-brand/20 bg-brand/5 p-3">
@@ -3852,7 +3662,7 @@ function HomeContent() {
                     )}
                     <button
                       className={osceDockButtonActionClass}
-                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isRequestingHint}
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingHint}
                       onClick={() => {
                         closeOsceDock();
                         void handleHintRequest();

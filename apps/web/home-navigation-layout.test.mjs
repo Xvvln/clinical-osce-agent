@@ -268,7 +268,7 @@ test("student report shows readable personal skill content, not only ids", () =>
   assert.match(reportSource, /candidate\.suggested_strategy/);
 });
 
-test("home page keeps agent pedagogy details behind a collapsible panel", () => {
+test("home page keeps agent pedagogy data available without showing a student-facing debug panel", () => {
   assert.match(pageSource, /type TeachingPlan = Readonly<\{/);
   assert.match(pageSource, /type StageCheckpoint = Readonly<\{/);
   assert.match(pageSource, /type ClinicalReasoningState = Readonly<\{/);
@@ -283,30 +283,19 @@ test("home page keeps agent pedagogy details behind a collapsible panel", () => 
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
   assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
-  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "hypotheses" \| "report";/);
-  assert.match(pageSource, /agent: false,/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*description="展开查看教学策略、阶段检查点和决策轨迹。"[\s\S]*isOpen=\{rightPanelOpenStates\.agent\}/);
+  assert.match(pageSource, /type RightPanelKey = "evidence" \| "hypotheses" \| "report";/);
+  assert.doesNotMatch(pageSource, /agent: false,/);
+  assert.doesNotMatch(pageSource, /rightPanelOpenStates\.agent/);
+  assert.doesNotMatch(pageSource, /toggleRightPanel\("agent"\)/);
+  assert.doesNotMatch(pageSource, /title="智能体教学详情"/);
   assert.doesNotMatch(pageSource, /<Panel title="智能体状态" description="展示教学策略节点的当前目标、下一步动作和安全边界。">/);
-  assert.match(pageSource, /session\.pedagogy_state\.active_learning_goal/);
-  assert.match(pageSource, /session\.pedagogy_state\.next_best_action/);
-  assert.match(pageSource, /session\.pedagogy_state\.coaching_mode/);
-  assert.match(pageSource, /session\.pedagogy_state\.safety_mode/);
-  assert.match(pageSource, /session\.pedagogy_state\.teaching_plan\.selected_strategy/);
-  assert.match(pageSource, /session\.pedagogy_state\.stage_checkpoint\.status/);
-  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.pedagogical_phase/);
-  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.sequence_flags/);
-  assert.match(pageSource, /session\.pedagogy_state\.clinical_reasoning_state\.next_best_action\.why/);
-  assert.match(pageSource, /session\.pedagogy_state\.hint_ladder\.map/);
-  assert.match(pageSource, /trace\.observe\.checkpoint_status/);
-  assert.match(pageSource, /trace\.decide\.selected_strategy/);
-  assert.match(pageSource, /trace\.act\.hint_ladder_levels/);
-  assert.match(pageSource, /trace\.reflect\.safety_mode/);
-  assert.match(pageSource, /session\.agent_decision_trace\.slice\(-3\)\.map/);
-  assert.match(pageSource, /智能体还未形成可展示的教学状态/);
-  assert.match(pageSource, /最近决策轨迹/);
-  assert.match(pageSource, /阶段检查点/);
-  assert.match(pageSource, /Hint Ladder/);
-  assert.match(pageSource, /教学安全边界/);
+  assert.match(pageSource, /clinicalReasoningState\?\.next_best_action\?\.message/);
+  assert.doesNotMatch(pageSource, /session\.pedagogy_state\.hint_ladder\.map/);
+  assert.doesNotMatch(pageSource, /session\.agent_decision_trace\.slice\(-3\)\.map/);
+  assert.doesNotMatch(pageSource, /智能体还未形成可展示的教学状态/);
+  assert.doesNotMatch(pageSource, /最近决策轨迹/);
+  assert.doesNotMatch(pageSource, /Hint Ladder/);
+  assert.doesNotMatch(pageSource, /教学安全边界/);
 });
 
 test("home left sidebar uses a personal center menu for profile actions", () => {
@@ -462,11 +451,20 @@ test("report page renders a defense evidence chain from explanation source items
   assert.match(reportSource, /type ExplanationChainDisplayItem = Readonly<\{/);
   assert.match(reportSource, /function getExplanationKindLabel\(kind: string\): string/);
   assert.match(reportSource, /function getExplanationSourceDisplayItems/);
+  assert.match(reportSource, /function TraceabilityDetailsSection/);
   assert.match(reportSource, /function DefenseEvidenceChainSection/);
-  assert.match(reportSource, /<DefenseEvidenceChainSection explanationItems=\{report\.explanation_source_items\} sourceReferenceItems=\{report\.source_reference_items\} \/>/);
-  assert.match(reportSource, /评分项 → 证据 → 来源/);
+  assert.match(reportSource, /explanationItems=\{report\.explanation_source_items\}/);
+  assert.match(reportSource, /sourceReferenceItems=\{report\.source_reference_items\}/);
+  assert.match(reportSource, /结构化评分链/);
   assert.match(reportSource, /item\.source_references\.filter\(\(reference\) => reference\.startsWith\("rubric:"\)\)/);
   assert.match(reportSource, /item\.source_references\.filter\(\(reference\) => reference\.startsWith\("evidence:"\)\)/);
+  assert.match(reportSource, /function TraceReferenceRows/);
+  assert.match(reportSource, /评分项来源/);
+  assert.match(reportSource, /训练证据来源/);
+  assert.match(reportSource, /结构化来源/);
+  assert.match(reportSource, /\[overflow-wrap:anywhere\]/);
+  assert.doesNotMatch(reportSource, /<div className="mt-3 grid gap-3 md:grid-cols-3">/);
+  assert.doesNotMatch(reportSource, /function TraceColumn/);
   assert.match(reportSource, /不参与评分裁判/);
 });
 
@@ -477,8 +475,9 @@ test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportModelSource, /evidence_graph_summary\?: EvidenceGraphSummary \| null;/);
   assert.match(reportModelSource, /evidence_graph_summary: report\.evidence_graph_summary \?\? null,/);
   assert.match(reportSource, /function EvidenceGraphSummarySection/);
-  assert.match(reportSource, /<EvidenceGraphSummarySection summary=\{report\.evidence_graph_summary\} \/>/);
-  assert.match(reportSource, /证据图谱覆盖/);
+  assert.match(reportSource, /evidenceGraphSummary=\{report\.evidence_graph_summary\}/);
+  assert.match(reportSource, /<EvidenceGraphSummarySection summary=\{evidenceGraphSummary\} \/>/);
+  assert.match(reportSource, /结构化证据覆盖/);
   assert.match(reportSource, /summary\.covered_evidence_node_count/);
   assert.match(reportSource, /summary\.total_evidence_node_count/);
   assert.match(reportSource, /nodes=\{summary\.covered_evidence_nodes\}/);
@@ -490,6 +489,89 @@ test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportSource, /证据图谱仅用于复盘已收集和缺失的训练证据，不参与诊断裁判或评分。/);
 });
 
+test("report page renders a compact iOS-style section navigator", () => {
+  assert.match(reportSource, /type ReportSectionId =/);
+  assert.match(reportSource, /const reportSections: readonly ReportSection\[] =/);
+  assert.match(reportSource, /function ReportSectionNavigator/);
+  assert.match(reportSource, /aria-label="评分报告章节导航"/);
+  assert.match(reportSource, /const \[isReportNavigatorCollapsed, setIsReportNavigatorCollapsed\]/);
+  assert.match(reportSource, /aria-expanded=\{!isCollapsed\}/);
+  assert.match(reportSource, /收起评分报告目录/);
+  assert.match(reportSource, /展开评分报告目录/);
+  assert.match(reportSource, /backdrop-blur-xl/);
+  assert.match(reportSource, /<aside className="scroll-mt-6 xl:sticky xl:top-6 xl:self-start"/);
+  assert.match(reportSource, /isReportNavigatorCollapsed \? "xl:grid-cols-\[76px_minmax\(0,1fr\)\]" : "xl:grid-cols-\[240px_minmax\(0,1fr\)\]"/);
+  assert.match(reportSource, /xl:grid xl:overflow-visible xl:pb-0/);
+  assert.match(reportSource, /max-h-\[calc\(100vh-3rem\)\]/);
+  assert.doesNotMatch(reportSource, /position: fixed/);
+  assert.match(reportSource, /bg-brand\/10 text-brand/);
+  assert.doesNotMatch(reportSource, /bg-foreground text-background/);
+  assert.match(reportSource, /report-card-scrollbar/);
+  assert.match(globalsSource, /\.report-card-scrollbar/);
+  assert.match(globalsSource, /scrollbar-gutter: stable;/);
+  assert.match(reportSource, /window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 2/);
+  assert.match(reportSource, /onSectionSelect\(section\.id\)/);
+  assert.doesNotMatch(reportSource, /xl:grid-cols-\[320px_minmax\(0,1fr\)\]/);
+  for (const label of ["总览", "图表", "结论", "复盘", "训练", "对话", "依据"]) {
+    assert.match(reportSource, new RegExp(`label: "${label}"`));
+  }
+  for (const targetId of [
+    "report-overview",
+    "report-dimensions",
+    "report-skill",
+    "report-recommendations",
+    "report-conversation",
+    "report-evidence",
+  ]) {
+    assert.match(reportSource, new RegExp(`targetId: "${targetId}"`));
+    assert.match(reportSource, new RegExp(`id="${targetId}"`));
+  }
+  assert.match(reportSource, /targetId: "report-feedback"/);
+  assert.match(reportSource, /sectionId="report-feedback"/);
+  assert.match(reportSource, /href=\{`#\$\{section\.targetId\}`\}/);
+  assert.ok(reportSource.indexOf('label: "图表"') < reportSource.indexOf('label: "结论"'));
+  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "复盘"'));
+  assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "训练"'));
+  assert.doesNotMatch(reportSource, /targetId: "report-ai-evaluation"/);
+  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"'));
+  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf("<ConversationDetailsSection"));
+});
+
+test("report section navigator keeps clicked sections selected instead of drifting to the next section", () => {
+  assert.match(reportSource, /const REPORT_SECTION_ACTIVATION_OFFSET_PX = 96;/);
+  assert.doesNotMatch(reportSource, /const viewportAnchor = Math\.min\(window\.innerHeight \* 0\.35, 260\);/);
+  assert.match(reportSource, /const viewportAnchor = REPORT_SECTION_ACTIVATION_OFFSET_PX;/);
+  assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
+  assert.match(reportSource, /function StudentReportSummary\(\{ report, sectionId \}: Readonly<\{ report: FeedbackReport; sectionId: string \}>\)/);
+  assert.match(reportSource, /<section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id=\{sectionId\}>/);
+  assert.match(reportSource, /<div className="grid gap-4 xl:grid-cols-2">/);
+  assert.doesNotMatch(reportSource, /<div className="grid scroll-mt-6 gap-4 xl:grid-cols-2" id="report-feedback">/);
+});
+
+test("report page prioritizes student learning over repeated source proof", () => {
+  const summaryStart = reportSource.indexOf("function StudentReportSummary");
+  const summaryEnd = reportSource.indexOf("function ReportCoverageMapOverview", summaryStart);
+  const summarySource = reportSource.slice(summaryStart, summaryEnd);
+
+  assert.match(reportSource, /function StudentReportSummary/);
+  assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
+  assert.match(reportSource, /本轮结论/);
+  assert.match(reportSource, /教练复盘/);
+  assert.match(reportSource, /推荐训练病例/);
+  assert.doesNotMatch(summarySource, /最需要补的部分/);
+  assert.doesNotMatch(summarySource, /下一轮训练计划/);
+  assert.doesNotMatch(summarySource, /LearningSummaryColumn/);
+  assert.match(reportSource, /function TraceabilityDetailsSection/);
+  assert.match(reportSource, /评分依据与来源/);
+  assert.match(reportSource, /<details className=/);
+  assert.match(reportSource, /<summary className=/);
+  assert.match(reportSource, /结构化评分依据，不是 RAG 评分裁判/);
+  assert.doesNotMatch(reportSource, /学习推荐与下一病例/);
+  assert.doesNotMatch(reportSource, /根据本轮漏项检索 rubric、知识点和病例库/);
+  assert.doesNotMatch(reportSource, /评分项 → 证据 → 来源/);
+  assert.doesNotMatch(reportSource, /推荐训练材料与病例/);
+});
+
 test("report page renders AI reflection review and personal training skill status", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
   assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
@@ -499,14 +581,109 @@ test("report page renders AI reflection review and personal training skill statu
   assert.match(reportModelSource, /personal_skill_candidate: normalizePersonalTrainingSkillCandidate\(report\.personal_skill_candidate\),/);
   assert.match(reportSource, /function AiReflectionReviewSection/);
   assert.match(reportSource, /function PersonalTrainingSkillSection/);
-  assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} \/>/);
-  assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} \/>/);
-  assert.match(reportSource, /AI 复盘回顾/);
+  assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
+  assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
+  assert.match(reportSource, /教练复盘/);
   assert.match(reportSource, /个人训练 Skill/);
   assert.match(reportSource, /review\.source_reference_items\.map/);
   assert.match(reportSource, /candidate\.rag_evidence_items\.map/);
   assert.match(reportSource, /candidate\.web_check_status/);
   assert.match(reportSource, /联网核查状态/);
+});
+
+test("report page keeps long AI evidence source lists collapsed with clear expand affordances", () => {
+  assert.match(reportSource, /<details className="mt-3 rounded-xl border border-border bg-muted\/20 p-3">/);
+  assert.match(reportSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);
+  assert.match(reportSource, /复盘来源/);
+  assert.match(reportSource, /默认折叠，可展开查看 AI 复盘引用的结构化来源。/);
+  assert.match(reportSource, /RAG 证据来源/);
+  assert.match(reportSource, /默认折叠，可展开查看 Skill 生成与审批使用的来源。/);
+  assert.doesNotMatch(reportSource, /<h3 className="text-xs font-semibold">复盘来源<\/h3>\s*\{review\.source_reference_items\.length > 0 \?/);
+  assert.doesNotMatch(reportSource, /<h3 className="text-xs font-semibold">RAG 证据来源<\/h3>\s*\{candidate\.rag_evidence_items\.length > 0 \?/);
+});
+
+test("report page derives training point labels from report metadata instead of fixed field tables", () => {
+  assert.match(reportSource, /function createTrainingPointLabelResolver\(report: FeedbackReport\): \(itemId: string\) => string/);
+  assert.match(reportSource, /Object\.entries\(report\.rubric_scores\)\.forEach/);
+  assert.match(reportSource, /collectCoverageMapLabels\(report\.training_progress_snapshot\?\.coverage_map, labelById\);/);
+  assert.match(reportSource, /report\.llm_reasoning_feedback\.forEach/);
+  assert.match(reportSource, /const trainingPointLabelResolver = useMemo\(\(\) => report \? createTrainingPointLabelResolver\(report\) : formatTrainingPointIdentifier/);
+  assert.doesNotMatch(reportSource, /const TRAINING_POINT_LABELS/);
+  assert.doesNotMatch(reportSource, /ht_onset: "起病时间"/);
+  assert.match(reportSource, /trainingPointLabelResolver\(pattern\)/);
+  assert.match(reportSource, /trainingPointLabelResolver\(triggerItemId\)/);
+  assert.doesNotMatch(reportSource, /\{pattern\}\s*<\/span>/);
+  assert.doesNotMatch(reportSource, /\{triggerItemId\}\s*<\/span>/);
+});
+
+test("report page exposes approval agent review details in expandable records", () => {
+  assert.match(reportSource, /function formatApprovalAgentChangedField/);
+  assert.match(reportSource, /function getApprovalAgentChangedFieldDisplay/);
+  assert.match(reportSource, /function formatApprovalActionPlan/);
+  assert.match(reportSource, /function formatApprovalAgentIssue/);
+  assert.match(reportSource, /审批 Agent 记录/);
+  assert.match(reportSource, /<details className="rounded-lg border border-border bg-muted\/25 p-3 text-xs leading-5 text-muted-foreground"/);
+  assert.match(reportSource, /展开查看修改内容、门禁结果和问题清单。/);
+  assert.match(reportSource, /修改内容/);
+  assert.match(reportSource, /修改前/);
+  assert.match(reportSource, /修改后/);
+  assert.match(reportSource, /为什么改/);
+  assert.match(reportSource, /把策略拆成 Coach 可执行动作/);
+  assert.match(reportSource, /max-h-24 overflow-y-auto whitespace-pre-wrap break-words/);
+  assert.match(reportSource, /\[overflow-wrap:anywhere\]/);
+  assert.match(reportSource, /门禁与问题/);
+  assert.match(reportSource, /turn\.changed_fields\.map/);
+  assert.doesNotMatch(reportSource, /\{formatApprovalAgentChangedField\(changedField\)\}/);
+  assert.match(reportSource, /turn\.blocking_failures\.map/);
+});
+
+test("report dimension chart keeps the right-side score list scrollable instead of stretching the card", () => {
+  assert.match(reportSource, /const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";/);
+  assert.doesNotMatch(reportSource, /<h2 className="text-lg font-semibold">/);
+  assert.match(reportSource, /<div className="mt-5 grid items-start gap-5 lg:grid-cols-\[minmax\(260px,0\.85fr\)_minmax\(0,1fr\)\]">/);
+  assert.match(reportSource, /<div className="rounded-2xl border border-border bg-muted\/30 p-4">/);
+  assert.match(reportSource, /<div className="grid max-h-80 content-start gap-3 overflow-y-auto pr-1 report-card-scrollbar">/);
+});
+
+test("report page keeps AI rubric reasoning as collapsed audit evidence instead of a main learning section", () => {
+  assert.doesNotMatch(reportSource, /<LlmReasoningFeedback items=\{report\.llm_reasoning_feedback\} \/>/);
+  assert.doesNotMatch(reportSource, /id="report-ai-evaluation"/);
+  assert.match(reportSource, /function LlmReasoningAuditSection/);
+  assert.match(reportSource, /llmReasoningItems=\{report\.llm_reasoning_feedback\}/);
+  assert.match(reportSource, /AI 评分审计/);
+  assert.match(reportSource, /默认折叠，用于查看大模型 rubric 评分过程，不作为学生主阅读内容。/);
+});
+
+test("report page recommends only follow-up cases and does not list study material cards", () => {
+  assert.match(reportSource, /function CaseRecommendations/);
+  assert.match(reportSource, /const caseItems = items\.filter\(\(item\) => item\.reference\.startsWith\("case:"\)\);/);
+  assert.match(reportSource, /推荐训练病例/);
+  assert.match(reportSource, /当前病例库暂未找到适合的下一轮训练病例。/);
+  assert.doesNotMatch(reportSource, /getRecommendationKindLabel\(item\.reference\)/);
+});
+
+test("report page shows submitted material coverage map as the round conclusion", () => {
+  const summaryStart = reportSource.indexOf("function StudentReportSummary");
+  const summaryEnd = reportSource.indexOf("function ReportCoverageMapOverview", summaryStart);
+  const summarySource = reportSource.slice(summaryStart, summaryEnd);
+
+  assert.match(reportModelSource, /export type ReportCoverageMapItem = Readonly<\{/);
+  assert.match(reportModelSource, /export type ReportTrainingProgressSnapshot = Readonly<\{/);
+  assert.match(reportModelSource, /training_progress_snapshot\?: ReportTrainingProgressSnapshot \| null;/);
+  assert.match(reportModelSource, /training_progress_snapshot: report\.training_progress_snapshot \?\? null,/);
+  assert.match(reportSource, /const coverageMap = report\.training_progress_snapshot\?\.coverage_map;/);
+  assert.match(reportSource, /function ReportCoverageMapOverview/);
+  assert.match(reportSource, /function ReportCoverageMapGroup/);
+  assert.match(reportSource, /问诊线索/);
+  assert.match(reportSource, /查体项目/);
+  assert.match(reportSource, /辅助检查/);
+  assert.match(reportSource, /推理证据/);
+  assert.match(reportSource, /素材覆盖/);
+  assert.match(reportSource, /item\.status === "covered" \? "已覆盖" : "未覆盖"/);
+  assert.doesNotMatch(reportSource, /待补充/);
+  assert.doesNotMatch(summarySource, /primaryIssues/);
+  assert.doesNotMatch(summarySource, /report\.next_recommendations/);
+  assert.doesNotMatch(summarySource, /report\.reasoning_errors/);
 });
 
 test("home personal center links to the learning profile page", () => {
@@ -540,13 +717,19 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /Skill 积累/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
   assert.match(profileSource, /student_visible_summary: string;/);
+  assert.match(profileSource, /description: string;/);
+  assert.match(profileSource, /learning_action: string;/);
+  assert.match(profileSource, /activation_summary: string;/);
+  assert.match(profileSource, /source_summary: string;/);
+  assert.match(profileSource, /effect_status_label: string;/);
+  assert.match(profileSource, /scope_label: string;/);
   assert.match(profileSource, /effect_status: string;/);
   assert.match(profileSource, /enabled_skill_count: number;/);
   assert.match(profileSource, /applied_skill_count: number;/);
   assert.match(profileSource, /enabled_skills: readonly EnabledSkillSummary\[];/);
-  assert.match(profileSource, /profile\.skillAccumulation\.enabled_skill_count/);
-  assert.match(profileSource, /profile\.skillAccumulation\.applied_skill_count/);
-  assert.match(profileSource, /profile\.skillAccumulation\.enabled_skills\.map/);
+  assert.match(profileSource, /accumulation\.enabled_skill_count/);
+  assert.match(profileSource, /accumulation\.applied_skill_count/);
+  assert.match(profileSource, /accumulation\.enabled_skills\.map/);
   assert.match(profileSource, /已启用 Skill/);
   assert.match(profileSource, /应用次数/);
   assert.match(profileSource, /支持次数/);
@@ -554,14 +737,50 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /暂无已启用 Skill/);
 });
 
+test("profile page gives Skill accumulation its own detailed module", () => {
+  const asideStart = profileSource.indexOf("<aside");
+  const asideEnd = profileSource.indexOf("</aside>", asideStart);
+  const skillModuleIndex = profileSource.indexOf("<SkillAccumulationSection accumulation={profile.skillAccumulation} />");
+  const recentSessionsIndex = profileSource.indexOf("最近训练");
+
+  assert.match(profileSource, /function SkillAccumulationSection\(\{ accumulation \}: Readonly<\{ accumulation: SkillAccumulation \}>\)/);
+  assert.ok(asideStart >= 0, "profile page should still have an aside for weak and strong dimensions");
+  assert.ok(asideEnd > asideStart, "profile aside should close before the standalone Skill module");
+  assert.ok(skillModuleIndex > asideEnd, "Skill accumulation should not be nested in the right aside");
+  assert.ok(skillModuleIndex < recentSessionsIndex, "Skill accumulation should remain a first-class profile section before recent sessions");
+  assert.match(profileSource, /<details className="rounded-xl border border-border bg-background p-4 shadow-xs"/);
+  assert.match(profileSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);
+  assert.match(profileSource, /查看 Skill 详情/);
+  assert.match(profileSource, /skill\.description/);
+  assert.match(profileSource, /skill\.learning_action/);
+  assert.match(profileSource, /skill\.activation_summary/);
+  assert.match(profileSource, /skill\.source_summary/);
+  assert.match(profileSource, /skill\.effect_status_label/);
+  assert.match(profileSource, /skill\.scope_label/);
+});
+
+test("profile page omits empty Skill detail rows instead of rendering blank cards", () => {
+  assert.match(profileSource, /function SkillDetailRow\(/);
+  assert.match(profileSource, /const trimmedValue = value\.trim\(\);/);
+  assert.match(profileSource, /if \(!trimmedValue\) \{/);
+  assert.match(profileSource, /return null;/);
+  assert.match(profileSource, /function formatSkillEffectSummary\(skill: EnabledSkillSummary\): string/);
+  assert.doesNotMatch(profileSource, /当前效果：\{skill\.effect_status_label\}。/);
+  assert.match(profileSource, /<SkillDetailRow label="训练目标" value=\{skill\.description\} \/>/);
+  assert.match(profileSource, /<SkillDetailRow label="Coach 应用方式" value=\{skill\.learning_action\} \/>/);
+  assert.match(profileSource, /<SkillDetailRow label="生效条件" value=\{skill\.activation_summary\} \/>/);
+  assert.match(profileSource, /<SkillDetailRow label="来源与效果" value=\{formatSkillEffectSummary\(skill\)\} \/>/);
+})
+
 test("profile page hides raw enabled skill strategy text from students", () => {
   assert.doesNotMatch(profileSource, /触发项：\{skill\.trigger_item_id\}/);
   assert.doesNotMatch(profileSource, /\{skill\.suggested_strategy\}/);
-  assert.match(profileSource, /\{skill\.student_visible_summary\}/);
+  assert.match(profileSource, /const studentVisibleSummary = skill\.student_visible_summary\.trim\(\);/);
+  assert.match(profileSource, /\{studentVisibleSummary\}/);
   assert.match(profileSource, /已启用教学策略/);
 });
 
-test("home workspace exposes OSCE workflow navigation and next-step guidance", () => {
+test("home workspace exposes OSCE workflow navigation without a separate left-column next-step card", () => {
   assert.match(pageSource, /type WorkflowStepDefinition = Readonly<\{/);
   assert.match(pageSource, /const workflowStepDefinitions: readonly WorkflowStepDefinition\[\] = \[/);
   assert.match(pageSource, /label: "进入病例"/);
@@ -572,11 +791,10 @@ test("home workspace exposes OSCE workflow navigation and next-step guidance", (
   assert.match(pageSource, /pedagogicalPhase === "needs_physical_exam"[\s\S]*?return 2;/);
   assert.match(pageSource, /const clinicalReasoningState = session\.pedagogy_state\?\.clinical_reasoning_state;/);
   assert.match(pageSource, /已识别训练顺序缺口/);
-  assert.match(pageSource, /const hasClinicalSequenceGap = Boolean\(session\?\.pedagogy_state\.clinical_reasoning_state\.sequence_flags\.length\);/);
-  assert.match(pageSource, /const trainingSuggestion = hasClinicalSequenceGap \? workflowSuggestion : session\?\.training_progress\.next_focus \?\? workflowSuggestion;/);
   assert.match(pageSource, /"请先询问起病、部位、性质、程度和伴随症状。"/);
-  assert.match(pageSource, /<Panel title="训练导航" description="当前病例、阶段和下一步。">/);
-  assert.match(pageSource, /<p className="text-sm font-semibold text-brand">下一步建议<\/p>/);
+  assert.match(pageSource, /<Panel title="训练导航" description="当前病例和训练阶段。">/);
+  assert.doesNotMatch(pageSource, /<p className="text-sm font-semibold text-brand">下一步建议<\/p>/);
+  assert.doesNotMatch(pageSource, /\{trainingSuggestion\}/);
 });
 
 test("home workspace can resume current user's persisted backend session", () => {
@@ -590,7 +808,8 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\([\s\S]*?selectedCaseId[\s\S]*?\? isTrainingModelConfigReady[\s\S]*?\? "已选择病例，发送问诊或点击训练操作后开始新会话。"[\s\S]*?: TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE[\s\S]*?: "请选择病例后再开始训练。"[\s\S]*?\);[\s\S]*?return;[\s\S]*?\}/);
   assert.match(pageSource, /const sessionIdToRestore = requestedSessionId;/);
   assert.match(pageSource, /const nextSession = await getSession\(sessionIdToRestore\);/);
-  assert.match(pageSource, /setStatusText\("已恢复后端训练会话，可以继续训练。"\);/);
+  assert.match(pageSource, /function isCompletedOsceSession\(session: OsceSession \| null\): boolean \{/);
+  assert.match(pageSource, /isCompletedOsceSession\(nextSession\) \? "该训练已提交诊断，训练已结束。可以查看评分报告或重新选择病例开始新训练。" : "已恢复后端训练会话，可以继续训练。"/);
   assert.match(pageSource, /`\/api\/me\/sessions\/\$\{sessionId\}\/report`/);
   assert.match(pageSource, /async function getRequestErrorMessage\(response: Response\): Promise<string>/);
   assert.match(pageSource, /if \(response\.status === 401\) \{/);
@@ -599,6 +818,14 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.doesNotMatch(pageSource, /requestedSessionId\s*\? await getSession\(requestedSessionId\)\s*: await createSession\(selectedCaseId\)/);
   assert.doesNotMatch(pageSource, /throw new Error\(detail \|\| `请求失败：\$\{response\.status\}`\);/);
   assert.match(pageSource, /\}, \[authUser, isCheckingAuth, isTrainingModelConfigReady, requestedSessionId, selectedCaseId\]\);/);
+});
+
+test("home workspace treats completed sessions as read-only training records", () => {
+  assert.match(pageSource, /const isCurrentSessionCompleted = isCompletedOsceSession\(session\);/);
+  assert.match(pageSource, /if \(isCompletedOsceSession\(activeSession\)\) \{[\s\S]*?setErrorText\("训练已结束，请查看报告。"\);[\s\S]*?return;/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| physicalExamOptions\.length === 0\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| auxiliaryTestOptions\.length === 0\}/);
 });
 
 test("home workspace starts without a default case and only prepares a case after selection", () => {
@@ -637,13 +864,13 @@ test("home workspace creates a new backend session only after a selected-case tr
   assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
   assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
   assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isSending\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
   assert.ok(pageSource.indexOf("if (!isTrainingModelConfigReady)") < pageSource.indexOf("setOptimisticHistoryMessage({"));
 });
 
 
 test("home case card points users to the case selection page", () => {
-  assert.match(pageSource, /<Panel[\s\S]*title="训练导航"[\s\S]*description="当前病例、阶段和下一步。"/);
+  assert.match(pageSource, /<Panel[\s\S]*title="训练导航"[\s\S]*description="当前病例和训练阶段。"/);
   assert.match(pageSource, />当前选择<\/p>/);
   assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
@@ -665,13 +892,13 @@ test("home dialogue header shows the selected case prominently", () => {
 
 
 test("home right sidebar starts with progress and keeps collapsible cards bounded", () => {
-  assert.match(pageSource, /type RightPanelKey = "focus" \| "agent" \| "evidence" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "evidence" \| "hypotheses" \| "report";/);
   assert.match(pageSource, /function CollapsiblePanel\(/);
   assert.match(pageSource, /maxContentHeightClass = "max-h-64"/);
   assert.match(pageSource, /overflow-y-scroll pr-1 student-rail-scrollbar/);
   assert.match(pageSource, /const \[rightPanelOpenStates, setRightPanelOpenStates\] = useState<Record<RightPanelKey, boolean>>/);
-  assert.match(pageSource, /focus: false,/);
-  assert.match(pageSource, /agent: false,/);
+  assert.doesNotMatch(pageSource, /focus: false,/);
+  assert.doesNotMatch(pageSource, /agent: false,/);
   assert.doesNotMatch(pageSource, /procedures: true,/);
   assert.match(pageSource, /report: true,/);
   assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) =>/);
@@ -680,16 +907,15 @@ test("home right sidebar starts with progress and keeps collapsible cards bounde
   const focusPanelIndex = pageSource.indexOf('title="教学重点与问诊提示"', rightAsideIndex);
   const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
   assert.notEqual(rightAsideIndex, -1);
-  assert.notEqual(focusPanelIndex, -1);
+  assert.equal(focusPanelIndex, -1);
   assert.notEqual(evidencePanelIndex, -1);
-  assert.ok(focusPanelIndex < evidencePanelIndex);
   assert.doesNotMatch(pageSource, /title="训练进度与素材覆盖"/);
   assert.match(pageSource, />\s*管理员图谱\s*<\/p>/);
   assert.match(pageSource, />\s*查看素材覆盖图谱\s*<\/button>/);
 
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="已收集线索"[\s\S]*maxContentHeightClass="max-h-64"/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*maxContentHeightClass="max-h-80"/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*maxContentHeightClass="max-h-96"/);
+  assert.doesNotMatch(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*maxContentHeightClass="max-h-80"/);
+  assert.doesNotMatch(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*maxContentHeightClass="max-h-96"/);
   assert.doesNotMatch(pageSource, /title="查体与检查申请"/);
   assert.doesNotMatch(pageSource, /toggleRightPanel\("procedures"\)/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"[\s\S]*maxContentHeightClass="max-h-48"/);
@@ -707,7 +933,7 @@ test("home sidebars prioritize a compact student task flow", () => {
   assert.notEqual(leftAsideIndex, -1);
   assert.notEqual(navigationPanelIndex, -1);
   assert.notEqual(currentCaseIndex, -1);
-  assert.notEqual(nextSuggestionIndex, -1);
+  assert.equal(nextSuggestionIndex, -1);
   assert.doesNotMatch(leftAsideSource, /title="问诊引导"|title="智能体状态"|title="当前训练重点"|title="训练重点"|title="OSCE 流程导航"/);
 
   const rightAsideIndex = pageSource.indexOf('<aside className="flex min-h-0 flex-col gap-4 overflow-y-scroll student-rail-scrollbar"');
@@ -715,12 +941,10 @@ test("home sidebars prioritize a compact student task flow", () => {
   const agentPanelIndex = pageSource.indexOf('title="智能体教学详情"', rightAsideIndex);
   const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
   const hypothesisPanelIndex = pageSource.indexOf('title="诊断假设"', rightAsideIndex);
-  assert.notEqual(focusPanelIndex, -1);
-  assert.notEqual(agentPanelIndex, -1);
+  assert.equal(focusPanelIndex, -1);
+  assert.equal(agentPanelIndex, -1);
   assert.notEqual(evidencePanelIndex, -1);
   assert.notEqual(hypothesisPanelIndex, -1);
-  assert.ok(focusPanelIndex < agentPanelIndex);
-  assert.ok(agentPanelIndex < evidencePanelIndex);
   assert.ok(evidencePanelIndex < hypothesisPanelIndex);
 });
 
@@ -751,8 +975,8 @@ test("home quick actions allow realistic sequence jumps but show teaching remind
   assert.match(pageSource, /const shouldShowAuxiliaryTestSequenceReminder = activeSession\.training_progress\.physical_exam\.requested === 0;/);
   assert.match(pageSource, /OSCE 通常建议先完成核心病史采集，再进入查体。/);
   assert.match(pageSource, /现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isRequestingExam\}/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isRequestingTest\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isRequestingExam\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isRequestingTest\}/);
   assert.doesNotMatch(pageSource, /canRequestPhysicalExam/);
   assert.doesNotMatch(pageSource, /canRequestAuxiliaryTest/);
 });
@@ -845,6 +1069,13 @@ test("home diagnosis submission form collects structured OSCE reasoning fields",
   assert.match(pageSource, /!nextStepValue\.trim\(\)/);
   assert.doesNotMatch(pageSource, /setDiagnosisValue\(nextSession\.diagnosis_draft\.diagnosis\)/);
   assert.doesNotMatch(pageSource, /setSupportingEvidenceValue\(nextSession\.diagnosis_draft\.reasoning\)/);
+});
+
+test("home scoring report preview keeps the copy concise and shows revealed fact totals", () => {
+  assert.match(pageSource, /const scoringPreview = useMemo/);
+  assert.match(pageSource, /已披露线索：\$\{session\?\.revealed_facts\.length \?\? 0\} \/ \$\{session\?\.training_progress\.history\.total \?\? 0\} 条/);
+  assert.match(pageSource, /session\?\.training_progress\.history\.total/);
+  assert.doesNotMatch(pageSource, /本报告仅用于教学复盘，评分依据来自病例、rubric 与来源引用。/);
 });
 
 test("report dimension max scores are derived from rubric score metadata", () => {
@@ -981,16 +1212,16 @@ test("home workspace renders opening task card and keeps teaching guidance in co
   assert.match(pageSource, /teaching_focus: CaseTeachingFocus;/);
   assert.match(pageSource, /type DerivedTeachingFocusPattern = Readonly<\{/);
   assert.match(pageSource, /dynamic_teaching_focus: DerivedTeachingFocus;/);
-  assert.match(pageSource, /const preparedTeachingFocus = session\?\.teaching_focus \?\? selectedCase\?\.teachingFocus \?\? null;/);
-  assert.match(pageSource, /const preparedDynamicTeachingFocus = session\?\.dynamic_teaching_focus \?\? null;/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*description="展开查看训练重点、误区和推荐问诊。"/);
-  assert.match(pageSource, /preparedDynamicTeachingFocus\.patterns\.map/);
-  assert.match(pageSource, /pattern\.why_now/);
+  assert.doesNotMatch(pageSource, /const preparedTeachingFocus = session\?\.teaching_focus \?\? selectedCase\?\.teachingFocus \?\? null;/);
+  assert.doesNotMatch(pageSource, /const preparedDynamicTeachingFocus = session\?\.dynamic_teaching_focus \?\? null;/);
+  assert.doesNotMatch(pageSource, /<CollapsiblePanel[\s\S]*title="教学重点与问诊提示"[\s\S]*description="展开查看训练重点、误区和推荐问诊。"/);
+  assert.doesNotMatch(pageSource, /preparedDynamicTeachingFocus\.patterns\.map/);
+  assert.doesNotMatch(pageSource, /pattern\.why_now/);
   assert.doesNotMatch(pageSource, /<Panel title="当前训练重点" description="由病例结构、Rubric 和当前会话进度动态派生。">/);
   assert.doesNotMatch(pageSource, /<Panel title="训练重点" description="展示不会泄露标准答案的病例学习目标与常见误区。">/);
-  assert.match(pageSource, /preparedTeachingFocus\.learning_objectives\.map/);
-  assert.match(pageSource, /preparedTeachingFocus\.common_error_patterns\.map/);
-  assert.match(pageSource, /preparedTeachingFocus\.recommended_training_path\.map/);
+  assert.doesNotMatch(pageSource, /preparedTeachingFocus\.learning_objectives\.map/);
+  assert.doesNotMatch(pageSource, /preparedTeachingFocus\.common_error_patterns\.map/);
+  assert.doesNotMatch(pageSource, /preparedTeachingFocus\.recommended_training_path\.map/);
   assert.match(pageSource, /type InquiryGuidance = Readonly<\{/);
   assert.match(pageSource, /inquiry_guidance: InquiryGuidance;/);
   assert.match(pageSource, /function OpeningTaskCardMessage\(/);
@@ -1008,10 +1239,10 @@ test("home workspace renders opening task card and keeps teaching guidance in co
   assert.match(pageSource, /openingTaskCard\.tasks\.map/);
   assert.doesNotMatch(pageSource, /<Panel title="开局任务卡"/);
   assert.doesNotMatch(pageSource, /<Panel title="问诊引导" description="优先完成不会泄露诊断的核心病史采集。">/);
-  assert.match(pageSource, /session\?\.inquiry_guidance\.priority/);
-  assert.match(pageSource, /session\.inquiry_guidance\.suggested_questions\.map/);
-  assert.match(pageSource, /onClick=\{\(\) => setInputValue\(question\)\}/);
-  assert.match(pageSource, /session\.inquiry_guidance\.categories\.map/);
+  assert.doesNotMatch(pageSource, /session\?\.inquiry_guidance\.priority/);
+  assert.doesNotMatch(pageSource, /session\.inquiry_guidance\.suggested_questions\.map/);
+  assert.doesNotMatch(pageSource, /onClick=\{\(\) => setInputValue\(question\)\}/);
+  assert.doesNotMatch(pageSource, /session\.inquiry_guidance\.categories\.map/);
 });
 
 test("home workspace centers compact coach hint cards inside the dialogue stream", () => {
@@ -1031,7 +1262,7 @@ test("home workspace keeps backend progress data and exposes compact admin cover
   assert.match(pageSource, /status: "covered" \| "pending";/);
   assert.match(pageSource, /type CoverageMapPayload = Readonly<\{/);
   assert.match(pageSource, /coverage_map: CoverageMapPayload;/);
-  assert.match(pageSource, /session\?\.training_progress\.next_focus \?\? workflowSuggestion/);
+  assert.doesNotMatch(pageSource, /session\?\.training_progress\.next_focus \?\? workflowSuggestion/);
   assert.doesNotMatch(pageSource, /function formatProgressCount\(covered: number, total: number\): string/);
   assert.match(pageSource, /function CoverageMap\(/);
   assert.match(pageSource, /function CoverageMapSection\(/);
@@ -1080,20 +1311,44 @@ test("report page reads current user's backend session snapshot for original dia
   assert.doesNotMatch(reportSource, /readTrainingHistoryRecords/);
   assert.doesNotMatch(reportSource, /TrainingHistoryRecord/);
   assert.doesNotMatch(reportSource, /`\/api\/sessions\/\$\{nextSessionId\}\/report`/);
-  assert.match(reportSource, /<h2 className="text-sm font-semibold">原始对话记录<\/h2>/);
+  assert.match(reportSource, /function ConversationDetailsSection/);
+  assert.match(reportSource, /<details className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-conversation">/);
+  assert.doesNotMatch(reportSource, /<details[^>]*open[^>]*id="report-conversation"/);
+  assert.match(reportSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3/);
+  assert.match(reportSource, /<h2 className=\{sectionHeadingClassName\}>原始对话记录<\/h2>/);
   assert.match(reportSource, /backendSession\?\.messages\.map/);
   assert.match(reportSource, /backendProcedureResults\.map/);
   assert.match(reportSource, /从后端训练 session 读取/);
+  assert.match(reportSource, /默认折叠，可展开查看完整训练过程。/);
   assert.match(reportSource, /后端 session 暂无原始对话记录/);
   assert.match(reportSource, /const workbenchHref = sessionId \? `\/\?session_id=\$\{sessionId\}` : "\/";/);
   assert.match(reportSource, /href=\{workbenchHref\}[\s\S]*?>\s*返回工作台\s*<\/Link>/);
 });
 
+test("report page uses larger section titles for scanability", () => {
+  assert.match(reportSource, /const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";/);
+  for (const title of ["本轮结论", "教练复盘", "AI 评分审计", "推荐训练病例", "维度图表", "原始对话记录", "评分依据与来源"]) {
+    assert.match(reportSource, new RegExp(`<h2 className=\\{sectionHeadingClassName\\}>${title}<\\/h2>`));
+  }
+  assert.doesNotMatch(reportSource, /<h2 className="text-lg font-semibold">/);
+  assert.doesNotMatch(reportSource, /<h2 className="text-sm font-semibold">(?:本轮结论|教练复盘|AI 评分审计|推荐训练病例|维度图表|原始对话记录|评分依据与来源)<\/h2>/);
+});
+
+test("report score status uses a non-action low score label", () => {
+  assert.match(reportSource, /return "需要补强";/);
+  assert.doesNotMatch(reportSource, /return "继续训练";/);
+});
+
 test("history page lists backend sessions as the only official records", () => {
   assert.match(historySource, /type PersistedSessionSummary = Readonly<\{/);
+  assert.match(historySource, /is_completed: boolean;/);
+  assert.match(historySource, /can_continue: boolean;/);
+  assert.match(historySource, /has_report: boolean;/);
+  assert.match(historySource, /completion_status: "in_progress" \| "diagnosis_submitted" \| "report_ready";/);
   assert.match(historySource, /type PersistedSessionListResponse = Readonly<\{/);
   assert.match(historySource, /async function getCurrentUserSessions\(\): Promise<readonly PersistedSessionSummary\[\]>/);
   assert.match(historySource, /async function deleteCurrentUserSession\(sessionId: string\): Promise<void>/);
+  assert.match(historySource, /function getTrainingSessionStatusLabel\(session: PersistedSessionSummary\): string \{/);
   assert.match(historySource, /fetch\("\/api\/me\/sessions", \{/);
   assert.match(historySource, /fetch\(`\/api\/me\/sessions\/\$\{sessionId\}`, \{/);
   assert.match(historySource, /method: "DELETE"/);
@@ -1104,11 +1359,15 @@ test("history page lists backend sessions as the only official records", () => {
   assert.match(historySource, /setBackendSessions\(\(currentSessions\) => currentSessions\.filter\(\(session\) => session\.session_id !== sessionId\)\)/);
   assert.match(historySource, /<p className="text-sm font-semibold text-brand">后端持久记录<\/p>/);
   assert.match(historySource, /backendSessions\.map\(\(session\) =>/);
-  assert.match(historySource, /const workbenchHref = backendSessions\[0\] \? `\/\?session_id=\$\{backendSessions\[0\]\.session_id\}` : "\/";/);
-  assert.match(historySource, /href=\{workbenchHref\}[\s\S]*?>\s*返回工作台\s*<\/Link>/);
-  assert.match(historySource, /href=\{`\/\?session_id=\$\{session\.session_id\}`\}/);
-  assert.match(historySource, />\s*继续训练\s*<\/Link>/);
+  assert.doesNotMatch(historySource, /const resumableSession = backendSessions\.find\(\(session\) => session\.can_continue\);/);
+  assert.doesNotMatch(historySource, /const workbenchHref = resumableSession \? `\/\?session_id=\$\{resumableSession\.session_id\}` : "\/";/);
+  assert.match(historySource, /href="\/"[\s\S]*?>\s*返回工作台\s*<\/Link>/);
+  assert.match(historySource, /session\.can_continue \? \(/);
+  assert.match(historySource, /href=\{`\/\?session_id=\$\{session\.session_id\}`\}[\s\S]*?>\s*继续训练\s*<\/Link>/);
+  assert.match(historySource, /训练已结束/);
   assert.match(historySource, /href=\{`\/report\?session_id=\$\{session\.session_id\}`\}/);
+  assert.doesNotMatch(historySource, /href=\{`\/api\/me\/sessions\/\$\{session\.session_id\}`\}/);
+  assert.doesNotMatch(historySource, />\s*查看状态\s*<\/Link>/);
   assert.match(historySource, /onClick=\{\(\) => handleDeleteBackendSession\(session\.session_id\)\}/);
   assert.match(historySource, /\{deletingSessionId === session\.session_id \? "删除中" : "删除记录"\}/);
   assert.doesNotMatch(historySource, /本机历史/);
@@ -1118,13 +1377,23 @@ test("history page lists backend sessions as the only official records", () => {
   assert.doesNotMatch(historySource, /deleteTrainingHistoryRecord/);
 });
 
-test("cases page starts selected cases in a prepared workspace without creating sessions", () => {
+test("profile recent sessions do not offer continue actions for completed sessions", () => {
+  assert.match(profileSource, /is_completed: boolean;/);
+  assert.match(profileSource, /can_continue: boolean;/);
+  assert.match(profileSource, /has_report: boolean;/);
+  assert.match(profileSource, /session\.can_continue \? \(/);
+  assert.match(profileSource, /href=\{`\/\?session_id=\$\{session\.session_id\}`\}[\s\S]*?>\s*继续训练\s*<\/Link>/);
+  assert.match(profileSource, /训练已结束/);
+  assert.match(profileSource, /session\.is_completed \|\| session\.has_report/);
+});
+
+test("cases page starts selected cases in a prepared workspace without exposing static teaching focus cards", () => {
   assert.match(casesSource, /type CaseTeachingFocus = Readonly<\{/);
   assert.match(casesSource, /teaching_focus: CaseTeachingFocus;/);
-  assert.match(casesSource, /caseSummary\.teaching_focus\.learning_objectives\.map/);
-  assert.match(casesSource, /caseSummary\.teaching_focus\.common_error_patterns\.map/);
-  assert.match(casesSource, />\s*教学重点\s*<\/p>/);
-  assert.match(casesSource, />\s*常见训练误区\s*<\/p>/);
+  assert.doesNotMatch(casesSource, /caseSummary\.teaching_focus\.learning_objectives\.map/);
+  assert.doesNotMatch(casesSource, /caseSummary\.teaching_focus\.common_error_patterns\.map/);
+  assert.doesNotMatch(casesSource, />\s*教学重点\s*<\/p>/);
+  assert.doesNotMatch(casesSource, />\s*常见训练误区\s*<\/p>/);
   assert.match(casesSource, /href=\{`\/\?case_id=\$\{encodeURIComponent\(caseSummary\.case_id\)\}`\}/);
   assert.match(casesSource, />\s*选择并进入工作台\s*<\/Link>/);
   assert.doesNotMatch(casesSource, /创建新的本地 session/);

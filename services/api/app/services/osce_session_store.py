@@ -61,7 +61,7 @@ class OsceSessionStore:
         with sqlite3.connect(self.database_path) as connection:
             rows = connection.execute(
                 """
-                SELECT session_id, case_id, stage, created_at, updated_at
+                SELECT session_id, case_id, stage, created_at, updated_at, session_json
                 FROM osce_sessions
                 WHERE user_id = ?
                 ORDER BY updated_at DESC
@@ -75,6 +75,7 @@ class OsceSessionStore:
                 "stage": row[2],
                 "created_at": row[3],
                 "updated_at": row[4],
+                **_session_completion_summary(row[5], row[2]),
             }
             for row in rows
         ]
@@ -84,7 +85,7 @@ class OsceSessionStore:
         with sqlite3.connect(self.database_path) as connection:
             rows = connection.execute(
                 """
-                SELECT session_id, user_id, case_id, stage, created_at, updated_at
+                SELECT session_id, user_id, case_id, stage, created_at, updated_at, session_json
                 FROM osce_sessions
                 ORDER BY updated_at DESC
                 """,
@@ -97,6 +98,7 @@ class OsceSessionStore:
                 "stage": row[3],
                 "created_at": row[4],
                 "updated_at": row[5],
+                **_session_completion_summary(row[6], row[3]),
             }
             for row in rows
         ]
@@ -126,3 +128,31 @@ class OsceSessionStore:
 
 
 osce_session_store = OsceSessionStore()
+
+
+def _session_completion_summary(session_json: str, stage: str) -> dict[str, object]:
+    try:
+        payload = json.loads(session_json)
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    final_submission = payload.get("final_submission")
+    feedback_report = payload.get("feedback_report")
+    has_report = bool(feedback_report)
+    has_final_submission = bool(final_submission)
+    stage_is_closed = stage in {"diagnosis_submission", "feedback"}
+    is_completed = has_report or has_final_submission or stage_is_closed
+    if has_report or stage == "feedback":
+        completion_status = "report_ready"
+    elif has_final_submission or stage == "diagnosis_submission":
+        completion_status = "diagnosis_submitted"
+    else:
+        completion_status = "in_progress"
+    return {
+        "is_completed": is_completed,
+        "can_continue": not is_completed,
+        "has_report": has_report,
+        "completion_status": completion_status,
+    }

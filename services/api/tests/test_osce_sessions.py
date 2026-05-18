@@ -285,12 +285,84 @@ def test_current_user_sessions_list_only_owned_sessions(tmp_path, authenticated_
                 "stage": "case_intro",
                 "created_at": response.json()["sessions"][0]["created_at"],
                 "updated_at": response.json()["sessions"][0]["updated_at"],
+                "is_completed": False,
+                "can_continue": True,
+                "has_report": False,
+                "completion_status": "in_progress",
             }
         ]
     }
     assert response.json()["sessions"][0]["session_id"] != other_response.json()["session_id"]
     assert response.json()["sessions"][0]["created_at"]
     assert response.json()["sessions"][0]["updated_at"]
+
+
+def test_current_user_sessions_mark_completed_after_diagnosis_submission(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    before_submit_response = client.get("/api/me/sessions")
+
+    submit_response = client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
+    )
+    after_submit_response = client.get("/api/me/sessions")
+    report_response = client.get(f"/api/me/sessions/{session_id}/report")
+    after_report_response = client.get("/api/me/sessions")
+
+    assert create_response.status_code == 200
+    assert before_submit_response.status_code == 200
+    assert before_submit_response.json()["sessions"][0]["is_completed"] is False
+    assert before_submit_response.json()["sessions"][0]["can_continue"] is True
+    assert before_submit_response.json()["sessions"][0]["has_report"] is False
+    assert before_submit_response.json()["sessions"][0]["completion_status"] == "in_progress"
+    assert submit_response.status_code == 200
+    assert after_submit_response.status_code == 200
+    assert after_submit_response.json()["sessions"][0]["is_completed"] is True
+    assert after_submit_response.json()["sessions"][0]["can_continue"] is False
+    assert after_submit_response.json()["sessions"][0]["has_report"] is False
+    assert after_submit_response.json()["sessions"][0]["completion_status"] == "diagnosis_submitted"
+    assert report_response.status_code == 200
+    assert after_report_response.status_code == 200
+    assert after_report_response.json()["sessions"][0]["is_completed"] is True
+    assert after_report_response.json()["sessions"][0]["can_continue"] is False
+    assert after_report_response.json()["sessions"][0]["has_report"] is True
+    assert after_report_response.json()["sessions"][0]["completion_status"] == "report_ready"
+
+
+def test_completed_session_rejects_further_training_actions(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    submit_response = client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
+    )
+
+    blocked_responses = [
+        client.post(f"/api/sessions/{session_id}/message", json={"message": "现在还疼吗？"}),
+        client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"}),
+        client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"}),
+        client.post(f"/api/sessions/{session_id}/hypotheses", json={"hypothesis": "急性阑尾炎"}),
+        client.post(f"/api/sessions/{session_id}/hint"),
+        client.post(
+            f"/api/sessions/{session_id}/submit-diagnosis",
+            json={"diagnosis": "急性阑尾炎", "reasoning": "再次提交。"},
+        ),
+    ]
+
+    assert create_response.status_code == 200
+    assert submit_response.status_code == 200
+    assert [response.status_code for response in blocked_responses] == [409, 409, 409, 409, 409, 409]
+    assert {response.json()["detail"] for response in blocked_responses} == {"训练已结束，请查看报告。"}
 
 
 def test_current_user_profile_requires_logged_in_user() -> None:
@@ -428,8 +500,15 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             {
                 "skill_id": "skill_reasoning_core",
                 "title": "临床推理链纠偏提示",
-                "student_visible_summary": "已启用教学策略，后续训练会在适用病例、阶段和当前缺口匹配时生效。",
+                "student_visible_summary": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
+                "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
+                "learning_action": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+                "activation_summary": "适用于右下腹痛教学病例；训练开始时，当当前缺口命中 1 个关联训练点时触发。",
+                "source_summary": "来自 2 份报告，累计支持 2 次。",
+                "effect_status_label": "样本不足",
+                "scope_label": "全局 Skill",
                 "support_count": 2,
+                "source_report_count": 2,
                 "effect_status": "insufficient_samples",
             }
         ],
@@ -1461,6 +1540,94 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
 
     assert other_session_response.status_code == 200
     assert other_session_response.json()["evolution_candidates"] == []
+
+
+def test_completed_training_hydrates_legacy_stored_report_with_ai_reflection_and_coverage_snapshot(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
+    )
+    osce_session_service.report_store.save_report(
+        {
+            "report_id": f"{session_id}_report",
+            "session_id": session_id,
+            "case_id": "appendicitis_001",
+            "total_score": 8,
+            "dimension_scores": {},
+            "rubric_scores": {},
+            "missed_items": ["ht_migration"],
+            "strengths": [],
+            "reasoning_errors": ["未完整追问疼痛部位及转移特征。"],
+            "next_recommendations": ["下一轮训练重点：追问疼痛部位及转移特征。"],
+            "knowledge_recommendations": [],
+            "source_references": ["rubric:appendicitis_001_rubric.item.ht_migration"],
+            "source_reference_items": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.ht_migration",
+                    "source_type": "rubric",
+                    "title": "追问疼痛部位及转移特征",
+                    "metadata": {},
+                }
+            ],
+            "explanation_source_items": [],
+            "llm_reasoning_feedback": [],
+            "evidence_graph_summary": None,
+            "feedback_summary": "历史报告。",
+            "personal_skill_candidate": {
+                "status": "not_complete",
+                "reason": "final_submission_required",
+                "scope": "personal",
+                "candidate_id": None,
+                "skill_id": None,
+                "web_check_status": "not_configured",
+                "external_evidence_checks": [],
+            },
+            "ai_reflection_review": {
+                "status": "not_ready",
+                "reason": "final_submission_required",
+                "summary": "提交诊断并生成完整评分报告后，系统会生成 AI 复盘和下一轮个人训练 Skill。",
+                "mistake_patterns": [],
+                "teacher_feedback": "",
+                "next_focus": "",
+                "source_references": [],
+                "source_reference_items": [],
+            },
+        }
+    )
+
+    report_response = client.get(f"/api/sessions/{session_id}/report")
+    report = report_response.json()
+
+    assert report_response.status_code == 200
+    assert report["ai_reflection_review"]["status"] == "generated"
+    assert report["personal_skill_candidate"]["status"] == "approved"
+    assert report["personal_skill_candidate"]["owner_student_id"] == authenticated_user["user_id"]
+    assert report["training_progress_snapshot"]["coverage_map"]["history"]
+    assert any(
+        item["status"] == "covered"
+        for item in report["training_progress_snapshot"]["coverage_map"]["physical_exam"]
+    )
+    stored_report = osce_session_service.report_store.get_report(session_id)
+    assert stored_report is not None
+    assert stored_report["ai_reflection_review"]["status"] == "generated"
+    assert stored_report["training_progress_snapshot"]["coverage_map"]["auxiliary_test"]
 
 
 def test_incomplete_training_report_does_not_generate_personal_skill(tmp_path) -> None:
