@@ -437,6 +437,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
             source_references=[item["reference"] for item in retrieved_knowledge_context],
+            retrieved_knowledge_context=retrieved_knowledge_context,
         ),
     }
 
@@ -1355,6 +1356,7 @@ def _apply_passive_coach_review(
         revealed_fact_id=None,
         safety_flags=list(state.get("safety_flags", [])),
         source_references=[item["reference"] for item in retrieved_knowledge_context] if should_emit else [],
+        retrieved_knowledge_context=retrieved_knowledge_context if should_emit else [],
     )
     return next_messages, next_agent_turn_memory
 
@@ -1415,28 +1417,46 @@ def _append_agent_turn_memory(
     revealed_fact_id: str | None,
     safety_flags: list[str],
     source_references: list[str] | None = None,
+    retrieved_knowledge_context: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
     turn_source_references = [f"case:{state['case_id']}.history.{revealed_fact_id}"] if revealed_fact_id else []
     for reference in source_references or []:
         if reference and reference not in turn_source_references:
             turn_source_references.append(reference)
-    turn_memory.append(
-        {
-            "turn_id": f"turn:{len(turn_memory) + 1}",
-            "student_message": student_message,
-            "reply": reply,
-            "reply_role": reply_role,
-            "current_intent": current_intent,
-            "turn_policy": turn_policy,
-            "turn_analysis": dict(turn_analysis),
-            "agent_path": list(agent_path),
-            "revealed_fact_id": revealed_fact_id,
-            "source_references": turn_source_references,
-            "safety_flags": list(safety_flags),
-        }
-    )
+    turn_knowledge_context = _turn_knowledge_context(retrieved_knowledge_context or [], turn_source_references)
+    turn_payload = {
+        "turn_id": f"turn:{len(turn_memory) + 1}",
+        "student_message": student_message,
+        "reply": reply,
+        "reply_role": reply_role,
+        "current_intent": current_intent,
+        "turn_policy": turn_policy,
+        "turn_analysis": dict(turn_analysis),
+        "agent_path": list(agent_path),
+        "revealed_fact_id": revealed_fact_id,
+        "source_references": turn_source_references,
+        "safety_flags": list(safety_flags),
+    }
+    if turn_knowledge_context:
+        turn_payload["knowledge_references"] = [item["reference"] for item in turn_knowledge_context]
+        turn_payload["retrieved_knowledge_context"] = turn_knowledge_context
+    turn_memory.append(turn_payload)
     return turn_memory
+
+
+def _turn_knowledge_context(
+    retrieved_knowledge_context: list[dict[str, Any]],
+    source_references: list[str],
+) -> list[dict[str, Any]]:
+    source_reference_set = set(source_references)
+    return [
+        item
+        for item in retrieved_knowledge_context
+        if isinstance(item, dict)
+        and isinstance(item.get("reference"), str)
+        and item["reference"] in source_reference_set
+    ]
 
 
 def _boundary_turn_analysis(current_intent: str, rationale: str) -> dict[str, Any]:

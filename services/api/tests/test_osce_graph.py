@@ -1297,6 +1297,13 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
     assert result["agent_turn_memory"][-1]["source_references"] == [
         "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     ]
+    assert result["agent_turn_memory"][-1]["knowledge_references"] == [
+        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+    ]
+    assert result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0]["reference"] == (
+        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+    )
+    assert result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0]["visibility"] == "pre_submit_safe"
 
 
 @pytest.mark.parametrize(

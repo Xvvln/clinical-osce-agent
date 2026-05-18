@@ -474,6 +474,53 @@ class ReportWithGroundedAgentKnowledgeReferenceService(ReportWithUngroundedAgent
         return report
 
 
+class ReportWithUngroundedSessionAgentTurnService(ReportWithGroundedAgentKnowledgeReferenceService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_ungrounded_agent_turn"}
+
+    def get_session(self, session_id: str) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "agent_turn_memory": [
+                {
+                    "turn_id": "turn:1",
+                    "reply_role": "coach",
+                    "knowledge_references": [
+                        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+                    ],
+                    "retrieved_knowledge_context": [],
+                }
+            ],
+        }
+
+
+class ReportWithGroundedSessionAgentTurnService(ReportWithGroundedAgentKnowledgeReferenceService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_grounded_agent_turn"}
+
+    def get_session(self, session_id: str) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "agent_turn_memory": [
+                {
+                    "turn_id": "turn:1",
+                    "reply_role": "coach",
+                    "knowledge_references": [
+                        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+                    ],
+                    "retrieved_knowledge_context": [
+                        {
+                            "reference": "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint",
+                            "source_type": "rag_knowledge",
+                            "title": "疼痛迁移问诊 Coach 提示",
+                            "visibility": "pre_submit_safe",
+                        }
+                    ],
+                }
+            ],
+        }
+
+
 def test_run_evaluation_case_passes_standard_appendicitis_path(tmp_path) -> None:
     service = OsceSessionService(
         report_store=ReportStore(tmp_path / "reports.sqlite3"),
@@ -763,6 +810,43 @@ def test_run_evaluation_case_passes_when_agent_knowledge_reference_is_grounded()
     )
 
     result = run_evaluation_case(evaluation_case, ReportWithGroundedAgentKnowledgeReferenceService())
+
+    assert result.passed is True
+    assert result.rag_agent_grounding_passed is True
+    assert result.missing_agent_knowledge_references == []
+
+
+def test_run_evaluation_case_fails_when_session_agent_turn_reference_is_not_grounded() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithUngroundedSessionAgentTurnService())
+
+    assert result.passed is False
+    assert result.rag_agent_grounding_passed is False
+    assert result.missing_agent_knowledge_references == [
+        (
+            "session.agent_turn_memory.0.knowledge_references:"
+            "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+        )
+    ]
+
+
+def test_run_evaluation_case_passes_when_session_agent_turn_reference_is_grounded() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithGroundedSessionAgentTurnService())
 
     assert result.passed is True
     assert result.rag_agent_grounding_passed is True

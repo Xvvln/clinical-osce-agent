@@ -96,6 +96,7 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
             service.submit_diagnosis(session_id, step.value, step.reasoning)
 
     report = service.get_report(session_id) or {}
+    session_payload = _evaluation_session_payload(service, session_id)
     actual_total_score = int(report.get("total_score", 0))
     source_reference_items = _valid_source_reference_items(report.get("source_reference_items", []))
     source_reference_types = _source_reference_types(source_reference_items)
@@ -111,6 +112,8 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
     forbidden_rag_knowledge_references = _forbidden_rag_knowledge_references(report)
     rag_score_isolation_violations = _rag_score_isolation_violations(report)
     missing_agent_knowledge_references = _missing_agent_knowledge_references(report)
+    for missing_reference in _missing_agent_knowledge_references({"session": session_payload}):
+        _append_unique(missing_agent_knowledge_references, missing_reference)
     rag_knowledge_safety_passed = not forbidden_rag_knowledge_references
     rag_score_isolation_passed = not rag_score_isolation_violations
     rag_agent_grounding_passed = not missing_agent_knowledge_references
@@ -209,6 +212,17 @@ def _missing_agent_knowledge_references(report: dict[str, Any]) -> list[str]:
     missing_references: list[str] = []
     _collect_agent_knowledge_reference_violations(report, [], missing_references)
     return missing_references
+
+
+def _evaluation_session_payload(service: OsceSessionService, session_id: str) -> dict[str, Any]:
+    get_session = getattr(service, "get_session", None)
+    if not callable(get_session):
+        return {}
+    try:
+        payload = get_session(session_id)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _collect_agent_knowledge_reference_violations(
