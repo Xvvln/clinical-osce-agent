@@ -1633,6 +1633,8 @@ def test_admin_can_read_evaluation_batch_detail(tmp_path, monkeypatch) -> None:
                     "forbidden_rag_knowledge_references": [],
                     "rag_score_isolation_passed": True,
                     "rag_score_isolation_violations": [],
+                    "rag_agent_grounding_passed": True,
+                    "missing_agent_knowledge_references": [],
                     "duration_ms": 66,
                 }
             ],
@@ -1760,6 +1762,8 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
                 "forbidden_rag_knowledge_references": [],
                 "rag_score_isolation_passed": True,
                 "rag_score_isolation_violations": [],
+                "rag_agent_grounding_passed": True,
+                "missing_agent_knowledge_references": [],
                 "duration_ms": 42,
             }
         ],

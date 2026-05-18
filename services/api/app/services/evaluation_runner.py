@@ -47,6 +47,8 @@ class EvaluationResult:
     forbidden_rag_knowledge_references: list[str] = field(default_factory=list)
     rag_score_isolation_passed: bool = True
     rag_score_isolation_violations: list[str] = field(default_factory=list)
+    rag_agent_grounding_passed: bool = True
+    missing_agent_knowledge_references: list[str] = field(default_factory=list)
     duration_ms: int = 0
 
 
@@ -108,8 +110,10 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
     rag_evidence_coverage_passed = not missing_evidence_references
     forbidden_rag_knowledge_references = _forbidden_rag_knowledge_references(report)
     rag_score_isolation_violations = _rag_score_isolation_violations(report)
+    missing_agent_knowledge_references = _missing_agent_knowledge_references(report)
     rag_knowledge_safety_passed = not forbidden_rag_knowledge_references
     rag_score_isolation_passed = not rag_score_isolation_violations
+    rag_agent_grounding_passed = not missing_agent_knowledge_references
     evaluation_text = f"{report} {evaluation_case.steps}"
     forbidden_term_violations = [term for term in evaluation_case.forbidden_terms if term in evaluation_text]
     passed = (
@@ -120,6 +124,7 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         and rag_evidence_coverage_passed
         and rag_knowledge_safety_passed
         and rag_score_isolation_passed
+        and rag_agent_grounding_passed
     )
     return EvaluationResult(
         session_id=session_id,
@@ -141,6 +146,8 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         forbidden_rag_knowledge_references=forbidden_rag_knowledge_references,
         rag_score_isolation_passed=rag_score_isolation_passed,
         rag_score_isolation_violations=rag_score_isolation_violations,
+        rag_agent_grounding_passed=rag_agent_grounding_passed,
+        missing_agent_knowledge_references=missing_agent_knowledge_references,
         passed=passed,
         duration_ms=int((time.perf_counter() - started_at) * 1000),
     )
@@ -196,6 +203,40 @@ def _rag_score_isolation_violations(report: dict[str, Any]) -> list[str]:
     violations: list[str] = []
     _collect_rag_scoring_violations(report, [], violations)
     return violations
+
+
+def _missing_agent_knowledge_references(report: dict[str, Any]) -> list[str]:
+    missing_references: list[str] = []
+    _collect_agent_knowledge_reference_violations(report, [], missing_references)
+    return missing_references
+
+
+def _collect_agent_knowledge_reference_violations(
+    payload: Any,
+    path: list[str],
+    missing_references: list[str],
+) -> None:
+    if isinstance(payload, dict):
+        knowledge_references = [
+            reference
+            for reference in _string_values(payload.get("knowledge_references", []))
+            if reference.startswith("rag_knowledge:")
+        ]
+        if knowledge_references:
+            grounded_references = {
+                item["reference"]
+                for item in payload.get("retrieved_knowledge_context", [])
+                if isinstance(item, dict) and isinstance(item.get("reference"), str)
+            }
+            reference_path = ".".join([*path, "knowledge_references"])
+            for reference in knowledge_references:
+                if reference not in grounded_references:
+                    _append_unique(missing_references, f"{reference_path}:{reference}")
+        for key, value in payload.items():
+            _collect_agent_knowledge_reference_violations(value, [*path, str(key)], missing_references)
+    elif isinstance(payload, list):
+        for index, item in enumerate(payload):
+            _collect_agent_knowledge_reference_violations(item, [*path, str(index)], missing_references)
 
 
 def _collect_rag_scoring_violations(payload: Any, path: list[str], violations: list[str]) -> None:

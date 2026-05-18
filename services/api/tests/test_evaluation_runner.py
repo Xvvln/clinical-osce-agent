@@ -428,6 +428,52 @@ class ReportWithRagScoringReferenceService(ReportWithExplanationTextWithoutExpla
         return report
 
 
+class ReportWithUngroundedAgentKnowledgeReferenceService(ReportWithExplanationTextWithoutExplanationSourcesService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_ungrounded_agent_reference"}
+
+    def get_report(self, session_id: str) -> dict[str, object]:
+        report = dict(super().get_report(session_id))
+        report["explanation_source_items"] = [
+            {
+                "kind": "strength",
+                "text": "主要诊断命中急性阑尾炎：已完成。",
+                "rubric_item_id": "dx_main",
+                "source_references": ["rubric:appendicitis_001_rubric.item.dx_main"],
+            }
+        ]
+        report["ai_reflection_review"] = {
+            "status": "generated",
+            "summary": "下次先补齐腹痛演变。",
+            "knowledge_references": [
+                "rag_knowledge:case:appendicitis_001:reflection:history_sequence"
+            ],
+            "retrieved_knowledge_context": [],
+        }
+        return report
+
+
+class ReportWithGroundedAgentKnowledgeReferenceService(ReportWithUngroundedAgentKnowledgeReferenceService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_grounded_agent_reference"}
+
+    def get_report(self, session_id: str) -> dict[str, object]:
+        report = dict(super().get_report(session_id))
+        report["ai_reflection_review"] = {
+            **report["ai_reflection_review"],
+            "retrieved_knowledge_context": [
+                {
+                    "reference": "rag_knowledge:case:appendicitis_001:reflection:history_sequence",
+                    "source_type": "rag_knowledge",
+                    "title": "腹痛演变复盘参考",
+                    "snippet": "复盘时优先解释起病、迁移和伴随症状之间的关系。",
+                    "visibility": "post_submit_review",
+                }
+            ],
+        }
+        return report
+
+
 def test_run_evaluation_case_passes_standard_appendicitis_path(tmp_path) -> None:
     service = OsceSessionService(
         report_store=ReportStore(tmp_path / "reports.sqlite3"),
@@ -687,6 +733,40 @@ def test_run_evaluation_case_fails_when_rag_reference_is_used_for_scoring() -> N
         "rubric_scores.dx_main.score_source_references:rag_knowledge:case:appendicitis_001:teaching:dx_main",
         "source_reference_items:rag_knowledge:case:appendicitis_001:teaching:dx_main",
     ]
+
+
+def test_run_evaluation_case_fails_when_agent_knowledge_reference_is_not_grounded() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithUngroundedAgentKnowledgeReferenceService())
+
+    assert result.passed is False
+    assert result.rag_agent_grounding_passed is False
+    assert result.missing_agent_knowledge_references == [
+        "ai_reflection_review.knowledge_references:rag_knowledge:case:appendicitis_001:reflection:history_sequence"
+    ]
+
+
+def test_run_evaluation_case_passes_when_agent_knowledge_reference_is_grounded() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithGroundedAgentKnowledgeReferenceService())
+
+    assert result.passed is True
+    assert result.rag_agent_grounding_passed is True
+    assert result.missing_agent_knowledge_references == []
 
 
 def test_run_evaluation_case_fails_when_forbidden_terms_appear(tmp_path) -> None:

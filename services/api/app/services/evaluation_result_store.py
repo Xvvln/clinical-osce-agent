@@ -94,6 +94,8 @@ def _normalize_batch_result(batch_result: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("forbidden_rag_knowledge_references", [])
         result.setdefault("rag_score_isolation_passed", False)
         result.setdefault("rag_score_isolation_violations", [])
+        result.setdefault("rag_agent_grounding_passed", False)
+        result.setdefault("missing_agent_knowledge_references", [])
     return batch_result
 
 
