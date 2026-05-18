@@ -4,6 +4,8 @@ import pytest
 
 from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
+from app.services import training_skill_candidate_service as candidate_module
+from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.training_skill_candidate_service import (
     OpenAICompatibleTrainingSkillCandidateGenerator,
     TemplateTrainingSkillCandidateGenerator,
@@ -533,6 +535,72 @@ def test_training_skill_candidate_service_uses_injected_generator_once_for_train
             ],
         }
     ]
+
+
+def test_training_skill_candidate_service_injects_filtered_rag_context_for_skill_generation(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:skill_generation:reasoning_bridge",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "skill_generation_note",
+            "visibility": "post_submit_review",
+            "allowed_agents": ["skill_generation"],
+            "source_id": "rubric_appendicitis_001",
+            "title": "推理链 Skill 生成参考",
+            "text": "生成 Skill 时可围绕 rs_exclude 和 reasoning_core 强调先列证据再说明排除依据。",
+            "tags": ["rs_exclude", "reasoning_core"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:secret:hidden_answer",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_answer",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "隐藏答案",
+            "text": "隐藏答案：急性阑尾炎。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(candidate_module, "rag_knowledge_store", store)
+    captured_contexts: list[TrainingSkillCandidateContext] = []
+
+    class FakeTrainingSkillCandidateGenerator:
+        def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
+            captured_contexts.append(context)
+            return TemplateTrainingSkillCandidateGenerator().generate_candidate(context)
+
+    insights = {
+        "session_count": 3,
+        "report_count": 3,
+        "frequent_missed_items": [
+            {"item_id": "reasoning_core", "count": 2, "case_ids": ["appendicitis_001"]},
+            {"item_id": "rs_exclude", "count": 3, "case_ids": ["appendicitis_001"]},
+        ],
+        "frequent_learning_recommendations": [],
+    }
+
+    candidates = TrainingSkillCandidateService(
+        generator=FakeTrainingSkillCandidateGenerator(),
+    ).propose_candidates(insights, min_count=2)
+
+    assert captured_contexts[0].retrieved_knowledge_context[0]["reference"] == (
+        "rag_knowledge:case:appendicitis_001:skill_generation:reasoning_bridge"
+    )
+    assert captured_contexts[0].retrieved_knowledge_context[0]["visibility"] == "post_submit_review"
+    assert candidates[0]["knowledge_references"] == [
+        "rag_knowledge:case:appendicitis_001:skill_generation:reasoning_bridge"
+    ]
+    assert "隐藏答案" not in str(candidates[0])
 
 
 def test_training_skill_candidate_service_proposes_one_training_pattern_candidate_from_frequent_missed_items(monkeypatch) -> None:

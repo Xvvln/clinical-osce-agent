@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from google import genai
@@ -12,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_skill_policy import (
     build_prohibited_content_policy,
@@ -49,6 +52,7 @@ class TrainingSkillCandidateContext:
     source_report_count: int
     related_recommendations: list[str]
     turn_patterns: list[TrainingSkillCandidateTurnPattern] = field(default_factory=list)
+    retrieved_knowledge_context: list[dict[str, Any]] = field(default_factory=list)
 
 
 SkillCandidateType = str
@@ -89,8 +93,11 @@ SKILL_CANDIDATE_SYSTEM_PROMPT = """你是 OSCE 临床思维训练的教学 Skill
 - Skill 必须面向一次训练或一批训练暴露出的整体错误模式，不得只针对单个 rubric 漏项机械改写；
 - 不得透露标准诊断、隐藏病例事实或标准答案；
 - 不得生成真实诊疗建议、治疗方案、用药剂量、手术方案或处置建议；
-- suggested_strategy 必须是面向学生的训练提醒，而不是临床处方。
+- suggested_strategy 必须是面向学生的训练提醒，而不是临床处方；
+- 如输入包含 retrieved_knowledge_context，只能把它作为教学策略参考，不得复制隐藏答案或病例事实。
 """
+
+SKILL_GENERATION_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
 
 
 class VertexGeminiTrainingSkillCandidateGenerator:
@@ -121,6 +128,7 @@ class VertexGeminiTrainingSkillCandidateGenerator:
                         "source_report_count": context.source_report_count,
                         "source_report_ids": _context_source_report_ids(context),
                         "related_recommendations": context.related_recommendations,
+                        "retrieved_knowledge_context": context.retrieved_knowledge_context,
                     },
                     ensure_ascii=False,
                 ),
@@ -155,6 +163,7 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
                     "source_report_count": context.source_report_count,
                     "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
+                    "retrieved_knowledge_context": context.retrieved_knowledge_context,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
@@ -183,6 +192,7 @@ class AnthropicTrainingSkillCandidateGenerator:
                     "source_report_count": context.source_report_count,
                     "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
+                    "retrieved_knowledge_context": context.retrieved_knowledge_context,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
@@ -274,6 +284,7 @@ class TrainingSkillCandidateService:
                 source_report_count=source_report_count,
                 related_recommendations=related_recommendations,
             )
+            context = _with_skill_generation_knowledge_context(context)
             candidates.append(self._generator.generate_candidate(context))
 
         for turn_pattern in _recurring_turn_patterns(insights, min_count):
@@ -286,6 +297,7 @@ class TrainingSkillCandidateService:
                 related_recommendations=related_recommendations,
                 turn_patterns=[turn_pattern],
             )
+            context = _with_skill_generation_knowledge_context(context)
             candidates.append(self._generator.generate_candidate(context))
         return candidates
 
@@ -394,6 +406,7 @@ def _candidate_from_content(
         "related_recommendations": list(context.related_recommendations),
     }
     _add_turn_pattern_source_fields(candidate, context)
+    _add_knowledge_context_source_fields(candidate, context)
     return candidate
 
 
@@ -427,7 +440,135 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
         "related_recommendations": context.related_recommendations,
     }
     _add_turn_pattern_source_fields(candidate, context)
+    _add_knowledge_context_source_fields(candidate, context)
     return candidate
+
+
+def _with_skill_generation_knowledge_context(context: TrainingSkillCandidateContext) -> TrainingSkillCandidateContext:
+    return TrainingSkillCandidateContext(
+        pattern_id=context.pattern_id,
+        missed_items=context.missed_items,
+        support_count=context.support_count,
+        case_ids=context.case_ids,
+        source_report_count=context.source_report_count,
+        related_recommendations=context.related_recommendations,
+        turn_patterns=context.turn_patterns,
+        retrieved_knowledge_context=_retrieve_skill_generation_knowledge_context(context),
+    )
+
+
+def _retrieve_skill_generation_knowledge_context(
+    context: TrainingSkillCandidateContext,
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    database_path = getattr(rag_knowledge_store, "database_path", None)
+    if isinstance(database_path, Path) and not database_path.exists():
+        return []
+
+    case_ids = {str(case_id) for case_id in context.case_ids if str(case_id)}
+    scored_items: list[tuple[int, str, dict[str, Any]]] = []
+    for item in rag_knowledge_store.list_items():
+        if not _skill_generation_can_read_knowledge_item(item, case_ids):
+            continue
+        score = _score_knowledge_item_for_skill_generation(context, item)
+        if score <= 0:
+            continue
+        knowledge_id = str(item.get("knowledge_id", "")).strip()
+        scored_items.append((score, knowledge_id, item))
+
+    return [
+        _serialize_skill_generation_knowledge_item(item)
+        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))[:limit]
+    ]
+
+
+def _skill_generation_can_read_knowledge_item(item: dict[str, Any], case_ids: set[str]) -> bool:
+    visibility = str(item.get("visibility", "")).strip()
+    if visibility not in SKILL_GENERATION_RAG_VISIBILITIES:
+        return False
+    allowed_agents = [str(agent).strip() for agent in item.get("allowed_agents", []) if str(agent).strip()]
+    if allowed_agents and "skill_generation" not in allowed_agents:
+        return False
+    item_case_id = str(item.get("case_id", "")).strip()
+    if item_case_id and item_case_id not in case_ids:
+        return False
+    if str(item.get("scope", "")).strip() == "case" and not item_case_id:
+        return False
+    return True
+
+
+def _score_knowledge_item_for_skill_generation(context: TrainingSkillCandidateContext, item: dict[str, Any]) -> int:
+    haystack = " ".join(
+        [
+            str(item.get("knowledge_id", "")),
+            str(item.get("title", "")),
+            str(item.get("text", "")),
+            " ".join(str(tag) for tag in item.get("tags", []) if str(tag)),
+        ]
+    ).lower()
+    return sum(1 for term in _skill_generation_rag_terms(context) if term.lower() in haystack)
+
+
+def _skill_generation_rag_terms(context: TrainingSkillCandidateContext) -> list[str]:
+    raw_terms = [
+        context.pattern_id,
+        *[item.item_id for item in context.missed_items],
+        *[case_id for case_id in context.case_ids],
+        *context.related_recommendations,
+    ]
+    for turn_pattern in context.turn_patterns:
+        raw_terms.extend(
+            [
+                turn_pattern.pattern_id,
+                turn_pattern.pattern_type,
+                turn_pattern.title,
+                *turn_pattern.trigger_item_ids,
+            ]
+        )
+    terms: set[str] = set()
+    for raw_term in raw_terms:
+        normalized = str(raw_term).strip()
+        if not normalized:
+            continue
+        terms.add(normalized)
+        terms.update(token for token in re.split(r"[\s,，。；;:：、()（）]+", normalized) if token)
+        terms.update(_cjk_ngrams(normalized, min_size=2, max_size=6))
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
+def _cjk_ngrams(text: str, *, min_size: int, max_size: int) -> set[str]:
+    compact_text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9_]+", "", text)
+    if len(compact_text) < min_size:
+        return set()
+    return {
+        compact_text[start : start + size]
+        for size in range(min_size, min(max_size, len(compact_text)) + 1)
+        for start in range(0, len(compact_text) - size + 1)
+    }
+
+
+def _serialize_skill_generation_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
+    knowledge_id = str(item.get("knowledge_id", "")).strip()
+    return {
+        "reference": f"rag_knowledge:{knowledge_id}",
+        "knowledge_id": knowledge_id,
+        "title": str(item.get("title", "")).strip(),
+        "snippet": str(item.get("text", "")).strip(),
+        "source_id": str(item.get("source_id", "")).strip(),
+        "case_id": str(item.get("case_id", "")).strip(),
+        "visibility": str(item.get("visibility", "")).strip(),
+        "allowed_agents": [str(agent) for agent in item.get("allowed_agents", []) if str(agent)],
+    }
+
+
+def _add_knowledge_context_source_fields(candidate: dict[str, Any], context: TrainingSkillCandidateContext) -> None:
+    if not context.retrieved_knowledge_context:
+        return
+    candidate["knowledge_references"] = [
+        item["reference"] for item in context.retrieved_knowledge_context if item.get("reference")
+    ]
+    candidate["retrieved_knowledge_context"] = list(context.retrieved_knowledge_context)
 
 
 def _candidate_description(context: TrainingSkillCandidateContext) -> str:

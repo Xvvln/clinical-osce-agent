@@ -30,6 +30,7 @@ from app.validators.case_validator import validate_case
 from app.models.case import Case, HiddenFact
 
 COACH_RAG_VISIBILITIES = {"pre_submit_safe"}
+REFLECTION_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
@@ -362,6 +363,20 @@ def skill_context_node(state: OsceGraphState) -> dict[str, Any]:
 
 def reflection_node(state: OsceGraphState) -> dict[str, Any]:
     reflection_summary = build_reflection_summary(dict(state))
+    case = _load_case(state["case_id"])
+    forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
+    retrieved_knowledge_context = _retrieve_reflection_knowledge_context(
+        state,
+        case=case,
+        reflection_summary=reflection_summary,
+        forbidden_terms=forbidden_terms,
+    )
+    if retrieved_knowledge_context:
+        reflection_summary = {
+            **reflection_summary,
+            "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
+            "retrieved_knowledge_context": retrieved_knowledge_context,
+        }
     pedagogy_state = build_pedagogy_state({**dict(state), "reflection_summary": reflection_summary})
     return {
         "reflection_summary": reflection_summary,
@@ -958,6 +973,98 @@ def _sanitize_knowledge_context_text(text: str, forbidden_terms: list[str]) -> s
         if term:
             sanitized = sanitized.replace(term, "标准诊断")
     return sanitized
+
+
+def _retrieve_reflection_knowledge_context(
+    state: OsceGraphState,
+    *,
+    case: Case,
+    reflection_summary: dict[str, Any],
+    forbidden_terms: list[str],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    database_path = getattr(rag_knowledge_store, "database_path", None)
+    if isinstance(database_path, Path) and not database_path.exists():
+        return []
+
+    scored_items: list[tuple[int, str, dict[str, Any]]] = []
+    for item in rag_knowledge_store.list_items():
+        if not _reflection_can_read_knowledge_item(item, case.case_id):
+            continue
+        score = _score_reflection_knowledge_item(state, case, reflection_summary, item)
+        if score <= 0:
+            continue
+        scored_items.append((score, str(item.get("knowledge_id", "")), item))
+    return [
+        _serialize_reflection_knowledge_item(item, forbidden_terms=forbidden_terms)
+        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))[:limit]
+    ]
+
+
+def _reflection_can_read_knowledge_item(item: dict[str, Any], case_id: str) -> bool:
+    visibility = str(item.get("visibility", "")).strip()
+    if visibility not in REFLECTION_RAG_VISIBILITIES:
+        return False
+    allowed_agents = [str(agent).strip() for agent in item.get("allowed_agents", []) if str(agent).strip()]
+    if allowed_agents and "reflection" not in allowed_agents:
+        return False
+    item_case_id = str(item.get("case_id", "")).strip()
+    if item_case_id and item_case_id != case_id:
+        return False
+    if str(item.get("scope", "")).strip() == "case" and not item_case_id:
+        return False
+    return True
+
+
+def _score_reflection_knowledge_item(
+    state: OsceGraphState,
+    case: Case,
+    reflection_summary: dict[str, Any],
+    item: dict[str, Any],
+) -> int:
+    haystack = " ".join(
+        [
+            str(item.get("knowledge_id", "")),
+            str(item.get("title", "")),
+            str(item.get("text", "")),
+            " ".join(str(tag) for tag in item.get("tags", []) if str(tag)),
+        ]
+    ).lower()
+    return sum(1 for term in _reflection_rag_terms(state, case, reflection_summary) if term.lower() in haystack)
+
+
+def _reflection_rag_terms(state: OsceGraphState, case: Case, reflection_summary: dict[str, Any]) -> list[str]:
+    raw_terms = [
+        case.case_id,
+        case.case_title,
+        *[str(item_id) for item_id in state.get("missed_items", []) if str(item_id)],
+        *[str(item_id) for item_id in reflection_summary.get("missed_item_ids", []) if str(item_id)],
+        str(reflection_summary.get("summary", "")),
+        str(reflection_summary.get("next_focus", "")),
+    ]
+    terms: set[str] = set()
+    for raw_term in raw_terms:
+        normalized = raw_term.strip()
+        if not normalized:
+            continue
+        terms.add(normalized)
+        terms.update(token for token in re.split(r"[\s,，。；;:：、()（）]+", normalized) if token)
+        terms.update(_cjk_ngrams(normalized, min_size=2, max_size=6))
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
+def _serialize_reflection_knowledge_item(item: dict[str, Any], *, forbidden_terms: list[str]) -> dict[str, Any]:
+    knowledge_id = str(item.get("knowledge_id", "")).strip()
+    return {
+        "reference": f"rag_knowledge:{knowledge_id}",
+        "knowledge_id": knowledge_id,
+        "title": _sanitize_knowledge_context_text(str(item.get("title", "")).strip(), forbidden_terms),
+        "snippet": _sanitize_knowledge_context_text(str(item.get("text", "")).strip(), forbidden_terms),
+        "source_id": str(item.get("source_id", "")).strip(),
+        "case_id": str(item.get("case_id", "")).strip(),
+        "visibility": str(item.get("visibility", "")).strip(),
+        "allowed_agents": [str(agent) for agent in item.get("allowed_agents", []) if str(agent)],
+    }
 
 
 def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> str:

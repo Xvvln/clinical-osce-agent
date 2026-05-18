@@ -1,6 +1,8 @@
 import json
 
+from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import reflection_node, training_strategy_node
+from app.services.rag_knowledge_store import RagKnowledgeStore
 
 
 def test_agent_strategy_node_updates_next_best_action() -> None:
@@ -182,3 +184,60 @@ def test_reflection_node_does_not_leak_diagnosis() -> None:
             "related_item_ids": ["ht_migration", "pe_rebound"],
         },
     ]
+
+
+def test_reflection_node_records_filtered_post_submit_rag_context(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:reflection:evidence_chain",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "reflection_note",
+            "visibility": "post_submit_review",
+            "allowed_agents": ["reflection"],
+            "source_id": "rubric_appendicitis_001",
+            "title": "证据链复盘参考",
+            "text": "复盘时可围绕 ht_migration 和 pe_rebound 追问学生为何先补齐病史再进入查体。",
+            "tags": ["ht_migration", "pe_rebound"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:secret:hidden_answer",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_answer",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "隐藏答案",
+            "text": "隐藏答案：急性阑尾炎。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(osce_graph_module, "rag_knowledge_store", store)
+
+    result = reflection_node(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "feedback",
+            "missed_items": ["ht_migration", "pe_rebound"],
+            "final_submission": {
+                "diagnosis": "急性阑尾炎",
+                "reasoning": "考虑急性阑尾炎。",
+            },
+            "agent_decision_trace": [],
+        }
+    )
+
+    reflection_summary = result["reflection_summary"]
+    assert reflection_summary["knowledge_references"] == [
+        "rag_knowledge:case:appendicitis_001:reflection:evidence_chain"
+    ]
+    assert reflection_summary["retrieved_knowledge_context"][0]["visibility"] == "post_submit_review"
+    assert "隐藏答案" not in json.dumps(reflection_summary, ensure_ascii=False)
