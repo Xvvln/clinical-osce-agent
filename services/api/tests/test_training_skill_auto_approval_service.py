@@ -1,3 +1,5 @@
+from app.services import training_skill_auto_approval_service as auto_approval_module
+from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.training_skill_auto_approval_service import TrainingSkillApprovalAgent, TrainingSkillAutoApprovalSettingsStore
 
 
@@ -72,3 +74,71 @@ def test_training_skill_approval_agent_removes_dose_and_drug_variants() -> None:
     assert "剂量" not in reviewed_text
     assert reviewed_candidate["candidate_id"] == candidate["candidate_id"]
     assert reviewed_candidate["trigger_item_ids"] == candidate["trigger_item_ids"]
+
+
+def test_training_skill_approval_agent_records_filtered_rag_knowledge_context(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:skill_review:pain_sequence",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "skill_review_note",
+            "visibility": "post_submit_review",
+            "allowed_agents": ["skill_approval"],
+            "source_id": "fareez_osce_2022",
+            "title": "疼痛迁移 Skill 审批参考",
+            "text": "审批时只允许把疼痛迁移作为训练复盘目标，不得透露标准诊断或隐藏事实。",
+            "tags": ["skill_review", "history_taking"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:secret:hidden_answer",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_answer",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "隐藏答案",
+            "text": "隐藏答案：急性阑尾炎。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(auto_approval_module, "rag_knowledge_store", store)
+    candidate = {
+        "candidate_id": "skill_candidate_training_pattern_ht_migration",
+        "trigger_item_id": "training_pattern_ht_migration",
+        "trigger_item_ids": ["ht_migration"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "history_bundle",
+        "stage_scope": ["case_intro", "history_taking"],
+        "applies_when": {},
+        "effect_status": "insufficient_samples",
+        "title": "疼痛迁移问诊训练",
+        "description": "学生多次遗漏疼痛迁移问诊。",
+        "suggested_strategy": "提醒学生复盘疼痛迁移线索。",
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": [],
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {},
+        "success_metrics": [],
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(candidate)
+    review = reviewed_candidate["approval_agent_review"]
+    review_text = str(review)
+
+    assert review["knowledge_references"] == [
+        "rag_knowledge:case:appendicitis_001:skill_review:pain_sequence"
+    ]
+    assert review["retrieved_knowledge_context"][0]["title"] == "疼痛迁移 Skill 审批参考"
+    assert review["retrieved_knowledge_context"][0]["visibility"] == "post_submit_review"
+    assert "隐藏答案" not in review_text
+    assert "急性阑尾炎" not in review_text

@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.training_skill_policy import build_teaching_action_plan
 from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_PATTERNS, FORBIDDEN_CANDIDATE_TERMS
 
@@ -49,6 +50,7 @@ SAFE_PATTERN_REPLACEMENTS = {
 }
 
 SAFETY_SUFFIX = "仅提示训练步骤和证据链复盘，不透露病例答案或隐藏事实，不提供真实诊疗信息。"
+SKILL_APPROVAL_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
 
 
 class TrainingSkillAutoApprovalSettingsStore:
@@ -161,6 +163,7 @@ class TrainingSkillApprovalAgent:
                 }
             )
 
+        retrieved_knowledge_context = _retrieve_skill_approval_knowledge_context(reviewed_candidate)
         reviewed_candidate["approval_agent_review"] = {
             "agent_id": self.agent_id,
             "decision": "prepared_for_auto_apply",
@@ -168,11 +171,14 @@ class TrainingSkillApprovalAgent:
             "changed_fields": changed_fields,
             "reviewed_fields": ["title", "description", "suggested_strategy", "teaching_action_plan"],
             "protected_fields": list(PROTECTED_CANDIDATE_FIELDS),
+            "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
+            "retrieved_knowledge_context": retrieved_knowledge_context,
             "safety_constraints": [
                 "teaching_strategy_only",
                 "no_standard_answer",
                 "no_hidden_facts",
                 "no_treatment_or_dose",
+                "rag_visibility_filtered",
             ],
         }
         return reviewed_candidate
@@ -196,6 +202,99 @@ def _ensure_safety_suffix(text: str) -> str:
     if not text:
         return SAFETY_SUFFIX
     return f"{text.rstrip('。')}。{SAFETY_SUFFIX}"
+
+
+def _retrieve_skill_approval_knowledge_context(candidate: dict[str, Any], *, limit: int = 3) -> list[dict[str, Any]]:
+    database_path = getattr(rag_knowledge_store, "database_path", None)
+    if isinstance(database_path, Path) and not database_path.exists():
+        return []
+
+    case_ids = {str(case_id) for case_id in candidate.get("case_ids", []) if str(case_id)}
+    scored_items: list[tuple[int, str, dict[str, Any]]] = []
+    for item in rag_knowledge_store.list_items():
+        if not _skill_approval_can_read_knowledge_item(item, case_ids):
+            continue
+        score = _score_knowledge_item_for_candidate(candidate, item)
+        if score <= 0:
+            continue
+        knowledge_id = str(item.get("knowledge_id", "")).strip()
+        scored_items.append((score, knowledge_id, item))
+
+    return [
+        _serialize_approval_knowledge_item(item)
+        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))[:limit]
+    ]
+
+
+def _skill_approval_can_read_knowledge_item(item: dict[str, Any], case_ids: set[str]) -> bool:
+    visibility = str(item.get("visibility", "")).strip()
+    if visibility not in SKILL_APPROVAL_RAG_VISIBILITIES:
+        return False
+    allowed_agents = [str(agent).strip() for agent in item.get("allowed_agents", []) if str(agent).strip()]
+    if allowed_agents and "skill_approval" not in allowed_agents:
+        return False
+    item_case_id = str(item.get("case_id", "")).strip()
+    if item_case_id and item_case_id not in case_ids:
+        return False
+    if str(item.get("scope", "")).strip() == "case" and not item_case_id:
+        return False
+    return True
+
+
+def _score_knowledge_item_for_candidate(candidate: dict[str, Any], item: dict[str, Any]) -> int:
+    haystack = " ".join(
+        [
+            str(item.get("knowledge_id", "")),
+            str(item.get("title", "")),
+            str(item.get("text", "")),
+            " ".join(str(tag) for tag in item.get("tags", []) if str(tag)),
+        ]
+    ).lower()
+    return sum(1 for term in _candidate_rag_terms(candidate) if term.lower() in haystack)
+
+
+def _candidate_rag_terms(candidate: dict[str, Any]) -> list[str]:
+    raw_terms = [
+        str(candidate.get("title", "")),
+        str(candidate.get("description", "")),
+        str(candidate.get("suggested_strategy", "")),
+        *[str(item_id) for item_id in candidate.get("trigger_item_ids", []) if str(item_id)],
+        *[str(case_id) for case_id in candidate.get("case_ids", []) if str(case_id)],
+    ]
+    terms: set[str] = set()
+    for raw_term in raw_terms:
+        normalized = raw_term.strip()
+        if not normalized:
+            continue
+        terms.add(normalized)
+        terms.update(token for token in re.split(r"[\s,，。；;:：、()（）]+", normalized) if token)
+        terms.update(_cjk_ngrams(normalized, min_size=2, max_size=6))
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
+def _cjk_ngrams(text: str, *, min_size: int, max_size: int) -> set[str]:
+    compact_text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9_]+", "", text)
+    if len(compact_text) < min_size:
+        return set()
+    return {
+        compact_text[start : start + size]
+        for size in range(min_size, min(max_size, len(compact_text)) + 1)
+        for start in range(0, len(compact_text) - size + 1)
+    }
+
+
+def _serialize_approval_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
+    knowledge_id = str(item.get("knowledge_id", "")).strip()
+    return {
+        "reference": f"rag_knowledge:{knowledge_id}",
+        "knowledge_id": knowledge_id,
+        "title": str(item.get("title", "")).strip(),
+        "snippet": str(item.get("text", "")).strip(),
+        "source_id": str(item.get("source_id", "")).strip(),
+        "case_id": str(item.get("case_id", "")).strip(),
+        "visibility": str(item.get("visibility", "")).strip(),
+        "allowed_agents": [str(agent) for agent in item.get("allowed_agents", []) if str(agent)],
+    }
 
 
 def _json_payload(payload: Any) -> str:
