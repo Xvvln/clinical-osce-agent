@@ -12,6 +12,7 @@ from typing import Any, Protocol
 import yaml
 
 from app.services.chroma_retriever import ChromaSourceDocument, build_chroma_retrieval_index_from_environment
+from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.vertex_embedding_retriever import build_vertex_embedding_client_from_environment
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -19,6 +20,7 @@ CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 SOURCE_REGISTRY_PATH = ROOT_DIR / "data" / "attribution" / "source_registry" / "sources.json"
 LOGGER = logging.getLogger(__name__)
+INDEXABLE_RAG_KNOWLEDGE_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
 
 
 class EmbeddingClient(Protocol):
@@ -140,6 +142,7 @@ def _retrieval_documents() -> tuple[RetrievalDocument, ...]:
     documents: list[RetrievalDocument] = []
     documents.extend(_case_documents())
     documents.extend(_source_documents())
+    documents.extend(_managed_rag_knowledge_documents())
     documents.extend(_knowledge_documents())
     documents.extend(_rubric_documents())
     return tuple(documents)
@@ -185,6 +188,43 @@ def _knowledge_documents() -> list[RetrievalDocument]:
                     score=0,
                 )
             )
+    return documents
+
+
+def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
+    database_path = getattr(rag_knowledge_store, "database_path", None)
+    if isinstance(database_path, Path) and not database_path.exists():
+        return []
+
+    documents: list[RetrievalDocument] = []
+    for item in rag_knowledge_store.list_items():
+        visibility = str(item.get("visibility", "")).strip()
+        if visibility not in INDEXABLE_RAG_KNOWLEDGE_VISIBILITIES:
+            continue
+        knowledge_id = str(item.get("knowledge_id", "")).strip()
+        title = str(item.get("title", "")).strip()
+        text = str(item.get("text", "")).strip()
+        if not knowledge_id or not title or not text:
+            continue
+        snippet_parts = [
+            f"scope: {str(item.get('scope', '')).strip()}",
+            f"case_id: {str(item.get('case_id', '')).strip()}",
+            f"content_kind: {str(item.get('content_kind', '')).strip()}",
+            f"visibility: {visibility}",
+            f"allowed_agents: {', '.join(str(agent) for agent in item.get('allowed_agents', []) if str(agent))}",
+            f"source_id: {str(item.get('source_id', '')).strip()}",
+            f"tags: {', '.join(str(tag) for tag in item.get('tags', []) if str(tag))}",
+            text,
+        ]
+        documents.append(
+            RetrievalDocument(
+                reference=f"rag_knowledge:{knowledge_id}",
+                source_type="rag_knowledge",
+                title=title,
+                snippet="；".join(part for part in snippet_parts if part),
+                score=0,
+            )
+        )
     return documents
 
 

@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import retrieval_index as retrieval_index_module
 from app.services.chroma_retriever import (
     ChromaRetrievalIndex,
@@ -5,7 +7,15 @@ from app.services.chroma_retriever import (
     ChromaSourceDocument,
     build_chroma_manifest_status,
 )
+from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import search_retrieval_documents, search_retrieval_documents_with_embeddings
+
+
+@pytest.fixture(autouse=True)
+def clear_retrieval_document_cache():
+    retrieval_index_module._retrieval_documents.cache_clear()
+    yield
+    retrieval_index_module._retrieval_documents.cache_clear()
 
 
 class FakeEmbeddingClient:
@@ -62,6 +72,100 @@ def test_search_retrieval_documents_returns_knowledge_item_for_reasoning_query()
     assert knowledge_result.title == "急性阑尾炎诊断依据"
     assert "白细胞升高" in knowledge_result.snippet
     assert knowledge_result.score > 0
+
+
+def test_search_retrieval_documents_includes_admin_managed_safe_knowledge(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:teaching:history_migration",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "teaching_note",
+            "visibility": "pre_submit_safe",
+            "allowed_agents": ["coach"],
+            "source_id": "fareez_osce_2022",
+            "title": "右下腹痛问诊中的疼痛迁移",
+            "text": "疼痛迁移训练应追问是否从上腹或脐周转移到右下腹。",
+            "tags": ["abdominal_pain", "history_taking"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:admin:hidden_answer_note",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_note",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "隐藏答案内部说明",
+            "text": "隐藏答案内部说明不应进入通用检索索引。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    results = search_retrieval_documents("疼痛迁移训练", limit=5)
+    hidden_results = search_retrieval_documents("隐藏答案内部说明", limit=5)
+
+    managed_result = next(
+        result
+        for result in results
+        if result.reference == "rag_knowledge:case:appendicitis_001:teaching:history_migration"
+    )
+    assert managed_result.source_type == "rag_knowledge"
+    assert managed_result.title == "右下腹痛问诊中的疼痛迁移"
+    assert "visibility: pre_submit_safe" in managed_result.snippet
+    assert "source_id: fareez_osce_2022" in managed_result.snippet
+    assert "疼痛迁移训练" in managed_result.snippet
+    assert all(result.source_type != "rag_knowledge" for result in hidden_results)
+
+
+def test_chroma_source_documents_include_admin_managed_knowledge_in_manifest(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:teaching:history_migration",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "teaching_note",
+            "visibility": "post_submit_review",
+            "allowed_agents": ["reflection", "skill_approval"],
+            "source_id": "fareez_osce_2022",
+            "title": "右下腹痛问诊中的疼痛迁移",
+            "text": "训练后复盘可强调疼痛演变采集不足的问题。",
+            "tags": ["reflection"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    documents = retrieval_index_module.get_chroma_source_documents()
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+        embedding_model="fake-embedding-model",
+    )
+    manifest = build_chroma_manifest_status(settings=settings, documents=documents)
+
+    managed_document = next(
+        document
+        for document in documents
+        if document.reference == "rag_knowledge:case:appendicitis_001:teaching:history_migration"
+    )
+    assert managed_document.source_type == "rag_knowledge"
+    assert "post_submit_review" in managed_document.snippet
+    assert manifest["source_count"] == len(documents)
+    assert "appendicitis_001" in manifest["case_ids"]
+    assert manifest["content_hash"].startswith("sha256:")
 
 
 def test_search_retrieval_documents_with_embeddings_can_recall_semantic_source_without_keyword_overlap() -> None:

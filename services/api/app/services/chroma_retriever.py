@@ -313,6 +313,11 @@ def _manifest_case_ids(documents: Sequence[ChromaSourceDocument]) -> list[str]:
 def _case_id_from_reference(reference: str) -> str:
     if reference.startswith("case:"):
         return reference.removeprefix("case:").split(".", maxsplit=1)[0]
+    if reference.startswith("rag_knowledge:"):
+        knowledge_id_parts = reference.removeprefix("rag_knowledge:").split(":")
+        if len(knowledge_id_parts) >= 3 and knowledge_id_parts[0] == "case":
+            return knowledge_id_parts[1]
+        return ""
     if reference.startswith("knowledge:"):
         return reference.removeprefix("knowledge:").split(".", maxsplit=1)[0]
     if reference.startswith("rubric:"):
