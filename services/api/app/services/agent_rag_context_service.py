@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.rag_knowledge_store import RagKnowledgeStore, rag_knowledge_store
+from app.services.retrieval_index import search_retrieval_documents
 
 
 def retrieve_agent_context(
@@ -23,6 +24,29 @@ def retrieve_agent_context(
         return []
 
     normalized_case_ids = {str(case_id).strip() for case_id in case_ids if str(case_id).strip()}
+    query_text = " ".join(str(term).strip() for term in query_terms if str(term).strip())
+    selected_items: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    if query_text:
+        for result in search_retrieval_documents(query_text, limit=max(limit * 4, limit)):
+            if result.source_type != "rag_knowledge" or not result.reference.startswith("rag_knowledge:"):
+                continue
+            knowledge_id = result.reference.removeprefix("rag_knowledge:")
+            item = knowledge_store.get_item(knowledge_id)
+            if item is None:
+                continue
+            if not _agent_can_read_knowledge_item(
+                item,
+                agent_role=agent_role,
+                case_ids=normalized_case_ids,
+                allowed_visibilities=allowed_visibilities,
+            ):
+                continue
+            selected_items.append(item)
+            selected_ids.add(knowledge_id)
+            if len(selected_items) >= limit:
+                break
+
     terms = _rag_terms(query_terms)
     scored_items: list[tuple[int, str, dict[str, Any]]] = []
     for item in knowledge_store.list_items():
@@ -37,11 +61,18 @@ def retrieve_agent_context(
         if score <= 0:
             continue
         knowledge_id = str(item.get("knowledge_id", "")).strip()
+        if knowledge_id in selected_ids:
+            continue
         scored_items.append((score, knowledge_id, item))
 
+    selected_items.extend(
+        item
+        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))
+        if len(selected_items) < limit
+    )
     return [
         _serialize_agent_knowledge_item(item, forbidden_terms=forbidden_terms or [])
-        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))[:limit]
+        for item in selected_items[:limit]
     ]
 
 
