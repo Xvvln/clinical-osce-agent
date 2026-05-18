@@ -29,6 +29,9 @@ dependencies = [
 dev = [
   "pytest>=8.0.0,<9.0.0"
 ]
+documents = [
+  "unstructured[pdf]>=0.18.0,<1.0.0"
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

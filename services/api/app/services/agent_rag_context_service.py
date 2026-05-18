@@ -87,6 +87,8 @@ def _agent_can_read_knowledge_item(
     case_ids: set[str],
     allowed_visibilities: set[str],
 ) -> bool:
+    if item.get("enabled") is False:
+        return False
     visibility = str(item.get("visibility", "")).strip()
     if visibility not in allowed_visibilities:
         return False

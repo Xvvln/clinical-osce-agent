@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
+import base64
 import json
 from pathlib import Path
 
@@ -9,7 +10,9 @@ import pytest
 import yaml
 
 from app import main
+from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
+from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.auth_store import AuthStore
 from app.services.evaluation_result_store import EvaluationResultStore
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
@@ -139,6 +142,9 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/retrieval-eval"),
             unauthenticated_client.get("/api/admin/rag/knowledge"),
             unauthenticated_client.post("/api/admin/rag/knowledge", json={}),
+            unauthenticated_client.get("/api/admin/rag/documents"),
+            unauthenticated_client.post("/api/admin/rag/documents", json={}),
+            unauthenticated_client.patch("/api/admin/rag/documents/missing_document/enabled", json={"enabled": False}),
             unauthenticated_client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.get("/api/admin/reports"),
@@ -192,6 +198,9 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/retrieval-eval"),
             client.get("/api/admin/rag/knowledge"),
             client.post("/api/admin/rag/knowledge", json={}),
+            client.get("/api/admin/rag/documents"),
+            client.post("/api/admin/rag/documents", json={}),
+            client.patch("/api/admin/rag/documents/missing_document/enabled", json={"enabled": False}),
             client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.get("/api/admin/reports"),
@@ -328,6 +337,113 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
         "deleted": True,
     }
     assert empty_detail_response.status_code == 404
+
+
+def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store, raising=False)
+    retrieval_index_module._retrieval_documents.cache_clear()
+    document_text = (
+        """
+# 右下腹痛教学知识库
+
+训练目标是让学生按病史、查体、检查、诊断假设的顺序推进，而不是直接猜答案。
+
+## 腹痛问诊
+
+需要追问起病时间、起病部位、疼痛迁移、疼痛性质、疼痛程度、伴随症状和既往病史。
+如果学生只问当前疼痛部位，Coach 可以提示其回到疼痛演变和诱发缓解因素。
+
+## 查体与检查
+
+腹部查体应覆盖视诊、听诊、触诊、压痛、反跳痛和肌紧张。
+血常规、尿常规和腹部超声用于支持或修正诊断假设。
+
+## 教学提示
+
+如果学生过早进入检查申请，Coach 应提示其说明为什么当前已经具备进入检查阶段的依据。
+如果学生已经收集到病史但遗漏腹膜刺激征，Coach 应提醒其把病史推理转化为有目的的查体。
+如果学生完成查体后仍没有提出鉴别诊断，Coach 应提示其比较阑尾炎、输尿管结石和急性胃肠炎的证据链。
+
+## 复盘重点
+
+复盘时不需要重新证明学生确实漏项，而应解释该漏项为什么会破坏临床推理链。
+复盘可以把未覆盖的病史、查体和检查事实合并成一个错误模式，避免机械地为每个 missed_item 生成一个 Skill。
+复盘还应标注知识来源、适用 agent、可见性和病例绑定关系，便于管理员追溯知识库是否被正确应用。
+""".strip()
+        + "\n\n"
+        + "\n".join(
+            [
+                "补充材料：教学知识库应支持 Coach 在训练中根据学生已问内容和未覆盖线索给出下一步建议，"
+                "也应支持复盘与 Skill 审批在提交后读取更完整的医学解释。"
+                for _ in range(8)
+            ]
+        )
+    )
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        upload_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "case_id": "appendicitis_001",
+                "file_name": "appendicitis_teaching.md",
+                "content_base64": base64.b64encode(document_text.encode("utf-8")).decode("ascii"),
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach", "reflection", "skill_generation", "skill_approval"],
+                "source_id": "fareez_osce_2022",
+                "tags": ["abdominal_pain", "teacher_document"],
+            },
+        )
+        documents_response = client.get("/api/admin/rag/documents?case_id=appendicitis_001")
+
+        assert upload_response.status_code == 200
+        uploaded_document = upload_response.json()["document"]
+        assert uploaded_document["case_id"] == "appendicitis_001"
+        assert uploaded_document["file_name"] == "appendicitis_teaching.md"
+        assert uploaded_document["chunk_count"] >= 2
+        assert uploaded_document["enabled"] is True
+
+        assert documents_response.status_code == 200
+        assert documents_response.json()["documents"] == [uploaded_document]
+
+        stored_chunks = store.list_items(case_id="appendicitis_001")
+        assert len(stored_chunks) == uploaded_document["chunk_count"]
+        assert {item["document_id"] for item in stored_chunks} == {uploaded_document["document_id"]}
+        assert all(item["content_kind"] == "document_chunk" for item in stored_chunks)
+        assert all(item["enabled"] is True for item in stored_chunks)
+        assert all(item["source_location"].startswith("appendicitis_teaching.md") for item in stored_chunks)
+
+        enabled_context = retrieve_agent_context(
+            agent_role="coach",
+            case_ids=["appendicitis_001"],
+            query_terms=["疼痛迁移 诱发缓解因素"],
+            allowed_visibilities={"pre_submit_safe"},
+            store=store,
+        )
+        assert enabled_context
+        assert enabled_context[0]["knowledge_id"].startswith(uploaded_document["document_id"])
+
+        disabled_response = client.patch(
+            f"/api/admin/rag/documents/{uploaded_document['document_id']}/enabled",
+            json={"enabled": False},
+        )
+
+    assert disabled_response.status_code == 200
+    disabled_document = disabled_response.json()["document"]
+    assert disabled_document["document_id"] == uploaded_document["document_id"]
+    assert disabled_document["enabled"] is False
+    assert all(item["enabled"] is False for item in store.list_items(case_id="appendicitis_001"))
+    assert (
+        retrieve_agent_context(
+            agent_role="coach",
+            case_ids=["appendicitis_001"],
+            query_terms=["疼痛迁移 诱发缓解因素"],
+            allowed_visibilities={"pre_submit_safe"},
+            store=store,
+        )
+        == []
+    )
 
 
 def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypatch) -> None:

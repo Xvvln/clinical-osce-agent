@@ -1,7 +1,10 @@
+import base64
+import binascii
 import hashlib
 import json
 import os
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -27,6 +30,11 @@ from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
 from app.services.rag_knowledge_store import rag_knowledge_store
+from app.services.rag_document_ingestion_service import (
+    RagDocumentParseError,
+    chunk_rag_document,
+    generate_rag_document_id,
+)
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.startup_config_service import build_startup_config_self_check
@@ -82,6 +90,8 @@ RAG_KNOWLEDGE_AGENT_ROLES = {
     "skill_generation",
 }
 RAG_GENERATIVE_AGENT_ROLES = {"coach", "reflection", "skill_approval", "skill_generation"}
+RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["reflection", "skill_generation", "skill_approval"]
+RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
 SOURCE_REGISTRY_PATH = RUBRICS_DIR.parent / "attribution" / "source_registry" / "sources.json"
@@ -266,6 +276,25 @@ class AdminRagKnowledgeItemRequest(BaseModel):
     text: str = ""
     tags: list[str] = Field(default_factory=list)
     version: int = Field(default=1, ge=1)
+
+
+class AdminRagDocumentUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = ""
+    file_name: str = ""
+    content_base64: str = ""
+    visibility: str = "post_submit_review"
+    allowed_agents: list[str] = Field(default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS))
+    source_id: str = ""
+    tags: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class AdminRagDocumentEnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
 
 
 class AdminEvaluationRunRequest(BaseModel):
@@ -705,6 +734,81 @@ def _validate_admin_rag_knowledge_item(item: dict[str, Any]) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="secret scoring knowledge cannot be exposed to generative agents",
         )
+
+
+def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> tuple[str, list[dict[str, Any]]]:
+    case_id = request.case_id.strip()
+    file_name = request.file_name.strip()
+    visibility = request.visibility.strip()
+    source_id = request.source_id.strip()
+    allowed_agents = [str(agent).strip() for agent in request.allowed_agents if str(agent).strip()]
+    tags = [str(tag).strip() for tag in request.tags if str(tag).strip()]
+    if not _admin_case_exists(case_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="case document requires a valid case_id")
+    if not file_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document file_name is required")
+    if visibility not in RAG_KNOWLEDGE_VISIBILITIES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge visibility")
+    unknown_agent_roles = sorted(set(allowed_agents) - RAG_KNOWLEDGE_AGENT_ROLES)
+    if unknown_agent_roles:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge agent role")
+    if source_id and source_id not in _admin_source_ids():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source_id is not registered")
+    if visibility == "secret_scoring_only" and set(allowed_agents) & RAG_GENERATIVE_AGENT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="secret scoring knowledge cannot be exposed to generative agents",
+        )
+    try:
+        content_bytes = base64.b64decode(request.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document content_base64 is invalid") from exc
+    if not content_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document content is empty")
+    if len(content_bytes) > RAG_DOCUMENT_MAX_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document is too large")
+
+    document_id = generate_rag_document_id(case_id=case_id, file_name=file_name, content_bytes=content_bytes)
+    try:
+        chunks = chunk_rag_document(file_name=file_name, content_bytes=content_bytes, document_id=document_id)
+    except RagDocumentParseError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    file_stem = Path(file_name).stem if file_name else "知识文档"
+    suffix_tag = Path(file_name).suffix.lower().lstrip(".")
+    document_tags = ["document_upload", *([suffix_tag] if suffix_tag else []), *tags]
+    chunk_count = len(chunks)
+    return document_id, [
+        {
+            "knowledge_id": f"{document_id}:chunk:{chunk.chunk_index:04d}",
+            "scope": "case",
+            "case_id": case_id,
+            "content_kind": "document_chunk",
+            "visibility": visibility,
+            "allowed_agents": allowed_agents,
+            "source_id": source_id,
+            "title": f"{file_stem} · {chunk.section_title or f'片段 {chunk.chunk_index + 1}'}",
+            "text": chunk.text,
+            "tags": document_tags,
+            "version": 1,
+            "document_id": document_id,
+            "document_name": Path(file_name).name,
+            "chunk_index": chunk.chunk_index,
+            "chunk_count": chunk_count,
+            "section_title": chunk.section_title,
+            "page_number": chunk.page_number,
+            "source_location": chunk.source_location,
+            "enabled": request.enabled,
+        }
+        for chunk in chunks
+    ]
+
+
+def _clear_retrieval_documents_cache() -> None:
+    retrieval_documents = getattr(retrieval_index, "_retrieval_documents", None)
+    cache_clear = getattr(retrieval_documents, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
 
 
 def _admin_case_exists(case_id: str) -> bool:
@@ -1307,6 +1411,53 @@ def list_admin_rag_knowledge_items(
     }
 
 
+@app.get("/api/admin/rag/documents")
+def list_admin_rag_documents(
+    case_id: str = Query(default=""),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"documents": rag_knowledge_store.list_documents(case_id=case_id.strip())}
+
+
+@app.post("/api/admin/rag/documents")
+def upload_admin_rag_document(
+    request: AdminRagDocumentUploadRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    document_id, items = _build_admin_rag_document_items(request)
+    rag_knowledge_store.delete_document(document_id)
+    saved_items = [
+        rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
+        for item in items
+    ]
+    _clear_retrieval_documents_cache()
+    documents = rag_knowledge_store.list_documents(case_id=request.case_id.strip())
+    document = next((item for item in documents if item["document_id"] == document_id), None)
+    if document is None:
+        raise HTTPException(status_code=500, detail="rag document was not persisted")
+    return {"document": document, "knowledge_items": saved_items}
+
+
+@app.patch("/api/admin/rag/documents/{document_id:path}/enabled")
+def set_admin_rag_document_enabled(
+    document_id: str,
+    request: AdminRagDocumentEnabledRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    document = rag_knowledge_store.set_document_enabled(
+        document_id,
+        enabled=request.enabled,
+        updated_by=reviewer["email"],
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="rag document not found")
+    _clear_retrieval_documents_cache()
+    return {"document": document}
+
+
 @app.post("/api/admin/rag/knowledge")
 def upsert_admin_rag_knowledge_item(
     request: AdminRagKnowledgeItemRequest,
@@ -1314,7 +1465,9 @@ def upsert_admin_rag_knowledge_item(
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
     item = _build_admin_rag_knowledge_item(request)
-    return {"knowledge_item": rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])}
+    saved_item = rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
+    _clear_retrieval_documents_cache()
+    return {"knowledge_item": saved_item}
 
 
 @app.get("/api/admin/rag/knowledge/{knowledge_id:path}")
@@ -1335,7 +1488,10 @@ def delete_admin_rag_knowledge_item(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"knowledge_id": knowledge_id, "deleted": rag_knowledge_store.delete_item(knowledge_id)}
+    deleted = rag_knowledge_store.delete_item(knowledge_id)
+    if deleted:
+        _clear_retrieval_documents_cache()
+    return {"knowledge_id": knowledge_id, "deleted": deleted}
 
 
 @app.post("/api/admin/demo/seed")

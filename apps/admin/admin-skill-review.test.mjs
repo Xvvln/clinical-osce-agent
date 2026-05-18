@@ -95,6 +95,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\("\/api\/admin\/retrieval-eval"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge", \{/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/documents"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/documents", \{/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/rag\/documents\/\$\{encodeURIComponent\(documentId\)\}\/enabled`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /临境 OSCE 智能体（TraceOSCE）管理后台/);
@@ -173,6 +176,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /结构化追溯覆盖/);
   assert.match(adminPageSource, /RAG 知识库/);
   assert.match(adminPageSource, /全局知识库 \/ 病例知识库/);
+  assert.match(adminPageSource, /病例文档知识库/);
+  assert.match(adminPageSource, /上传并切分文档/);
+  assert.match(adminPageSource, /应用知识库/);
   assert.match(adminPageSource, /pre_submit_safe/);
   assert.match(adminPageSource, /secret_scoring_only/);
   assert.match(adminPageSource, /allowed_agents/);
@@ -407,10 +413,16 @@ test("admin dashboard shows a read-only case rubric and source ledger", () => {
   assert.match(adminPageSource, /type AdminRubricResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminSourcesResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagKnowledgeItem = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagDocumentSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagDocumentsResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagDocumentUploadPayload = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminRagDocumentUploadResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagKnowledgeItemsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagKnowledgeItemResponse = Readonly<\{/);
   assert.match(adminPageSource, /knowledge_items: readonly AdminRagKnowledgeItem\[];/);
+  assert.match(adminPageSource, /documents: readonly AdminRagDocumentSummary\[];/);
   assert.match(adminPageSource, /const \[ragKnowledgeItems, setRagKnowledgeItems\]/);
+  assert.match(adminPageSource, /const \[ragDocuments, setRagDocuments\]/);
   assert.match(adminPageSource, /const \[ragKnowledgeForm, setRagKnowledgeForm\]/);
   assert.match(adminPageSource, /fetch\("\/api\/cases"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/cases\/\$\{caseId\}\/raw`/);

@@ -198,6 +198,8 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
 
     documents: list[RetrievalDocument] = []
     for item in rag_knowledge_store.list_items():
+        if item.get("enabled") is False:
+            continue
         visibility = str(item.get("visibility", "")).strip()
         if visibility not in INDEXABLE_RAG_KNOWLEDGE_VISIBILITIES:
             continue
@@ -214,6 +216,8 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
             f"allowed_agents: {', '.join(str(agent) for agent in item.get('allowed_agents', []) if str(agent))}",
             f"source_id: {str(item.get('source_id', '')).strip()}",
             f"tags: {', '.join(str(tag) for tag in item.get('tags', []) if str(tag))}",
+            f"document_id: {str(item.get('document_id', '')).strip()}",
+            f"source_location: {str(item.get('source_location', '')).strip()}",
             text,
         ]
         documents.append(

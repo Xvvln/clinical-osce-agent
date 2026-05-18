@@ -100,6 +100,70 @@ class RagKnowledgeStore:
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def list_document_items(self, document_id: str) -> list[dict[str, Any]]:
+        normalized_document_id = document_id.strip()
+        if not normalized_document_id:
+            return []
+        return [
+            item
+            for item in self.list_items()
+            if str(item.get("document_id", "")).strip() == normalized_document_id
+        ]
+
+    def list_documents(self, *, case_id: str = "") -> list[dict[str, Any]]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for item in self.list_items(case_id=case_id.strip()):
+            document_id = str(item.get("document_id", "")).strip()
+            if not document_id:
+                continue
+            groups.setdefault(document_id, []).append(item)
+        return [
+            _summarize_document_items(groups[document_id])
+            for document_id in sorted(groups, key=lambda item_id: _latest_updated_at(groups[item_id]), reverse=True)
+        ]
+
+    def set_document_enabled(self, document_id: str, *, enabled: bool, updated_by: str) -> dict[str, Any] | None:
+        self._initialize()
+        items = self.list_document_items(document_id)
+        if not items:
+            return None
+        updated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            for item in items:
+                item["enabled"] = bool(enabled)
+                item["updated_by"] = updated_by
+                item["updated_at"] = updated_at
+                connection.execute(
+                    """
+                    UPDATE rag_knowledge_items
+                    SET item_json = ?,
+                        updated_at = ?
+                    WHERE knowledge_id = ?
+                    """,
+                    (
+                        json.dumps(item, ensure_ascii=False),
+                        updated_at,
+                        item["knowledge_id"],
+                    ),
+                )
+        return _summarize_document_items(self.list_document_items(document_id))
+
+    def delete_document(self, document_id: str) -> int:
+        self._initialize()
+        normalized_document_id = document_id.strip()
+        if not normalized_document_id:
+            return 0
+        with sqlite3.connect(self.database_path) as connection:
+            rows = connection.execute("SELECT knowledge_id, item_json FROM rag_knowledge_items").fetchall()
+            knowledge_ids = [
+                str(knowledge_id)
+                for knowledge_id, item_json in rows
+                if str(json.loads(item_json).get("document_id", "")).strip() == normalized_document_id
+            ]
+            for knowledge_id in knowledge_ids:
+                connection.execute("DELETE FROM rag_knowledge_items WHERE knowledge_id = ?", (knowledge_id,))
+        return len(knowledge_ids)
+
     def delete_item(self, knowledge_id: str) -> bool:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:
@@ -191,7 +255,8 @@ def _seed_default_items(connection: sqlite3.Connection, seed_path: Path) -> None
 
 
 def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
-    return {
+    page_number = item.get("page_number")
+    normalized_item = {
         "knowledge_id": str(item["knowledge_id"]).strip(),
         "scope": str(item["scope"]).strip(),
         "case_id": str(item.get("case_id") or "").strip(),
@@ -206,12 +271,60 @@ def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
         "updated_by": updated_by,
         "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
     }
+    document_id = str(item.get("document_id") or "").strip()
+    if document_id:
+        normalized_item.update(
+            {
+                "document_id": document_id,
+                "document_name": str(item.get("document_name") or "").strip(),
+                "chunk_index": _optional_int(item.get("chunk_index")),
+                "chunk_count": _optional_int(item.get("chunk_count")),
+                "section_title": str(item.get("section_title") or "").strip(),
+                "page_number": _optional_int(page_number) if page_number is not None else None,
+                "source_location": str(item.get("source_location") or "").strip(),
+                "enabled": bool(item.get("enabled", True)),
+            }
+        )
+    elif "enabled" in item:
+        normalized_item["enabled"] = bool(item.get("enabled", True))
+    return normalized_item
 
 
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    sorted_items = sorted(items, key=lambda item: int(item.get("chunk_index") or 0))
+    first_item = sorted_items[0]
+    return {
+        "document_id": str(first_item.get("document_id", "")).strip(),
+        "file_name": str(first_item.get("document_name", "")).strip(),
+        "case_id": str(first_item.get("case_id", "")).strip(),
+        "chunk_count": len(sorted_items),
+        "enabled": all(bool(item.get("enabled", True)) for item in sorted_items),
+        "visibility": str(first_item.get("visibility", "")).strip(),
+        "allowed_agents": _string_list(first_item.get("allowed_agents", [])),
+        "source_id": str(first_item.get("source_id", "")).strip(),
+        "tags": sorted({tag for item in sorted_items for tag in _string_list(item.get("tags", []))}),
+        "updated_by": str(first_item.get("updated_by", "")).strip(),
+        "updated_at": _latest_updated_at(sorted_items),
+    }
+
+
+def _latest_updated_at(items: list[dict[str, Any]]) -> str:
+    return max((str(item.get("updated_at", "")).strip() for item in items), default="")
 
 
 rag_knowledge_store = RagKnowledgeStore(seed_defaults=True)

@@ -569,6 +569,14 @@ type AdminRagKnowledgeItem = Readonly<{
   text: string;
   tags: readonly string[];
   version: number;
+  document_id?: string;
+  document_name?: string;
+  chunk_index?: number | null;
+  chunk_count?: number | null;
+  section_title?: string;
+  page_number?: number | null;
+  source_location?: string;
+  enabled?: boolean;
   updated_by: string;
   updated_at: string;
 }>;
@@ -601,12 +609,61 @@ type AdminRagKnowledgeItemForm = Readonly<{
   version: number;
 }>;
 
+type AdminRagDocumentSummary = Readonly<{
+  document_id: string;
+  file_name: string;
+  case_id: string;
+  chunk_count: number;
+  enabled: boolean;
+  visibility: string;
+  allowed_agents: readonly string[];
+  source_id: string;
+  tags: readonly string[];
+  updated_by: string;
+  updated_at: string;
+}>;
+
+type AdminRagDocumentUploadPayload = Readonly<{
+  case_id: string;
+  file_name: string;
+  content_base64: string;
+  visibility: string;
+  allowed_agents: readonly string[];
+  source_id: string;
+  tags: readonly string[];
+  enabled: boolean;
+}>;
+
+type AdminRagDocumentUploadForm = Readonly<{
+  case_id: string;
+  file_name: string;
+  content_base64: string;
+  visibility: string;
+  allowed_agents: string;
+  source_id: string;
+  tags: string;
+  enabled: boolean;
+}>;
+
 type AdminRagKnowledgeItemsResponse = Readonly<{
   knowledge_items: readonly AdminRagKnowledgeItem[];
 }>;
 
 type AdminRagKnowledgeItemResponse = Readonly<{
   knowledge_item: AdminRagKnowledgeItem;
+}>;
+
+type AdminRagDocumentsResponse = Readonly<{
+  documents: readonly AdminRagDocumentSummary[];
+}>;
+
+type AdminRagDocumentUploadResponse = Readonly<{
+  document: AdminRagDocumentSummary;
+  knowledge_items: readonly AdminRagKnowledgeItem[];
+}>;
+
+type AdminRagDocumentEnabledResponse = Readonly<{
+  document: AdminRagDocumentSummary;
 }>;
 
 type AdminModelConfigResponse = Readonly<{
@@ -790,6 +847,16 @@ const EMPTY_ADMIN_RAG_KNOWLEDGE_FORM: AdminRagKnowledgeItemForm = {
   text: "",
   tags: "",
   version: 1,
+};
+const EMPTY_ADMIN_RAG_DOCUMENT_FORM: AdminRagDocumentUploadForm = {
+  case_id: "",
+  file_name: "",
+  content_base64: "",
+  visibility: "post_submit_review",
+  allowed_agents: "reflection,skill_generation,skill_approval",
+  source_id: "",
+  tags: "",
+  enabled: true,
 };
 const ADMIN_CASE_COURSE_MODULES = ["腹痛", "胸痛", "发热", "头痛", "咳嗽", "呼吸困难", "心悸", "消瘦", "黄疸", "水肿"];
 const ADMIN_CASE_DIFFICULTIES = ["初级", "中级", "高级"];
@@ -987,6 +1054,35 @@ function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRa
   };
 }
 
+function buildAdminRagDocumentUploadPayload(form: AdminRagDocumentUploadForm): AdminRagDocumentUploadPayload {
+  return {
+    case_id: form.case_id.trim(),
+    file_name: form.file_name.trim(),
+    content_base64: form.content_base64,
+    visibility: form.visibility,
+    allowed_agents: splitAdminCsvInput(form.allowed_agents),
+    source_id: form.source_id.trim(),
+    tags: splitAdminCsvInput(form.tags),
+    enabled: form.enabled,
+  };
+}
+
+function readAdminFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("无法读取文档内容。"));
+        return;
+      }
+      resolve(result.split(",").at(-1) ?? "");
+    });
+    reader.addEventListener("error", () => reject(new Error("读取文档失败。")));
+    reader.readAsDataURL(file);
+  });
+}
+
 function buildAdminRubricItemEditValues(rubric: AdminRubricDetail): Record<string, string> {
   return Object.fromEntries(
     rubric.dimensions.flatMap((dimension) => dimension.items.map((item) => [item.item_id, item.description])),
@@ -1027,6 +1123,13 @@ async function getAdminRagKnowledgeItems(): Promise<readonly AdminRagKnowledgeIt
   return payload.knowledge_items;
 }
 
+async function getAdminRagDocuments(): Promise<readonly AdminRagDocumentSummary[]> {
+  const response = await fetch("/api/admin/rag/documents", { method: "GET" });
+  await assertAdminResponseOk(response, "读取 RAG 文档知识库");
+  const payload = (await response.json()) as AdminRagDocumentsResponse;
+  return payload.documents;
+}
+
 async function upsertAdminRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload): Promise<AdminRagKnowledgeItem> {
   const response = await fetch("/api/admin/rag/knowledge", {
     body: JSON.stringify(payload),
@@ -1036,6 +1139,27 @@ async function upsertAdminRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload
   await assertAdminResponseOk(response, "保存 RAG 知识条目");
   const responsePayload = (await response.json()) as AdminRagKnowledgeItemResponse;
   return responsePayload.knowledge_item;
+}
+
+async function uploadAdminRagDocument(payload: AdminRagDocumentUploadPayload): Promise<AdminRagDocumentUploadResponse> {
+  const response = await fetch("/api/admin/rag/documents", {
+    body: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  await assertAdminResponseOk(response, "上传 RAG 文档知识库");
+  return (await response.json()) as AdminRagDocumentUploadResponse;
+}
+
+async function setAdminRagDocumentEnabled(documentId: string, enabled: boolean): Promise<AdminRagDocumentSummary> {
+  const response = await fetch(`/api/admin/rag/documents/${encodeURIComponent(documentId)}/enabled`, {
+    body: JSON.stringify({ enabled }),
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+  await assertAdminResponseOk(response, "更新 RAG 文档应用状态");
+  const payload = (await response.json()) as AdminRagDocumentEnabledResponse;
+  return payload.document;
 }
 
 async function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
@@ -1567,8 +1691,11 @@ export default function AdminDashboardPage() {
   const [busyRubricItemId, setBusyRubricItemId] = useState<string | null>(null);
   const [sources, setSources] = useState<readonly AdminSourceRegistryEntry[]>([]);
   const [ragKnowledgeItems, setRagKnowledgeItems] = useState<readonly AdminRagKnowledgeItem[]>([]);
+  const [ragDocuments, setRagDocuments] = useState<readonly AdminRagDocumentSummary[]>([]);
   const [ragKnowledgeForm, setRagKnowledgeForm] = useState<AdminRagKnowledgeItemForm>(EMPTY_ADMIN_RAG_KNOWLEDGE_FORM);
+  const [ragDocumentForm, setRagDocumentForm] = useState<AdminRagDocumentUploadForm>(EMPTY_ADMIN_RAG_DOCUMENT_FORM);
   const [isRagKnowledgeBusy, setIsRagKnowledgeBusy] = useState(false);
+  const [isRagDocumentBusy, setIsRagDocumentBusy] = useState(false);
   const [ragKnowledgeStatusText, setRagKnowledgeStatusText] = useState("");
   const [modelConfig, setModelConfig] = useState<AdminModelConfigResponse | null>(null);
   const [retrievalEval, setRetrievalEval] = useState<AdminRetrievalEval | null>(null);
@@ -1639,10 +1766,11 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextRagKnowledgeItems, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
+    const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminRagKnowledgeItems(),
+      getAdminRagDocuments(),
       getAdminModelConfig(),
       getAdminRetrievalEval(),
       getAdminSessions(initialListQuery),
@@ -1658,6 +1786,7 @@ export default function AdminDashboardPage() {
     setCases(nextCases);
     setSources(nextSources);
     setRagKnowledgeItems(nextRagKnowledgeItems);
+    setRagDocuments(nextRagDocuments);
     setModelConfig(nextModelConfig);
     setRetrievalEval(nextRetrievalEval);
     setSessions(nextSessionPage.sessions);
@@ -1680,6 +1809,8 @@ export default function AdminDashboardPage() {
       const firstCaseRaw = await getAdminCaseRaw(nextCases[0].case_id);
       setSelectedCaseRaw(firstCaseRaw);
       setCaseEditForm(buildAdminCaseEditForm(firstCaseRaw));
+      setRagDocumentForm((current) => ({ ...current, case_id: firstCaseRaw.case_id }));
+      setRagKnowledgeForm((current) => ({ ...current, case_id: firstCaseRaw.case_id }));
       const firstRubric = await getAdminRubric(firstCaseRaw.rubric_ref.rubric_id);
       setSelectedRubric(firstRubric);
       setRubricItemEditValues(buildAdminRubricItemEditValues(firstRubric));
@@ -1896,10 +2027,99 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function handleSelectRagDocumentFile(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    setIsRagDocumentBusy(true);
+    setRagKnowledgeStatusText("正在读取本地文档...");
+    try {
+      const contentBase64 = await readAdminFileAsBase64(file);
+      setRagDocumentForm((current) => ({
+        ...current,
+        content_base64: contentBase64,
+        file_name: file.name,
+      }));
+      setRagKnowledgeStatusText(`已读取文档：${file.name}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "读取文档失败。";
+      setRagKnowledgeStatusText(message);
+      setStatusText(message);
+    } finally {
+      setIsRagDocumentBusy(false);
+    }
+  }
+
+  async function handleUploadRagDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ragDocumentForm.content_base64 || !ragDocumentForm.file_name) {
+      setRagKnowledgeStatusText("请先选择一个 md、txt、pdf 或其他可解析文档。");
+      return;
+    }
+    setIsRagDocumentBusy(true);
+    setRagKnowledgeStatusText("");
+    try {
+      const result = await uploadAdminRagDocument(buildAdminRagDocumentUploadPayload(ragDocumentForm));
+      const [nextDocuments, nextKnowledgeItems] = await Promise.all([
+        getAdminRagDocuments(),
+        getAdminRagKnowledgeItems(),
+      ]);
+      setRagDocuments(nextDocuments);
+      setRagKnowledgeItems(nextKnowledgeItems);
+      setRagDocumentForm((current) => ({
+        ...EMPTY_ADMIN_RAG_DOCUMENT_FORM,
+        case_id: current.case_id,
+        visibility: current.visibility,
+        allowed_agents: current.allowed_agents,
+        source_id: current.source_id,
+        tags: current.tags,
+      }));
+      setRagKnowledgeStatusText(`已上传并切分文档：${result.document.file_name}，生成 ${result.document.chunk_count} 个片段。`);
+      setStatusText(`已更新病例文档知识库：${result.document.file_name}`);
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setRagKnowledgeStatusText(message);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsRagDocumentBusy(false);
+    }
+  }
+
+  async function handleSetRagDocumentEnabled(documentId: string, enabled: boolean) {
+    setIsRagDocumentBusy(true);
+    try {
+      const document = await setAdminRagDocumentEnabled(documentId, enabled);
+      const [nextDocuments, nextKnowledgeItems] = await Promise.all([
+        getAdminRagDocuments(),
+        getAdminRagKnowledgeItems(),
+      ]);
+      setRagDocuments(nextDocuments);
+      setRagKnowledgeItems(nextKnowledgeItems);
+      setRagKnowledgeStatusText(`${document.file_name} 已${document.enabled ? "应用到 RAG" : "从 RAG 暂停"}。`);
+      setStatusText(`${document.file_name} 已${document.enabled ? "应用到 RAG" : "暂停应用"}。`);
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setRagKnowledgeStatusText(message);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    } finally {
+      setIsRagDocumentBusy(false);
+    }
+  }
+
   async function handleSelectCase(caseId: string) {
     const nextCaseRaw = await getAdminCaseRaw(caseId);
     setSelectedCaseRaw(nextCaseRaw);
     setCaseEditForm(buildAdminCaseEditForm(nextCaseRaw));
+    setRagDocumentForm((current) => ({ ...current, case_id: nextCaseRaw.case_id }));
+    setRagKnowledgeForm((current) => ({ ...current, case_id: nextCaseRaw.case_id }));
     const nextRubric = await getAdminRubric(nextCaseRaw.rubric_ref.rubric_id);
     setSelectedRubric(nextRubric);
     setRubricItemEditValues(buildAdminRubricItemEditValues(nextRubric));
@@ -2758,6 +2978,135 @@ export default function AdminDashboardPage() {
                 <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">知识条目只服务 Coach、复盘、Skill 审批和可追溯解释，不参与评分裁判；需要绑定来源时使用 source_id。</p>
               </div>
               <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragKnowledgeItems.length} 条知识</p>
+            </div>
+            <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUploadRagDocument(event)}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold text-[#AE5630]">病例文档知识库</p>
+                  <h4 className="mt-1 text-sm font-semibold">上传并切分文档</h4>
+                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf 等资料后，后端会按标题、页码和段落切分为可追溯 chunk；PDF/DOCX 依赖服务端文档解析库。</p>
+                </div>
+                <p className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs text-[#6F6257]">{ragDocuments.length} 份文档</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  关联病例
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, case_id: event.target.value }))}
+                    value={ragDocumentForm.case_id}
+                  >
+                    <option value="">选择病例</option>
+                    {cases.map((caseItem) => (
+                      <option key={caseItem.case_id} value={caseItem.case_id}>{caseItem.case_title}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  可见性
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, visibility: event.target.value }))}
+                    value={ragDocumentForm.visibility}
+                  >
+                    {ADMIN_RAG_KNOWLEDGE_VISIBILITIES.map((visibility) => (
+                      <option key={visibility} value={visibility}>{visibility}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  source_id
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, source_id: event.target.value }))}
+                    value={ragDocumentForm.source_id}
+                  >
+                    <option value="">不绑定来源</option>
+                    {sources.map((source) => (
+                      <option key={source.source_id} value={source.source_id}>{source.source_id}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  文档文件
+                  <input
+                    accept=".md,.markdown,.txt,.text,.pdf,.docx,.html,.htm"
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition file:mr-3 file:rounded-md file:border-0 file:bg-[#141413] file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white focus:border-[#AE5630]"
+                    onChange={(event) => void handleSelectRagDocumentFile(event.currentTarget.files?.[0])}
+                    type="file"
+                  />
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  allowed_agents
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, allowed_agents: event.target.value }))}
+                    value={ragDocumentForm.allowed_agents}
+                  />
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  标签
+                  <input
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, tags: event.target.value }))}
+                    placeholder="teacher_document,appendicitis"
+                    value={ragDocumentForm.tags}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]">
+                  <input
+                    checked={ragDocumentForm.enabled}
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, enabled: event.target.checked }))}
+                    type="checkbox"
+                  />
+                  应用知识库
+                </label>
+                <button
+                  className="rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#2A2927] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isRagDocumentBusy || !ragDocumentForm.case_id || !ragDocumentForm.content_base64}
+                  type="submit"
+                >
+                  {isRagDocumentBusy ? "处理中" : "上传并切分文档"}
+                </button>
+                <p className="text-xs leading-5 text-[#8A7D6F]">{ragDocumentForm.file_name ? `已选择：${ragDocumentForm.file_name}` : "未选择文档"}</p>
+              </div>
+            </form>
+            <div className="admin-panel-scrollbar mt-3 grid max-h-72 gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
+              {ragDocuments.length > 0 ? (
+                ragDocuments.map((document) => (
+                  <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={document.document_id}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-mono text-[11px] text-[#AE5630]">{document.document_id}</p>
+                        <h4 className="mt-1 text-sm font-semibold text-[#141413]">{document.file_name}</h4>
+                      </div>
+                      <button
+                        className={[
+                          "rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap transition disabled:cursor-not-allowed disabled:opacity-60",
+                          document.enabled ? "border-[#AE5630]/20 bg-[#AE5630]/10 text-[#AE5630]" : "border-[#E6DFD2] bg-[#FAF9F5] text-[#6F6257]",
+                        ].join(" ")}
+                        disabled={isRagDocumentBusy}
+                        onClick={() => void handleSetRagDocumentEnabled(document.document_id, !document.enabled)}
+                        type="button"
+                      >
+                        {document.enabled ? "已应用" : "未应用"}
+                      </button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{document.case_id}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">片段：{document.chunk_count}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">可见性：{document.visibility}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{document.source_id || "未绑定"}</span>
+                    </div>
+                    <p className="mt-2 break-words">Agent：{document.allowed_agents.length > 0 ? document.allowed_agents.join("、") : "未开放给 agent"}</p>
+                    <p className="mt-1 text-[#8A7D6F]">更新：{document.updated_by || "未知"} · {document.updated_at}</p>
+                  </article>
+                ))
+              ) : (
+                <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无病例文档知识库。</p>
+              )}
             </div>
             <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
               <div className="grid gap-3 md:grid-cols-3">
