@@ -90,6 +90,10 @@ def _normalize_batch_result(batch_result: dict[str, Any]) -> dict[str, Any]:
         result.setdefault("rag_evidence_coverage_passed", False)
         result.setdefault("rag_evidence_coverage_ratio", 0.0)
         result.setdefault("missing_evidence_references", [])
+        result.setdefault("rag_knowledge_safety_passed", False)
+        result.setdefault("forbidden_rag_knowledge_references", [])
+        result.setdefault("rag_score_isolation_passed", False)
+        result.setdefault("rag_score_isolation_violations", [])
     return batch_result
 
 

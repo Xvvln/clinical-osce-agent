@@ -43,6 +43,10 @@ class EvaluationResult:
     rag_evidence_coverage_passed: bool = False
     rag_evidence_coverage_ratio: float = 0.0
     missing_evidence_references: list[str] = field(default_factory=list)
+    rag_knowledge_safety_passed: bool = True
+    forbidden_rag_knowledge_references: list[str] = field(default_factory=list)
+    rag_score_isolation_passed: bool = True
+    rag_score_isolation_violations: list[str] = field(default_factory=list)
     duration_ms: int = 0
 
 
@@ -102,6 +106,10 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
     rag_source_coverage_passed = len(source_reference_items) > 0 and not missing_rubric_references
     rag_explanation_coverage_passed = not missing_explanation_references
     rag_evidence_coverage_passed = not missing_evidence_references
+    forbidden_rag_knowledge_references = _forbidden_rag_knowledge_references(report)
+    rag_score_isolation_violations = _rag_score_isolation_violations(report)
+    rag_knowledge_safety_passed = not forbidden_rag_knowledge_references
+    rag_score_isolation_passed = not rag_score_isolation_violations
     evaluation_text = f"{report} {evaluation_case.steps}"
     forbidden_term_violations = [term for term in evaluation_case.forbidden_terms if term in evaluation_text]
     passed = (
@@ -110,6 +118,8 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         and rag_source_coverage_passed
         and rag_explanation_coverage_passed
         and rag_evidence_coverage_passed
+        and rag_knowledge_safety_passed
+        and rag_score_isolation_passed
     )
     return EvaluationResult(
         session_id=session_id,
@@ -127,6 +137,10 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         rag_evidence_coverage_passed=rag_evidence_coverage_passed,
         rag_evidence_coverage_ratio=rag_evidence_coverage_ratio,
         missing_evidence_references=missing_evidence_references,
+        rag_knowledge_safety_passed=rag_knowledge_safety_passed,
+        forbidden_rag_knowledge_references=forbidden_rag_knowledge_references,
+        rag_score_isolation_passed=rag_score_isolation_passed,
+        rag_score_isolation_violations=rag_score_isolation_violations,
         passed=passed,
         duration_ms=int((time.perf_counter() - started_at) * 1000),
     )
@@ -151,6 +165,79 @@ def _source_reference_types(source_reference_items: Any) -> list[str]:
         if isinstance(source_type, str) and source_type not in source_types:
             source_types.append(source_type)
     return source_types
+
+
+FORBIDDEN_RAG_VISIBILITIES = {"secret_scoring_only", "admin_only"}
+RAG_SCORING_USAGES = {"score", "scoring", "rubric_decision", "diagnosis_decision", "standard_diagnosis"}
+RAG_SCORING_REFERENCE_KEYS = {
+    "score_source_references",
+    "scoring_source_references",
+    "rubric_decision_source_references",
+    "diagnosis_decision_source_references",
+}
+
+
+def _forbidden_rag_knowledge_references(report: dict[str, Any]) -> list[str]:
+    references: list[str] = []
+    for item in _iter_reference_dicts(report):
+        reference = item.get("reference")
+        if not isinstance(reference, str) or not reference.startswith("rag_knowledge:"):
+            continue
+        metadata = item.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        visibility = str(item.get("visibility") or metadata.get("visibility") or "").strip()
+        if visibility in FORBIDDEN_RAG_VISIBILITIES:
+            _append_unique(references, reference)
+    return references
+
+
+def _rag_score_isolation_violations(report: dict[str, Any]) -> list[str]:
+    violations: list[str] = []
+    _collect_rag_scoring_violations(report, [], violations)
+    return violations
+
+
+def _collect_rag_scoring_violations(payload: Any, path: list[str], violations: list[str]) -> None:
+    if isinstance(payload, dict):
+        reference = payload.get("reference")
+        metadata = payload.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        usage = str(payload.get("usage") or payload.get("used_for") or metadata.get("usage") or metadata.get("used_for") or "").strip()
+        if isinstance(reference, str) and reference.startswith("rag_knowledge:") and usage in RAG_SCORING_USAGES:
+            _append_unique(violations, f"{'.'.join(path) or 'report'}:{reference}")
+        for key, value in payload.items():
+            next_path = [*path, str(key)]
+            if key in RAG_SCORING_REFERENCE_KEYS:
+                for reference_value in _string_values(value):
+                    if reference_value.startswith("rag_knowledge:"):
+                        _append_unique(violations, f"{'.'.join(next_path)}:{reference_value}")
+            _collect_rag_scoring_violations(value, next_path, violations)
+    elif isinstance(payload, list):
+        for item in payload:
+            _collect_rag_scoring_violations(item, path, violations)
+
+
+def _iter_reference_dicts(payload: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        if isinstance(payload.get("reference"), str):
+            items.append(payload)
+        for value in payload.values():
+            items.extend(_iter_reference_dicts(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            items.extend(_iter_reference_dicts(item))
+    return items
+
+
+def _string_values(payload: Any) -> list[str]:
+    if isinstance(payload, str):
+        return [payload]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, str)]
+    return []
 
 
 def _missing_rubric_references(case_id: str, report: dict[str, Any], source_reference_items: Any) -> list[str]:

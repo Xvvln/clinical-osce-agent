@@ -1629,6 +1629,10 @@ def test_admin_can_read_evaluation_batch_detail(tmp_path, monkeypatch) -> None:
                     "rag_evidence_coverage_passed": False,
                     "rag_evidence_coverage_ratio": 0.0,
                     "missing_evidence_references": [],
+                    "rag_knowledge_safety_passed": True,
+                    "forbidden_rag_knowledge_references": [],
+                    "rag_score_isolation_passed": True,
+                    "rag_score_isolation_violations": [],
                     "duration_ms": 66,
                 }
             ],
@@ -1752,6 +1756,10 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
                 "rag_evidence_coverage_passed": True,
                 "rag_evidence_coverage_ratio": 1.0,
                 "missing_evidence_references": [],
+                "rag_knowledge_safety_passed": True,
+                "forbidden_rag_knowledge_references": [],
+                "rag_score_isolation_passed": True,
+                "rag_score_isolation_violations": [],
                 "duration_ms": 42,
             }
         ],

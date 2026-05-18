@@ -369,6 +369,65 @@ class ReportWithInvalidSourceItemsService(ReportWithoutRagSourcesService):
         return {"case_id": "appendicitis_001", "total_score": 32, "missed_items": [], "source_reference_items": [{}]}
 
 
+class ReportWithForbiddenRagKnowledgeReferenceService(ReportWithExplanationTextWithoutExplanationSourcesService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_forbidden_rag_reference"}
+
+    def get_report(self, session_id: str) -> dict[str, object]:
+        report = dict(super().get_report(session_id))
+        report["explanation_source_items"] = [
+            {
+                "kind": "strength",
+                "text": "主要诊断命中急性阑尾炎：已完成。",
+                "rubric_item_id": "dx_main",
+                "source_references": ["rubric:appendicitis_001_rubric.item.dx_main"],
+            }
+        ]
+        report["source_reference_items"] = [
+            *report["source_reference_items"],
+            {
+                "reference": "rag_knowledge:case:appendicitis_001:secret:hidden_answer",
+                "source_type": "rag_knowledge",
+                "title": "隐藏答案",
+                "metadata": {"visibility": "secret_scoring_only"},
+            },
+        ]
+        return report
+
+
+class ReportWithRagScoringReferenceService(ReportWithExplanationTextWithoutExplanationSourcesService):
+    def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
+        return {"session_id": "session_with_rag_scoring_reference"}
+
+    def get_report(self, session_id: str) -> dict[str, object]:
+        report = dict(super().get_report(session_id))
+        report["explanation_source_items"] = [
+            {
+                "kind": "strength",
+                "text": "主要诊断命中急性阑尾炎：已完成。",
+                "rubric_item_id": "dx_main",
+                "source_references": ["rubric:appendicitis_001_rubric.item.dx_main"],
+            }
+        ]
+        report["source_reference_items"] = [
+            *report["source_reference_items"],
+            {
+                "reference": "rag_knowledge:case:appendicitis_001:teaching:dx_main",
+                "source_type": "rag_knowledge",
+                "title": "教学解释来源",
+                "metadata": {"visibility": "post_submit_review", "usage": "scoring"},
+            },
+        ]
+        report["rubric_scores"] = {
+            **report["rubric_scores"],
+            "dx_main": {
+                **report["rubric_scores"]["dx_main"],
+                "score_source_references": ["rag_knowledge:case:appendicitis_001:teaching:dx_main"],
+            },
+        }
+        return report
+
+
 def test_run_evaluation_case_passes_standard_appendicitis_path(tmp_path) -> None:
     service = OsceSessionService(
         report_store=ReportStore(tmp_path / "reports.sqlite3"),
@@ -591,6 +650,43 @@ def test_run_evaluation_case_fails_when_source_items_are_not_valid_references() 
     assert result.rag_source_coverage_passed is False
     assert result.source_reference_count == 0
     assert result.source_reference_types == []
+
+
+def test_run_evaluation_case_fails_when_forbidden_rag_knowledge_reference_is_present() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithForbiddenRagKnowledgeReferenceService())
+
+    assert result.passed is False
+    assert result.rag_knowledge_safety_passed is False
+    assert result.forbidden_rag_knowledge_references == [
+        "rag_knowledge:case:appendicitis_001:secret:hidden_answer"
+    ]
+
+
+def test_run_evaluation_case_fails_when_rag_reference_is_used_for_scoring() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=32,
+        forbidden_terms=[],
+    )
+
+    result = run_evaluation_case(evaluation_case, ReportWithRagScoringReferenceService())
+
+    assert result.passed is False
+    assert result.rag_score_isolation_passed is False
+    assert result.rag_score_isolation_violations == [
+        "rubric_scores.dx_main.score_source_references:rag_knowledge:case:appendicitis_001:teaching:dx_main",
+        "source_reference_items:rag_knowledge:case:appendicitis_001:teaching:dx_main",
+    ]
 
 
 def test_run_evaluation_case_fails_when_forbidden_terms_appear(tmp_path) -> None:
