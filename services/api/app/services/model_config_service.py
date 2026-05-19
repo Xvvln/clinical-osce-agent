@@ -10,7 +10,6 @@ from app.services.chroma_retriever import (
 )
 from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
 from app.services.retrieval_index import ROOT_DIR, get_chroma_source_documents
-from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.vertex_embedding_retriever import DEFAULT_VERTEX_EMBEDDING_MODEL
 
 
@@ -21,7 +20,9 @@ def build_admin_model_config() -> dict[str, Any]:
         "policy": {
             "secrets_persisted": False,
             "runtime_write_supported": runtime_write_supported,
-            "configuration_source": "environment_or_runtime_memory" if runtime_write_supported else "environment_only",
+            "configuration_source": "environment_default_only",
+            "account_runtime_scope": "per_authenticated_user",
+            "account_runtime_visible": False,
             "deployment_mode": deployment_mode,
         },
         "providers": [
@@ -59,18 +60,12 @@ def _gemini_patient_api_config() -> dict[str, Any]:
 
 
 def _gemini_patient_vertex_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
-    runtime_active = runtime_vertex_config is not None
-    enabled = runtime_active or _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
-    vertex_api_key = (
-        runtime_vertex_config.api_key
-        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
-        else _env("OSCE_GEMINI_PATIENT_API_KEY") or _env("OSCE_VERTEX_API_KEY")
-    )
-    project = runtime_vertex_config.project if runtime_active else _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT")
-    model = runtime_vertex_config.model if runtime_active else _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
-    location = runtime_vertex_config.location if runtime_active else _env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
-    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    enabled = _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
+    vertex_api_key = _env("OSCE_GEMINI_PATIENT_API_KEY") or _env("OSCE_VERTEX_API_KEY")
+    project = _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    model = _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
+    location = _env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
     configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
@@ -99,23 +94,17 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
             ],
         ),
         integration_status="wired",
-        notes="支持 Google Application Default Credentials 或 Vertex Express/API Key；密钥只来自环境变量或本次运行时内存，不落库也不回显。",
+        notes="服务端默认能力支持 Google Application Default Credentials 或 Vertex Express/API Key；账号级 API 配置不在本页展示。",
     )
 
 
 def _vertex_rubric_scorer_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
-    runtime_active = runtime_vertex_config is not None
-    enabled = runtime_active or _truthy_env("OSCE_VERTEX_ENABLED")
-    vertex_api_key = (
-        runtime_vertex_config.api_key
-        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
-        else _env("OSCE_VERTEX_API_KEY")
-    )
-    project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
-    model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
-    location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
-    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    enabled = _truthy_env("OSCE_VERTEX_ENABLED")
+    vertex_api_key = _env("OSCE_VERTEX_API_KEY")
+    project = _env("OSCE_VERTEX_PROJECT")
+    model = _env("OSCE_VERTEX_MODEL", "gemini-3.1-pro-preview")
+    location = _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
     configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
@@ -141,18 +130,12 @@ def _vertex_rubric_scorer_config() -> dict[str, Any]:
 
 
 def _vertex_skill_candidate_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
-    runtime_active = runtime_vertex_config is not None
-    enabled = runtime_active or _truthy_env("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED")
-    vertex_api_key = (
-        runtime_vertex_config.api_key
-        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
-        else _env("OSCE_VERTEX_API_KEY")
-    )
-    project = runtime_vertex_config.project if runtime_active else _env("OSCE_VERTEX_PROJECT")
-    model = runtime_vertex_config.model if runtime_active else _env("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", "gemini-3.1-pro-preview")
-    location = runtime_vertex_config.location if runtime_active else _env("OSCE_VERTEX_LOCATION", "global")
-    proxy_url = runtime_vertex_config.proxy_url if runtime_active else _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    enabled = _truthy_env("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED")
+    vertex_api_key = _env("OSCE_VERTEX_API_KEY")
+    project = _env("OSCE_VERTEX_PROJECT")
+    model = _env("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", "gemini-3.1-pro-preview")
+    location = _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
     configured = enabled and (bool(project) or secret_configured)
     return _provider_config(
@@ -178,31 +161,13 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
 
 
 def _vertex_embedding_retrieval_config() -> dict[str, Any]:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
-    runtime_active = runtime_vertex_config is not None
-    enabled = runtime_active or _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED")
-    runtime_api_key = (
-        runtime_vertex_config.api_key
-        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
-        else ""
-    )
-    project = (
-        runtime_vertex_config.project
-        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_adc"
-        else _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
-    )
+    enabled = _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED")
+    vertex_api_key = _env("OSCE_VERTEX_EMBEDDING_API_KEY") or _env("OSCE_VERTEX_API_KEY")
+    project = _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
     model = _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001")
-    location = (
-        _env("OSCE_VERTEX_EMBEDDING_LOCATION")
-        or (runtime_vertex_config.location if runtime_active else "")
-        or _env("OSCE_VERTEX_LOCATION", "global")
-    )
-    proxy_url = (
-        _env("OSCE_VERTEX_EMBEDDING_PROXY_URL")
-        or (runtime_vertex_config.proxy_url if runtime_active else "")
-        or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
-    )
-    secret_configured = bool(runtime_api_key)
+    location = _env("OSCE_VERTEX_EMBEDDING_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
+    proxy_url = _env("OSCE_VERTEX_EMBEDDING_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    secret_configured = bool(vertex_api_key)
     configured = enabled and bool(project or secret_configured)
     return _provider_config(
         provider_id="vertex_embedding_retrieval",
@@ -216,10 +181,10 @@ def _vertex_embedding_retrieval_config() -> dict[str, Any]:
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["运行态 Vertex 配置，或 OSCE_VERTEX_EMBEDDING_ENABLED=true + OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT"],
+        required_env=["OSCE_VERTEX_EMBEDDING_ENABLED=true + OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY"],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
-            [("运行态 Vertex 配置或 OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT", project or ("configured" if secret_configured else ""))],
+            [("OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
         ),
         integration_status="wired_optional",
         notes="只用于 RAG 来源片段相似度召回；不参与标准诊断、rubric、评分裁判或病例隐藏信息决策。",
@@ -262,12 +227,9 @@ def _chroma_retrieval_config() -> dict[str, Any]:
 
 
 def _vertex_embedding_retrieval_available() -> bool:
-    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
-    if runtime_vertex_config is not None:
-        return bool(runtime_vertex_config.project or runtime_vertex_config.api_key)
     if not _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED"):
         return False
-    return bool(_env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT"))
+    return bool(_env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT") or _env("OSCE_VERTEX_EMBEDDING_API_KEY") or _env("OSCE_VERTEX_API_KEY"))
 
 
 def _chroma_enabled(*, embedding_configured: bool) -> bool:
@@ -287,13 +249,11 @@ def _chroma_index_manifest_status(*, persist_directory: str, collection: str) ->
 
 
 def _openai_compatible_config() -> dict[str, Any]:
-    runtime_config = runtime_model_config_store.get_active_config()
-    runtime_active = runtime_config is not None and runtime_config.provider == "openai_compatible"
-    enabled = runtime_active or _truthy_env("OSCE_OPENAI_ENABLED")
-    secret_configured = runtime_active or bool(_env("OSCE_OPENAI_API_KEY"))
-    model = runtime_config.model if runtime_active else _env("OSCE_OPENAI_MODEL")
-    base_url = runtime_config.base_url if runtime_active else _env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1")
-    proxy_url = runtime_config.proxy_url if runtime_active else _env("OSCE_OPENAI_PROXY_URL", "http://127.0.0.1:7897")
+    enabled = _truthy_env("OSCE_OPENAI_ENABLED")
+    secret_configured = bool(_env("OSCE_OPENAI_API_KEY"))
+    model = _env("OSCE_OPENAI_MODEL")
+    base_url = _env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1")
+    proxy_url = _env("OSCE_OPENAI_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and secret_configured and bool(model)
     return _provider_config(
         provider_id="openai_compatible",
@@ -309,7 +269,7 @@ def _openai_compatible_config() -> dict[str, Any]:
         required_env=["OSCE_OPENAI_ENABLED=true", "OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_OPENAI_API_KEY", "configured" if secret_configured else ""), ("OSCE_OPENAI_MODEL", model)]),
         integration_status="wired",
-        notes="支持环境变量或学生端本次运行时配置；密钥只保存在进程内存，不写入文件或数据库。",
+        notes="这里只展示服务端环境变量默认能力；学生或管理员账号自行保存的 API 配置在对应账号的 API 设置中查看。",
     )
 
 

@@ -514,6 +514,8 @@ type AdminModelConfigPolicy = Readonly<{
   secrets_persisted: boolean;
   runtime_write_supported: boolean;
   configuration_source: string;
+  account_runtime_scope: string;
+  account_runtime_visible: boolean;
   deployment_mode: string;
 }>;
 
@@ -911,7 +913,7 @@ const adminWorkspaceSections: readonly AdminWorkspaceSection[] = [
 ];
 const adminWorkspaceSubsections: Record<AdminWorkspaceSectionId, readonly AdminWorkspaceSubsection[]> = {
   system: [
-    { id: "system-models", sectionId: "system", label: "模型接入", eyebrow: "服务商" },
+    { id: "system-models", sectionId: "system", label: "服务端模型", eyebrow: "默认能力" },
     { id: "system-retrieval", sectionId: "system", label: "RAG 评测", eyebrow: "召回" },
     { id: "system-boundary", sectionId: "system", label: "运行边界", eyebrow: "规则" },
   ],
@@ -2786,7 +2788,7 @@ export default function AdminDashboardPage() {
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-semibold">系统状态</h2>
-              <p className="mt-1 text-sm leading-6 text-[#6F6257]">模型接入、RAG 检索和评分边界。</p>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">服务端默认模型、RAG 检索和账号配置边界。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">只读核查</p>
           </div>
@@ -2800,11 +2802,11 @@ export default function AdminDashboardPage() {
         <section className={getAdminSubsectionPanelClassName(activeSystemSubsectionId === "system-models", `mt-4 ${adminPanelCardClassName}`)} id="model-config">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold">模型配置</h3>
-              <p className="mt-1 text-sm leading-6 text-[#6F6257]">查看当前服务商、模型、密钥状态和运行时配置来源。</p>
+              <h3 className="text-lg font-semibold">服务端默认模型与检索能力</h3>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">服务端默认能力，不代表每个账号当前使用的模型；账号级 API 配置请在对应账号的 API 设置中查看。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
-              {modelConfig ? `配置来源：${modelConfig.policy.configuration_source}` : "读取中"}
+              {modelConfig ? `默认来源：${modelConfig.policy.configuration_source}` : "读取中"}
             </p>
           </div>
           {modelConfig ? (
@@ -2815,17 +2817,19 @@ export default function AdminDashboardPage() {
                   <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.deployment_mode}</p>
                 </article>
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
-                  <p className="text-xs text-[#8A7D6F]">Runtime 写入</p>
+                  <p className="text-xs text-[#8A7D6F]">账号 Runtime</p>
                   <p className="mt-1 break-words text-sm font-semibold">
-                    {modelConfig.policy.runtime_write_supported ? "允许本次运行时配置" : "仅环境变量配置"}
+                    {modelConfig.policy.runtime_write_supported ? "账号可自配置" : "仅服务端环境变量"}
                   </p>
                 </article>
                 <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
-                  <p className="text-xs text-[#8A7D6F]">密钥持久化</p>
-                  <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.secrets_persisted ? "持久化" : "不落库"}</p>
+                  <p className="text-xs text-[#8A7D6F]">账号配置可见性</p>
+                  <p className="mt-1 break-words text-sm font-semibold">{modelConfig.policy.account_runtime_visible ? "管理员可见" : "不在本页展示"}</p>
                 </article>
               </div>
-              <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">密钥不落库：管理员端只展示配置状态，不回显完整 API Key。</p>
+              <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">
+                本页只展示服务端环境变量默认能力。服务端默认密钥不落库、不回显；账号级配置作用域：{modelConfig.policy.account_runtime_scope}，用户保存的 API Key 不在管理员端列出。
+              </p>
               <div className="admin-panel-scrollbar mt-4 grid max-h-[28rem] gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
                 {modelConfig.providers.map((provider) => (
                   <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={provider.provider_id}>

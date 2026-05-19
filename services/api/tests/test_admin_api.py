@@ -775,7 +775,9 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert payload["policy"] == {
         "secrets_persisted": False,
         "runtime_write_supported": True,
-        "configuration_source": "environment_or_runtime_memory",
+        "configuration_source": "environment_default_only",
+        "account_runtime_scope": "per_authenticated_user",
+        "account_runtime_visible": False,
         "deployment_mode": "local-dev",
     }
     providers = {provider["provider_id"]: provider for provider in payload["providers"]}
@@ -824,7 +826,7 @@ def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monke
     assert manifest["manifest_path"].endswith("retrieval_index_manifest.json")
 
 
-def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
+def test_admin_model_config_does_not_merge_account_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     runtime_model_config_store.clear()
     runtime_model_config_store.apply_config(
@@ -844,24 +846,23 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
         runtime_model_config_store.clear()
 
     assert response.status_code == 200
+    payload = response.json()
+    assert payload["policy"]["configuration_source"] == "environment_default_only"
+    assert payload["policy"]["account_runtime_scope"] == "per_authenticated_user"
+    assert payload["policy"]["account_runtime_visible"] is False
     providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
-    assert providers["gemini_patient_vertex"]["configured"] is True
-    assert providers["gemini_patient_vertex"]["project"] == "demo-project"
-    assert providers["gemini_patient_vertex"]["model"] == "gemini-3.1-pro-preview"
-    assert providers["vertex_rubric_scorer"]["configured"] is True
-    assert providers["vertex_rubric_scorer"]["project"] == "demo-project"
-    assert providers["vertex_skill_candidate"]["configured"] is True
-    assert providers["vertex_skill_candidate"]["project"] == "demo-project"
-    assert providers["vertex_embedding_retrieval"]["enabled"] is True
-    assert providers["vertex_embedding_retrieval"]["configured"] is True
-    assert providers["vertex_embedding_retrieval"]["project"] == "demo-project"
-    assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
-    assert providers["chroma_retrieval"]["enabled"] is True
-    assert providers["chroma_retrieval"]["configured"] is True
+    assert providers["gemini_patient_vertex"]["configured"] is False
+    assert providers["gemini_patient_vertex"]["project"] == ""
+    assert providers["vertex_rubric_scorer"]["configured"] is False
+    assert providers["vertex_skill_candidate"]["configured"] is False
+    assert providers["vertex_embedding_retrieval"]["enabled"] is False
+    assert providers["vertex_embedding_retrieval"]["configured"] is False
+    assert providers["chroma_retrieval"]["enabled"] is False
+    assert providers["chroma_retrieval"]["configured"] is False
     assert providers["chroma_retrieval"]["persist_directory"] == str(tmp_path / "chroma-index")
 
 
-def test_admin_model_config_reports_runtime_vertex_gemini_api_key_without_secret(tmp_path, monkeypatch) -> None:
+def test_admin_model_config_does_not_merge_account_runtime_vertex_gemini_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     runtime_model_config_store.clear()
     runtime_model_config_store.apply_config(
@@ -885,17 +886,14 @@ def test_admin_model_config_reports_runtime_vertex_gemini_api_key_without_secret
     assert "student-vertex-secret" not in response_text
     providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
     for provider_id in ["gemini_patient_vertex", "vertex_rubric_scorer", "vertex_skill_candidate"]:
-        assert providers[provider_id]["configured"] is True
-        assert providers[provider_id]["secret_configured"] is True
-        assert providers[provider_id]["auth_mode"] == "vertex_api_key"
-        assert providers[provider_id]["model"] == "gemini-2.5-flash"
+        assert providers[provider_id]["configured"] is False
+        assert providers[provider_id]["secret_configured"] is False
         assert providers[provider_id]["project"] == ""
-    assert providers["vertex_embedding_retrieval"]["enabled"] is True
-    assert providers["vertex_embedding_retrieval"]["configured"] is True
-    assert providers["vertex_embedding_retrieval"]["secret_configured"] is True
-    assert providers["vertex_embedding_retrieval"]["auth_mode"] == "vertex_api_key"
-    assert providers["chroma_retrieval"]["enabled"] is True
-    assert providers["chroma_retrieval"]["configured"] is True
+    assert providers["vertex_embedding_retrieval"]["enabled"] is False
+    assert providers["vertex_embedding_retrieval"]["configured"] is False
+    assert providers["vertex_embedding_retrieval"]["secret_configured"] is False
+    assert providers["chroma_retrieval"]["enabled"] is False
+    assert providers["chroma_retrieval"]["configured"] is False
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

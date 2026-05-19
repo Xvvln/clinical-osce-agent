@@ -70,6 +70,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
   assert.match(adminPageSource, /deployment_mode: string;/);
+  assert.match(adminPageSource, /account_runtime_scope: string;/);
+  assert.match(adminPageSource, /account_runtime_visible: boolean;/);
   assert.match(adminPageSource, /type AdminRetrievalEvalResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRetrievalEvalMetrics = Readonly<\{/);
   assert.match(adminPageSource, /type CandidateAuditEventsResponse = Readonly<\{/);
@@ -167,11 +169,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /selectedCandidate\.source_turn_patterns/);
   assert.match(adminPageSource, /历史数据未记录/);
   assert.match(adminPageSource, /id="model-config"/);
-  assert.match(adminPageSource, /模型 \/ API 配置/);
+  assert.match(adminPageSource, /服务端模型/);
   assert.match(adminPageSource, /部署模式/);
   assert.match(adminPageSource, /modelConfig\.policy\.deployment_mode/);
-  assert.match(adminPageSource, /Runtime 写入/);
-  assert.match(adminPageSource, /modelConfig\.policy\.runtime_write_supported \? "允许本次运行时配置" : "仅环境变量配置"/);
+  assert.match(adminPageSource, /账号 Runtime/);
+  assert.match(adminPageSource, /modelConfig\.policy\.runtime_write_supported \? "账号可自配置" : "仅服务端环境变量"/);
   assert.match(adminPageSource, /RAG 检索评测/);
   assert.match(adminPageSource, /结构化追溯覆盖/);
   assert.match(adminPageSource, /RAG 知识库/);
@@ -197,7 +199,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.doesNotMatch(adminPageSource, /用标注查询验证反馈解释来源覆盖/);
   assert.doesNotMatch(adminPageSource, /RAG 引用覆盖/);
   assert.doesNotMatch(adminPageSource, /评分项 → 证据 → 来源/);
-  assert.match(adminPageSource, /查看当前服务商、模型、密钥状态和运行时配置来源/);
+  assert.match(adminPageSource, /服务端默认能力，不代表每个账号当前使用的模型/);
   assert.match(adminPageSource, /provider\.label/);
   assert.match(adminPageSource, /provider\.integration_status/);
   assert.match(adminPageSource, /provider\.persist_directory/);
@@ -288,7 +290,7 @@ test("admin dashboard organizes the long workspace with a report-style side navi
   assert.match(adminPageSource, /const activeSectionCandidates: AdminWorkspaceSection\[] = \[]/);
   assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
   for (const subsection of [
-    "模型接入",
+    "服务端模型",
     "RAG 评测",
     "病例台账",
     "Rubric",
@@ -304,6 +306,8 @@ test("admin dashboard organizes the long workspace with a report-style side navi
   ]) {
     assert.match(adminPageSource, new RegExp(`label: "${subsection}"`));
   }
+  assert.match(adminPageSource, /label: "服务端模型"/);
+  assert.doesNotMatch(adminPageSource, /label: "模型接入"/);
 });
 
 test("admin side navigator keeps clicked modules selected instead of drifting to the next module", () => {
@@ -352,7 +356,7 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
 
   for (const chineseHeading of [
     "系统状态",
-    "模型配置",
+    "服务端默认模型与检索能力",
     "RAG 检索评测",
     "病例与来源台账",
     "训练记录",
@@ -375,6 +379,9 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
   assert.match(adminPageSource, />查看连接与索引细节</);
   assert.match(adminPageSource, />查看检索使用边界</);
   assert.match(adminPageSource, /展开原始数据/);
+  assert.match(adminPageSource, /服务端默认能力，不代表每个账号当前使用的模型/);
+  assert.match(adminPageSource, /账号级 API 配置请在对应账号的 API 设置中查看/);
+  assert.doesNotMatch(adminPageSource, /查看当前服务商、模型、密钥状态和运行时配置来源。/);
 });
 
 test("admin workspace subsection tabs render distinct panes", () => {
