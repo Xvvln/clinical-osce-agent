@@ -375,6 +375,34 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
   assert.match(adminPageSource, /展开原始数据/);
 });
 
+test("admin workspace subsection tabs render distinct panes", () => {
+  assert.match(adminPageSource, /const isResourceLedgerActive =/);
+  assert.match(adminPageSource, /activeResourcesSubsectionId === "resources-cases"/);
+  assert.match(adminPageSource, /activeResourcesSubsectionId === "resources-rubric"/);
+  assert.match(adminPageSource, /"病例字段与来源"/);
+  assert.match(adminPageSource, /"Rubric 评分表"/);
+  assert.doesNotMatch(
+    adminPageSource,
+    /activeResourcesSubsectionId === "resources-cases" \|\| activeResourcesSubsectionId === "resources-rubric", "mt-4"/,
+  );
+
+  assert.match(adminPageSource, /activeSkillSubsectionId === "skill-candidates"/);
+  assert.match(adminPageSource, /activeSkillSubsectionId === "skill-auto-apply"/);
+  assert.match(adminPageSource, /activeSkillSubsectionId === "skill-approval-records"/);
+  assert.match(adminPageSource, /"自动应用设置"/);
+  assert.match(adminPageSource, /"审批记录"/);
+  assert.doesNotMatch(adminPageSource, /activeSkillSubsectionId !== "skill-effects"/);
+});
+
+test("admin workspace removes outer cards and fills session tab details", () => {
+  assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6";/);
+  assert.match(adminPageSource, /const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"/);
+  assert.match(adminPageSource, /const selectedSessionSummary = sessions\.find/);
+  assert.match(adminPageSource, />Session 详情</);
+  assert.match(adminPageSource, /xl:items-stretch/);
+  assert.match(adminPageSource, /max-h-\[44rem\]/);
+});
+
 test("admin action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("admin dashboard", adminPageSource, [
     "管理员登录",

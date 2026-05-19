@@ -1979,6 +1979,8 @@ export default function AdminDashboardPage() {
   const activeEvaluationSubsectionId = activeAdminWorkspaceSubsectionIds.evaluation;
   const activeAuditSubsectionId = activeAdminWorkspaceSubsectionIds.audit;
   const activeSkillSubsectionId = activeAdminWorkspaceSubsectionIds.skillLoop;
+  const isResourceLedgerActive = activeResourcesSubsectionId === "resources-cases" || activeResourcesSubsectionId === "resources-rubric";
+  const selectedSessionSummary = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
@@ -2725,12 +2727,14 @@ export default function AdminDashboardPage() {
     isAdminNavigatorCollapsed ? "xl:grid-cols-[76px_minmax(0,1fr)]" : "xl:grid-cols-[220px_minmax(0,1fr)]",
   ].join(" ");
   const adminWorkspaceFrameClassName = "min-w-0 space-y-4";
-  const adminModuleShellClassName = "scroll-mt-6 rounded-lg border border-[#E6DFD2] bg-white/70 p-4 shadow-sm";
+  const adminModuleShellClassName = "scroll-mt-6";
   const adminPanelCardClassName = "rounded-lg border border-[#E6DFD2] bg-white/85 p-4 shadow-sm";
   const adminDrawerPanelClassName = "rounded-lg border border-[#E6DFD2] bg-white p-4 shadow-lg";
   const adminWidePanelCardClassName = `${adminPanelCardClassName} xl:col-span-2`;
   const adminEvidenceGridClassName = "mt-4 grid gap-5";
-  const adminTrainingColumnClassName = "grid gap-5 xl:grid-cols-2";
+  const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"
+    ? "grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"
+    : "grid gap-5 xl:grid-cols-2";
   const adminDecisionColumnClassName = "grid gap-5";
 
   return (
@@ -2989,7 +2993,7 @@ export default function AdminDashboardPage() {
               sectionId="resources"
             />
           </div>
-          <div className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-cases" || activeResourcesSubsectionId === "resources-rubric", "mt-4")}>
+          <div className={getAdminSubsectionPanelClassName(isResourceLedgerActive, "mt-4")}>
           <input
             aria-label="筛选病例"
             className="w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
@@ -2998,8 +3002,8 @@ export default function AdminDashboardPage() {
             type="search"
             value={caseSearchText}
           />
-          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
-            <div className="admin-panel-scrollbar grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)] xl:items-stretch">
+            <div className="admin-panel-scrollbar grid max-h-[44rem] content-start gap-2 overflow-y-auto pr-1">
               {filteredCases.length > 0 ? (
                 filteredCases.map((caseItem) => (
                   <button
@@ -3022,7 +3026,7 @@ export default function AdminDashboardPage() {
               )}
             </div>
             {selectedCaseRaw ? (
-              <article className="admin-panel-scrollbar max-h-[42rem] overflow-y-auto rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4 pr-3">
+              <article className="admin-panel-scrollbar h-full max-h-[44rem] overflow-y-auto rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4 pr-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] text-[#AE5630]">{selectedCaseRaw.case_id}</p>
@@ -3040,6 +3044,11 @@ export default function AdminDashboardPage() {
                     </button>
                   </div>
                 </div>
+                <h3 className="mt-4 border-t border-[#E6DFD2] pt-4 text-base font-semibold">
+                  {activeResourcesSubsectionId === "resources-rubric" ? "Rubric 评分表" : "病例字段与来源"}
+                </h3>
+                {activeResourcesSubsectionId === "resources-cases" ? (
+                  <>
                 <form className="mt-4 grid gap-3 border-t border-[#E6DFD2] pt-4" onSubmit={(event) => void handleUpdateCaseFields(event)}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold text-[#AE5630]">编辑病例字段</p>
@@ -3135,7 +3144,9 @@ export default function AdminDashboardPage() {
                     <dd className="mt-2 text-[#6F6257]">{selectedCaseRaw.safety_notes}</dd>
                   </div>
                 </dl>
-                {selectedRubric ? (
+                  </>
+                ) : null}
+                {activeResourcesSubsectionId === "resources-rubric" && selectedRubric ? (
                   <section className="mt-4 rounded-xl border border-[#E6DFD2] bg-white p-4">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -3182,9 +3193,9 @@ export default function AdminDashboardPage() {
                       ))}
                     </div>
                   </section>
-                ) : (
+                ) : activeResourcesSubsectionId === "resources-rubric" ? (
                   <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">Rubric 详情待读取。</p>
-                )}
+                ) : null}
               </article>
             ) : (
               <p className="rounded-2xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个病例查看 Rubric 与来源台账。</p>
@@ -3711,6 +3722,55 @@ export default function AdminDashboardPage() {
                   <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{sessionSearchText.trim() ? "没有匹配的训练 Session。请调整服务端筛选条件。" : "暂无训练 Session。"}</p>
                 )}
               </div>
+            </section>
+
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-sessions", adminPanelCardClassName)}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold">Session 详情</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">选择左侧会话后，可直接读取报告或日志。</p>
+                </div>
+                {selectedSessionSummary ? (
+                  <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{selectedSessionSummary.stage}</span>
+                ) : null}
+              </div>
+              {selectedSessionSummary ? (
+                <div className="mt-4 grid gap-3">
+                  <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                    <p className="text-xs font-semibold text-[#AE5630]">{selectedSessionSummary.case_id}</p>
+                    <p className="mt-2 break-all text-lg font-semibold">{selectedSessionSummary.session_id}</p>
+                    <p className="mt-2 text-sm text-[#6F6257]">学员：{selectedSessionSummary.student_id}</p>
+                  </div>
+                  <dl className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                      <dt className="text-xs text-[#8A7D6F]">创建时间</dt>
+                      <dd className="mt-1 break-words text-sm font-medium">{selectedSessionSummary.created_at}</dd>
+                    </div>
+                    <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                      <dt className="text-xs text-[#8A7D6F]">更新时间</dt>
+                      <dd className="mt-1 break-words text-sm font-medium">{selectedSessionSummary.updated_at}</dd>
+                    </div>
+                  </dl>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
+                      onClick={() => void handleLoadSessionReport()}
+                      type="button"
+                    >
+                      读取该 Session 报告
+                    </button>
+                    <button
+                      className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2]"
+                      onClick={() => void handleLoadSessionEvents()}
+                      type="button"
+                    >
+                      读取该 Session 日志
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm leading-6 text-[#6F6257]">请选择一个训练 Session。右侧会显示病例、学员、阶段和可读的操作入口。</p>
+              )}
             </section>
 
             <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-reports", adminPanelCardClassName)}>
@@ -4571,10 +4631,13 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, getAdminSubsectionPanelClassName(activeSkillSubsectionId !== "skill-effects", adminPanelCardClassName))}>
+            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-candidates" || activeSkillSubsectionId === "skill-auto-apply" || activeSkillSubsectionId === "skill-approval-records", adminPanelCardClassName))}>
               <div className="flex items-start justify-between gap-3">
-                <h2 className="text-xl font-semibold">候选 Skill 审核</h2>
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <h2 className="text-xl font-semibold">
+                  {activeSkillSubsectionId === "skill-auto-apply" ? "自动应用设置" : activeSkillSubsectionId === "skill-approval-records" ? "审批记录" : "候选 Skill 审核"}
+                </h2>
+                {activeSkillSubsectionId === "skill-candidates" ? (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={isGeneratingCandidates}
@@ -4586,14 +4649,15 @@ export default function AdminDashboardPage() {
                   <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                     {formatAdminPaginationRange(candidatePagination, candidates.length)} 个候选
                   </p>
-                </div>
+                  </div>
+                ) : null}
               </div>
-              <div className="mt-4 rounded-xl border border-[#E6DFD2] bg-white p-4">
+              <div className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-auto-apply", "mt-4 rounded-xl border border-[#E6DFD2] bg-white p-4")}>
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold">Skill 自动应用</h3>
+                    <h3 className="text-sm font-semibold">自动应用设置</h3>
                     <p className="mt-1 text-xs leading-5 text-[#6F6257]">
-                      审批 Agent：{autoApprovalSettings?.approval_agent_id ?? "skill_auto_approval_agent"} · {autoApprovalSettings?.auto_apply_enabled ? "自动应用已开启" : "自动应用已关闭"}
+                      Skill 自动应用 · 审批 Agent：{autoApprovalSettings?.approval_agent_id ?? "skill_auto_approval_agent"} · {autoApprovalSettings?.auto_apply_enabled ? "自动应用已开启" : "自动应用已关闭"}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">
                       开启后，候选 Skill 会先由审批 Agent 审核和修订教学文案，再通过回归门禁并自动写入 enabled Skill 库；关闭时沿用人工审核。
@@ -4609,6 +4673,7 @@ export default function AdminDashboardPage() {
                   </button>
                 </div>
               </div>
+              <div className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-candidates", "")}>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <input
                   aria-label="筛选候选 Skill"
@@ -4923,6 +4988,50 @@ export default function AdminDashboardPage() {
               ) : (
                 <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个候选 Skill。</p>
               )}
+              </div>
+              <div className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-approval-records", "mt-4 grid gap-3")}>
+                <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                  <h3 className="text-lg font-semibold">审批 Agent 修订记录</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">选择候选 Skill 后查看审批 Agent 决策、修改字段和审计事件。</p>
+                </div>
+                {selectedCandidate ? (
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <article className="rounded-xl border border-[#E6DFD2] bg-white p-4">
+                      <p className="text-xs font-semibold text-[#AE5630]">{selectedCandidate.review.status}</p>
+                      <h4 className="mt-1 text-base font-semibold">{selectedCandidate.title}</h4>
+                      <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.description}</p>
+                      {selectedCandidate.approval_agent_review ? (
+                        <div className="mt-3 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">
+                          <p className="font-semibold text-[#141413]">
+                            {selectedCandidate.approval_agent_review.agent_id} · {selectedCandidate.approval_agent_review.decision} · {selectedCandidate.approval_agent_review.revision_status}
+                          </p>
+                          <p className="mt-1">修改字段：{selectedCandidate.approval_agent_review.changed_fields.map((changedField) => changedField.field).join("、") || "无"}</p>
+                          <p className="mt-1">保护字段：{selectedCandidate.approval_agent_review.protected_fields.join("、") || "无"}</p>
+                        </div>
+                      ) : (
+                        <p className="mt-3 rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">该候选暂无审批 Agent 修订记录。</p>
+                      )}
+                    </article>
+                    <article className="rounded-xl border border-[#E6DFD2] bg-white p-4">
+                      <h4 className="text-base font-semibold">审批审计事件</h4>
+                      <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
+                        {candidateAuditEvents.length > 0 ? (
+                          candidateAuditEvents.map((event) => (
+                            <details className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]" key={`${event.event_type}-${event.created_at}`}>
+                              <summary className="cursor-pointer font-semibold text-[#141413]">{event.event_type} · {event.created_at}</summary>
+                              <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
+                            </details>
+                          ))
+                        ) : (
+                          <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无审核审计事件。</p>
+                        )}
+                      </div>
+                    </article>
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个候选 Skill 查看审批记录。</p>
+                )}
+              </div>
             </section>
           </div>
         </div>
