@@ -20,6 +20,7 @@ from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResu
 from app.services.osce_session_service import OsceSession, OsceSessionService, osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
+from app.services.rag_document_ingestion_service import RagDocumentChunk
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
 from app.services.training_event_store import TrainingEventStore
@@ -566,6 +567,50 @@ def test_admin_can_upload_global_rag_document_and_scope_document_listing(tmp_pat
     )
     assert context
     assert context[0]["knowledge_id"].startswith(global_document["document_id"])
+
+
+def test_admin_rag_document_upload_persists_chunk_quality_metadata(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store, raising=False)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    def fake_chunk_rag_document(**kwargs):
+        return [
+            RagDocumentChunk(
+                document_id=kwargs["document_id"],
+                chunk_index=0,
+                text="References\n\nSmith J. Example article.",
+                section_title="References",
+                page_number=8,
+                source_location="paper.pdf · 第 8 页 · References · 片段 1",
+                chunking_strategy="unstructured_by_title",
+                chunk_categories=["Title", "NarrativeText"],
+                quality_warnings=["low_value_section"],
+                risk_flags=["references_section"],
+                char_count=34,
+            )
+        ]
+
+    monkeypatch.setattr(main, "chunk_rag_document", fake_chunk_rag_document, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "scope": "global",
+                "file_name": "paper.pdf",
+                "content_base64": base64.b64encode(b"pretend-pdf").decode("ascii"),
+            },
+        )
+
+    assert response.status_code == 200
+    saved_item = response.json()["knowledge_items"][0]
+    assert saved_item["chunking_strategy"] == "unstructured_by_title"
+    assert saved_item["chunk_categories"] == ["Title", "NarrativeText"]
+    assert saved_item["quality_warnings"] == ["low_value_section"]
+    assert saved_item["risk_flags"] == ["references_section"]
+    assert saved_item["char_count"] == 34
 
 
 def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypatch) -> None:

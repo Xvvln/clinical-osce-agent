@@ -282,6 +282,11 @@ def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
                 "section_title": str(item.get("section_title") or "").strip(),
                 "page_number": _optional_int(page_number) if page_number is not None else None,
                 "source_location": str(item.get("source_location") or "").strip(),
+                "chunking_strategy": str(item.get("chunking_strategy") or "").strip(),
+                "chunk_categories": _string_list(item.get("chunk_categories", [])),
+                "quality_warnings": _string_list(item.get("quality_warnings", [])),
+                "risk_flags": _string_list(item.get("risk_flags", [])),
+                "char_count": _optional_int(item.get("char_count")),
                 "enabled": bool(item.get("enabled", True)),
             }
         )
@@ -319,6 +324,27 @@ def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "allowed_agents": _string_list(first_item.get("allowed_agents", [])),
         "source_id": str(first_item.get("source_id", "")).strip(),
         "tags": sorted({tag for item in sorted_items for tag in _string_list(item.get("tags", []))}),
+        "chunking_strategies": sorted(
+            {
+                str(item.get("chunking_strategy", "")).strip()
+                for item in sorted_items
+                if str(item.get("chunking_strategy", "")).strip()
+            }
+        ),
+        "quality_warnings": sorted(
+            {
+                warning
+                for item in sorted_items
+                for warning in _string_list(item.get("quality_warnings", []))
+            }
+        ),
+        "risk_flags": sorted(
+            {
+                flag
+                for item in sorted_items
+                for flag in _string_list(item.get("risk_flags", []))
+            }
+        ),
         "updated_by": str(first_item.get("updated_by", "")).strip(),
         "updated_at": _latest_updated_at(sorted_items),
     }

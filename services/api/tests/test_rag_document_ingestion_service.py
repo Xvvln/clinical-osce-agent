@@ -1,5 +1,7 @@
 import tomllib
 from pathlib import Path
+import sys
+import types
 
 from app.services.rag_document_ingestion_service import chunk_rag_document
 
@@ -52,3 +54,84 @@ def test_markdown_document_chunking_preserves_sections_and_overlap() -> None:
     assert all(chunk.document_id == "kbdoc:appendicitis_001:test" for chunk in chunks)
     assert all(chunk.text.strip() for chunk in chunks)
     assert chunks[1].text[:18] in chunks[0].text
+
+
+def test_unstructured_document_chunking_uses_title_strategy_and_adds_chunk_metadata(monkeypatch) -> None:
+    captured_partition: dict[str, str] = {}
+    captured_chunk_kwargs: dict[str, object] = {}
+
+    class FakeMetadata:
+        def __init__(self, page_number: int | None = None) -> None:
+            self.page_number = page_number
+
+    class FakeElement:
+        def __init__(self, text: str, *, category: str, page_number: int | None) -> None:
+            self.text = text
+            self.category = category
+            self.metadata = FakeMetadata(page_number)
+
+        def __str__(self) -> str:
+            return self.text
+
+    class FakeChunk:
+        def __init__(self, text: str, orig_elements: list[FakeElement]) -> None:
+            self.text = text
+            self.category = "CompositeElement"
+            self.metadata = types.SimpleNamespace(
+                orig_elements=orig_elements,
+                page_number=orig_elements[0].metadata.page_number if orig_elements else None,
+            )
+
+        def __str__(self) -> str:
+            return self.text
+
+    title = FakeElement("Clinical Features", category="Title", page_number=2)
+    body = FakeElement("Ask about pain migration and associated fever before deciding next steps.", category="NarrativeText", page_number=2)
+    references = FakeElement("References", category="Title", page_number=12)
+    reference_body = FakeElement("Smith J. Example article. 2024.", category="NarrativeText", page_number=12)
+
+    def fake_partition(*, filename: str):
+        captured_partition["filename"] = filename
+        return [title, body, references, reference_body]
+
+    def fake_chunk_by_title(elements, **kwargs):
+        captured_chunk_kwargs.update(kwargs)
+        assert list(elements) == [title, body, references, reference_body]
+        return [
+            FakeChunk("Clinical Features\n\nAsk about pain migration and associated fever before deciding next steps.", [title, body]),
+            FakeChunk("References\n\nSmith J. Example article. 2024.", [references, reference_body]),
+        ]
+
+    partition_module = types.ModuleType("unstructured.partition.auto")
+    partition_module.partition = fake_partition
+    chunking_module = types.ModuleType("unstructured.chunking.title")
+    chunking_module.chunk_by_title = fake_chunk_by_title
+    monkeypatch.setitem(sys.modules, "unstructured", types.ModuleType("unstructured"))
+    monkeypatch.setitem(sys.modules, "unstructured.partition", types.ModuleType("unstructured.partition"))
+    monkeypatch.setitem(sys.modules, "unstructured.partition.auto", partition_module)
+    monkeypatch.setitem(sys.modules, "unstructured.chunking", types.ModuleType("unstructured.chunking"))
+    monkeypatch.setitem(sys.modules, "unstructured.chunking.title", chunking_module)
+
+    chunks = chunk_rag_document(
+        file_name="appendicitis_review.pdf",
+        content_bytes=b"%PDF-pretend-content",
+        document_id="kbdoc:appendicitis_001:review",
+        max_chars=900,
+        overlap_chars=120,
+    )
+
+    assert captured_partition["filename"].endswith(".pdf")
+    assert captured_chunk_kwargs["max_characters"] == 900
+    assert captured_chunk_kwargs["overlap"] == 120
+    assert captured_chunk_kwargs["include_orig_elements"] is True
+    assert captured_chunk_kwargs["multipage_sections"] is True
+
+    assert len(chunks) == 2
+    assert chunks[0].chunking_strategy == "unstructured_by_title"
+    assert chunks[0].chunk_categories == ["Title", "NarrativeText"]
+    assert chunks[0].section_title == "Clinical Features"
+    assert chunks[0].page_number == 2
+    assert chunks[0].char_count == len(chunks[0].text)
+    assert chunks[0].source_location == "appendicitis_review.pdf · 第 2 页 · Clinical Features · 片段 1"
+    assert chunks[1].risk_flags == ["references_section"]
+    assert "low_value_section" in chunks[1].quality_warnings

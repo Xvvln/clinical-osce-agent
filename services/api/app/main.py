@@ -804,6 +804,11 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
             "section_title": chunk.section_title,
             "page_number": chunk.page_number,
             "source_location": chunk.source_location,
+            "chunking_strategy": chunk.chunking_strategy,
+            "chunk_categories": chunk.chunk_categories,
+            "quality_warnings": chunk.quality_warnings,
+            "risk_flags": chunk.risk_flags,
+            "char_count": chunk.char_count,
             "enabled": request.enabled,
         }
         for chunk in chunks

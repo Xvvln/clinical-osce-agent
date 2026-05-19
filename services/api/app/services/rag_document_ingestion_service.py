@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,11 @@ class RagDocumentChunk:
     section_title: str
     page_number: int | None
     source_location: str
+    chunking_strategy: str = "project_section_window"
+    chunk_categories: list[str] = field(default_factory=list)
+    quality_warnings: list[str] = field(default_factory=list)
+    risk_flags: list[str] = field(default_factory=list)
+    char_count: int = 0
 
 
 def generate_rag_document_id(*, case_id: str, file_name: str, content_bytes: bytes) -> str:
@@ -51,6 +56,15 @@ def chunk_rag_document(
     max_chars: int = 900,
     overlap_chars: int = 120,
 ) -> list[RagDocumentChunk]:
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in MARKDOWN_SUFFIXES | TEXT_SUFFIXES:
+        return _chunk_with_unstructured(
+            file_name=file_name,
+            content_bytes=content_bytes,
+            document_id=document_id,
+            max_chars=max_chars,
+            overlap_chars=overlap_chars,
+        )
     elements = parse_rag_document(file_name=file_name, content_bytes=content_bytes)
     return chunk_rag_document_elements(
         elements=elements,
@@ -91,17 +105,20 @@ def chunk_rag_document_elements(
 
     chunks: list[RagDocumentChunk] = []
     current_parts: list[str] = []
+    current_categories: list[str] = []
     current_section = ""
     current_page: int | None = None
     previous_tail = ""
 
     def flush() -> None:
-        nonlocal current_parts, current_section, current_page, previous_tail
+        nonlocal current_parts, current_categories, current_section, current_page, previous_tail
         chunk_body = "\n\n".join(part.strip() for part in current_parts if part.strip()).strip()
         if not chunk_body:
             current_parts = []
+            current_categories = []
             return
         chunk_text = f"{previous_tail}\n\n{chunk_body}".strip() if previous_tail else chunk_body
+        chunk_categories = _unique_strings(current_categories)
         chunk = RagDocumentChunk(
             document_id=document_id,
             chunk_index=len(chunks),
@@ -114,10 +131,16 @@ def chunk_rag_document_elements(
                 page_number=current_page,
                 chunk_number=len(chunks) + 1,
             ),
+            chunking_strategy="project_section_window",
+            chunk_categories=chunk_categories,
+            quality_warnings=_quality_warnings(chunk_text, section_title=current_section, categories=chunk_categories, max_chars=max_chars),
+            risk_flags=_risk_flags(chunk_text, section_title=current_section),
+            char_count=len(chunk_text),
         )
         chunks.append(chunk)
         previous_tail = _tail_window(chunk_body, overlap_chars)
         current_parts = []
+        current_categories = []
         current_section = ""
         current_page = None
 
@@ -139,6 +162,7 @@ def chunk_rag_document_elements(
                 next_section = section_title
                 next_page = element.page_number
             current_parts.append(part)
+            current_categories.append(element.category)
             current_section = next_section
             current_page = next_page
 
@@ -146,6 +170,99 @@ def chunk_rag_document_elements(
     if not chunks:
         raise RagDocumentParseError("document contains no readable text")
     return chunks
+
+
+def _chunk_with_unstructured(
+    *,
+    file_name: str,
+    content_bytes: bytes,
+    document_id: str,
+    max_chars: int,
+    overlap_chars: int,
+) -> list[RagDocumentChunk]:
+    if max_chars < 80:
+        raise ValueError("max_chars must be at least 80")
+    if overlap_chars < 0:
+        raise ValueError("overlap_chars cannot be negative")
+    try:
+        from unstructured.chunking.title import chunk_by_title
+        from unstructured.partition.auto import partition
+    except ImportError as exc:
+        raise RagDocumentParseError(
+            "document parser dependency is not installed; install unstructured for PDF/DOCX/HTML ingestion"
+        ) from exc
+
+    TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file_name).suffix.lower()
+    temp_name = f"{hashlib.sha1(content_bytes).hexdigest()[:16]}{suffix}"
+    temp_path = TEMP_UPLOAD_DIR / temp_name
+    temp_path.write_bytes(content_bytes)
+    try:
+        raw_elements = partition(filename=str(temp_path))
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    raw_chunks = chunk_by_title(
+        raw_elements,
+        max_characters=max_chars,
+        new_after_n_chars=max(80, int(max_chars * 0.85)),
+        combine_text_under_n_chars=max(40, min(500, int(max_chars * 0.35))),
+        overlap=overlap_chars,
+        include_orig_elements=True,
+        multipage_sections=True,
+    )
+    chunks: list[RagDocumentChunk] = []
+    for raw_chunk in raw_chunks:
+        converted_chunk = _convert_unstructured_chunk(
+            raw_chunk,
+            file_name=file_name,
+            document_id=document_id,
+            chunk_index=len(chunks),
+            max_chars=max_chars,
+        )
+        if converted_chunk is not None:
+            chunks.append(converted_chunk)
+    if not chunks:
+        raise RagDocumentParseError("document contains no readable text")
+    return chunks
+
+
+def _convert_unstructured_chunk(
+    raw_chunk: Any,
+    *,
+    file_name: str,
+    document_id: str,
+    chunk_index: int,
+    max_chars: int,
+) -> RagDocumentChunk | None:
+    text = str(raw_chunk).strip()
+    if not text:
+        return None
+    metadata = getattr(raw_chunk, "metadata", None)
+    orig_elements = list(getattr(metadata, "orig_elements", []) or [])
+    chunk_categories = _unique_strings(_element_category(element) for element in orig_elements) or [
+        _element_category(raw_chunk) or raw_chunk.__class__.__name__
+    ]
+    section_title = _section_title_from_elements(orig_elements)
+    page_number = _first_page_number(orig_elements) or _optional_int(getattr(metadata, "page_number", None))
+    return RagDocumentChunk(
+        document_id=document_id,
+        chunk_index=chunk_index,
+        text=text,
+        section_title=section_title,
+        page_number=page_number,
+        source_location=_source_location(
+            file_name=file_name,
+            section_title=section_title,
+            page_number=page_number,
+            chunk_number=chunk_index + 1,
+        ),
+        chunking_strategy="unstructured_by_title",
+        chunk_categories=chunk_categories,
+        quality_warnings=_quality_warnings(text, section_title=section_title, categories=chunk_categories, max_chars=max_chars),
+        risk_flags=_risk_flags(text, section_title=section_title),
+        char_count=len(text),
+    )
 
 
 def _parse_markdown_text(text: str) -> list[ParsedRagDocumentElement]:
@@ -247,6 +364,75 @@ def _parse_with_unstructured(*, file_name: str, content_bytes: bytes) -> list[Pa
     return parsed_elements
 
 
+def _element_category(element: Any) -> str:
+    return str(getattr(element, "category", "") or element.__class__.__name__).strip()
+
+
+def _section_title_from_elements(elements: list[Any]) -> str:
+    for element in elements:
+        if _element_category(element).lower() == "title":
+            title = str(element).strip()
+            if title:
+                return title
+    return ""
+
+
+def _first_page_number(elements: list[Any]) -> int | None:
+    for element in elements:
+        metadata = getattr(element, "metadata", None)
+        page_number = _optional_int(getattr(metadata, "page_number", None))
+        if page_number is not None:
+            return page_number
+    return None
+
+
+def _unique_strings(values: Any) -> list[str]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_values.append(normalized)
+    return unique_values
+
+
+def _quality_warnings(text: str, *, section_title: str, categories: list[str], max_chars: int) -> list[str]:
+    warnings: list[str] = []
+    normalized_text = text.strip()
+    if len(normalized_text) < 80:
+        warnings.append("short_chunk")
+    if len(normalized_text) > max_chars:
+        warnings.append("over_max_chars")
+    if not section_title.strip():
+        warnings.append("missing_section_title")
+    if _is_low_value_section(section_title, normalized_text):
+        warnings.append("low_value_section")
+    if any(category.lower() == "table" for category in categories) and len(normalized_text) < 120:
+        warnings.append("short_table_chunk")
+    return _unique_strings(warnings)
+
+
+def _risk_flags(text: str, *, section_title: str) -> list[str]:
+    flags: list[str] = []
+    combined_text = f"{section_title}\n{text}".lower()
+    if _is_low_value_section(section_title, text):
+        flags.append("references_section")
+    if re.search(r"(标准诊断|诊断为|最终诊断|diagnosis\s*(is|:)|diagnosed\s+with)", combined_text, flags=re.IGNORECASE):
+        flags.append("diagnosis_answer_content")
+    if re.search(r"(治疗|手术|抗生素|用药|剂量|mg\b|q\d+h|treatment|therapy|dose|dosage)", combined_text, flags=re.IGNORECASE):
+        flags.append("treatment_or_dose_content")
+    return _unique_strings(flags)
+
+
+def _is_low_value_section(section_title: str, text: str) -> bool:
+    combined_text = f"{section_title}\n{text}".strip().lower()
+    if "参考文献" in combined_text or "致谢" in combined_text:
+        return True
+    return bool(re.search(r"(^|\n)\s*(references|bibliography|acknowledg(e)?ments?)\b", combined_text))
+
+
 def _decode_text(content_bytes: bytes) -> str:
     for encoding in ("utf-8-sig", "utf-8", "gb18030"):
         try:
@@ -313,4 +499,3 @@ def _optional_int(value: Any) -> int | None:
 def _safe_identifier(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_:-]+", "_", value.strip())
     return normalized.strip("_") or "global"
-
