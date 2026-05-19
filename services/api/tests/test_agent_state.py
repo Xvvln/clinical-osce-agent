@@ -2,7 +2,9 @@ import json
 
 from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import reflection_node, training_strategy_node
+from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.retrieval_index import RetrievalDocument
 
 
 def test_agent_strategy_node_updates_next_best_action() -> None:
@@ -221,6 +223,20 @@ def test_reflection_node_records_filtered_post_submit_rag_context(tmp_path, monk
         updated_by="admin@example.test",
     )
     monkeypatch.setattr(osce_graph_module, "rag_knowledge_store", store)
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:reflection:evidence_chain",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=0.99,
+            )
+        ],
+        raising=False,
+    )
 
     result = reflection_node(
         {

@@ -4,7 +4,7 @@ from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
 
 
-def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forbidden_terms(tmp_path) -> None:
+def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forbidden_terms(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(
         {
@@ -71,6 +71,38 @@ def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forb
         updated_by="admin@example.test",
     )
 
+    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+        return [
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:coach:pain_migration",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=0.99,
+            ),
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:reflection:pain_migration",
+                source_type="rag_knowledge",
+                title="filtered by agent",
+                snippet="filtered by agent",
+                score=0.98,
+            ),
+            RetrievalDocument(
+                reference="rag_knowledge:case:acs_001:coach:pain_migration",
+                source_type="rag_knowledge",
+                title="filtered by case",
+                snippet="filtered by case",
+                score=0.97,
+            ),
+        ]
+
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        fake_search_retrieval_documents,
+        raising=False,
+    )
+
     results = retrieve_agent_context(
         agent_role="coach",
         case_ids=["appendicitis_001"],
@@ -89,7 +121,47 @@ def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forb
     assert "标准诊断" in results[0]["snippet"]
 
 
-def test_retrieve_agent_context_uses_retrieval_index_before_deterministic_keyword_match(
+def test_retrieve_agent_context_does_not_keyword_scan_when_vector_retrieval_misses(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:coach:keyword_only",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "coach_hint_note",
+            "visibility": "pre_submit_safe",
+            "allowed_agents": ["coach"],
+            "source_id": "rubric_appendicitis_001",
+            "title": "关键词命中但不应返回",
+            "text": "疼痛迁移训练应追问是否从上腹或脐周转移到右下腹。",
+            "tags": ["疼痛迁移训练"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [],
+        raising=False,
+    )
+
+    results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["疼痛迁移训练"],
+        allowed_visibilities={"pre_submit_safe"},
+        store=store,
+    )
+
+    assert results == []
+
+
+def test_retrieve_agent_context_uses_vector_retrieval_results_without_keyword_overlap(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -145,8 +217,22 @@ def test_retrieve_agent_context_uses_retrieval_index_before_deterministic_keywor
     ]
 
 
-def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_diagnosis(tmp_path) -> None:
+def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_diagnosis(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=0.99,
+            )
+        ],
+        raising=False,
+    )
 
     results = retrieve_agent_context(
         agent_role="coach",

@@ -3,7 +3,9 @@ import pytest
 from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import build_osce_graph
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
+from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.retrieval_index import RetrievalDocument
 
 
 def canonical_patient_responder(request: object) -> str:
@@ -12,6 +14,24 @@ def canonical_patient_responder(request: object) -> str:
 
 def silent_coach_agent(request: object) -> dict[str, object]:
     return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+
+
+def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference=f"rag_knowledge:{knowledge_id}",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=max(0.0, 1.0 - index * 0.01),
+            )
+            for index, knowledge_id in enumerate(knowledge_ids)
+        ][:limit],
+        raising=False,
+    )
 
 
 def base_hint_state(**overrides: object) -> dict[str, object]:
@@ -1162,8 +1182,12 @@ def test_osce_graph_returns_socratic_hint_as_coach_message_without_revealing_dia
         assert forbidden_term not in result["hint"]
 
 
-def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn() -> None:
+def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(monkeypatch) -> None:
     captured_requests: list[object] = []
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:coach:abdominal_pain_history_sequence",
+    )
 
     def fake_coach_agent(request: object) -> dict[str, str]:
         captured_requests.append(request)
@@ -1283,6 +1307,11 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
         updated_by="admin@example.test",
     )
     monkeypatch.setattr(osce_graph_module, "rag_knowledge_store", store)
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:coach:pain_migration_hint",
+        "case:appendicitis_001:secret:hidden_answer",
+    )
     captured_requests: list[object] = []
 
     def fake_coach_agent(request: object) -> dict[str, object]:

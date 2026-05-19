@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from app import main
+from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.agent_rag_context_service import retrieve_agent_context
@@ -20,6 +21,7 @@ from app.services.osce_session_service import OsceSession, OsceSessionService, o
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.retrieval_index import RetrievalDocument
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_service import TemplateTrainingSkillCandidateGenerator, TrainingSkillCandidateService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
@@ -71,6 +73,27 @@ def configure_case_import_directories(tmp_path, monkeypatch) -> tuple[Path, Path
     monkeypatch.setattr(main, "CASES_DIR", cases_dir, raising=False)
     monkeypatch.setattr(main, "RUBRICS_DIR", rubrics_dir, raising=False)
     return cases_dir, rubrics_dir
+
+
+def mock_vector_rag_hits_for_store(monkeypatch, store: RagKnowledgeStore) -> None:
+    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+        return [
+            RetrievalDocument(
+                reference=f"rag_knowledge:{item['knowledge_id']}",
+                source_type="rag_knowledge",
+                title=str(item.get("title", "")),
+                snippet=str(item.get("text", "")),
+                score=max(0.0, 1.0 - index * 0.01),
+            )
+            for index, item in enumerate(store.list_items())
+        ][:limit]
+
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        fake_search_retrieval_documents,
+        raising=False,
+    )
 
 
 def expected_training_skill_action_plan(stage_scope: list[str], trigger_item_ids: list[str], suggested_strategy: str) -> list[dict[str, object]]:
@@ -414,6 +437,7 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
         assert all(item["enabled"] is True for item in stored_chunks)
         assert all(item["source_location"].startswith("appendicitis_teaching.md") for item in stored_chunks)
 
+        mock_vector_rag_hits_for_store(monkeypatch, store)
         enabled_context = retrieve_agent_context(
             agent_role="coach",
             case_ids=["appendicitis_001"],
@@ -473,6 +497,7 @@ def test_admin_rag_document_upload_defaults_apply_to_all_generative_agents(tmp_p
         "skill_approval",
     }
 
+    mock_vector_rag_hits_for_store(monkeypatch, store)
     for agent_role in ["coach", "reflection", "skill_generation", "skill_approval"]:
         context = retrieve_agent_context(
             agent_role=agent_role,
@@ -531,6 +556,7 @@ def test_admin_can_upload_global_rag_document_and_scope_document_listing(tmp_pat
         case_document["document_id"]
     ]
 
+    mock_vector_rag_hits_for_store(monkeypatch, store)
     context = retrieve_agent_context(
         agent_role="coach",
         case_ids=["appendicitis_001"],

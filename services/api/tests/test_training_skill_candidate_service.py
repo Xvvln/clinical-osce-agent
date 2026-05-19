@@ -4,9 +4,12 @@ from dataclasses import replace
 import pytest
 
 from app.services import anthropic_chat_client as anthropic_module
+from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services import training_skill_candidate_service as candidate_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.retrieval_index import RetrievalDocument
+from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.training_skill_candidate_service import (
     OpenAICompatibleTrainingSkillCandidateGenerator,
     TemplateTrainingSkillCandidateGenerator,
@@ -19,7 +22,24 @@ from app.services.training_skill_candidate_service import (
     VertexGeminiTrainingSkillCandidateGenerator,
     create_default_training_skill_candidate_generator,
 )
-from app.services.runtime_model_config_store import runtime_model_config_store
+
+
+def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference=f"rag_knowledge:{knowledge_id}",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=max(0.0, 1.0 - index * 0.01),
+            )
+            for index, knowledge_id in enumerate(knowledge_ids)
+        ][:limit],
+        raising=False,
+    )
 
 
 class FakeSkillCandidateModels:
@@ -436,8 +456,12 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
     assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
 
 
-def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern() -> None:
+def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern(monkeypatch) -> None:
     captured_contexts: list[TrainingSkillCandidateContext] = []
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:skill_generation:appendicitis_differential_chain",
+    )
 
     class FakeTrainingSkillCandidateGenerator:
         def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
@@ -577,6 +601,11 @@ def test_training_skill_candidate_service_injects_filtered_rag_context_for_skill
         updated_by="admin@example.test",
     )
     monkeypatch.setattr(candidate_module, "rag_knowledge_store", store)
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:skill_generation:reasoning_bridge",
+        "case:appendicitis_001:secret:hidden_answer",
+    )
     captured_contexts: list[TrainingSkillCandidateContext] = []
 
     class FakeTrainingSkillCandidateGenerator:
@@ -611,6 +640,10 @@ def test_training_skill_candidate_service_injects_filtered_rag_context_for_skill
 def test_training_skill_candidate_service_proposes_one_training_pattern_candidate_from_frequent_missed_items(monkeypatch) -> None:
     monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
     monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:skill_generation:appendicitis_differential_chain",
+    )
 
     insights = {
         "session_count": 3,
@@ -760,8 +793,12 @@ def test_training_skill_candidate_service_skips_when_no_repeated_training_patter
     assert candidates == []
 
 
-def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_missed_items_do_not_repeat() -> None:
+def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_missed_items_do_not_repeat(monkeypatch) -> None:
     captured_contexts: list[TrainingSkillCandidateContext] = []
+    mock_vector_rag_hits(
+        monkeypatch,
+        "case:appendicitis_001:skill_generation:appendicitis_differential_chain",
+    )
 
     class FakeTrainingSkillCandidateGenerator:
         def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:

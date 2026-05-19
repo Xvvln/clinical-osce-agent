@@ -43,47 +43,35 @@ def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocu
         return []
 
     embedding_client = build_vertex_embedding_client_from_environment()
-    if embedding_client is not None:
-        try:
-            chroma_index = build_chroma_retrieval_index_from_environment(
-                embedding_client=embedding_client,
-                documents=get_chroma_source_documents(),
-                root_dir=ROOT_DIR,
-            )
-            if chroma_index is not None:
-                return [
-                    RetrievalDocument(
-                        reference=result.reference,
-                        source_type=result.source_type,
-                        title=result.title,
-                        snippet=result.snippet,
-                        score=result.score,
-                    )
-                    for result in chroma_index.search(query, limit=limit)
-                ]
-        except Exception as exc:
-            LOGGER.warning("ChromaDB retrieval failed; falling back to embedding search: %s", exc)
+    if embedding_client is None:
+        LOGGER.warning("RAG vector retrieval skipped because no embedding client is configured")
+        return []
 
-        try:
-            return search_retrieval_documents_with_embeddings(query, embedding_client=embedding_client, limit=limit)
-        except Exception as exc:
-            LOGGER.warning("Vertex embedding retrieval failed; falling back to deterministic search: %s", exc)
-
-    scored_documents = [
-        RetrievalDocument(
-            reference=document.reference,
-            source_type=document.source_type,
-            title=document.title,
-            snippet=document.snippet,
-            score=_score_document(normalized_query, document),
+    try:
+        chroma_index = build_chroma_retrieval_index_from_environment(
+            embedding_client=embedding_client,
+            documents=get_chroma_source_documents(),
+            root_dir=ROOT_DIR,
         )
-        for document in _retrieval_documents()
-    ]
-    return [
-        document
-        for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
-        if document.score > 0
-    ][:limit]
+        if chroma_index is not None:
+            return [
+                RetrievalDocument(
+                    reference=result.reference,
+                    source_type=result.source_type,
+                    title=result.title,
+                    snippet=result.snippet,
+                    score=result.score,
+                )
+                for result in chroma_index.search(query, limit=limit)
+            ]
+    except Exception as exc:
+        LOGGER.warning("ChromaDB retrieval failed; falling back to in-memory vector search: %s", exc)
+
+    try:
+        return search_retrieval_documents_with_embeddings(query, embedding_client=embedding_client, limit=limit)
+    except Exception as exc:
+        LOGGER.warning("Vertex embedding retrieval failed; returning no RAG retrieval results: %s", exc)
+        return []
 
 
 def search_retrieval_documents_with_embeddings(
@@ -285,14 +273,6 @@ def _rubric_documents() -> list[RetrievalDocument]:
     return documents
 
 
-def _score_document(query: str, document: RetrievalDocument) -> int:
-    haystack = f"{document.reference} {document.title} {document.snippet}".lower()
-    if query in haystack:
-        return len(query) * 10
-
-    return sum(1 for token in _query_tokens(query) if token in haystack)
-
-
 def _document_embedding_text(document: RetrievalDocument) -> str:
     return f"{document.source_type}\n{document.reference}\n{document.title}\n{document.snippet}"
 
@@ -306,7 +286,3 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
         return 0.0
     dot_product = sum(left_value * right_value for left_value, right_value in zip(left, right))
     return dot_product / (left_norm * right_norm)
-
-
-def _query_tokens(query: str) -> list[str]:
-    return [token for token in query.replace("；", " ").replace(",", " ").split() if token]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +29,6 @@ def retrieve_agent_context(
     normalized_case_ids = {str(case_id).strip() for case_id in case_ids if str(case_id).strip()}
     query_text = " ".join(str(term).strip() for term in query_terms if str(term).strip())
     selected_items: list[dict[str, Any]] = []
-    selected_ids: set[str] = set()
     if query_text:
         for result in search_retrieval_documents(query_text, limit=max(limit * 4, limit)):
             if result.source_type != "rag_knowledge" or not result.reference.startswith("rag_knowledge:"):
@@ -47,33 +45,9 @@ def retrieve_agent_context(
             ):
                 continue
             selected_items.append(item)
-            selected_ids.add(knowledge_id)
             if len(selected_items) >= limit:
                 break
 
-    terms = _rag_terms(query_terms)
-    scored_items: list[tuple[int, str, dict[str, Any]]] = []
-    for item in knowledge_store.list_items():
-        if not _agent_can_read_knowledge_item(
-            item,
-            agent_role=agent_role,
-            case_ids=normalized_case_ids,
-            allowed_visibilities=allowed_visibilities,
-        ):
-            continue
-        score = _score_knowledge_item(item, terms)
-        if score <= 0:
-            continue
-        knowledge_id = str(item.get("knowledge_id", "")).strip()
-        if knowledge_id in selected_ids:
-            continue
-        scored_items.append((score, knowledge_id, item))
-
-    selected_items.extend(
-        item
-        for _, _, item in sorted(scored_items, key=lambda entry: (-entry[0], entry[1]))
-        if len(selected_items) < limit
-    )
     return [
         _serialize_agent_knowledge_item(item, forbidden_terms=forbidden_terms or [])
         for item in selected_items[:limit]
@@ -101,41 +75,6 @@ def _agent_can_read_knowledge_item(
     if str(item.get("scope", "")).strip() == "case" and not item_case_id:
         return False
     return True
-
-
-def _score_knowledge_item(item: dict[str, Any], terms: list[str]) -> int:
-    haystack = " ".join(
-        [
-            str(item.get("knowledge_id", "")),
-            str(item.get("title", "")),
-            str(item.get("text", "")),
-            " ".join(str(tag) for tag in item.get("tags", []) if str(tag)),
-        ]
-    ).lower()
-    return sum(1 for term in terms if term.lower() in haystack)
-
-
-def _rag_terms(query_terms: list[str]) -> list[str]:
-    terms: set[str] = set()
-    for raw_term in query_terms:
-        normalized = str(raw_term).strip()
-        if not normalized:
-            continue
-        terms.add(normalized)
-        terms.update(token for token in re.split(r"[\s,，。；;:：、()（）]+", normalized) if token)
-        terms.update(_cjk_ngrams(normalized, min_size=2, max_size=6))
-    return sorted(terms, key=lambda term: (-len(term), term))
-
-
-def _cjk_ngrams(text: str, *, min_size: int, max_size: int) -> set[str]:
-    compact_text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9_]+", "", text)
-    if len(compact_text) < min_size:
-        return set()
-    return {
-        compact_text[start : start + size]
-        for size in range(min_size, min(max_size, len(compact_text)) + 1)
-        for start in range(0, len(compact_text) - size + 1)
-    }
 
 
 def _serialize_agent_knowledge_item(item: dict[str, Any], *, forbidden_terms: list[str]) -> dict[str, Any]:

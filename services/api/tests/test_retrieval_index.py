@@ -37,6 +37,24 @@ class FakeEmbeddingClient:
         raise AssertionError(f"unexpected task_type: {task_type}")
 
 
+class ExactPhraseFakeEmbeddingClient:
+    def __init__(self, phrase: str) -> None:
+        self.phrase = phrase
+
+    def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+        if task_type == "RETRIEVAL_QUERY":
+            return [
+                [1.0, 0.0, 0.0, 0.0] if self.phrase in text else [0.0, 1.0, 0.0, 0.0]
+                for text in texts
+            ]
+        if task_type == "RETRIEVAL_DOCUMENT":
+            return [
+                [1.0, 0.0, 0.0, 0.0] if self.phrase in text else [0.0, 1.0, 0.0, 0.0]
+                for text in texts
+            ]
+        raise AssertionError(f"unexpected task_type: {task_type}")
+
+
 class FakeGenAIEmbeddingClient:
     created_kwargs: list[dict[str, object]] = []
     embed_content_calls: list[dict[str, object]] = []
@@ -61,7 +79,24 @@ class FakeGenAIEmbeddingClient:
         )()
 
 
-def test_search_retrieval_documents_returns_case_for_clinical_query() -> None:
+def test_search_retrieval_documents_returns_empty_without_embedding_client_even_for_exact_keyword_match(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(retrieval_index_module, "build_vertex_embedding_client_from_environment", lambda: None)
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert results == []
+
+
+def test_search_retrieval_documents_returns_case_for_clinical_query(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("右下腹痛"),
+    )
+
     results = search_retrieval_documents("右下腹痛", limit=3)
 
     assert results
@@ -72,7 +107,14 @@ def test_search_retrieval_documents_returns_case_for_clinical_query() -> None:
     assert results[0].score > 0
 
 
-def test_search_retrieval_documents_returns_rubric_item_for_exam_query() -> None:
+def test_search_retrieval_documents_returns_rubric_item_for_exam_query(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("反跳痛"),
+    )
+
     results = search_retrieval_documents("反跳痛", limit=5)
 
     rubric_result = next(
@@ -86,7 +128,14 @@ def test_search_retrieval_documents_returns_rubric_item_for_exam_query() -> None
     assert rubric_result.score > 0
 
 
-def test_search_retrieval_documents_returns_knowledge_item_for_reasoning_query() -> None:
+def test_search_retrieval_documents_returns_knowledge_item_for_reasoning_query(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: FakeEmbeddingClient(),
+    )
+
     results = search_retrieval_documents("白细胞升高", limit=8)
 
     knowledge_result = next(
@@ -101,6 +150,7 @@ def test_search_retrieval_documents_returns_knowledge_item_for_reasoning_query()
 
 
 def test_search_retrieval_documents_includes_admin_managed_safe_knowledge(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(
         {
@@ -135,6 +185,11 @@ def test_search_retrieval_documents_includes_admin_managed_safe_knowledge(tmp_pa
         updated_by="admin@example.test",
     )
     monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store)
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("疼痛迁移训练"),
+    )
     retrieval_index_module._retrieval_documents.cache_clear()
 
     results = search_retrieval_documents("疼痛迁移训练", limit=5)

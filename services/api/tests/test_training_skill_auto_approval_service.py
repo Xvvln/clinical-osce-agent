@@ -1,5 +1,7 @@
 from app.services import training_skill_auto_approval_service as auto_approval_module
+from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.retrieval_index import RetrievalDocument
 from app.services.training_skill_auto_approval_service import TrainingSkillApprovalAgent, TrainingSkillAutoApprovalSettingsStore
 
 
@@ -111,6 +113,20 @@ def test_training_skill_approval_agent_records_filtered_rag_knowledge_context(tm
         updated_by="admin@example.test",
     )
     monkeypatch.setattr(auto_approval_module, "rag_knowledge_store", store)
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:skill_review:pain_sequence",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=0.99,
+            )
+        ],
+        raising=False,
+    )
     candidate = {
         "candidate_id": "skill_candidate_training_pattern_ht_migration",
         "trigger_item_id": "training_pattern_ht_migration",
