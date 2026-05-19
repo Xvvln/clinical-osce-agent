@@ -824,6 +824,40 @@ type AdminWorkspaceSection = Readonly<{
   targetId: string;
 }>;
 
+type AdminWorkspaceSubsectionId =
+  | "system-models"
+  | "system-retrieval"
+  | "system-boundary"
+  | "resources-cases"
+  | "resources-rubric"
+  | "resources-knowledge"
+  | "resources-sources"
+  | "resources-import"
+  | "training-sessions"
+  | "training-reports"
+  | "training-logs"
+  | "training-agent"
+  | "insights-errors"
+  | "insights-focus"
+  | "insights-sources"
+  | "evaluation-batches"
+  | "evaluation-cases"
+  | "evaluation-export"
+  | "audit-all"
+  | "audit-skill"
+  | "audit-admin"
+  | "skill-candidates"
+  | "skill-auto-apply"
+  | "skill-effects"
+  | "skill-approval-records";
+
+type AdminWorkspaceSubsection = Readonly<{
+  id: AdminWorkspaceSubsectionId;
+  sectionId: AdminWorkspaceSectionId;
+  label: string;
+  eyebrow: string;
+}>;
+
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
 const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。";
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
@@ -875,6 +909,56 @@ const adminWorkspaceSections: readonly AdminWorkspaceSection[] = [
   { id: "audit", label: "审计", eyebrow: "审核追踪", targetId: "admin-audit" },
   { id: "skillLoop", label: "Skill", eyebrow: "Skill 进化", targetId: "admin-skill-loop" },
 ];
+const adminWorkspaceSubsections: Record<AdminWorkspaceSectionId, readonly AdminWorkspaceSubsection[]> = {
+  system: [
+    { id: "system-models", sectionId: "system", label: "模型接入", eyebrow: "服务商" },
+    { id: "system-retrieval", sectionId: "system", label: "RAG 评测", eyebrow: "召回" },
+    { id: "system-boundary", sectionId: "system", label: "运行边界", eyebrow: "规则" },
+  ],
+  resources: [
+    { id: "resources-cases", sectionId: "resources", label: "病例台账", eyebrow: "病例" },
+    { id: "resources-rubric", sectionId: "resources", label: "Rubric", eyebrow: "评分" },
+    { id: "resources-knowledge", sectionId: "resources", label: "知识库", eyebrow: "RAG" },
+    { id: "resources-sources", sectionId: "resources", label: "来源", eyebrow: "台账" },
+    { id: "resources-import", sectionId: "resources", label: "导入", eyebrow: "JSON" },
+  ],
+  training: [
+    { id: "training-sessions", sectionId: "training", label: "Session", eyebrow: "会话" },
+    { id: "training-reports", sectionId: "training", label: "报告", eyebrow: "评分" },
+    { id: "training-logs", sectionId: "training", label: "日志", eyebrow: "事件" },
+    { id: "training-agent", sectionId: "training", label: "Agent 轨迹", eyebrow: "决策" },
+  ],
+  insights: [
+    { id: "insights-errors", sectionId: "insights", label: "错误模式", eyebrow: "漏项" },
+    { id: "insights-focus", sectionId: "insights", label: "教学重点", eyebrow: "模式" },
+    { id: "insights-sources", sectionId: "insights", label: "来源热度", eyebrow: "引用" },
+  ],
+  evaluation: [
+    { id: "evaluation-batches", sectionId: "evaluation", label: "批次", eyebrow: "运行" },
+    { id: "evaluation-cases", sectionId: "evaluation", label: "用例详情", eyebrow: "结果" },
+    { id: "evaluation-export", sectionId: "evaluation", label: "导出", eyebrow: "JSON" },
+  ],
+  audit: [
+    { id: "audit-all", sectionId: "audit", label: "全部事件", eyebrow: "日志" },
+    { id: "audit-skill", sectionId: "audit", label: "Skill 审核", eyebrow: "候选" },
+    { id: "audit-admin", sectionId: "audit", label: "管理操作", eyebrow: "动作" },
+  ],
+  skillLoop: [
+    { id: "skill-candidates", sectionId: "skillLoop", label: "候选审核", eyebrow: "候选" },
+    { id: "skill-auto-apply", sectionId: "skillLoop", label: "自动应用", eyebrow: "Agent" },
+    { id: "skill-effects", sectionId: "skillLoop", label: "效果统计", eyebrow: "样本" },
+    { id: "skill-approval-records", sectionId: "skillLoop", label: "审批记录", eyebrow: "审计" },
+  ],
+};
+const ADMIN_DEFAULT_WORKSPACE_SUBSECTION_IDS: Record<AdminWorkspaceSectionId, AdminWorkspaceSubsectionId> = {
+  system: "system-models",
+  resources: "resources-cases",
+  training: "training-sessions",
+  insights: "insights-errors",
+  evaluation: "evaluation-batches",
+  audit: "audit-all",
+  skillLoop: "skill-candidates",
+};
 const ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX = 96;
 
 class AdminApiError extends Error {
@@ -992,6 +1076,14 @@ async function loginAdminUser(email: string, password: string): Promise<AuthUser
   }
   const payload = (await response.json()) as AuthLoginResponse;
   return payload.user;
+}
+
+async function logoutAdminUser(): Promise<void> {
+  const response = await fetch("/api/auth/logout", {
+    credentials: "same-origin",
+    method: "POST",
+  });
+  await assertAdminResponseOk(response, "管理员退出登录");
 }
 
 async function getAdminCases(): Promise<readonly AdminCaseSummary[]> {
@@ -1621,6 +1713,14 @@ function getAdminWorkspaceGroupClassName(_activeSectionId: AdminWorkspaceSection
   return className;
 }
 
+function getAdminSubsectionPanelClassName(isActive: boolean, className: string): string {
+  return isActive ? className : "hidden";
+}
+
+function getAdminWorkspaceSectionLabel(sectionId: AdminWorkspaceSectionId): string {
+  return adminWorkspaceSections.find((section) => section.id === sectionId)?.label ?? "管理";
+}
+
 function AdminWorkspaceNavigator({
   activeSectionId,
   isCollapsed,
@@ -1686,6 +1786,106 @@ function AdminWorkspaceNavigator({
   );
 }
 
+function AdminWorkspaceSubnav({
+  activeSubsectionId,
+  onSubsectionSelect,
+  sectionId,
+}: Readonly<{
+  activeSubsectionId: AdminWorkspaceSubsectionId;
+  onSubsectionSelect: (sectionId: AdminWorkspaceSectionId, subsectionId: AdminWorkspaceSubsectionId) => void;
+  sectionId: AdminWorkspaceSectionId;
+}>) {
+  return (
+    <nav
+      aria-label={`${getAdminWorkspaceSectionLabel(sectionId)}二级菜单`}
+      className="admin-panel-scrollbar flex gap-2 overflow-x-auto rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-1"
+    >
+      {adminWorkspaceSubsections[sectionId].map((subsection) => {
+        const isActive = activeSubsectionId === subsection.id;
+        return (
+          <button
+            className={[
+              "min-w-fit rounded-md px-3 py-2 text-left text-sm transition whitespace-nowrap",
+              isActive
+                ? "bg-white text-[#AE5630] shadow-sm ring-1 ring-[#AE5630]/20"
+                : "text-[#6F6257] hover:bg-white hover:text-[#141413]",
+            ].join(" ")}
+            key={subsection.id}
+            onClick={() => onSubsectionSelect(sectionId, subsection.id)}
+            type="button"
+          >
+            <span className="font-semibold">{subsection.label}</span>
+            <span className="ml-2 text-[11px] text-[#8A7D6F]">{subsection.eyebrow}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function AdminAccountMenu({
+  authUser,
+  isOpen,
+  onLoginClick,
+  onLogoutClick,
+  onRefreshClick,
+  onToggle,
+}: Readonly<{
+  authUser: AuthUser | null;
+  isOpen: boolean;
+  onLoginClick: () => void;
+  onLogoutClick: () => void;
+  onRefreshClick: () => void;
+  onToggle: () => void;
+}>) {
+  return (
+    <div className="relative">
+      <button
+        aria-expanded={isOpen}
+        aria-label="管理账号菜单"
+        className="inline-flex items-center gap-2 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-semibold whitespace-nowrap text-[#141413] transition hover:border-[#AE5630]/35 hover:bg-[#FAF9F5]"
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+        {authUser ? authUser.email : "管理员登录"}
+      </button>
+      {isOpen ? (
+        <div className="absolute right-0 z-40 mt-2 w-72 rounded-lg border border-[#E6DFD2] bg-white p-2 shadow-xl">
+          <div className="rounded-md bg-[#FAF9F5] px-3 py-2">
+            <p className="text-xs font-semibold text-[#AE5630]">当前账号</p>
+            <p className="mt-1 break-all text-sm font-semibold text-[#141413]">{authUser?.email ?? "未登录"}</p>
+            <p className="mt-1 text-xs text-[#8A7D6F]">{authUser?.display_name ?? "需要登录后读取后台数据"}</p>
+          </div>
+          <div className="mt-2 grid gap-1">
+            <button
+              className="rounded-md px-3 py-2 text-left text-sm font-medium whitespace-nowrap text-[#141413] transition hover:bg-[#FAF9F5]"
+              onClick={onRefreshClick}
+              type="button"
+            >
+              刷新数据
+            </button>
+            <button
+              className="rounded-md px-3 py-2 text-left text-sm font-medium whitespace-nowrap text-[#141413] transition hover:bg-[#FAF9F5]"
+              onClick={onLoginClick}
+              type="button"
+            >
+              重新登录
+            </button>
+            <button
+              className="rounded-md border border-red-200 px-3 py-2 text-left text-sm font-semibold whitespace-nowrap text-red-700 transition hover:bg-red-50"
+              onClick={onLogoutClick}
+              type="button"
+            >
+              退出登录
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function AdminDashboardPage() {
   const [cases, setCases] = useState<readonly AdminCaseSummary[]>([]);
   const [selectedCaseRaw, setSelectedCaseRaw] = useState<AdminCaseRaw | null>(null);
@@ -1741,12 +1941,15 @@ export default function AdminDashboardPage() {
   const [sessionIdInput, setSessionIdInput] = useState("");
   const [trainingEvents, setTrainingEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [statusText, setStatusText] = useState("正在读取管理后台数据...");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [adminEmail, setAdminEmail] = useState(DEMO_ADMIN_EMAIL);
   const [adminPassword, setAdminPassword] = useState(DEMO_ADMIN_PASSWORD);
   const [adminLoginErrorText, setAdminLoginErrorText] = useState<string | null>(null);
   const [isAdminLoginDialogOpen, setIsAdminLoginDialogOpen] = useState(false);
+  const [isAdminAccountMenuOpen, setIsAdminAccountMenuOpen] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [activeAdminWorkspaceSectionId, setActiveAdminWorkspaceSectionId] = useState<AdminWorkspaceSectionId>("system");
+  const [activeAdminWorkspaceSubsectionIds, setActiveAdminWorkspaceSubsectionIds] = useState<Record<AdminWorkspaceSectionId, AdminWorkspaceSubsectionId>>(ADMIN_DEFAULT_WORKSPACE_SUBSECTION_IDS);
   const [isAdminNavigatorCollapsed, setIsAdminNavigatorCollapsed] = useState(false);
   const [retrievalEvalErrorText, setRetrievalEvalErrorText] = useState("");
 
@@ -1769,6 +1972,13 @@ export default function AdminDashboardPage() {
   const agentTurnEvents = trainingEvents.filter((event) => getAgentTurnPayload(event) !== null);
   const agentDecisionEvents = trainingEvents.filter((event) => event.event_type === "agent_decision_traced");
   const agentReflectionEvents = trainingEvents.filter((event) => event.event_type === "agent_reflection_recorded");
+  const activeSystemSubsectionId = activeAdminWorkspaceSubsectionIds.system;
+  const activeResourcesSubsectionId = activeAdminWorkspaceSubsectionIds.resources;
+  const activeTrainingSubsectionId = activeAdminWorkspaceSubsectionIds.training;
+  const activeInsightsSubsectionId = activeAdminWorkspaceSubsectionIds.insights;
+  const activeEvaluationSubsectionId = activeAdminWorkspaceSubsectionIds.evaluation;
+  const activeAuditSubsectionId = activeAdminWorkspaceSubsectionIds.audit;
+  const activeSkillSubsectionId = activeAdminWorkspaceSubsectionIds.skillLoop;
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
@@ -1907,6 +2117,10 @@ export default function AdminDashboardPage() {
 
   function handleAdminWorkspaceSectionSelect(section: AdminWorkspaceSection) {
     setActiveAdminWorkspaceSectionId(section.id);
+    setActiveAdminWorkspaceSubsectionIds((currentValue) => ({
+      ...currentValue,
+      [section.id]: currentValue[section.id] ?? ADMIN_DEFAULT_WORKSPACE_SUBSECTION_IDS[section.id],
+    }));
     const element = document.getElementById(section.targetId);
     if (!element) {
       return;
@@ -1914,6 +2128,10 @@ export default function AdminDashboardPage() {
     const targetTop = element.getBoundingClientRect().top + window.scrollY - ADMIN_WORKSPACE_SECTION_ACTIVATION_OFFSET_PX;
     window.history.replaceState(null, "", `#${section.targetId}`);
     window.scrollTo({ left: 0, top: Math.max(0, targetTop), behavior: "auto" });
+  }
+
+  function handleAdminWorkspaceSubsectionSelect(sectionId: AdminWorkspaceSectionId, subsectionId: AdminWorkspaceSubsectionId) {
+    setActiveAdminWorkspaceSubsectionIds((currentValue) => ({ ...currentValue, [sectionId]: subsectionId }));
   }
 
   async function handleAdminLogin(event: FormEvent<HTMLFormElement>) {
@@ -1928,8 +2146,10 @@ export default function AdminDashboardPage() {
     setIsLoggingIn(true);
     try {
       const user = await loginAdminUser(email, adminPassword);
+      setAuthUser(user);
       setAdminLoginErrorText(null);
       setIsAdminLoginDialogOpen(false);
+      setIsAdminAccountMenuOpen(false);
       setStatusText(`已登录管理员账号：${user.email}，正在读取管理后台数据...`);
       await loadDashboard();
       void loadRetrievalEval();
@@ -1939,6 +2159,20 @@ export default function AdminDashboardPage() {
       setStatusText(message);
     } finally {
       setIsLoggingIn(false);
+    }
+  }
+
+  async function handleAdminLogout() {
+    try {
+      await logoutAdminUser();
+      setAuthUser(null);
+      setIsAdminAccountMenuOpen(false);
+      setIsAdminLoginDialogOpen(true);
+      setStatusText("已退出管理员账号。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      setAdminLoginErrorText(message);
     }
   }
 
@@ -2490,9 +2724,10 @@ export default function AdminDashboardPage() {
     "mt-5 grid gap-4 transition-[grid-template-columns] duration-200",
     isAdminNavigatorCollapsed ? "xl:grid-cols-[76px_minmax(0,1fr)]" : "xl:grid-cols-[220px_minmax(0,1fr)]",
   ].join(" ");
-  const adminWorkspaceFrameClassName = "min-w-0 space-y-5";
-  const adminModuleShellClassName = "scroll-mt-6 rounded-[1.5rem] border border-[#E6DFD2] bg-white/60 p-4 shadow-sm";
-  const adminPanelCardClassName = "rounded-2xl border border-[#E6DFD2] bg-white/80 p-4 shadow-sm";
+  const adminWorkspaceFrameClassName = "min-w-0 space-y-4";
+  const adminModuleShellClassName = "scroll-mt-6 rounded-lg border border-[#E6DFD2] bg-white/70 p-4 shadow-sm";
+  const adminPanelCardClassName = "rounded-lg border border-[#E6DFD2] bg-white/85 p-4 shadow-sm";
+  const adminDrawerPanelClassName = "rounded-lg border border-[#E6DFD2] bg-white p-4 shadow-lg";
   const adminWidePanelCardClassName = `${adminPanelCardClassName} xl:col-span-2`;
   const adminEvidenceGridClassName = "mt-4 grid gap-5";
   const adminTrainingColumnClassName = "grid gap-5 xl:grid-cols-2";
@@ -2500,53 +2735,46 @@ export default function AdminDashboardPage() {
 
   return (
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
-      <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_20%_20%,rgba(174,86,48,0.10),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.75),rgba(250,249,245,0.35))]" />
       <div className={isAdminLoginDialogOpen ? "pointer-events-none blur-sm" : ""}>
         <div className="mx-auto max-w-[100rem]">
-        <header className="rounded-[2rem] border border-[#E6DFD2] bg-white/75 p-6 shadow-sm backdrop-blur">
-          <p className="text-xs font-medium uppercase tracking-[0.28em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
-          <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <header className="rounded-lg border border-[#E6DFD2] bg-white/85 px-4 py-3 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-3xl font-semibold tracking-tight">临境 OSCE 智能体（TraceOSCE）管理后台</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6257]">
-                教师视角查看训练 Session、评分报告、系统评测、训练日志，并审核受控进化产生的候选 Skill。
-              </p>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-[#8A7D6F]">TraceOSCE Admin</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">临境 OSCE 智能体（TraceOSCE）管理后台</h1>
             </div>
-            <div className="flex flex-col gap-2 sm:items-end">
-              <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-4 py-2 text-xs font-medium text-[#AE5630]">{statusText}</p>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <p className="max-w-xl truncate rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]">{statusText}</p>
               <button
-                className="rounded-md border border-[#AE5630] bg-white px-4 py-2 text-sm font-semibold whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
-                onClick={() => setIsAdminLoginDialogOpen(true)}
+                className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-semibold whitespace-nowrap text-[#141413] transition hover:border-[#AE5630]/35 hover:bg-[#FAF9F5]"
+                onClick={() => {
+                  setStatusText("正在刷新管理后台数据...");
+                  loadDashboard().catch((error: unknown) => setStatusText(getAdminErrorMessage(error)));
+                  void loadRetrievalEval();
+                }}
                 type="button"
               >
-                管理员登录
+                刷新
               </button>
+              <AdminAccountMenu
+                authUser={authUser}
+                isOpen={isAdminAccountMenuOpen}
+                onLoginClick={() => {
+                  setIsAdminAccountMenuOpen(false);
+                  setIsAdminLoginDialogOpen(true);
+                }}
+                onLogoutClick={() => void handleAdminLogout()}
+                onRefreshClick={() => {
+                  setIsAdminAccountMenuOpen(false);
+                  setStatusText("正在刷新管理后台数据...");
+                  loadDashboard().catch((error: unknown) => setStatusText(getAdminErrorMessage(error)));
+                  void loadRetrievalEval();
+                }}
+                onToggle={() => setIsAdminAccountMenuOpen((currentValue) => !currentValue)}
+              />
             </div>
           </div>
         </header>
-
-        <section className="mt-5 grid scroll-mt-6 gap-3 md:grid-cols-5" id="admin-overview">
-          <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
-            <p className="text-xs text-[#8A7D6F]">总览 · 训练 Session</p>
-            <p className="mt-2 text-3xl font-semibold">{sessions.length}</p>
-          </article>
-          <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
-            <p className="text-xs text-[#8A7D6F]">总览 · 错误模式</p>
-            <p className="mt-2 text-3xl font-semibold">{insights ? insights.frequent_missed_items.length : "—"}</p>
-          </article>
-          <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
-            <p className="text-xs text-[#8A7D6F]">总览 · 候选 Skill</p>
-            <p className="mt-2 text-3xl font-semibold">{candidates.length}</p>
-          </article>
-          <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
-            <p className="text-xs text-[#8A7D6F]">总览 · 系统评测</p>
-            <p className="mt-2 text-3xl font-semibold">{evaluations.length}</p>
-          </article>
-          <article className="rounded-2xl border border-[#E6DFD2] bg-white/70 p-4 shadow-sm">
-            <p className="text-xs text-[#8A7D6F]">总览 · 当前报告</p>
-            <p className="mt-2 text-3xl font-semibold">{selectedReport ? selectedReport.total_score : "—"}</p>
-          </article>
-        </section>
 
         <div className={adminWorkspaceLayoutClassName}>
           <AdminWorkspaceNavigator
@@ -2560,11 +2788,18 @@ export default function AdminDashboardPage() {
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-semibold">系统状态</h2>
-              <p className="mt-1 text-sm leading-6 text-[#6F6257]">模型接入、RAG 检索和评分边界集中核对。</p>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">模型接入、RAG 检索和评分边界。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">只读核查</p>
           </div>
-        <section className={`mt-4 ${adminPanelCardClassName}`} id="model-config">
+          <div className="mt-4">
+            <AdminWorkspaceSubnav
+              activeSubsectionId={activeSystemSubsectionId}
+              onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+              sectionId="system"
+            />
+          </div>
+        <section className={getAdminSubsectionPanelClassName(activeSystemSubsectionId === "system-models", `mt-4 ${adminPanelCardClassName}`)} id="model-config">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold">模型配置</h3>
@@ -2647,7 +2882,7 @@ export default function AdminDashboardPage() {
           )}
         </section>
 
-        <section className={`mt-5 ${adminPanelCardClassName}`}>
+        <section className={getAdminSubsectionPanelClassName(activeSystemSubsectionId === "system-retrieval", `mt-4 ${adminPanelCardClassName}`)}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold">RAG 检索评测</h3>
@@ -2720,19 +2955,44 @@ export default function AdminDashboardPage() {
             <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">RAG 检索评测正在后台读取，其他管理数据不会等待该评测完成。</p>
           )}
         </section>
+        <section className={getAdminSubsectionPanelClassName(activeSystemSubsectionId === "system-boundary", `mt-4 ${adminPanelCardClassName}`)}>
+          <h3 className="text-lg font-semibold">运行边界</h3>
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <div className={adminDrawerPanelClassName}>
+              <p className="text-sm font-semibold">RAG 使用范围</p>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">仅用于 Coach、复盘、Skill 生成/审批和知识库检索。</p>
+            </div>
+            <div className={adminDrawerPanelClassName}>
+              <p className="text-sm font-semibold">评分边界</p>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">标准评分仍由病例结构和 rubric 决定，检索结果不参与评分裁判。</p>
+            </div>
+            <div className={adminDrawerPanelClassName}>
+              <p className="text-sm font-semibold">密钥策略</p>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">管理员端展示配置状态，不回显完整密钥。</p>
+            </div>
+          </div>
+        </section>
         </section>
 
         <section className={getAdminWorkspacePanelClassName("resources", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-resources">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-xl font-semibold">病例与来源台账</h2>
-              <p className="mt-1 text-sm leading-6 text-[#6F6257]">只读核对病例、Rubric 引用、来源追踪与医学安全边界。</p>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">病例、Rubric、知识库和来源登记。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{filteredCases.length}/{cases.length} 个病例</p>
           </div>
+          <div className="mt-4">
+            <AdminWorkspaceSubnav
+              activeSubsectionId={activeResourcesSubsectionId}
+              onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+              sectionId="resources"
+            />
+          </div>
+          <div className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-cases" || activeResourcesSubsectionId === "resources-rubric", "mt-4")}>
           <input
             aria-label="筛选病例"
-            className="mt-4 w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+            className="w-full rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
             onChange={(event) => setCaseSearchText(event.target.value)}
             placeholder="筛选病例 / 主诉"
             type="search"
@@ -2930,7 +3190,8 @@ export default function AdminDashboardPage() {
               <p className="rounded-2xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个病例查看 Rubric 与来源台账。</p>
             )}
           </div>
-          <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+          </div>
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-import", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">病例 / Rubric 导入</p>
@@ -2990,7 +3251,7 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-knowledge", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">RAG 知识库</p>
@@ -3301,7 +3562,7 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-sources", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">数据来源登记表</p>
@@ -3339,13 +3600,20 @@ export default function AdminDashboardPage() {
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-semibold">训练记录</h2>
-              <p className="mt-1 text-sm leading-6 text-[#6F6257]">Session、评分报告、日志和智能体轨迹集中查看。</p>
+              <p className="mt-1 text-sm leading-6 text-[#6F6257]">Session、报告、日志和智能体轨迹。</p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">证据链</p>
           </div>
+          <div className="mt-4">
+            <AdminWorkspaceSubnav
+              activeSubsectionId={activeTrainingSubsectionId}
+              onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+              sectionId="training"
+            />
+          </div>
         <div className={adminEvidenceGridClassName}>
           <div className={adminTrainingColumnClassName} id="admin-training">
-            <section className={adminPanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-sessions", adminPanelCardClassName)}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <h3 className="text-lg font-semibold">训练 Session</h3>
@@ -3445,7 +3713,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className={adminPanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-reports", adminPanelCardClassName)}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold">评分报告</h3>
@@ -3522,7 +3790,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className={adminWidePanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-reports", adminWidePanelCardClassName)}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xl font-semibold">评分报告</h2>
                 {selectedReport ? (
@@ -3696,7 +3964,7 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className={adminWidePanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-logs", adminWidePanelCardClassName)}>
               <h2 className="text-xl font-semibold">训练日志</h2>
               <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {trainingEvents.length > 0 ? (
@@ -3705,9 +3973,10 @@ export default function AdminDashboardPage() {
                       <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                       <p className="mt-1 text-xs font-semibold text-[#141413]">事件类型：{event.event_type}</p>
                       <p className="mt-1 text-xs text-[#6F6257]">病例：{event.case_id} · 学生：{event.student_id}</p>
-                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
-                        事件内容：{JSON.stringify(event.payload, null, 2)}
-                      </pre>
+                      <details className="mt-2 rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
+                        <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words">事件内容：{JSON.stringify(event.payload, null, 2)}</pre>
+                      </details>
                     </div>
                   ))
                 ) : (
@@ -3716,7 +3985,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className={adminWidePanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-agent", adminWidePanelCardClassName)}>
               <h2 className="text-xl font-semibold">受控话轮记忆</h2>
               <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1">
                 {agentTurnEvents.length > 0 ? (
@@ -3766,7 +4035,7 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
-            <section className={adminWidePanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-agent", adminWidePanelCardClassName)}>
               <h2 className="text-xl font-semibold">智能体决策轨迹</h2>
               <div className="admin-panel-scrollbar mt-3 grid max-h-72 gap-2 overflow-y-auto pr-1">
                 {agentDecisionEvents.length > 0 ? (
@@ -3803,9 +4072,10 @@ export default function AdminDashboardPage() {
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">摘要：{formatAgentDecisionValue(reflect?.reflection_summary_id)}</p>
                           </div>
                         </div>
-                        <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
-                          {JSON.stringify(event.payload, null, 2)}
-                        </pre>
+                        <details className="mt-2 rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
+                          <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
+                          <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
+                        </details>
                       </div>
                     );
                   })
@@ -3820,9 +4090,10 @@ export default function AdminDashboardPage() {
                     <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={`agent-reflection-${event.created_at}`}>
                       <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                       <p className="mt-1 text-xs font-semibold text-[#141413]">{event.event_type}</p>
-                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
-                        {JSON.stringify(event.payload, null, 2)}
-                      </pre>
+                      <details className="mt-2 rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
+                        <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
+                      </details>
                     </div>
                   ))
                 ) : (
@@ -3837,14 +4108,21 @@ export default function AdminDashboardPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold">错误模式统计</h2>
-                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">聚合训练报告中的高频漏项、话轮模式和来源引用。</p>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">高频漏项、话轮模式和来源引用。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {insights ? `${insights.report_count} 份报告` : "待读取"}
                 </p>
               </div>
+              <div className="mt-4">
+                <AdminWorkspaceSubnav
+                  activeSubsectionId={activeInsightsSubsectionId}
+                  onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+                  sectionId="insights"
+                />
+              </div>
               {insights ? (
-                <div className="admin-panel-scrollbar mt-4 grid max-h-[36rem] gap-4 overflow-y-auto pr-1">
+                <div className={getAdminSubsectionPanelClassName(activeInsightsSubsectionId === "insights-errors" || activeInsightsSubsectionId === "insights-sources", "admin-panel-scrollbar mt-4 grid max-h-[36rem] gap-4 overflow-y-auto pr-1")}>
                   <div>
                     <h3 className="text-sm font-semibold">常见漏项</h3>
                     <div className="mt-2 grid gap-2">
@@ -3930,7 +4208,7 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
-            <section className={adminPanelCardClassName}>
+            <section className={getAdminSubsectionPanelClassName(activeInsightsSubsectionId === "insights-focus", adminPanelCardClassName)}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold">教学重点</h2>
@@ -3993,7 +4271,14 @@ export default function AdminDashboardPage() {
                   {isRunningEvaluation ? "运行中" : "运行系统评测"}
                 </button>
               </div>
-              <article className="mt-4 rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+              <div className="mt-4">
+                <AdminWorkspaceSubnav
+                  activeSubsectionId={activeEvaluationSubsectionId}
+                  onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+                  sectionId="evaluation"
+                />
+              </div>
+              <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-batches", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold">系统评测</h3>
@@ -4106,7 +4391,7 @@ export default function AdminDashboardPage() {
                 )}
               </div>
               {selectedEvaluation ? (
-                <article className="mt-4 rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+                <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-cases" || activeEvaluationSubsectionId === "evaluation-export", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-[#AE5630]">{getPassLabel(selectedEvaluation.passed)}</p>
@@ -4158,11 +4443,18 @@ export default function AdminDashboardPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold">审核审计</h2>
-                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">按时间线查看候选 Skill、自动审批和管理员操作记录。</p>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">候选 Skill、自动审批和管理员操作记录。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {formatAdminPaginationRange(auditPagination, auditEvents.length)} 条事件
                 </p>
+              </div>
+              <div className="mt-4">
+                <AdminWorkspaceSubnav
+                  activeSubsectionId={activeAuditSubsectionId}
+                  onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+                  sectionId="audit"
+                />
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <input
@@ -4218,9 +4510,10 @@ export default function AdminDashboardPage() {
                         <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                       </div>
                       <p className="mt-2 text-xs text-[#6F6257]">候选：{event.session_id} · 审核人：{event.student_id}</p>
-                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
-                        {JSON.stringify(event.payload, null, 2)}
-                      </pre>
+                      <details className="mt-2 rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
+                        <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
+                      </details>
                     </article>
                   ))
                 ) : (
@@ -4232,15 +4525,23 @@ export default function AdminDashboardPage() {
             <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-skill-loop">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-xl font-semibold">Skill 效果统计</h2>
-                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">展示启用 Skill 后的应用次数、样本状态和描述性效果。</p>
+                  <h2 className="text-xl font-semibold">Skill 工作台</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">候选审核、自动应用、效果统计和审批记录。</p>
                 </div>
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
                   {skillEffects?.label ?? "待读取"}
                 </p>
               </div>
+              <div className="mt-4">
+                <AdminWorkspaceSubnav
+                  activeSubsectionId={activeSkillSubsectionId}
+                  onSubsectionSelect={handleAdminWorkspaceSubsectionSelect}
+                  sectionId="skillLoop"
+                />
+              </div>
               {skillEffects ? (
-                <div className="mt-4 grid gap-3">
+                <div className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-effects", "mt-4 grid gap-3")}>
+                  <h3 className="text-lg font-semibold">Skill 效果统计</h3>
                   {skillEffects.status === "insufficient_samples" ? (
                     <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm leading-6 text-[#6F6257]">
                       样本不足：使用 Skill 与未使用 Skill 的训练报告各至少需要 {skillEffects.min_sessions_per_group} 份，当前只展示描述性计数，不计算提升。
@@ -4266,11 +4567,11 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
               ) : (
-                <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 Skill 效果统计。</p>
+                <p className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-effects", "mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]")}>正在读取 Skill 效果统计。</p>
               )}
             </section>
 
-            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, adminPanelCardClassName)}>
+            <section className={getAdminWorkspacePanelClassName("skillLoop", activeAdminWorkspaceSectionId, getAdminSubsectionPanelClassName(activeSkillSubsectionId !== "skill-effects", adminPanelCardClassName))}>
               <div className="flex items-start justify-between gap-3">
                 <h2 className="text-xl font-semibold">候选 Skill 审核</h2>
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -4606,9 +4907,10 @@ export default function AdminDashboardPage() {
                                 <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                               </div>
                               <p className="mt-1 text-xs text-[#6F6257]">审核人：{event.student_id} · 触发项：{event.case_id}</p>
-                              <pre className="mt-2 whitespace-pre-wrap rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
-                                {JSON.stringify(event.payload, null, 2)}
-                              </pre>
+                              <details className="mt-2 rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
+                                <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
+                                <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
+                              </details>
                             </div>
                           ))
                         ) : (

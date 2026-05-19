@@ -101,7 +101,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/approve"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/evolution\/reject"/);
   assert.match(adminPageSource, /临境 OSCE 智能体（TraceOSCE）管理后台/);
-  assert.match(adminPageSource, /总览/);
+  assert.doesNotMatch(adminPageSource, /id="admin-overview"/);
   assert.match(adminPageSource, /训练 Session/);
   assert.match(adminPageSource, /评分报告/);
   assert.match(adminPageSource, /跨 Session 报告列表/);
@@ -230,18 +230,24 @@ test("admin dashboard reads management data and exposes review actions", () => {
 
 test("admin dashboard organizes the long workspace with a report-style side navigator", () => {
   assert.match(adminPageSource, /type AdminWorkspaceSectionId =/);
+  assert.match(adminPageSource, /type AdminWorkspaceSubsectionId =/);
   assert.match(adminPageSource, /const adminWorkspaceSections: readonly AdminWorkspaceSection\[] =/);
+  assert.match(adminPageSource, /const adminWorkspaceSubsections:/);
+  assert.match(adminPageSource, /const ADMIN_DEFAULT_WORKSPACE_SUBSECTION_IDS:/);
   assert.match(adminPageSource, /function getAdminWorkspacePanelClassName/);
   assert.match(adminPageSource, /function getAdminWorkspaceGroupClassName/);
   assert.match(adminPageSource, /function AdminWorkspaceNavigator/);
+  assert.match(adminPageSource, /function AdminWorkspaceSubnav/);
   assert.match(adminPageSource, /id="admin-workspace-frame"/);
   assert.match(adminPageSource, /const adminWorkspaceLayoutClassName = \[/);
-  assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-5"/);
+  assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-4"/);
   assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5"/);
   assert.match(adminPageSource, /const adminWidePanelCardClassName = `\$\{adminPanelCardClassName\} xl:col-span-2`/);
+  assert.doesNotMatch(adminPageSource, /id="admin-overview"/);
   assert.doesNotMatch(adminPageSource, /label: "总览"/);
   assert.doesNotMatch(adminPageSource, /function AdminWorkspaceInspector/);
   assert.match(adminPageSource, /const \[isAdminNavigatorCollapsed, setIsAdminNavigatorCollapsed\]/);
+  assert.match(adminPageSource, /const \[activeAdminWorkspaceSubsectionIds, setActiveAdminWorkspaceSubsectionIds\]/);
   assert.match(adminPageSource, /isAdminNavigatorCollapsed \? "xl:grid-cols-\[76px_minmax\(0,1fr\)\]" : "xl:grid-cols-\[220px_minmax\(0,1fr\)\]"/);
   assert.match(adminPageSource, /<aside className="xl:sticky xl:top-4 xl:self-start">/);
   assert.match(adminPageSource, /xl:sticky xl:top-4/);
@@ -280,10 +286,23 @@ test("admin dashboard organizes the long workspace with a report-style side navi
   assert.ok(adminPageSource.indexOf('targetId: "admin-audit"') < adminPageSource.indexOf('targetId: "admin-skill-loop"'));
   assert.match(adminPageSource, /const activeSectionCandidates: AdminWorkspaceSection\[] = \[]/);
   assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
-  assert.match(adminPageSource, /教学资源/);
-  assert.match(adminPageSource, /训练证据/);
-  assert.match(adminPageSource, /质量评测/);
-  assert.match(adminPageSource, /Skill 进化/);
+  for (const subsection of [
+    "模型接入",
+    "RAG 评测",
+    "病例台账",
+    "Rubric",
+    "知识库",
+    "Session",
+    "报告",
+    "Agent 轨迹",
+    "错误模式",
+    "批次",
+    "候选审核",
+    "自动应用",
+    "全部事件",
+  ]) {
+    assert.match(adminPageSource, new RegExp(`label: "${subsection}"`));
+  }
 });
 
 test("admin side navigator keeps clicked modules selected instead of drifting to the next module", () => {
@@ -346,12 +365,14 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
 
   assert.match(adminPageSource, /const adminModuleShellClassName =/);
   assert.match(adminPageSource, /const adminPanelCardClassName =/);
+  assert.match(adminPageSource, /const adminDrawerPanelClassName =/);
   assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5";/);
   assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName = .*xl:grid-cols/);
   assert.match(adminPageSource, /max-h-\[28rem\]/);
   assert.match(adminPageSource, /<details className="mt-3 rounded-xl/);
   assert.match(adminPageSource, />查看连接与索引细节</);
   assert.match(adminPageSource, />查看检索使用边界</);
+  assert.match(adminPageSource, /展开原始数据/);
 });
 
 test("admin action buttons keep Chinese labels on one line", () => {
@@ -393,14 +414,19 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /type AuthUser = Readonly<\{/);
   assert.match(adminPageSource, /type AuthLoginResponse = Readonly<\{/);
   assert.match(adminPageSource, /async function loginAdminUser\(email: string, password: string\): Promise<AuthUser>/);
+  assert.match(adminPageSource, /async function logoutAdminUser\(\): Promise<void>/);
   assert.match(adminPageSource, /fetch\("\/api\/auth\/login"/);
+  assert.match(adminPageSource, /fetch\("\/api\/auth\/logout"/);
   assert.match(adminPageSource, /credentials: "same-origin"/);
   assert.match(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin-demo@example.test"/);
   assert.match(adminPageSource, /const DEMO_ADMIN_PASSWORD = "safe-admin-password"/);
   assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\(DEMO_ADMIN_EMAIL\)/);
   assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(DEMO_ADMIN_PASSWORD\)/);
   assert.match(adminPageSource, /const \[isAdminLoginDialogOpen, setIsAdminLoginDialogOpen\] = useState\(false\)/);
+  assert.match(adminPageSource, /const \[isAdminAccountMenuOpen, setIsAdminAccountMenuOpen\] = useState\(false\)/);
   assert.match(adminPageSource, /async function handleAdminLogin\(event: FormEvent<HTMLFormElement>\)/);
+  assert.match(adminPageSource, /async function handleAdminLogout\(\)/);
+  assert.match(adminPageSource, /function AdminAccountMenu/);
   assert.match(adminPageSource, /setIsAdminLoginDialogOpen\(true\)/);
   assert.match(adminPageSource, /setIsAdminLoginDialogOpen\(false\)/);
   assert.match(adminPageSource, /<div className=\{isAdminLoginDialogOpen \? "pointer-events-none blur-sm" : ""\}>/);
@@ -409,6 +435,9 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /backdrop-blur/);
   assert.match(adminPageSource, /onSubmit=\{\(event\) => void handleAdminLogin\(event\)\}/);
   assert.match(adminPageSource, /管理员登录/);
+  assert.match(adminPageSource, /管理账号菜单/);
+  assert.match(adminPageSource, /当前账号/);
+  assert.match(adminPageSource, /退出登录/);
   assert.match(adminPageSource, /id="admin-email-input"/);
   assert.match(adminPageSource, /id="admin-password-input"/);
   assert.match(adminPageSource, /type="password"/);
