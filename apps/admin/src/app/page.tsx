@@ -1838,16 +1838,16 @@ function AdminAccountMenu({
     <div className="relative">
       <button
         aria-expanded={isOpen}
-        aria-label="管理账号菜单"
+        aria-label="管理员账号中心"
         className="inline-flex items-center gap-2 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-semibold whitespace-nowrap text-[#141413] transition hover:border-[#AE5630]/35 hover:bg-[#FAF9F5]"
         onClick={onToggle}
         type="button"
       >
         <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
-        {authUser ? authUser.email : "管理员登录"}
+        <span>账号中心</span>
       </button>
       {isOpen ? (
-        <div className="absolute right-0 z-40 mt-2 w-72 rounded-[24px] border border-[#E6DFD2] bg-white p-2 shadow-xl">
+        <div className="absolute right-0 z-[80] mt-2 w-72 rounded-[24px] border border-[#E6DFD2] bg-white p-2 shadow-xl">
           <div className="rounded-md bg-[#FAF9F5] px-3 py-2">
             <p className="text-xs font-semibold text-[#AE5630]">当前账号</p>
             <p className="mt-1 break-all text-sm font-semibold text-[#141413]">{authUser?.email ?? "未登录"}</p>
@@ -2735,7 +2735,7 @@ export default function AdminDashboardPage() {
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
       <div className={isAdminLoginDialogOpen ? "pointer-events-none blur-sm" : ""}>
         <div className="mx-auto max-w-[100rem]">
-        <header className="rounded-[28px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_18px_50px_rgb(73_49_34_/_0.10)] backdrop-blur-xl">
+        <header className="relative z-30 rounded-[28px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_18px_50px_rgb(73_49_34_/_0.10)] backdrop-blur-xl">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-[#8A7D6F]">TraceOSCE Admin</p>

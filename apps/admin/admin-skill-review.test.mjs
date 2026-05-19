@@ -410,7 +410,7 @@ test("admin workspace keeps module cards with navigator-like radius and fills se
 
 test("admin action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("admin dashboard", adminPageSource, [
-    "管理员登录",
+    "账号中心",
     "从训练日志生成候选 Skill",
     "批准并启用",
     "拒绝候选",
@@ -468,7 +468,7 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /backdrop-blur/);
   assert.match(adminPageSource, /onSubmit=\{\(event\) => void handleAdminLogin\(event\)\}/);
   assert.match(adminPageSource, /管理员登录/);
-  assert.match(adminPageSource, /管理账号菜单/);
+  assert.match(adminPageSource, /管理员账号中心/);
   assert.match(adminPageSource, /当前账号/);
   assert.match(adminPageSource, /退出登录/);
   assert.match(adminPageSource, /id="admin-email-input"/);
@@ -476,6 +476,14 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /type="password"/);
   assert.match(adminPageSource, /演示账号已预填/);
   assert.match(adminPageSource, /await loadDashboard\(\)/);
+});
+
+test("admin account menu is a visible account center instead of a hidden login button", () => {
+  assert.match(adminPageSource, /aria-label="管理员账号中心"/);
+  assert.match(adminPageSource, />账号中心</);
+  assert.doesNotMatch(adminPageSource, /\{authUser \? authUser\.email : "管理员登录"\}/);
+  assert.match(adminPageSource, /<header className="relative z-30 rounded-\[28px\]/);
+  assert.match(adminPageSource, /<div className="absolute right-0 z-\[80\] mt-2 w-72/);
 });
 
 test("admin dashboard shows a read-only case rubric and source ledger", () => {
