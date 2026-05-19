@@ -1709,10 +1709,6 @@ function getAdminWorkspacePanelClassName(_panelId: AdminWorkspaceSectionId, _act
   return className;
 }
 
-function getAdminWorkspaceGroupClassName(_activeSectionId: AdminWorkspaceSectionId, className: string): string {
-  return className;
-}
-
 function getAdminSubsectionPanelClassName(isActive: boolean, className: string): string {
   return isActive ? className : "hidden";
 }
@@ -2731,11 +2727,9 @@ export default function AdminDashboardPage() {
   const adminPanelCardClassName = "rounded-[24px] border border-[#E6DFD2] bg-white/85 p-4 shadow-sm";
   const adminDrawerPanelClassName = "rounded-[24px] border border-[#E6DFD2] bg-white p-4 shadow-lg";
   const adminWidePanelCardClassName = `${adminPanelCardClassName} xl:col-span-2`;
-  const adminEvidenceGridClassName = "mt-4 grid gap-5";
   const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"
     ? "grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"
     : "grid gap-5 xl:grid-cols-2";
-  const adminDecisionColumnClassName = "grid gap-5";
 
   return (
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
@@ -3607,7 +3601,7 @@ export default function AdminDashboardPage() {
           </section>
         </section>
 
-        <section className={getAdminWorkspaceGroupClassName(activeAdminWorkspaceSectionId, adminModuleShellClassName)}>
+        <section className={getAdminWorkspacePanelClassName("training", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-training">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-semibold">训练记录</h2>
@@ -3622,8 +3616,7 @@ export default function AdminDashboardPage() {
               sectionId="training"
             />
           </div>
-        <div className={adminEvidenceGridClassName}>
-          <div className={adminTrainingColumnClassName} id="admin-training">
+          <div className={adminTrainingColumnClassName}>
             <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-sessions", adminPanelCardClassName)}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
@@ -4162,8 +4155,8 @@ export default function AdminDashboardPage() {
               </div>
             </section>
           </div>
+        </section>
 
-          <div className={adminDecisionColumnClassName}>
             <section className={getAdminWorkspacePanelClassName("insights", activeAdminWorkspaceSectionId, adminModuleShellClassName)} id="admin-insights">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -5033,9 +5026,6 @@ export default function AdminDashboardPage() {
                 )}
               </div>
             </section>
-          </div>
-        </div>
-        </section>
           </div>
         </div>
         </div>

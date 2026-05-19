@@ -235,14 +235,15 @@ test("admin dashboard organizes the long workspace with a report-style side navi
   assert.match(adminPageSource, /const adminWorkspaceSubsections:/);
   assert.match(adminPageSource, /const ADMIN_DEFAULT_WORKSPACE_SUBSECTION_IDS:/);
   assert.match(adminPageSource, /function getAdminWorkspacePanelClassName/);
-  assert.match(adminPageSource, /function getAdminWorkspaceGroupClassName/);
+  assert.doesNotMatch(adminPageSource, /function getAdminWorkspaceGroupClassName/);
   assert.match(adminPageSource, /function AdminWorkspaceNavigator/);
   assert.match(adminPageSource, /function AdminWorkspaceSubnav/);
   assert.match(adminPageSource, /id="admin-workspace-frame"/);
   assert.match(adminPageSource, /const adminWorkspaceLayoutClassName = \[/);
   assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-4"/);
-  assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5"/);
+  assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName =/);
   assert.match(adminPageSource, /const adminWidePanelCardClassName = `\$\{adminPanelCardClassName\} xl:col-span-2`/);
+  assert.doesNotMatch(adminPageSource, /<section className=\{getAdminWorkspaceGroupClassName\(activeAdminWorkspaceSectionId, adminModuleShellClassName\)\}>/);
   assert.doesNotMatch(adminPageSource, /id="admin-overview"/);
   assert.doesNotMatch(adminPageSource, /label: "总览"/);
   assert.doesNotMatch(adminPageSource, /function AdminWorkspaceInspector/);
@@ -314,7 +315,9 @@ test("admin side navigator keeps clicked modules selected instead of drifting to
   assert.match(adminPageSource, /window\.scrollTo\(\{ left: 0, top: Math\.max\(0, targetTop\), behavior: "auto" \}\);/);
   assert.match(adminPageSource, /event\.preventDefault\(\);\s+onSectionSelect\(section\);/s);
   assert.doesNotMatch(adminPageSource, /<section className=\{getAdminWorkspaceGroupClassName\(activeAdminWorkspaceSectionId, adminModuleShellClassName\)\} id="admin-training">/);
-  assert.match(adminPageSource, /<div className=\{adminTrainingColumnClassName\} id="admin-training">/);
+  assert.doesNotMatch(adminPageSource, /<div className=\{adminTrainingColumnClassName\} id="admin-training">/);
+  assert.match(adminPageSource, /<section className=\{getAdminWorkspacePanelClassName\("training", activeAdminWorkspaceSectionId, adminModuleShellClassName\)\} id="admin-training">/);
+  assert.match(adminPageSource, /<div className=\{adminTrainingColumnClassName\}>/);
   assert.match(adminPageSource, /const activeSectionCandidates: AdminWorkspaceSection\[] = \[]/);
   assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
 });
@@ -366,8 +369,7 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
   assert.match(adminPageSource, /const adminModuleShellClassName =/);
   assert.match(adminPageSource, /const adminPanelCardClassName =/);
   assert.match(adminPageSource, /const adminDrawerPanelClassName =/);
-  assert.match(adminPageSource, /const adminEvidenceGridClassName = "mt-4 grid gap-5";/);
-  assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName = .*xl:grid-cols/);
+  assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName =/);
   assert.match(adminPageSource, /max-h-\[28rem\]/);
   assert.match(adminPageSource, /<details className="mt-3 rounded-xl/);
   assert.match(adminPageSource, />查看连接与索引细节</);
@@ -398,6 +400,7 @@ test("admin workspace keeps module cards with navigator-like radius and fills se
   assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6 rounded-\[28px\] border border-white\/70 bg-white\/75 p-4 shadow-\[0_18px_50px_rgb\(73_49_34_\/_0\.10\)\] backdrop-blur-xl";/);
   assert.match(adminPageSource, /const adminPanelCardClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white\/85 p-4 shadow-sm";/);
   assert.match(adminPageSource, /const adminDrawerPanelClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white p-4 shadow-lg";/);
+  assert.match(adminPageSource, /<section className=\{getAdminWorkspacePanelClassName\("training", activeAdminWorkspaceSectionId, adminModuleShellClassName\)\} id="admin-training">/);
   assert.match(adminPageSource, /const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"/);
   assert.match(adminPageSource, /const selectedSessionSummary = sessions\.find/);
   assert.match(adminPageSource, />Session 详情</);
