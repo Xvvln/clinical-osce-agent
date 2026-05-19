@@ -14,6 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.osce_graph import build_osce_graph
 from app.services import retrieval_index, source_retriever
+from app.services.admin_display_resolver import (
+    enrich_rag_document,
+    enrich_rag_knowledge_item,
+    enrich_report,
+    enrich_session_summary,
+)
 from app.services.auth_store import auth_store
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
@@ -1414,11 +1420,14 @@ def list_admin_rag_knowledge_items(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return {
-        "knowledge_items": rag_knowledge_store.list_items(
-            scope=scope.strip(),
-            case_id=case_id.strip(),
-            visibility=visibility.strip(),
-        )
+        "knowledge_items": [
+            enrich_rag_knowledge_item(item)
+            for item in rag_knowledge_store.list_items(
+                scope=scope.strip(),
+                case_id=case_id.strip(),
+                visibility=visibility.strip(),
+            )
+        ]
     }
 
 
@@ -1432,7 +1441,12 @@ def list_admin_rag_documents(
     normalized_scope = scope.strip()
     if normalized_scope and normalized_scope not in {"global", "case"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported document scope")
-    return {"documents": rag_knowledge_store.list_documents(scope=normalized_scope, case_id=case_id.strip())}
+    return {
+        "documents": [
+            enrich_rag_document(document)
+            for document in rag_knowledge_store.list_documents(scope=normalized_scope, case_id=case_id.strip())
+        ]
+    }
 
 
 @app.post("/api/admin/rag/documents")
@@ -1452,7 +1466,10 @@ def upload_admin_rag_document(
     document = next((item for item in documents if item["document_id"] == document_id), None)
     if document is None:
         raise HTTPException(status_code=500, detail="rag document was not persisted")
-    return {"document": document, "knowledge_items": saved_items}
+    return {
+        "document": enrich_rag_document(document),
+        "knowledge_items": [enrich_rag_knowledge_item(item) for item in saved_items],
+    }
 
 
 @app.patch("/api/admin/rag/documents/{document_id:path}/enabled")
@@ -1470,7 +1487,7 @@ def set_admin_rag_document_enabled(
     if document is None:
         raise HTTPException(status_code=404, detail="rag document not found")
     _clear_retrieval_documents_cache()
-    return {"document": document}
+    return {"document": enrich_rag_document(document)}
 
 
 @app.post("/api/admin/rag/knowledge")
@@ -1482,7 +1499,7 @@ def upsert_admin_rag_knowledge_item(
     item = _build_admin_rag_knowledge_item(request)
     saved_item = rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
     _clear_retrieval_documents_cache()
-    return {"knowledge_item": saved_item}
+    return {"knowledge_item": enrich_rag_knowledge_item(saved_item)}
 
 
 @app.get("/api/admin/rag/knowledge/{knowledge_id:path}")
@@ -1494,7 +1511,7 @@ def get_admin_rag_knowledge_item(
     item = rag_knowledge_store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(status_code=404, detail="knowledge item not found")
-    return {"knowledge_item": item}
+    return {"knowledge_item": enrich_rag_knowledge_item(item)}
 
 
 @app.delete("/api/admin/rag/knowledge/{knowledge_id:path}")
@@ -1811,7 +1828,7 @@ def list_admin_reports(
     _require_admin_user(auth_token)
     return _build_paginated_admin_payload(
         "reports",
-        osce_session_service.report_store.list_reports(),
+        [enrich_report(report) for report in osce_session_service.report_store.list_reports()],
         limit,
         offset,
         q,
@@ -1828,7 +1845,7 @@ def list_admin_sessions(
     _require_admin_user(auth_token)
     return _build_paginated_admin_payload(
         "sessions",
-        osce_session_service.session_store.list_session_summaries(),
+        [enrich_session_summary(session) for session in osce_session_service.session_store.list_session_summaries()],
         limit,
         offset,
         q,
@@ -1844,7 +1861,7 @@ def get_admin_session_report(
     report = osce_session_service.report_store.get_report(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
-    return {"report": report}
+    return {"report": enrich_report(report)}
 
 
 @app.get("/api/admin/sessions/{session_id}/events")

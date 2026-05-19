@@ -344,6 +344,8 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
     created_item = create_response.json()["knowledge_item"]
     assert created_item == {
         **payload,
+        "case_title": "右下腹痛教学病例",
+        "source_title": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
         "updated_by": "admin@example.test",
         "updated_at": created_item["updated_at"],
     }
@@ -424,9 +426,11 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
         assert upload_response.status_code == 200
         uploaded_document = upload_response.json()["document"]
         assert uploaded_document["case_id"] == "appendicitis_001"
+        assert uploaded_document["case_title"] == "右下腹痛教学病例"
         assert uploaded_document["file_name"] == "appendicitis_teaching.md"
         assert uploaded_document["chunk_count"] >= 2
         assert uploaded_document["enabled"] is True
+        assert uploaded_document["source_title"] == "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases"
 
         assert documents_response.status_code == 200
         assert documents_response.json()["documents"] == [uploaded_document]
@@ -545,8 +549,10 @@ def test_admin_can_upload_global_rag_document_and_scope_document_listing(tmp_pat
     case_document = case_response.json()["document"]
     assert global_document["scope"] == "global"
     assert global_document["case_id"] == ""
+    assert global_document["case_title"] == "全局知识库"
     assert case_document["scope"] == "case"
     assert case_document["case_id"] == "appendicitis_001"
+    assert case_document["case_title"] == "右下腹痛教学病例"
 
     assert global_documents_response.status_code == 200
     assert [document["document_id"] for document in global_documents_response.json()["documents"]] == [
@@ -1423,7 +1429,9 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
     assert [session["session_id"] for session in payload["sessions"]] == ["session_admin_recent", "session_admin_old"]
     assert payload["sessions"][0]["student_id"] == "student_b"
     assert payload["sessions"][0]["case_id"] == "hyperthyroid_001"
+    assert payload["sessions"][0]["case_title"] == "心慌、手抖与消瘦教学病例"
     assert payload["sessions"][0]["stage"] == "diagnosis_submitted"
+    assert payload["sessions"][0]["stage_label"] == "诊断已提交"
     assert isinstance(payload["sessions"][0]["created_at"], str)
     assert isinstance(payload["sessions"][0]["updated_at"], str)
     assert payload["pagination"] == {"limit": 2, "offset": 0, "total": 2}
@@ -1641,8 +1649,20 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             "session_count": 2,
             "report_count": 2,
             "frequent_missed_items": [
-                {"item_id": "reasoning_core", "count": 2, "case_ids": ["appendicitis_001", "pneumonia_001"]},
-                {"item_id": "ht_location", "count": 1, "case_ids": ["appendicitis_001"]},
+                {
+                    "item_id": "reasoning_core",
+                    "item_label": "推理链覆盖感染症状、体征和影像证据",
+                    "count": 2,
+                    "case_ids": ["appendicitis_001", "pneumonia_001"],
+                    "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
+                },
+                {
+                    "item_id": "ht_location",
+                    "item_label": "ht_location",
+                    "count": 1,
+                    "case_ids": ["appendicitis_001"],
+                    "case_titles": ["右下腹痛教学病例"],
+                },
             ],
             "frequent_learning_recommendations": [
                 {
@@ -1663,6 +1683,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "title": "Fareez OSCE 数据集",
                     "count": 2,
                     "case_ids": ["appendicitis_001", "pneumonia_001"],
+                    "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
                     "metadata": {"license": "CC BY 4.0"},
                 }
             ],
@@ -1836,8 +1857,22 @@ def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> Non
     assert response.status_code == 200
     assert response.json() == {
         "evaluations": [
-            {"batch_id": "batch_smoke", "total_cases": 2, "passed_cases": 2, "failed_cases": 0, "passed": True},
-            {"batch_id": "batch_regression", "total_cases": 3, "passed_cases": 2, "failed_cases": 1, "passed": False},
+            {
+                "batch_id": "batch_smoke",
+                "batch_label": "冒烟评测批次",
+                "total_cases": 2,
+                "passed_cases": 2,
+                "failed_cases": 0,
+                "passed": True,
+            },
+            {
+                "batch_id": "batch_regression",
+                "batch_label": "回归评测批次",
+                "total_cases": 3,
+                "passed_cases": 2,
+                "failed_cases": 1,
+                "passed": False,
+            },
         ],
         "pagination": {"limit": 2, "offset": 0, "total": 2},
     }
@@ -1902,6 +1937,7 @@ def test_admin_can_read_evaluation_batch_detail(tmp_path, monkeypatch) -> None:
     assert response.json() == {
         "evaluation": {
             "batch_id": "batch_regression",
+            "batch_label": "回归评测批次",
             "total_cases": 1,
             "passed_cases": 0,
             "failed_cases": 1,
@@ -2031,9 +2067,10 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post("/api/admin/evals/run", json={"batch_id": "batch_admin_manual"})
 
-    expected_evaluation = {
-        "batch_id": "batch_admin_manual",
-        "total_cases": 1,
+        expected_evaluation = {
+            "batch_id": "batch_admin_manual",
+            "batch_label": "系统评测批次",
+            "total_cases": 1,
         "passed_cases": 1,
         "failed_cases": 0,
         "results": [
@@ -2468,7 +2505,18 @@ def test_admin_can_list_session_reports(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "reports": [second_report, first_report],
+        "reports": [
+            {
+                **second_report,
+                "case_title": "appendicitis_002",
+                "missed_item_labels": [],
+            },
+            {
+                **first_report,
+                "case_title": "右下腹痛教学病例",
+                "missed_item_labels": ["reasoning_core"],
+            },
+        ],
         "pagination": {"limit": 2, "offset": 0, "total": 2},
     }
 
@@ -2507,7 +2555,13 @@ def test_admin_can_paginate_session_reports(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "reports": [first_report],
+        "reports": [
+            {
+                **first_report,
+                "case_title": "右下腹痛教学病例",
+                "missed_item_labels": ["reasoning_core"],
+            }
+        ],
         "pagination": {"limit": 1, "offset": 1, "total": 2},
     }
 
@@ -2546,7 +2600,13 @@ def test_admin_can_filter_session_reports(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "reports": [second_report],
+        "reports": [
+            {
+                **second_report,
+                "case_title": "appendicitis_002",
+                "missed_item_labels": [],
+            }
+        ],
         "pagination": {"limit": 5, "offset": 0, "total": 1},
     }
 
@@ -2579,10 +2639,12 @@ def test_admin_can_read_session_report(tmp_path, monkeypatch) -> None:
             "report_id": "report_session_admin_report",
             "session_id": "session_admin_report",
             "case_id": "appendicitis_001",
+            "case_title": "右下腹痛教学病例",
             "student_id": "student_admin_report",
             "total_score": 82,
             "dimension_scores": {"history_taking": 18, "reasoning": 14},
             "missed_items": ["reasoning_core"],
+            "missed_item_labels": ["reasoning_core"],
             "knowledge_recommendations": [
                 {"title": "补充鉴别诊断证据链", "reference": "rubric:appendicitis_001_rubric.item.reasoning_core"}
             ],

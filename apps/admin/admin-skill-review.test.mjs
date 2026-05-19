@@ -36,18 +36,26 @@ function assertInteractiveLabelsDoNotWrap(sourceName, source, labels) {
 test("admin dashboard reads management data and exposes review actions", () => {
   assert.ok(existsSync(adminPageUrl), "admin dashboard page should exist");
   assert.match(adminPageSource, /type AdminSessionSummary = Readonly<\{/);
+  assert.match(adminPageSource, /case_title\?: string;/);
+  assert.match(adminPageSource, /stage_label\?: string;/);
   assert.match(adminPageSource, /type AdminSessionReport = Readonly<\{/);
+  assert.match(adminPageSource, /missed_item_labels\?: readonly string\[];/);
   assert.match(adminPageSource, /type AdminExplanationSourceItem = Readonly<\{/);
   assert.match(adminPageSource, /explanation_source_items\?: readonly AdminExplanationSourceItem\[];/);
   assert.match(adminPageSource, /type AdminEvidenceGraphSummary = Readonly<\{/);
   assert.match(adminPageSource, /evidence_graph_summary\?: AdminEvidenceGraphSummary \| null;/);
   assert.match(adminPageSource, /type AdminReportsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type EvaluationBatchSummary = Readonly<\{/);
+  assert.match(adminPageSource, /batch_label\?: string;/);
   assert.match(adminPageSource, /type EvaluationBatchDetail = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTrainingInsights = Readonly<\{/);
   assert.match(adminPageSource, /type FrequentMissedItem = Readonly<\{/);
+  assert.match(adminPageSource, /item_label\?: string;/);
+  assert.match(adminPageSource, /case_titles\?: readonly string\[];/);
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
   assert.match(adminPageSource, /type FrequentTurnPattern = Readonly<\{/);
+  assert.match(adminPageSource, /pattern_type_label\?: string;/);
+  assert.match(adminPageSource, /trigger_item_labels\?: readonly string\[];/);
   assert.match(adminPageSource, /frequent_turn_patterns: readonly FrequentTurnPattern\[];/);
   assert.match(adminPageSource, /type TrainingSkillCandidateSummary = Readonly<\{/);
   assert.match(adminPageSource, /type TrainingSkillCandidateDetail = Readonly<\{/);
@@ -439,6 +447,32 @@ test("admin workspace keeps module cards with navigator-like radius and fills se
   assert.match(adminPageSource, /max-h-\[44rem\]/);
 });
 
+test("admin dashboard renders readable display labels before technical ids", () => {
+  for (const displayField of [
+    "session.case_title",
+    "selectedSessionSummary.case_title",
+    "selectedSessionSummary.stage_label",
+    "report.case_title",
+    "selectedReport.case_title",
+    "selectedReport.missed_item_labels",
+    "item.item_label",
+    "item.case_titles",
+    "pattern.pattern_type_label",
+    "pattern.trigger_item_labels",
+    "sourceReference.case_titles",
+    "evaluation.batch_label",
+    "selectedEvaluation.batch_label",
+    "document.case_title",
+    "document.source_title",
+    "item.case_title",
+    "item.source_title",
+  ]) {
+    assert.match(adminPageSource, new RegExp(displayField.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(adminPageSource, /技术 ID/);
+  assert.match(adminPageSource, /原始 ID/);
+});
+
 test("admin action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("admin dashboard", adminPageSource, [
     "账号中心",
@@ -530,6 +564,7 @@ test("admin dashboard shows a read-only case rubric and source ledger", () => {
   assert.match(adminPageSource, /type AdminSourcesResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagKnowledgeItem = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagDocumentSummary = Readonly<\{/);
+  assert.match(adminPageSource, /source_title\?: string;/);
   assert.match(adminPageSource, /type AdminRagDocumentsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagDocumentUploadPayload = Readonly<\{/);
   assert.match(adminPageSource, /type AdminRagDocumentUploadResponse = Readonly<\{/);

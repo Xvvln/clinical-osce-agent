@@ -6,7 +6,9 @@ type AdminSessionSummary = Readonly<{
   session_id: string;
   student_id: string;
   case_id: string;
+  case_title?: string;
   stage: string;
+  stage_label?: string;
   created_at: string;
   updated_at: string;
 }>;
@@ -62,10 +64,12 @@ type AdminSessionReport = Readonly<{
   report_id: string;
   session_id: string;
   case_id: string;
+  case_title?: string;
   student_id: string;
   total_score: number;
   dimension_scores: Record<string, number>;
   missed_items: readonly string[];
+  missed_item_labels?: readonly string[];
   source_references?: readonly string[];
   source_reference_items?: readonly AdminSourceReferenceItem[];
   explanation_source_items?: readonly AdminExplanationSourceItem[];
@@ -75,6 +79,7 @@ type AdminSessionReport = Readonly<{
 
 type EvaluationBatchSummary = Readonly<{
   batch_id: string;
+  batch_label?: string;
   total_cases: number;
   passed_cases: number;
   failed_cases: number;
@@ -103,6 +108,7 @@ type EvaluationCaseResult = Readonly<{
 
 type EvaluationBatchDetail = Readonly<{
   batch_id: string;
+  batch_label?: string;
   total_cases: number;
   passed_cases: number;
   failed_cases: number;
@@ -186,8 +192,10 @@ type AdminRetrievalEvalResponse = Readonly<{
 
 type FrequentMissedItem = Readonly<{
   item_id: string;
+  item_label?: string;
   count: number;
   case_ids: readonly string[];
+  case_titles?: readonly string[];
 }>;
 
 type FrequentLearningRecommendation = Readonly<{
@@ -199,10 +207,13 @@ type FrequentLearningRecommendation = Readonly<{
 type FrequentTurnPattern = Readonly<{
   pattern_id: string;
   pattern_type: string;
+  pattern_type_label?: string;
   title: string;
   count: number;
   trigger_item_ids: readonly string[];
+  trigger_item_labels?: readonly string[];
   case_ids: readonly string[];
+  case_titles?: readonly string[];
   session_ids: readonly string[];
   source_report_ids: readonly string[];
   source_report_count: number;
@@ -212,6 +223,7 @@ type FrequentSourceReference = AdminSourceReferenceItem &
   Readonly<{
     count: number;
     case_ids: readonly string[];
+    case_titles?: readonly string[];
   }>;
 
 type AdminTrainingInsights = Readonly<{
@@ -563,10 +575,12 @@ type AdminRagKnowledgeItem = Readonly<{
   knowledge_id: string;
   scope: string;
   case_id: string;
+  case_title?: string;
   content_kind: string;
   visibility: string;
   allowed_agents: readonly string[];
   source_id: string;
+  source_title?: string;
   title: string;
   text: string;
   tags: readonly string[];
@@ -616,11 +630,13 @@ type AdminRagDocumentSummary = Readonly<{
   file_name: string;
   scope: string;
   case_id: string;
+  case_title?: string;
   chunk_count: number;
   enabled: boolean;
   visibility: string;
   allowed_agents: readonly string[];
   source_id: string;
+  source_title?: string;
   tags: readonly string[];
   updated_by: string;
   updated_at: string;
@@ -1182,6 +1198,29 @@ function getAdminOptionLabel(options: readonly { readonly value: string; readonl
 
 function getAdminSourceSelectLabel(source: AdminSourceRegistryEntry): string {
   return `${source.source_name || source.source_id}（${source.source_id}）`;
+}
+
+function getAdminDisplayText(displayText: string | undefined, fallbackText: string | undefined, emptyText = "未记录"): string {
+  return displayText?.trim() || fallbackText?.trim() || emptyText;
+}
+
+function getAdminCaseDisplayTitle(caseId: string | undefined, caseTitle: string | undefined): string {
+  if (!caseId?.trim()) {
+    return "全局通用";
+  }
+  return getAdminDisplayText(caseTitle, caseId);
+}
+
+function getAdminSourceDisplayTitle(sourceId: string | undefined, sourceTitle: string | undefined): string {
+  if (!sourceId?.trim()) {
+    return "未绑定来源";
+  }
+  return getAdminDisplayText(sourceTitle, sourceId);
+}
+
+function getAdminDisplayList(displayValues: readonly string[] | undefined, fallbackValues: readonly string[] | undefined, emptyText = "无"): string {
+  const values = displayValues && displayValues.length > 0 ? displayValues : fallbackValues;
+  return values && values.length > 0 ? values.join("、") : emptyText;
 }
 
 function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRagKnowledgeItemPayload {
@@ -3442,8 +3481,8 @@ export default function AdminDashboardPage() {
                   <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={document.document_id}>
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
-                        <p className="font-mono text-[11px] text-[#AE5630]">{document.document_id}</p>
-                        <h4 className="mt-1 text-sm font-semibold text-[#141413]">{document.file_name}</h4>
+                        <h4 className="text-sm font-semibold text-[#141413]">{document.file_name}</h4>
+                        <p className="mt-1 font-mono text-[11px] text-[#8A7D6F]">技术 ID：{document.document_id}</p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={[
@@ -3464,11 +3503,14 @@ export default function AdminDashboardPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{document.scope === "global" ? "全局" : "病例"}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{document.case_id || "全局通用"}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{getAdminCaseDisplayTitle(document.case_id, document.case_title)}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">片段：{document.chunk_count}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">可见性：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, document.visibility)}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{document.source_id || "未绑定"}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{getAdminSourceDisplayTitle(document.source_id, document.source_title)}</span>
                     </div>
+                    <p className="mt-2 break-all font-mono text-[11px] text-[#8A7D6F]">
+                      原始 ID：病例 {document.case_id || "global"} · 来源 {document.source_id || "none"}
+                    </p>
                     <p className="mt-2 break-words">可使用模块：{document.allowed_agents.length > 0 ? document.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
                     <p className="mt-1 text-[#8A7D6F]">已启用文档会进入 RAG 检索和所选模块；停用后不会再被 Agent 读取。</p>
                     <p className="mt-1 text-[#8A7D6F]">更新：{document.updated_by || "未知"} · {document.updated_at}</p>
@@ -3641,18 +3683,21 @@ export default function AdminDashboardPage() {
                       <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={item.knowledge_id}>
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
-                            <p className="font-mono text-[11px] text-[#AE5630]">{item.knowledge_id}</p>
-                            <h4 className="mt-1 text-sm font-semibold text-[#141413]">{item.title}</h4>
+                            <h4 className="text-sm font-semibold text-[#141413]">{item.title}</h4>
+                            <p className="mt-1 font-mono text-[11px] text-[#8A7D6F]">技术 ID：{item.knowledge_id}</p>
                           </div>
                           <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, item.visibility)}</span>
                         </div>
                         <p className="mt-2">{item.text}</p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS, item.scope)}</span>
-                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{item.case_id || "全局"}</span>
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{getAdminCaseDisplayTitle(item.case_id, item.case_title)}</span>
                           <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{getAdminOptionLabel(ADMIN_RAG_CONTENT_KIND_OPTIONS, item.content_kind)}</span>
-                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{item.source_id || "未绑定"}</span>
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{getAdminSourceDisplayTitle(item.source_id, item.source_title)}</span>
                         </div>
+                        <p className="mt-2 break-all font-mono text-[11px] text-[#8A7D6F]">
+                          原始 ID：病例 {item.case_id || "global"} · 来源 {item.source_id || "none"}
+                        </p>
                         <p className="mt-2">可使用模块：{item.allowed_agents.length > 0 ? item.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
                         <p className="mt-1">标签：{item.tags.length > 0 ? item.tags.join("、") : "无"}</p>
                         <p className="mt-1 text-[#8A7D6F]">更新：{item.updated_by || "未知"} · {item.updated_at}</p>
@@ -3803,10 +3848,11 @@ export default function AdminDashboardPage() {
                       onClick={() => void handleSelectSession(session.session_id)}
                       type="button"
                     >
-                      <span className="text-sm font-semibold">{session.case_id}</span>
+                      <span className="text-sm font-semibold">{getAdminCaseDisplayTitle(session.case_id, session.case_title)}</span>
                       <span className="mt-1 block text-xs text-[#6F6257]">
-                        {session.session_id} · {session.student_id} · {session.stage}
+                        {session.student_id} · {session.stage_label ?? session.stage}
                       </span>
+                      <span className="mt-1 block break-all font-mono text-[11px] text-[#8A7D6F]">技术 ID：{session.session_id}</span>
                       <span className="mt-1 block text-[11px] text-[#8A7D6F]">更新：{session.updated_at}</span>
                     </button>
                   ))
@@ -3823,14 +3869,15 @@ export default function AdminDashboardPage() {
                   <p className="mt-1 text-sm leading-6 text-[#6F6257]">选择左侧会话后，可直接读取报告或日志。</p>
                 </div>
                 {selectedSessionSummary ? (
-                  <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{selectedSessionSummary.stage}</span>
+                  <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{selectedSessionSummary.stage_label ?? selectedSessionSummary.stage}</span>
                 ) : null}
               </div>
               {selectedSessionSummary ? (
                 <div className="mt-4 grid gap-3">
                   <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
-                    <p className="text-xs font-semibold text-[#AE5630]">{selectedSessionSummary.case_id}</p>
-                    <p className="mt-2 break-all text-lg font-semibold">{selectedSessionSummary.session_id}</p>
+                    <p className="text-xs font-semibold text-[#AE5630]">{selectedSessionSummary.stage_label ?? selectedSessionSummary.stage}</p>
+                    <p className="mt-2 text-lg font-semibold">{getAdminCaseDisplayTitle(selectedSessionSummary.case_id, selectedSessionSummary.case_title)}</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-[#8A7D6F]">技术 ID：{selectedSessionSummary.session_id}</p>
                     <p className="mt-2 text-sm text-[#6F6257]">学员：{selectedSessionSummary.student_id}</p>
                   </div>
                   <dl className="grid gap-3 sm:grid-cols-2">
@@ -3929,10 +3976,11 @@ export default function AdminDashboardPage() {
                       onClick={() => handleSelectReport(report)}
                       type="button"
                     >
-                      <span className="text-sm font-semibold">{report.report_id}</span>
+                      <span className="text-sm font-semibold">{getAdminCaseDisplayTitle(report.case_id, report.case_title)}</span>
                       <span className="mt-1 block text-xs text-[#6F6257]">
-                        {report.case_id} · {report.student_id} · {report.total_score} 分
+                        {report.student_id} · {report.total_score} 分
                       </span>
+                      <span className="mt-1 block break-all font-mono text-[11px] text-[#8A7D6F]">技术 ID：{report.report_id}</span>
                       <span className="mt-1 block text-[11px] text-[#8A7D6F]">Session：{report.session_id}</span>
                     </button>
                   ))
@@ -3958,10 +4006,10 @@ export default function AdminDashboardPage() {
               {selectedReport ? (
                 <div className="admin-panel-scrollbar mt-4 grid max-h-[42rem] gap-4 overflow-y-auto pr-1">
                   <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
-                    <p className="text-xs text-[#8A7D6F]">{selectedReport.report_id}</p>
+                    <p className="text-xs text-[#8A7D6F]">技术 ID：{selectedReport.report_id}</p>
                     <p className="mt-2 text-3xl font-semibold">{selectedReport.total_score} 分</p>
                     <p className="mt-1 text-sm text-[#6F6257]">
-                      {selectedReport.case_id} · {selectedReport.student_id}
+                      {getAdminCaseDisplayTitle(selectedReport.case_id, selectedReport.case_title)} · {selectedReport.student_id}
                     </p>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -3974,7 +4022,7 @@ export default function AdminDashboardPage() {
                   <div>
                     <h3 className="text-sm font-semibold">常见漏项</h3>
                     <p className="mt-2 text-sm leading-6 text-[#6F6257]">
-                      {selectedReport.missed_items.length > 0 ? selectedReport.missed_items.join("、") : "暂无漏项。"}
+                      {getAdminDisplayList(selectedReport.missed_item_labels, selectedReport.missed_items, "暂无漏项。")}
                     </p>
                   </div>
                   <div>
@@ -4282,10 +4330,13 @@ export default function AdminDashboardPage() {
                         insights.frequent_missed_items.map((item) => (
                           <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3" key={item.item_id}>
                             <div className="flex items-center justify-between gap-3">
-                              <p className="text-sm font-semibold">{item.item_id}</p>
+                              <div>
+                                <p className="text-sm font-semibold">{item.item_label ?? item.item_id}</p>
+                                <p className="mt-1 break-all font-mono text-[11px] text-[#8A7D6F]">技术 ID：{item.item_id}</p>
+                              </div>
                               <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{item.count} 次</span>
                             </div>
-                            <p className="mt-2 text-xs leading-5 text-[#6F6257]">涉及病例：{item.case_ids.join("、")}</p>
+                            <p className="mt-2 text-xs leading-5 text-[#6F6257]">涉及病例：{getAdminDisplayList(item.case_titles, item.case_ids)}</p>
                           </div>
                         ))
                       ) : (
@@ -4306,8 +4357,9 @@ export default function AdminDashboardPage() {
                               </div>
                               <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{pattern.count} 次</span>
                             </div>
-                            <p className="mt-2 text-xs text-[#8A7D6F]">类型：{pattern.pattern_type} · 报告：{pattern.source_report_count} 份</p>
-                            <p className="mt-1 break-words text-xs text-[#8A7D6F]">触发：{pattern.trigger_item_ids.join("、") || "历史数据未记录"}</p>
+                            <p className="mt-2 text-xs text-[#8A7D6F]">类型：{pattern.pattern_type_label ?? pattern.pattern_type} · 报告：{pattern.source_report_count} 份</p>
+                            <p className="mt-1 break-words text-xs text-[#8A7D6F]">触发：{getAdminDisplayList(pattern.trigger_item_labels, pattern.trigger_item_ids, "历史数据未记录")}</p>
+                            <p className="mt-1 text-xs text-[#8A7D6F]">涉及病例：{getAdminDisplayList(pattern.case_titles, pattern.case_ids)}</p>
                           </article>
                         ))
                       ) : (
@@ -4344,7 +4396,7 @@ export default function AdminDashboardPage() {
                                 </div>
                                 <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{sourceReference.count} 次</span>
                               </div>
-                              <p className="mt-2 text-xs text-[#8A7D6F]">类型：{getSourceReferenceLabel(sourceReference.reference)} · 涉及病例：{sourceReference.case_ids.join("、")}</p>
+                              <p className="mt-2 text-xs text-[#8A7D6F]">类型：{getSourceReferenceLabel(sourceReference.reference)} · 涉及病例：{getAdminDisplayList(sourceReference.case_titles, sourceReference.case_ids)}</p>
                               {metadataText ? <p className="mt-1 text-xs text-[#8A7D6F]">{metadataText}</p> : null}
                             </article>
                           );
@@ -4532,10 +4584,11 @@ export default function AdminDashboardPage() {
                       onClick={() => void handleSelectEvaluation(evaluation.batch_id)}
                       type="button"
                     >
-                      <span className="text-sm font-semibold">{evaluation.batch_id}</span>
+                      <span className="text-sm font-semibold">{evaluation.batch_label ?? evaluation.batch_id}</span>
                       <span className="mt-1 block text-xs text-[#6F6257]">
                         {getPassLabel(evaluation.passed)} · 通过 {evaluation.passed_cases}/{evaluation.total_cases} · 通过率 {getPercent(evaluation.passed_cases, evaluation.total_cases)}
                       </span>
+                      <span className="mt-1 block break-all font-mono text-[11px] text-[#8A7D6F]">原始 ID：{evaluation.batch_id}</span>
                     </button>
                   ))
                 ) : (
@@ -4547,7 +4600,8 @@ export default function AdminDashboardPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-[#AE5630]">{getPassLabel(selectedEvaluation.passed)}</p>
-                      <h3 className="mt-1 text-sm font-semibold">{selectedEvaluation.batch_id}</h3>
+                      <h3 className="mt-1 text-sm font-semibold">{selectedEvaluation.batch_label ?? selectedEvaluation.batch_id}</h3>
+                      <p className="mt-1 break-all font-mono text-[11px] text-[#8A7D6F]">原始 ID：{selectedEvaluation.batch_id}</p>
                     </div>
                     <button
                       className="rounded-md border border-[#2F6868] bg-white px-3 py-2 text-xs font-medium whitespace-nowrap text-[#2F6868] transition hover:bg-[#E7F0EC]"

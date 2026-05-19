@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from app.services.admin_display_resolver import batch_label
 from app.services.evaluation_runner import EvaluationBatchResult
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -49,6 +50,7 @@ class EvaluationResultStore:
         return [
             {
                 "batch_id": result["batch_id"],
+                "batch_label": batch_label(str(result["batch_id"])),
                 "total_cases": result["total_cases"],
                 "passed_cases": result["passed_cases"],
                 "failed_cases": result["failed_cases"],
@@ -76,6 +78,7 @@ def _serialize_batch_result(batch_id: str, batch_result: EvaluationBatchResult) 
 
 
 def _normalize_batch_result(batch_result: dict[str, Any]) -> dict[str, Any]:
+    batch_result.setdefault("batch_label", batch_label(str(batch_result.get("batch_id", ""))))
     for result in batch_result.get("results", []):
         if not isinstance(result, dict):
             continue

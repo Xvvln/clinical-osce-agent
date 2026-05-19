@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any
 
+from app.services.admin_display_resolver import (
+    enrich_training_insight_missed_item,
+    enrich_training_insight_source_reference,
+    enrich_training_insight_turn_pattern,
+)
 from app.services.training_event_store import TrainingEventStore, training_event_store
 
 
@@ -83,11 +88,13 @@ class TrainingInsightService:
             "session_count": len(session_ids),
             "report_count": report_count,
             "frequent_missed_items": [
-                {
-                    "item_id": item_id,
-                    "count": count,
-                    "case_ids": sorted(missed_item_case_ids[item_id]),
-                }
+                enrich_training_insight_missed_item(
+                    {
+                        "item_id": item_id,
+                        "count": count,
+                        "case_ids": sorted(missed_item_case_ids[item_id]),
+                    }
+                )
                 for item_id, count in sorted(missed_item_counts.items(), key=lambda item: (-item[1], item[0]))
             ],
             "frequent_learning_recommendations": [
@@ -102,31 +109,35 @@ class TrainingInsightService:
                 )
             ],
             "frequent_source_references": [
-                {
-                    "reference": reference,
-                    "source_type": source_reference_types[reference],
-                    "title": source_reference_titles[reference],
-                    "count": count,
-                    "case_ids": sorted(source_reference_case_ids[reference]),
-                    "metadata": source_reference_metadata[reference],
-                }
+                enrich_training_insight_source_reference(
+                    {
+                        "reference": reference,
+                        "source_type": source_reference_types[reference],
+                        "title": source_reference_titles[reference],
+                        "count": count,
+                        "case_ids": sorted(source_reference_case_ids[reference]),
+                        "metadata": source_reference_metadata[reference],
+                    }
+                )
                 for reference, count in sorted(
                     source_reference_counts.items(),
                     key=lambda item: (-item[1], _source_reference_kind_rank(item[0]), item[0]),
                 )
             ],
             "frequent_turn_patterns": [
-                {
-                    "pattern_id": pattern_id,
-                    "pattern_type": turn_pattern_types[pattern_id],
-                    "title": turn_pattern_titles[pattern_id],
-                    "count": count,
-                    "trigger_item_ids": turn_pattern_trigger_item_ids[pattern_id],
-                    "case_ids": sorted(turn_pattern_case_ids[pattern_id]),
-                    "session_ids": sorted(turn_pattern_session_ids[pattern_id]),
-                    "source_report_ids": sorted(turn_pattern_source_report_ids[pattern_id]),
-                    "source_report_count": len(turn_pattern_source_report_ids[pattern_id]),
-                }
+                enrich_training_insight_turn_pattern(
+                    {
+                        "pattern_id": pattern_id,
+                        "pattern_type": turn_pattern_types[pattern_id],
+                        "title": turn_pattern_titles[pattern_id],
+                        "count": count,
+                        "trigger_item_ids": turn_pattern_trigger_item_ids[pattern_id],
+                        "case_ids": sorted(turn_pattern_case_ids[pattern_id]),
+                        "session_ids": sorted(turn_pattern_session_ids[pattern_id]),
+                        "source_report_ids": sorted(turn_pattern_source_report_ids[pattern_id]),
+                        "source_report_count": len(turn_pattern_source_report_ids[pattern_id]),
+                    }
+                )
                 for pattern_id, count in sorted(turn_pattern_counts.items(), key=lambda item: (-item[1], item[0]))
             ],
         }

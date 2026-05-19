@@ -89,13 +89,17 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
         "frequent_missed_items": [
             {
                 "item_id": "reasoning_core",
+                "item_label": "推理链覆盖感染症状、体征和影像证据",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
+                "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
             },
             {
                 "item_id": "ht_location",
+                "item_label": "ht_location",
                 "count": 1,
                 "case_ids": ["appendicitis_001"],
+                "case_titles": ["右下腹痛教学病例"],
             },
         ],
         "frequent_learning_recommendations": [
@@ -122,6 +126,7 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "title": "Fareez OSCE 数据集",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
+                "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
                 "metadata": {"license": "CC BY 4.0"},
             },
             {
@@ -130,6 +135,7 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "title": "推理链覆盖关键证据并能自圆其说",
                 "count": 1,
                 "case_ids": ["appendicitis_001"],
+                "case_titles": ["右下腹痛教学病例"],
                 "metadata": {},
             },
         ],
@@ -195,13 +201,19 @@ def test_training_insight_service_summarizes_repeated_agent_turn_patterns_from_t
         {
             "pattern_id": "turn_pattern_off_topic_redirect",
             "pattern_type": "off_topic_redirect",
+            "pattern_type_label": "偏题/寒暄回到问诊目标",
             "title": "偏题或寒暄后需要回到问诊目标",
             "count": 2,
             "trigger_item_ids": [
                 "turn_intent:unknown_history_intent",
                 "turn_policy:patient_context_redirect",
             ],
+            "trigger_item_labels": [
+                "未命中明确病史意图",
+                "引导回患者上下文",
+            ],
             "case_ids": ["appendicitis_001"],
+            "case_titles": ["右下腹痛教学病例"],
             "session_ids": ["session_one", "session_two"],
             "source_report_ids": ["session_one_report", "session_two_report"],
             "source_report_count": 2,
@@ -268,13 +280,19 @@ def test_training_insight_service_summarizes_auxiliary_test_before_physical_exam
         {
             "pattern_id": "turn_pattern_auxiliary_test_before_physical_exam",
             "pattern_type": "auxiliary_test_before_physical_exam",
+            "pattern_type_label": "跳过查体直接申请辅助检查",
             "title": "有病史线索后跳过查体直接申请辅助检查",
             "count": 2,
             "trigger_item_ids": [
                 "event:auxiliary_test_requested",
                 "sequence:before_physical_exam",
             ],
+            "trigger_item_labels": [
+                "申请辅助检查",
+                "发生在查体前",
+            ],
             "case_ids": ["appendicitis_001"],
+            "case_titles": ["右下腹痛教学病例"],
             "session_ids": ["session_one", "session_two"],
             "source_report_ids": ["session_one_report", "session_two_report"],
             "source_report_count": 2,

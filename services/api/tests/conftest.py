@@ -33,6 +33,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_GEMINI_PATIENT_LOCATION",
         "OSCE_GEMINI_PATIENT_MODEL",
         "OSCE_GEMINI_PATIENT_PROXY_URL",
+        "OSCE_VERTEX_ENABLED",
         "OSCE_VERTEX_API_KEY",
         "OSCE_VERTEX_PROJECT",
         "OSCE_VERTEX_LOCATION",
@@ -60,6 +61,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         monkeypatch.setenv(env_name, "")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")
     monkeypatch.setenv("OSCE_ANTHROPIC_ENABLED", "false")
+    monkeypatch.setenv("OSCE_VERTEX_ENABLED", "false")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
     monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "0")
     yield
