@@ -300,6 +300,16 @@ test("admin side navigator keeps clicked modules selected instead of drifting to
   assert.match(adminPageSource, /activeSectionCandidates\[activeSectionCandidates\.length - 1\]\.id/);
 });
 
+test("admin dashboard loads retrieval evaluation outside the blocking dashboard batch", () => {
+  assert.match(adminPageSource, /async function loadRetrievalEval\(\)/);
+  assert.match(adminPageSource, /void loadRetrievalEval\(\)/);
+  assert.match(adminPageSource, /retrievalEvalErrorText/);
+  assert.doesNotMatch(
+    adminPageSource,
+    /const \[[^\]]*nextRetrievalEval[\s\S]*?\] = await Promise\.all\(/,
+  );
+});
+
 test("admin dashboard keeps module content compact and student-facing copy Chinese", () => {
   for (const englishHeading of [
     "System Readiness",

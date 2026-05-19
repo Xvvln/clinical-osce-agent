@@ -1748,6 +1748,7 @@ export default function AdminDashboardPage() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [activeAdminWorkspaceSectionId, setActiveAdminWorkspaceSectionId] = useState<AdminWorkspaceSectionId>("system");
   const [isAdminNavigatorCollapsed, setIsAdminNavigatorCollapsed] = useState(false);
+  const [retrievalEvalErrorText, setRetrievalEvalErrorText] = useState("");
 
   const filteredCases = cases.filter((caseItem) =>
     includesSearchText(
@@ -1771,13 +1772,12 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
-    const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextRetrievalEval, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
+    const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminRagKnowledgeItems(),
       getAdminRagDocuments(),
       getAdminModelConfig(),
-      getAdminRetrievalEval(),
       getAdminSessions(initialListQuery),
       getAdminReports(initialListQuery),
       getAdminInsights(),
@@ -1793,7 +1793,6 @@ export default function AdminDashboardPage() {
     setRagKnowledgeItems(nextRagKnowledgeItems);
     setRagDocuments(nextRagDocuments);
     setModelConfig(nextModelConfig);
-    setRetrievalEval(nextRetrievalEval);
     setSessions(nextSessionPage.sessions);
     setSessionPagination(nextSessionPage.pagination);
     setReports(nextReportPage.reports);
@@ -1838,6 +1837,15 @@ export default function AdminDashboardPage() {
     }
   }
 
+  async function loadRetrievalEval() {
+    setRetrievalEvalErrorText("");
+    try {
+      setRetrievalEval(await getAdminRetrievalEval());
+    } catch (error: unknown) {
+      setRetrievalEvalErrorText(getAdminErrorMessage(error));
+    }
+  }
+
   useEffect(() => {
     loadDashboard().catch((error: unknown) => {
       const message = getAdminErrorMessage(error);
@@ -1847,6 +1855,7 @@ export default function AdminDashboardPage() {
         setIsAdminLoginDialogOpen(true);
       }
     });
+    void loadRetrievalEval();
   }, []);
 
   useEffect(() => {
@@ -1923,6 +1932,7 @@ export default function AdminDashboardPage() {
       setIsAdminLoginDialogOpen(false);
       setStatusText(`已登录管理员账号：${user.email}，正在读取管理后台数据...`);
       await loadDashboard();
+      void loadRetrievalEval();
     } catch (error: unknown) {
       const message = getAdminErrorMessage(error);
       setAdminLoginErrorText(message);
@@ -2646,7 +2656,7 @@ export default function AdminDashboardPage() {
               </p>
             </div>
             <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
-              {retrievalEval ? `${retrievalEval.gold_set.query_count} 条 gold query` : "读取中"}
+              {retrievalEval ? `${retrievalEval.gold_set.query_count} 条 gold query` : retrievalEvalErrorText ? "暂不可用" : "后台读取中"}
             </p>
           </div>
           {retrievalEval ? (
@@ -2702,8 +2712,12 @@ export default function AdminDashboardPage() {
                 </details>
               </div>
             </>
+          ) : retrievalEvalErrorText ? (
+            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm leading-6 text-[#6F6257]">
+              RAG 检索评测暂不可用：{retrievalEvalErrorText}。主体管理数据已独立加载，可稍后刷新本区块。
+            </p>
           ) : (
-            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">正在读取 RAG 检索评测。</p>
+            <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">RAG 检索评测正在后台读取，其他管理数据不会等待该评测完成。</p>
           )}
         </section>
         </section>

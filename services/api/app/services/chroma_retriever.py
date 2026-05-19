@@ -78,11 +78,14 @@ class ChromaRetrievalIndex:
         if len(query_vectors) != 1:
             raise ValueError("embedding client must return one query vector")
 
-        raw_results = self._collection.query(
-            query_embeddings=query_vectors,
-            n_results=min(limit, len(self._documents)),
-            include=["metadatas", "distances"],
-        )
+        try:
+            raw_results = self._query_collection(query_vectors, limit=limit)
+        except Exception as exc:
+            if not _is_embedding_dimension_mismatch_error(exc):
+                raise
+            self._reset_collection()
+            self.ensure_indexed()
+            raw_results = self._query_collection(query_vectors, limit=limit)
         metadatas = raw_results.get("metadatas", [[]])[0]
         distances = raw_results.get("distances", [[]])[0]
 
@@ -107,6 +110,11 @@ class ChromaRetrievalIndex:
     def ensure_indexed(self) -> None:
         if not self._documents:
             return
+        manifest_status = build_chroma_manifest_status(settings=self._settings, documents=self._documents)
+        if manifest_status.get("rebuild_required") is True:
+            self._reset_collection()
+        elif self._collection_has_expected_count():
+            return
 
         document_vectors = self._embedding_client.embed_texts(
             [_document_embedding_text(document) for document in self._documents],
@@ -115,6 +123,16 @@ class ChromaRetrievalIndex:
         if len(document_vectors) != len(self._documents):
             raise ValueError("embedding client must return one vector for each ChromaDB document")
 
+        try:
+            self._upsert_documents(document_vectors)
+        except Exception as exc:
+            if not _is_embedding_dimension_mismatch_error(exc):
+                raise
+            self._reset_collection()
+            self._upsert_documents(document_vectors)
+        write_chroma_manifest(settings=self._settings, documents=self._documents)
+
+    def _upsert_documents(self, document_vectors: list[list[float]]) -> None:
         self._collection.upsert(
             ids=[_document_id(document) for document in self._documents],
             embeddings=document_vectors,
@@ -129,7 +147,29 @@ class ChromaRetrievalIndex:
                 for document in self._documents
             ],
         )
-        write_chroma_manifest(settings=self._settings, documents=self._documents)
+
+    def _query_collection(self, query_vectors: list[list[float]], *, limit: int) -> dict[str, Any]:
+        return self._collection.query(
+            query_embeddings=query_vectors,
+            n_results=min(limit, len(self._documents)),
+            include=["metadatas", "distances"],
+        )
+
+    def _reset_collection(self) -> None:
+        try:
+            self._client.delete_collection(name=self._settings.collection_name)
+        except Exception:
+            pass
+        self._collection = self._client.get_or_create_collection(
+            name=self._settings.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def _collection_has_expected_count(self) -> bool:
+        try:
+            return int(self._collection.count()) >= len(self._documents)
+        except Exception:
+            return False
 
 
 def build_chroma_retrieval_index_from_environment(
@@ -251,6 +291,15 @@ def _document_id(document: ChromaSourceDocument) -> str:
 
 def _distance_to_score(distance: float) -> float:
     return max(0.0, 1.0 - distance)
+
+
+def _is_embedding_dimension_mismatch_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "dimension" in message and (
+        "expecting embedding" in message
+        or "embedding dimension" in message
+        or "dimensionality" in message
+    )
 
 
 def _resolve_persist_directory(raw_path: str, *, root_dir: Path) -> Path:

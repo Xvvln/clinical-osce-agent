@@ -30,7 +30,8 @@ def retrieve_agent_context(
     query_text = " ".join(str(term).strip() for term in query_terms if str(term).strip())
     selected_items: list[dict[str, Any]] = []
     if query_text:
-        for result in search_retrieval_documents(query_text, limit=max(limit * 4, limit)):
+        retrieval_limit = max(limit * 20, 40)
+        for result in search_retrieval_documents(query_text, limit=retrieval_limit):
             if result.source_type != "rag_knowledge" or not result.reference.startswith("rag_knowledge:"):
                 continue
             knowledge_id = result.reference.removeprefix("rag_knowledge:")

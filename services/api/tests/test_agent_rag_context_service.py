@@ -217,6 +217,73 @@ def test_retrieve_agent_context_uses_vector_retrieval_results_without_keyword_ov
     ]
 
 
+def test_retrieve_agent_context_keeps_teacher_document_when_non_rag_hits_are_ahead(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    store.upsert_item(
+        {
+            "knowledge_id": "kbdoc:appendicitis_001:teacher_note:chunk:0000",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "document_chunk",
+            "visibility": "pre_submit_safe",
+            "allowed_agents": ["coach"],
+            "source_id": "teacher_uploaded_note",
+            "title": "腹痛问诊教学补充",
+            "text": "腹痛问诊应先厘清起病部位、转移过程、伴随恶心发热以及腹泻等阴性信息。",
+            "tags": ["teacher_note", "abdominal_pain"],
+            "version": 1,
+        },
+        updated_by="admin@example.test",
+    )
+    captured_limits: list[int] = []
+
+    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+        captured_limits.append(limit)
+        all_hits = [
+            RetrievalDocument(
+                reference=f"rubric:appendicitis_001_rubric.item.ht_{index}",
+                source_type="rubric",
+                title=f"rubric hit {index}",
+                snippet="rubric content",
+                score=1.0 - index * 0.01,
+            )
+            for index in range(30)
+        ]
+        all_hits.append(
+            RetrievalDocument(
+                reference="rag_knowledge:kbdoc:appendicitis_001:teacher_note:chunk:0000",
+                source_type="rag_knowledge",
+                title="teacher note",
+                snippet="semantic teacher note",
+                score=0.7,
+            )
+        )
+        return all_hits[:limit]
+
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        fake_search_retrieval_documents,
+        raising=False,
+    )
+
+    results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["腹痛问诊 起病 转移 恶心 发热"],
+        allowed_visibilities={"pre_submit_safe"},
+        store=store,
+    )
+
+    assert captured_limits and captured_limits[0] >= 40
+    assert [item["reference"] for item in results] == [
+        "rag_knowledge:kbdoc:appendicitis_001:teacher_note:chunk:0000"
+    ]
+
+
 def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_diagnosis(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
     monkeypatch.setattr(

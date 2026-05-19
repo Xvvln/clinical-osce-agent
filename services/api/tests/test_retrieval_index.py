@@ -37,6 +37,27 @@ class FakeEmbeddingClient:
         raise AssertionError(f"unexpected task_type: {task_type}")
 
 
+class ThreeDimensionalFakeEmbeddingClient:
+    def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+        if task_type == "RETRIEVAL_QUERY":
+            return [[1.0, 0.0, 0.0] for _ in texts]
+        if task_type == "RETRIEVAL_DOCUMENT":
+            return [
+                [1.0, 0.0, 0.0] if "白细胞升高" in text else [0.0, 1.0, 0.0]
+                for text in texts
+            ]
+        raise AssertionError(f"unexpected task_type: {task_type}")
+
+
+class CountingFakeEmbeddingClient(FakeEmbeddingClient):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+        self.calls.append((task_type, len(texts)))
+        return super().embed_texts(texts, task_type=task_type)
+
+
 class ExactPhraseFakeEmbeddingClient:
     def __init__(self, phrase: str) -> None:
         self.phrase = phrase
@@ -300,6 +321,118 @@ def test_chroma_retrieval_index_persists_vectors_between_clients(tmp_path) -> No
     assert second_results[0].source_type == "knowledge"
     assert second_results[0].score > 0.99
     assert any(settings.persist_directory.iterdir())
+
+
+def test_chroma_retrieval_index_skips_document_embedding_when_manifest_is_current(tmp_path) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference="knowledge:appendicitis_001.rp_03",
+            source_type="knowledge",
+            title="急性阑尾炎诊断依据",
+            snippet="白细胞升高提示炎症反应。",
+        ),
+        ChromaSourceDocument(
+            reference="case:appendicitis_001",
+            source_type="case",
+            title="右下腹痛教学病例",
+            snippet="转移性右下腹痛。",
+        ),
+    ]
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+    )
+    first_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    first_index.search("炎症实验室证据", limit=2)
+    counting_client = CountingFakeEmbeddingClient()
+    second_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=counting_client,
+        documents=documents,
+    )
+
+    results = second_index.search("炎症实验室证据", limit=2)
+
+    assert results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert ("RETRIEVAL_QUERY", 1) in counting_client.calls
+    assert not any(task_type == "RETRIEVAL_DOCUMENT" for task_type, _ in counting_client.calls)
+
+
+def test_chroma_retrieval_index_recovers_when_embedding_dimension_changes(tmp_path) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference="knowledge:appendicitis_001.rp_03",
+            source_type="knowledge",
+            title="急性阑尾炎诊断依据",
+            snippet="白细胞升高提示炎症反应。",
+        ),
+        ChromaSourceDocument(
+            reference="case:appendicitis_001",
+            source_type="case",
+            title="右下腹痛教学病例",
+            snippet="转移性右下腹痛。",
+        ),
+    ]
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+    )
+    first_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    first_index.search("炎症实验室证据", limit=2)
+    second_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=ThreeDimensionalFakeEmbeddingClient(),
+        documents=documents,
+    )
+
+    results = second_index.search("炎症实验室证据", limit=2)
+
+    assert results
+    assert results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert results[0].score > 0.99
+
+
+def test_chroma_retrieval_index_removes_stale_documents_when_source_set_changes(tmp_path) -> None:
+    stale_document = ChromaSourceDocument(
+        reference="rag_knowledge:case:appendicitis_001:removed",
+        source_type="rag_knowledge",
+        title="已停用知识",
+        snippet="白细胞升高提示炎症反应。",
+    )
+    active_document = ChromaSourceDocument(
+        reference="case:appendicitis_001",
+        source_type="case",
+        title="右下腹痛教学病例",
+        snippet="转移性右下腹痛。",
+    )
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+    )
+    first_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=[stale_document, active_document],
+    )
+    first_results = first_index.search("炎症实验室证据", limit=2)
+    second_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=[active_document],
+    )
+
+    second_results = second_index.search("炎症实验室证据", limit=1)
+
+    assert first_results[0].reference == stale_document.reference
+    assert all(result.reference != stale_document.reference for result in second_results)
 
 
 def test_chroma_manifest_tracks_built_index_and_rebuild_need(tmp_path) -> None:
