@@ -181,9 +181,18 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /默认推荐：上传文档知识库/);
   assert.match(adminPageSource, /全局文档知识库 \/ 病例文档知识库/);
   assert.match(adminPageSource, /上传并切分文档/);
-  assert.match(adminPageSource, /应用知识库/);
+  assert.match(adminPageSource, /上传后立即启用/);
+  assert.match(adminPageSource, /已启用/);
+  assert.match(adminPageSource, /停用文档/);
+  assert.match(adminPageSource, /启用文档/);
+  assert.match(adminPageSource, /已启用文档会进入 RAG 检索和所选模块/);
+  assert.match(adminPageSource, /adminRagFieldClassName/);
+  assert.match(adminPageSource, /adminRagControlClassName/);
+  assert.match(adminPageSource, /min-w-0/);
   assert.match(adminPageSource, /高级手工录入知识条目/);
   assert.match(adminPageSource, /仅在无法上传文档或需要补充短条目时使用/);
+  assert.match(adminPageSource, /手工条目列表（高级）/);
+  assert.match(adminPageSource, /仅展示手工录入的短知识条目/);
   assert.match(adminPageSource, /可使用模块/);
   assert.match(adminPageSource, /教练提示/);
   assert.match(adminPageSource, /训练后复盘/);
@@ -202,6 +211,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /ragDocumentForm\.scope === "case" && !ragDocumentForm\.case_id/);
   assert.doesNotMatch(adminPageSource, />\s*allowed_agents\s*</);
   assert.doesNotMatch(adminPageSource, />\s*source_id\s*</);
+  assert.doesNotMatch(adminPageSource, /已应用/);
+  assert.doesNotMatch(adminPageSource, /未应用/);
   assert.doesNotMatch(adminPageSource, /secret_scoring_only 不允许暴露/);
   assert.match(adminPageSource, /不参与评分裁判/);
   assert.match(adminPageSource, /检索目标覆盖/);

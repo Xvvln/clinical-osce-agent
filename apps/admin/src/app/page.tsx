@@ -927,6 +927,11 @@ const ADMIN_RAG_CONTENT_KIND_OPTIONS = [
 ] as const;
 const ADMIN_RAG_KNOWLEDGE_SCOPES = ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((option) => option.value);
 const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((option) => option.value);
+const adminRagFieldClassName = "grid min-w-0 gap-2 text-xs font-semibold text-[#141413]";
+const adminRagControlClassName = "w-full min-w-0 rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]";
+const adminRagFileControlClassName = "w-full min-w-0 rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition file:mr-3 file:rounded-md file:border-0 file:bg-[#141413] file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white focus:border-[#AE5630]";
+const adminRagTextareaControlClassName = "min-h-28 w-full min-w-0 rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal leading-6 text-[#6F6257] outline-none transition focus:border-[#AE5630]";
+const adminRagCheckboxPillClassName = "flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]";
 const adminWorkspaceSections: readonly AdminWorkspaceSection[] = [
   { id: "system", label: "配置", eyebrow: "模型与检索", targetId: "admin-system" },
   { id: "resources", label: "资源", eyebrow: "教学资源", targetId: "admin-resources" },
@@ -3310,7 +3315,10 @@ export default function AdminDashboardPage() {
                 <h3 className="mt-1 text-sm font-semibold">全局知识库 / 病例知识库</h3>
                 <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">默认推荐：上传文档知识库。教师资料启用后只服务 Coach、复盘、Skill 生成 / 审批和可追溯解释，不参与评分裁判。</p>
               </div>
-              <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragKnowledgeItems.length} 条知识</p>
+              <div className="flex flex-wrap gap-2">
+                <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragDocuments.length} 份文档</p>
+                <p className="rounded-full border border-[#E6DFD2] bg-white px-3 py-1 text-xs text-[#6F6257]">{ragKnowledgeItems.length} 条高级条目</p>
+              </div>
             </div>
             <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUploadRagDocument(event)}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -3321,11 +3329,11 @@ export default function AdminDashboardPage() {
                 </div>
                 <p className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs text-[#6F6257]">{ragDocuments.length} 份文档</p>
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+              <div className="grid min-w-0 gap-3 md:grid-cols-3">
+                <label className={adminRagFieldClassName}>
                   知识库范围
                   <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    className={adminRagControlClassName}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, scope: event.target.value, case_id: event.target.value === "global" ? "" : current.case_id }))}
                     value={ragDocumentForm.scope}
                   >
@@ -3333,10 +3341,10 @@ export default function AdminDashboardPage() {
                     <option value="global">全局知识库</option>
                   </select>
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                <label className={adminRagFieldClassName}>
                   关联病例
                   <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    className={adminRagControlClassName}
                     disabled={ragDocumentForm.scope === "global"}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, case_id: event.target.value }))}
                     value={ragDocumentForm.case_id}
@@ -3347,10 +3355,10 @@ export default function AdminDashboardPage() {
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                <label className={adminRagFieldClassName}>
                   可见性
                   <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    className={adminRagControlClassName}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, visibility: event.target.value }))}
                     value={ragDocumentForm.visibility}
                   >
@@ -3359,10 +3367,10 @@ export default function AdminDashboardPage() {
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                <label className={adminRagFieldClassName}>
                   关联来源（可选）
                   <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    className={adminRagControlClassName}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, source_id: event.target.value }))}
                     value={ragDocumentForm.source_id}
                   >
@@ -3372,22 +3380,22 @@ export default function AdminDashboardPage() {
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                <label className={adminRagFieldClassName}>
                   文档文件
                   <input
                     accept=".md,.markdown,.txt,.text,.pdf,.docx,.html,.htm"
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition file:mr-3 file:rounded-md file:border-0 file:bg-[#141413] file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white focus:border-[#AE5630]"
+                    className={adminRagFileControlClassName}
                     onChange={(event) => void handleSelectRagDocumentFile(event.currentTarget.files?.[0])}
                     type="file"
                   />
                 </label>
-                <fieldset className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
+                <fieldset className={`${adminRagFieldClassName} md:col-span-2`}>
                   <legend>可使用模块</legend>
                   <div className="flex flex-wrap gap-2">
                     {ADMIN_RAG_AGENT_OPTIONS.map((agent) => {
                       const selectedAgents = splitAdminCsvInput(ragDocumentForm.allowed_agents);
                       return (
-                        <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]" key={agent.value}>
+                        <label className={adminRagCheckboxPillClassName} key={agent.value}>
                           <input
                             checked={selectedAgents.includes(agent.value)}
                             onChange={(event) => setRagDocumentForm((current) => ({ ...current, allowed_agents: toggleAdminCsvToken(current.allowed_agents, agent.value, event.target.checked) }))}
@@ -3399,10 +3407,10 @@ export default function AdminDashboardPage() {
                     })}
                   </div>
                 </fieldset>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                <label className={adminRagFieldClassName}>
                   标签
                   <input
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    className={adminRagControlClassName}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, tags: event.target.value }))}
                     placeholder="teacher_document,appendicitis"
                     value={ragDocumentForm.tags}
@@ -3410,13 +3418,13 @@ export default function AdminDashboardPage() {
                 </label>
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]">
+                <label className={adminRagCheckboxPillClassName}>
                   <input
                     checked={ragDocumentForm.enabled}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, enabled: event.target.checked }))}
                     type="checkbox"
                   />
-                  应用知识库
+                  上传后立即启用
                 </label>
                 <button
                   className="rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#2A2927] disabled:cursor-not-allowed disabled:opacity-60"
@@ -3437,17 +3445,22 @@ export default function AdminDashboardPage() {
                         <p className="font-mono text-[11px] text-[#AE5630]">{document.document_id}</p>
                         <h4 className="mt-1 text-sm font-semibold text-[#141413]">{document.file_name}</h4>
                       </div>
-                      <button
-                        className={[
-                          "rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap transition disabled:cursor-not-allowed disabled:opacity-60",
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={[
+                          "rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap",
                           document.enabled ? "border-[#AE5630]/20 bg-[#AE5630]/10 text-[#AE5630]" : "border-[#E6DFD2] bg-[#FAF9F5] text-[#6F6257]",
-                        ].join(" ")}
-                        disabled={isRagDocumentBusy}
-                        onClick={() => void handleSetRagDocumentEnabled(document.document_id, !document.enabled)}
-                        type="button"
-                      >
-                        {document.enabled ? "已应用" : "未应用"}
-                      </button>
+                        ].join(" ")}>
+                          {document.enabled ? "已启用" : "已停用"}
+                        </span>
+                        <button
+                          className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs font-medium whitespace-nowrap text-[#6F6257] transition hover:border-[#AE5630]/30 hover:text-[#AE5630] disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isRagDocumentBusy}
+                          onClick={() => void handleSetRagDocumentEnabled(document.document_id, !document.enabled)}
+                          type="button"
+                        >
+                          {document.enabled ? "停用文档" : "启用文档"}
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{document.scope === "global" ? "全局" : "病例"}</span>
@@ -3457,6 +3470,7 @@ export default function AdminDashboardPage() {
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{document.source_id || "未绑定"}</span>
                     </div>
                     <p className="mt-2 break-words">可使用模块：{document.allowed_agents.length > 0 ? document.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
+                    <p className="mt-1 text-[#8A7D6F]">已启用文档会进入 RAG 检索和所选模块；停用后不会再被 Agent 读取。</p>
                     <p className="mt-1 text-[#8A7D6F]">更新：{document.updated_by || "未知"} · {document.updated_at}</p>
                   </article>
                 ))
@@ -3469,178 +3483,187 @@ export default function AdminDashboardPage() {
                 <span className="block text-sm font-semibold text-[#141413]">高级手工录入知识条目</span>
                 <span className="mt-1 block text-xs leading-5 text-[#8A7D6F]">仅在无法上传文档或需要补充短条目时使用；常规资料请优先上传文档知识库。</span>
               </summary>
-            <form className="mt-3 grid gap-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  条目编号（可选）
+              <form className="mt-3 grid gap-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
+                <div className="grid min-w-0 gap-3 md:grid-cols-3">
+                  <label className={adminRagFieldClassName}>
+                    条目编号（可选）
+                    <input
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, knowledge_id: event.target.value }))}
+                      placeholder="留空由后端确定性生成"
+                      value={ragKnowledgeForm.knowledge_id}
+                    />
+                  </label>
+                  <label className={adminRagFieldClassName}>
+                    适用范围
+                    <select
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, scope: event.target.value }))}
+                      value={ragKnowledgeForm.scope}
+                    >
+                      {ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((scope) => (
+                        <option key={scope.value} value={scope.value}>{scope.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={adminRagFieldClassName}>
+                    关联病例
+                    <select
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, case_id: event.target.value }))}
+                      value={ragKnowledgeForm.case_id}
+                    >
+                      <option value="">不绑定病例</option>
+                      {cases.map((caseItem) => (
+                        <option key={caseItem.case_id} value={caseItem.case_id}>{caseItem.case_title}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={adminRagFieldClassName}>
+                    内容类型
+                    <select
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, content_kind: event.target.value }))}
+                      value={ragKnowledgeForm.content_kind}
+                    >
+                      {ADMIN_RAG_CONTENT_KIND_OPTIONS.map((kind) => (
+                        <option key={kind.value} value={kind.value}>{kind.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={adminRagFieldClassName}>
+                    可见性
+                    <select
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, visibility: event.target.value }))}
+                      value={ragKnowledgeForm.visibility}
+                    >
+                      {ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((visibility) => (
+                        <option key={visibility.value} value={visibility.value}>{visibility.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={adminRagFieldClassName}>
+                    关联来源（可选）
+                    <select
+                      className={adminRagControlClassName}
+                      onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, source_id: event.target.value }))}
+                      value={ragKnowledgeForm.source_id}
+                    >
+                      <option value="">不绑定来源</option>
+                      {sources.map((source) => (
+                        <option key={source.source_id} value={source.source_id}>{getAdminSourceSelectLabel(source)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <fieldset className={`${adminRagFieldClassName} md:col-span-2`}>
+                    <legend>可使用模块</legend>
+                    <div className="flex flex-wrap gap-2">
+                      {ADMIN_RAG_AGENT_OPTIONS.map((agent) => {
+                        const selectedAgents = splitAdminCsvInput(ragKnowledgeForm.allowed_agents);
+                        return (
+                          <label className={adminRagCheckboxPillClassName} key={agent.value}>
+                            <input
+                              checked={selectedAgents.includes(agent.value)}
+                              onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, allowed_agents: toggleAdminCsvToken(current.allowed_agents, agent.value, event.target.checked) }))}
+                              type="checkbox"
+                            />
+                            {agent.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                  <label className={adminRagFieldClassName}>
+                    版本
+                    <input
+                      className={adminRagControlClassName}
+                      min={1}
+                      onChange={(event) => {
+                        const nextVersion = Number(event.target.value);
+                        setRagKnowledgeForm((current) => ({ ...current, version: Number.isFinite(nextVersion) && nextVersion > 0 ? nextVersion : 1 }));
+                      }}
+                      type="number"
+                      value={ragKnowledgeForm.version}
+                    />
+                  </label>
+                </div>
+                <label className={adminRagFieldClassName}>
+                  标题
                   <input
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, knowledge_id: event.target.value }))}
-                    placeholder="留空由后端确定性生成"
-                    value={ragKnowledgeForm.knowledge_id}
+                    className={adminRagControlClassName}
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, title: event.target.value }))}
+                    value={ragKnowledgeForm.title}
                   />
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  适用范围
-                  <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, scope: event.target.value }))}
-                    value={ragKnowledgeForm.scope}
-                  >
-                    {ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((scope) => (
-                      <option key={scope.value} value={scope.value}>{scope.label}</option>
-                    ))}
-                  </select>
+                <label className={adminRagFieldClassName}>
+                  正文
+                  <textarea
+                    className={adminRagTextareaControlClassName}
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, text: event.target.value }))}
+                    value={ragKnowledgeForm.text}
+                  />
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  关联病例
-                  <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, case_id: event.target.value }))}
-                    value={ragKnowledgeForm.case_id}
-                  >
-                    <option value="">不绑定病例</option>
-                    {cases.map((caseItem) => (
-                      <option key={caseItem.case_id} value={caseItem.case_id}>{caseItem.case_title}</option>
-                    ))}
-                  </select>
+                <label className={adminRagFieldClassName}>
+                  标签
+                  <input
+                    className={adminRagControlClassName}
+                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, tags: event.target.value }))}
+                    placeholder="abdominal_pain,history_taking"
+                    value={ragKnowledgeForm.tags}
+                  />
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  内容类型
-                  <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, content_kind: event.target.value }))}
-                    value={ragKnowledgeForm.content_kind}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isRagKnowledgeBusy}
+                    type="submit"
                   >
-                    {ADMIN_RAG_CONTENT_KIND_OPTIONS.map((kind) => (
-                      <option key={kind.value} value={kind.value}>{kind.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  可见性
-                  <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, visibility: event.target.value }))}
-                    value={ragKnowledgeForm.visibility}
-                  >
-                    {ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((visibility) => (
-                      <option key={visibility.value} value={visibility.value}>{visibility.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  关联来源（可选）
-                  <select
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, source_id: event.target.value }))}
-                    value={ragKnowledgeForm.source_id}
-                  >
-                    <option value="">不绑定来源</option>
-                    {sources.map((source) => (
-                      <option key={source.source_id} value={source.source_id}>{getAdminSourceSelectLabel(source)}</option>
-                    ))}
-                  </select>
-                </label>
-                <fieldset className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
-                  <legend>可使用模块</legend>
-                  <div className="flex flex-wrap gap-2">
-                    {ADMIN_RAG_AGENT_OPTIONS.map((agent) => {
-                      const selectedAgents = splitAdminCsvInput(ragKnowledgeForm.allowed_agents);
-                      return (
-                        <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]" key={agent.value}>
-                          <input
-                            checked={selectedAgents.includes(agent.value)}
-                            onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, allowed_agents: toggleAdminCsvToken(current.allowed_agents, agent.value, event.target.checked) }))}
-                            type="checkbox"
-                          />
-                          {agent.label}
-                        </label>
-                      );
-                    })}
+                    {isRagKnowledgeBusy ? "保存中" : "保存手工条目"}
+                  </button>
+                  <p className="text-xs leading-5 text-[#8A7D6F]">选择“标准答案保护区”时，不会开放给教练提示、训练后复盘、Skill 生成或 Skill 审批。</p>
+                </div>
+                {ragKnowledgeStatusText ? (
+                  <p className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">{ragKnowledgeStatusText}</p>
+                ) : null}
+              </form>
+              <div className="mt-4 rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h4 className="text-sm font-semibold text-[#141413]">手工条目列表（高级）</h4>
+                    <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">仅展示手工录入的短知识条目；文档上传产生的 chunk 请看上方文档列表。</p>
                   </div>
-                </fieldset>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  版本
-                  <input
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    min={1}
-                    onChange={(event) => {
-                      const nextVersion = Number(event.target.value);
-                      setRagKnowledgeForm((current) => ({ ...current, version: Number.isFinite(nextVersion) && nextVersion > 0 ? nextVersion : 1 }));
-                    }}
-                    type="number"
-                    value={ragKnowledgeForm.version}
-                  />
-                </label>
+                  <p className="rounded-full border border-[#E6DFD2] bg-white px-3 py-1 text-xs text-[#6F6257]">{ragKnowledgeItems.length} 条</p>
+                </div>
+                <div className="admin-panel-scrollbar mt-3 grid max-h-96 gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
+                  {ragKnowledgeItems.length > 0 ? (
+                    ragKnowledgeItems.map((item) => (
+                      <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={item.knowledge_id}>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-mono text-[11px] text-[#AE5630]">{item.knowledge_id}</p>
+                            <h4 className="mt-1 text-sm font-semibold text-[#141413]">{item.title}</h4>
+                          </div>
+                          <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, item.visibility)}</span>
+                        </div>
+                        <p className="mt-2">{item.text}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS, item.scope)}</span>
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{item.case_id || "全局"}</span>
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{getAdminOptionLabel(ADMIN_RAG_CONTENT_KIND_OPTIONS, item.content_kind)}</span>
+                          <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{item.source_id || "未绑定"}</span>
+                        </div>
+                        <p className="mt-2">可使用模块：{item.allowed_agents.length > 0 ? item.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
+                        <p className="mt-1">标签：{item.tags.length > 0 ? item.tags.join("、") : "无"}</p>
+                        <p className="mt-1 text-[#8A7D6F]">更新：{item.updated_by || "未知"} · {item.updated_at}</p>
+                      </article>
+                    ))
+                  ) : (
+                    <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无手工 RAG 知识条目。</p>
+                  )}
+                </div>
               </div>
-              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                标题
-                <input
-                  className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, title: event.target.value }))}
-                  value={ragKnowledgeForm.title}
-                />
-              </label>
-              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                正文
-                <textarea
-                  className="min-h-28 rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal leading-6 text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, text: event.target.value }))}
-                  value={ragKnowledgeForm.text}
-                />
-              </label>
-              <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                标签
-                <input
-                  className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                  onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, tags: event.target.value }))}
-                  placeholder="abdominal_pain,history_taking"
-                  value={ragKnowledgeForm.tags}
-                />
-              </label>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isRagKnowledgeBusy}
-                  type="submit"
-                >
-                  {isRagKnowledgeBusy ? "保存中" : "保存手工条目"}
-                </button>
-                <p className="text-xs leading-5 text-[#8A7D6F]">选择“标准答案保护区”时，不会开放给教练提示、训练后复盘、Skill 生成或 Skill 审批。</p>
-              </div>
-              {ragKnowledgeStatusText ? (
-                <p className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">{ragKnowledgeStatusText}</p>
-              ) : null}
-            </form>
             </details>
-            <div className="admin-panel-scrollbar mt-3 grid max-h-96 gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
-              {ragKnowledgeItems.length > 0 ? (
-                ragKnowledgeItems.map((item) => (
-                  <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]" key={item.knowledge_id}>
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="font-mono text-[11px] text-[#AE5630]">{item.knowledge_id}</p>
-                        <h4 className="mt-1 text-sm font-semibold text-[#141413]">{item.title}</h4>
-                      </div>
-                      <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, item.visibility)}</span>
-                    </div>
-                    <p className="mt-2">{item.text}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS, item.scope)}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{item.case_id || "全局"}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{getAdminOptionLabel(ADMIN_RAG_CONTENT_KIND_OPTIONS, item.content_kind)}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{item.source_id || "未绑定"}</span>
-                    </div>
-                    <p className="mt-2">可使用模块：{item.allowed_agents.length > 0 ? item.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
-                    <p className="mt-1">标签：{item.tags.length > 0 ? item.tags.join("、") : "无"}</p>
-                    <p className="mt-1 text-[#8A7D6F]">更新：{item.updated_by || "未知"} · {item.updated_at}</p>
-                  </article>
-                ))
-              ) : (
-                <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无 RAG 知识条目。</p>
-              )}
-            </div>
           </section>
 
           <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-sources", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
