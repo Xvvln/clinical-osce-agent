@@ -1,6 +1,7 @@
 import pytest
 
 from app.services import retrieval_index as retrieval_index_module
+from app.services import vertex_embedding_retriever as vertex_embedding_retriever_module
 from app.services.chroma_retriever import (
     ChromaRetrievalIndex,
     ChromaRetrievalSettings,
@@ -9,6 +10,7 @@ from app.services.chroma_retriever import (
 )
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import search_retrieval_documents, search_retrieval_documents_with_embeddings
+from app.services.runtime_model_config_store import runtime_model_config_store
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,30 @@ class FakeEmbeddingClient:
                     )
             return vectors
         raise AssertionError(f"unexpected task_type: {task_type}")
+
+
+class FakeGenAIEmbeddingClient:
+    created_kwargs: list[dict[str, object]] = []
+    embed_content_calls: list[dict[str, object]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.created_kwargs.append(kwargs)
+        self.models = self
+
+    def embed_content(self, **kwargs: object):
+        self.embed_content_calls.append(kwargs)
+        contents = kwargs.get("contents", [])
+        content_count = len(contents) if isinstance(contents, list) else 1
+        return type(
+            "FakeEmbeddingResponse",
+            (),
+            {
+                "embeddings": [
+                    type("FakeEmbedding", (), {"values": [float(index), 0.2, 0.3]})()
+                    for index in range(content_count)
+                ]
+            },
+        )()
 
 
 def test_search_retrieval_documents_returns_case_for_clinical_query() -> None:
@@ -338,3 +364,75 @@ def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypat
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert results[0].source_type == "knowledge"
     assert results[0].score > 0.99
+
+
+def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_EMBEDDING_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_EMBEDDING_PROJECT", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-2.5-flash",
+            "base_url": "runtime-demo-project",
+            "proxy_url": "http://127.0.0.1:7897",
+            "location": "global",
+        }
+    )
+    FakeGenAIEmbeddingClient.created_kwargs = []
+    monkeypatch.setattr(vertex_embedding_retriever_module.genai, "Client", FakeGenAIEmbeddingClient)
+
+    try:
+        embedding_client = vertex_embedding_retriever_module.build_vertex_embedding_client_from_environment()
+        vectors = embedding_client.embed_texts(["右下腹疼痛迁移"], task_type="RETRIEVAL_QUERY")
+    finally:
+        runtime_model_config_store.clear()
+
+    assert embedding_client is not None
+    assert FakeGenAIEmbeddingClient.created_kwargs == [
+        {"vertexai": True, "project": "runtime-demo-project", "location": "global"}
+    ]
+    assert vectors == [[0.0, 0.2, 0.3]]
+
+
+def test_vertex_embedding_client_batches_multiple_texts(monkeypatch) -> None:
+    FakeGenAIEmbeddingClient.created_kwargs = []
+    FakeGenAIEmbeddingClient.embed_content_calls = []
+    monkeypatch.setattr(vertex_embedding_retriever_module.genai, "Client", FakeGenAIEmbeddingClient)
+    client = vertex_embedding_retriever_module.VertexTextEmbeddingClient(
+        vertex_embedding_retriever_module.VertexEmbeddingSettings(project="demo-project")
+    )
+
+    vectors = client.embed_texts(["第一段", "第二段", "第三段"], task_type="RETRIEVAL_DOCUMENT")
+
+    assert len(FakeGenAIEmbeddingClient.embed_content_calls) == 1
+    assert FakeGenAIEmbeddingClient.embed_content_calls[0]["contents"] == ["第一段", "第二段", "第三段"]
+    assert vectors == [[0.0, 0.2, 0.3], [1.0, 0.2, 0.3], [2.0, 0.2, 0.3]]
+
+
+def test_search_retrieval_documents_uses_chroma_by_default_when_embedding_client_exists(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: FakeEmbeddingClient(),
+    )
+
+    def fail_in_memory_embedding_search(*args, **kwargs):
+        raise AssertionError("in-memory embedding fallback should not run when ChromaDB can be used")
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "search_retrieval_documents_with_embeddings",
+        fail_in_memory_embedding_search,
+    )
+
+    results = search_retrieval_documents("炎症实验室证据", limit=3)
+
+    assert results
+    assert results[0].reference == "knowledge:appendicitis_001.rp_03"
+    assert (tmp_path / "chroma").exists()

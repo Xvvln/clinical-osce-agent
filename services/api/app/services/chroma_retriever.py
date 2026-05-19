@@ -138,7 +138,7 @@ def build_chroma_retrieval_index_from_environment(
     documents: Sequence[ChromaSourceDocument],
     root_dir: Path,
 ) -> ChromaRetrievalIndex | None:
-    if not _truthy_env("OSCE_CHROMA_ENABLED"):
+    if not _chroma_enabled_from_environment():
         return None
 
     persist_directory = _resolve_persist_directory(
@@ -328,6 +328,13 @@ def _case_id_from_reference(reference: str) -> str:
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
+
+
+def _chroma_enabled_from_environment() -> bool:
+    raw_value = _env("OSCE_CHROMA_ENABLED")
+    if not raw_value:
+        return True
+    return raw_value.lower() in {"1", "true", "yes", "on"}
 
 
 def _truthy_env(name: str) -> bool:

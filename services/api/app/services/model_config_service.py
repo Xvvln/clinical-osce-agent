@@ -178,36 +178,60 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
 
 
 def _vertex_embedding_retrieval_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED")
-    project = _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
+    runtime_active = runtime_vertex_config is not None
+    enabled = runtime_active or _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED")
+    runtime_api_key = (
+        runtime_vertex_config.api_key
+        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_api_key"
+        else ""
+    )
+    project = (
+        runtime_vertex_config.project
+        if runtime_active and runtime_vertex_config.provider == "vertex_gemini_adc"
+        else _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
+    )
     model = _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001")
-    location = _env("OSCE_VERTEX_EMBEDDING_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
-    proxy_url = _env("OSCE_VERTEX_EMBEDDING_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
-    configured = enabled and bool(project)
+    location = (
+        _env("OSCE_VERTEX_EMBEDDING_LOCATION")
+        or (runtime_vertex_config.location if runtime_active else "")
+        or _env("OSCE_VERTEX_LOCATION", "global")
+    )
+    proxy_url = (
+        _env("OSCE_VERTEX_EMBEDDING_PROXY_URL")
+        or (runtime_vertex_config.proxy_url if runtime_active else "")
+        or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
+    )
+    secret_configured = bool(runtime_api_key)
+    configured = enabled and bool(project or secret_configured)
     return _provider_config(
         provider_id="vertex_embedding_retrieval",
         label="Vertex Gemini RAG 向量检索",
         capability="RAG 反馈解释、学习推荐和来源片段召回",
         enabled=enabled,
         configured=configured,
-        secret_configured=False,
-        auth_mode="vertex_adc",
+        secret_configured=secret_configured,
+        auth_mode="vertex_api_key" if secret_configured else "vertex_adc",
         model=model,
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_EMBEDDING_ENABLED=true", "OSCE_VERTEX_EMBEDDING_PROJECT 或 OSCE_VERTEX_PROJECT"],
-        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_VERTEX_EMBEDDING_PROJECT 或 OSCE_VERTEX_PROJECT", project)]),
+        required_env=["运行态 Vertex 配置，或 OSCE_VERTEX_EMBEDDING_ENABLED=true + OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT"],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [("运行态 Vertex 配置或 OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT", project or ("configured" if secret_configured else ""))],
+        ),
         integration_status="wired_optional",
         notes="只用于 RAG 来源片段相似度召回；不参与标准诊断、rubric、评分裁判或病例隐藏信息决策。",
     )
 
 
 def _chroma_retrieval_config() -> dict[str, Any]:
-    enabled = _truthy_env("OSCE_CHROMA_ENABLED")
+    embedding_configured = _vertex_embedding_retrieval_available()
+    enabled = _chroma_enabled(embedding_configured=embedding_configured)
     persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
     collection = _env("OSCE_CHROMA_COLLECTION", "clinical_osce_retrieval")
-    configured = enabled and bool(persist_directory) and bool(collection)
+    configured = enabled and embedding_configured and bool(persist_directory) and bool(collection)
     index_manifest = _chroma_index_manifest_status(
         persist_directory=persist_directory,
         collection=collection,
@@ -223,14 +247,34 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         persist_directory=persist_directory,
         collection=collection,
         index_manifest=index_manifest,
-        required_env=["OSCE_CHROMA_ENABLED=true", "CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"],
+        required_env=["运行态 Vertex/Embedding 配置；OSCE_CHROMA_ENABLED 可显式关闭或开启", "CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
-            [("CHROMA_PERSIST_DIRECTORY", persist_directory), ("OSCE_CHROMA_COLLECTION", collection)],
+            [
+                ("Vertex embedding 配置", "configured" if embedding_configured else ""),
+                ("CHROMA_PERSIST_DIRECTORY", persist_directory),
+                ("OSCE_CHROMA_COLLECTION", collection),
+            ],
         ),
         integration_status="wired_optional",
         notes="通过本地 ChromaDB PersistentClient 持久化 RAG 来源片段向量；当前搭配 Vertex embedding 使用，只用于反馈解释、学习推荐和引用展示，不参与诊断或评分裁判。",
     )
+
+
+def _vertex_embedding_retrieval_available() -> bool:
+    runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
+    if runtime_vertex_config is not None:
+        return bool(runtime_vertex_config.project or runtime_vertex_config.api_key)
+    if not _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED"):
+        return False
+    return bool(_env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT"))
+
+
+def _chroma_enabled(*, embedding_configured: bool) -> bool:
+    raw_enabled = _env("OSCE_CHROMA_ENABLED")
+    if raw_enabled:
+        return raw_enabled.lower() in {"1", "true", "yes", "on"}
+    return embedding_configured
 
 
 def _chroma_index_manifest_status(*, persist_directory: str, collection: str) -> dict[str, Any]:

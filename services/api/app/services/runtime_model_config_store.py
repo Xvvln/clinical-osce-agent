@@ -15,6 +15,11 @@ RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     "skill_candidate_generator",
 ]
 
+VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
+    *RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
+    "rag_vector_retrieval",
+]
+
 
 @dataclass(frozen=True)
 class RuntimeModelConfig:
@@ -75,7 +80,7 @@ class RuntimeModelConfig:
                 "proxy_url": self.proxy_url,
                 "project": self.project,
                 "location": self.location,
-                "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+                "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
                 "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
             }
         if self.provider == "vertex_gemini_api_key":
@@ -87,7 +92,7 @@ class RuntimeModelConfig:
                 "proxy_url": self.proxy_url,
                 "project": self.project,
                 "location": self.location,
-                "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+                "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
                 "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
             }
         if self.provider == "anthropic":

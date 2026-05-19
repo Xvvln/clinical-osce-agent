@@ -110,9 +110,9 @@ class RagKnowledgeStore:
             if str(item.get("document_id", "")).strip() == normalized_document_id
         ]
 
-    def list_documents(self, *, case_id: str = "") -> list[dict[str, Any]]:
+    def list_documents(self, *, scope: str = "", case_id: str = "") -> list[dict[str, Any]]:
         groups: dict[str, list[dict[str, Any]]] = {}
-        for item in self.list_items(case_id=case_id.strip()):
+        for item in self.list_items(scope=scope.strip(), case_id=case_id.strip()):
             document_id = str(item.get("document_id", "")).strip()
             if not document_id:
                 continue
@@ -311,6 +311,7 @@ def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "document_id": str(first_item.get("document_id", "")).strip(),
         "file_name": str(first_item.get("document_name", "")).strip(),
+        "scope": str(first_item.get("scope", "")).strip(),
         "case_id": str(first_item.get("case_id", "")).strip(),
         "chunk_count": len(sorted_items),
         "enabled": all(bool(item.get("enabled", True)) for item in sorted_items),

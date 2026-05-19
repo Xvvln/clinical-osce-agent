@@ -50,7 +50,11 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert providers["openai_compatible"]["configured"] is False
     assert providers["openai_compatible"]["missing_env"] == ["OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"]
     assert providers["vertex_rubric_scorer"]["missing_env"] == ["OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"]
-    assert providers["chroma_retrieval"]["missing_env"] == ["CHROMA_PERSIST_DIRECTORY", "OSCE_CHROMA_COLLECTION"]
+    assert providers["chroma_retrieval"]["missing_env"] == [
+        "Vertex embedding 配置",
+        "CHROMA_PERSIST_DIRECTORY",
+        "OSCE_CHROMA_COLLECTION",
+    ]
 
 
 def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -> None:

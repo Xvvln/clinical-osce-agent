@@ -90,7 +90,7 @@ RAG_KNOWLEDGE_AGENT_ROLES = {
     "skill_generation",
 }
 RAG_GENERATIVE_AGENT_ROLES = {"coach", "reflection", "skill_approval", "skill_generation"}
-RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["reflection", "skill_generation", "skill_approval"]
+RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["coach", "reflection", "skill_generation", "skill_approval"]
 RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
@@ -281,10 +281,11 @@ class AdminRagKnowledgeItemRequest(BaseModel):
 class AdminRagDocumentUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    scope: str = ""
     case_id: str = ""
     file_name: str = ""
     content_base64: str = ""
-    visibility: str = "post_submit_review"
+    visibility: str = "pre_submit_safe"
     allowed_agents: list[str] = Field(default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS))
     source_id: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -738,13 +739,18 @@ def _validate_admin_rag_knowledge_item(item: dict[str, Any]) -> None:
 
 def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> tuple[str, list[dict[str, Any]]]:
     case_id = request.case_id.strip()
+    scope = request.scope.strip() or ("case" if case_id else "global")
     file_name = request.file_name.strip()
     visibility = request.visibility.strip()
     source_id = request.source_id.strip()
     allowed_agents = [str(agent).strip() for agent in request.allowed_agents if str(agent).strip()]
     tags = [str(tag).strip() for tag in request.tags if str(tag).strip()]
-    if not _admin_case_exists(case_id):
+    if scope not in {"global", "case"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported document scope")
+    if scope == "case" and not _admin_case_exists(case_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="case document requires a valid case_id")
+    if scope == "global":
+        case_id = ""
     if not file_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document file_name is required")
     if visibility not in RAG_KNOWLEDGE_VISIBILITIES:
@@ -768,7 +774,7 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
     if len(content_bytes) > RAG_DOCUMENT_MAX_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document is too large")
 
-    document_id = generate_rag_document_id(case_id=case_id, file_name=file_name, content_bytes=content_bytes)
+    document_id = generate_rag_document_id(case_id=case_id or "global", file_name=file_name, content_bytes=content_bytes)
     try:
         chunks = chunk_rag_document(file_name=file_name, content_bytes=content_bytes, document_id=document_id)
     except RagDocumentParseError as exc:
@@ -781,7 +787,7 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
     return document_id, [
         {
             "knowledge_id": f"{document_id}:chunk:{chunk.chunk_index:04d}",
-            "scope": "case",
+            "scope": scope,
             "case_id": case_id,
             "content_kind": "document_chunk",
             "visibility": visibility,
@@ -1414,10 +1420,14 @@ def list_admin_rag_knowledge_items(
 @app.get("/api/admin/rag/documents")
 def list_admin_rag_documents(
     case_id: str = Query(default=""),
+    scope: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"documents": rag_knowledge_store.list_documents(case_id=case_id.strip())}
+    normalized_scope = scope.strip()
+    if normalized_scope and normalized_scope not in {"global", "case"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported document scope")
+    return {"documents": rag_knowledge_store.list_documents(scope=normalized_scope, case_id=case_id.strip())}
 
 
 @app.post("/api/admin/rag/documents")

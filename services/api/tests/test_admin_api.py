@@ -446,6 +446,102 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
     )
 
 
+def test_admin_rag_document_upload_defaults_apply_to_all_generative_agents(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store, raising=False)
+    retrieval_index_module._retrieval_documents.cache_clear()
+    document_text = "疼痛迁移训练：Coach 应在训练中提示学生追问起病部位、转移过程和伴随症状。"
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        upload_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "case_id": "appendicitis_001",
+                "file_name": "coach_ready_teaching.txt",
+                "content_base64": base64.b64encode(document_text.encode("utf-8")).decode("ascii"),
+            },
+        )
+
+    assert upload_response.status_code == 200
+    uploaded_document = upload_response.json()["document"]
+    assert uploaded_document["visibility"] == "pre_submit_safe"
+    assert set(uploaded_document["allowed_agents"]) == {
+        "coach",
+        "reflection",
+        "skill_generation",
+        "skill_approval",
+    }
+
+    for agent_role in ["coach", "reflection", "skill_generation", "skill_approval"]:
+        context = retrieve_agent_context(
+            agent_role=agent_role,
+            case_ids=["appendicitis_001"],
+            query_terms=["疼痛迁移训练 起病部位 伴随症状"],
+            allowed_visibilities={"pre_submit_safe", "post_submit_review"},
+            store=store,
+        )
+        assert context, agent_role
+        assert context[0]["knowledge_id"].startswith(uploaded_document["document_id"])
+
+
+def test_admin_can_upload_global_rag_document_and_scope_document_listing(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store, raising=False)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        global_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "scope": "global",
+                "file_name": "global_osce_framework.md",
+                "content_base64": base64.b64encode(
+                    "# OSCE 通用问诊框架\n\n训练中应先明确主诉、起病、部位、性质、程度和伴随症状。".encode("utf-8")
+                ).decode("ascii"),
+            },
+        )
+        case_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "case_id": "appendicitis_001",
+                "file_name": "appendicitis_case_teaching.txt",
+                "content_base64": base64.b64encode("病例专项知识库：右下腹痛需要追问疼痛迁移。".encode("utf-8")).decode("ascii"),
+            },
+        )
+        global_documents_response = client.get("/api/admin/rag/documents?scope=global")
+        case_documents_response = client.get("/api/admin/rag/documents?scope=case&case_id=appendicitis_001")
+
+    assert global_response.status_code == 200
+    assert case_response.status_code == 200
+    global_document = global_response.json()["document"]
+    case_document = case_response.json()["document"]
+    assert global_document["scope"] == "global"
+    assert global_document["case_id"] == ""
+    assert case_document["scope"] == "case"
+    assert case_document["case_id"] == "appendicitis_001"
+
+    assert global_documents_response.status_code == 200
+    assert [document["document_id"] for document in global_documents_response.json()["documents"]] == [
+        global_document["document_id"]
+    ]
+    assert case_documents_response.status_code == 200
+    assert [document["document_id"] for document in case_documents_response.json()["documents"]] == [
+        case_document["document_id"]
+    ]
+
+    context = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["OSCE 通用问诊框架 主诉 起病 部位"],
+        allowed_visibilities={"pre_submit_safe"},
+        store=store,
+    )
+    assert context
+    assert context[0]["knowledge_id"].startswith(global_document["document_id"])
+
+
 def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(main, "rag_knowledge_store", RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3"), raising=False)
     base_payload = {
@@ -658,6 +754,7 @@ def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monke
 
 
 def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     runtime_model_config_store.clear()
     runtime_model_config_store.apply_config(
         {
@@ -684,13 +781,17 @@ def test_admin_model_config_reports_runtime_vertex_gemini_adc(tmp_path, monkeypa
     assert providers["vertex_rubric_scorer"]["project"] == "demo-project"
     assert providers["vertex_skill_candidate"]["configured"] is True
     assert providers["vertex_skill_candidate"]["project"] == "demo-project"
-    assert providers["vertex_embedding_retrieval"]["configured"] is False
+    assert providers["vertex_embedding_retrieval"]["enabled"] is True
+    assert providers["vertex_embedding_retrieval"]["configured"] is True
+    assert providers["vertex_embedding_retrieval"]["project"] == "demo-project"
     assert providers["vertex_embedding_retrieval"]["model"] == "gemini-embedding-001"
-    assert providers["chroma_retrieval"]["enabled"] is False
-    assert providers["chroma_retrieval"]["configured"] is False
+    assert providers["chroma_retrieval"]["enabled"] is True
+    assert providers["chroma_retrieval"]["configured"] is True
+    assert providers["chroma_retrieval"]["persist_directory"] == str(tmp_path / "chroma-index")
 
 
 def test_admin_model_config_reports_runtime_vertex_gemini_api_key_without_secret(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     runtime_model_config_store.clear()
     runtime_model_config_store.apply_config(
         {
@@ -718,8 +819,12 @@ def test_admin_model_config_reports_runtime_vertex_gemini_api_key_without_secret
         assert providers[provider_id]["auth_mode"] == "vertex_api_key"
         assert providers[provider_id]["model"] == "gemini-2.5-flash"
         assert providers[provider_id]["project"] == ""
-    assert providers["vertex_embedding_retrieval"]["configured"] is False
-    assert providers["vertex_embedding_retrieval"]["auth_mode"] == "vertex_adc"
+    assert providers["vertex_embedding_retrieval"]["enabled"] is True
+    assert providers["vertex_embedding_retrieval"]["configured"] is True
+    assert providers["vertex_embedding_retrieval"]["secret_configured"] is True
+    assert providers["vertex_embedding_retrieval"]["auth_mode"] == "vertex_api_key"
+    assert providers["chroma_retrieval"]["enabled"] is True
+    assert providers["chroma_retrieval"]["configured"] is True
 
 
 def test_admin_can_read_raw_case_through_admin_namespace(tmp_path, monkeypatch) -> None:

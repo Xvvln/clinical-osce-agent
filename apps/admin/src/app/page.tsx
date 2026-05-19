@@ -612,6 +612,7 @@ type AdminRagKnowledgeItemForm = Readonly<{
 type AdminRagDocumentSummary = Readonly<{
   document_id: string;
   file_name: string;
+  scope: string;
   case_id: string;
   chunk_count: number;
   enabled: boolean;
@@ -624,6 +625,7 @@ type AdminRagDocumentSummary = Readonly<{
 }>;
 
 type AdminRagDocumentUploadPayload = Readonly<{
+  scope: string;
   case_id: string;
   file_name: string;
   content_base64: string;
@@ -635,6 +637,7 @@ type AdminRagDocumentUploadPayload = Readonly<{
 }>;
 
 type AdminRagDocumentUploadForm = Readonly<{
+  scope: string;
   case_id: string;
   file_name: string;
   content_base64: string;
@@ -849,11 +852,12 @@ const EMPTY_ADMIN_RAG_KNOWLEDGE_FORM: AdminRagKnowledgeItemForm = {
   version: 1,
 };
 const EMPTY_ADMIN_RAG_DOCUMENT_FORM: AdminRagDocumentUploadForm = {
+  scope: "case",
   case_id: "",
   file_name: "",
   content_base64: "",
-  visibility: "post_submit_review",
-  allowed_agents: "reflection,skill_generation,skill_approval",
+  visibility: "pre_submit_safe",
+  allowed_agents: "coach,reflection,skill_generation,skill_approval",
   source_id: "",
   tags: "",
   enabled: true,
@@ -1056,7 +1060,8 @@ function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRa
 
 function buildAdminRagDocumentUploadPayload(form: AdminRagDocumentUploadForm): AdminRagDocumentUploadPayload {
   return {
-    case_id: form.case_id.trim(),
+    scope: form.scope,
+    case_id: form.scope === "global" ? "" : form.case_id.trim(),
     file_name: form.file_name.trim(),
     content_base64: form.content_base64,
     visibility: form.visibility,
@@ -2068,6 +2073,7 @@ export default function AdminDashboardPage() {
       setRagKnowledgeItems(nextKnowledgeItems);
       setRagDocumentForm((current) => ({
         ...EMPTY_ADMIN_RAG_DOCUMENT_FORM,
+        scope: current.scope,
         case_id: current.case_id,
         visibility: current.visibility,
         allowed_agents: current.allowed_agents,
@@ -2075,7 +2081,7 @@ export default function AdminDashboardPage() {
         tags: current.tags,
       }));
       setRagKnowledgeStatusText(`已上传并切分文档：${result.document.file_name}，生成 ${result.document.chunk_count} 个片段。`);
-      setStatusText(`已更新病例文档知识库：${result.document.file_name}`);
+      setStatusText(`已更新${result.document.scope === "global" ? "全局" : "病例"}文档知识库：${result.document.file_name}`);
     } catch (error: unknown) {
       const message = getAdminErrorMessage(error);
       setRagKnowledgeStatusText(message);
@@ -2982,21 +2988,33 @@ export default function AdminDashboardPage() {
             <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUploadRagDocument(event)}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-xs font-semibold text-[#AE5630]">病例文档知识库</p>
+                  <p className="text-xs font-semibold text-[#AE5630]">全局文档知识库 / 病例文档知识库</p>
                   <h4 className="mt-1 text-sm font-semibold">上传并切分文档</h4>
-                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf 等资料后，后端会按标题、页码和段落切分为可追溯 chunk；PDF/DOCX 依赖服务端文档解析库。</p>
+                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf 等资料后，后端会按标题、页码和段落切分为可追溯 chunk；默认进入 Coach、复盘、Skill 生成和审批 Agent，但不参与评分裁判。</p>
                 </div>
                 <p className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs text-[#6F6257]">{ragDocuments.length} 份文档</p>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
+                  知识库范围
+                  <select
+                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, scope: event.target.value, case_id: event.target.value === "global" ? "" : current.case_id }))}
+                    value={ragDocumentForm.scope}
+                  >
+                    <option value="case">病例知识库</option>
+                    <option value="global">全局知识库</option>
+                  </select>
+                </label>
+                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
                   关联病例
                   <select
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
+                    disabled={ragDocumentForm.scope === "global"}
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, case_id: event.target.value }))}
                     value={ragDocumentForm.case_id}
                   >
-                    <option value="">选择病例</option>
+                    <option value="">{ragDocumentForm.scope === "global" ? "全局通用" : "选择病例"}</option>
                     {cases.map((caseItem) => (
                       <option key={caseItem.case_id} value={caseItem.case_id}>{caseItem.case_title}</option>
                     ))}
@@ -3065,7 +3083,7 @@ export default function AdminDashboardPage() {
                 </label>
                 <button
                   className="rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#2A2927] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isRagDocumentBusy || !ragDocumentForm.case_id || !ragDocumentForm.content_base64}
+                  disabled={isRagDocumentBusy || (ragDocumentForm.scope === "case" && !ragDocumentForm.case_id) || !ragDocumentForm.content_base64}
                   type="submit"
                 >
                   {isRagDocumentBusy ? "处理中" : "上传并切分文档"}
@@ -3095,7 +3113,8 @@ export default function AdminDashboardPage() {
                       </button>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{document.case_id}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{document.scope === "global" ? "全局" : "病例"}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{document.case_id || "全局通用"}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">片段：{document.chunk_count}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">可见性：{document.visibility}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{document.source_id || "未绑定"}</span>
@@ -3105,7 +3124,7 @@ export default function AdminDashboardPage() {
                   </article>
                 ))
               ) : (
-                <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无病例文档知识库。</p>
+                <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无全局或病例文档知识库。</p>
               )}
             </div>
             <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>

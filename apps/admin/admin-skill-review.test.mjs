@@ -176,9 +176,14 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /结构化追溯覆盖/);
   assert.match(adminPageSource, /RAG 知识库/);
   assert.match(adminPageSource, /全局知识库 \/ 病例知识库/);
-  assert.match(adminPageSource, /病例文档知识库/);
+  assert.match(adminPageSource, /全局文档知识库 \/ 病例文档知识库/);
   assert.match(adminPageSource, /上传并切分文档/);
   assert.match(adminPageSource, /应用知识库/);
+  assert.match(adminPageSource, /scope: string;/);
+  assert.match(adminPageSource, /scope: "case"/);
+  assert.match(adminPageSource, /visibility: "pre_submit_safe"/);
+  assert.match(adminPageSource, /allowed_agents: "coach,reflection,skill_generation,skill_approval"/);
+  assert.match(adminPageSource, /ragDocumentForm\.scope === "case" && !ragDocumentForm\.case_id/);
   assert.match(adminPageSource, /pre_submit_safe/);
   assert.match(adminPageSource, /secret_scoring_only/);
   assert.match(adminPageSource, /allowed_agents/);

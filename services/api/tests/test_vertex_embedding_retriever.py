@@ -7,13 +7,13 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
             self.values = values
 
     class FakeResponse:
-        def __init__(self, values: list[float]) -> None:
-            self.embeddings = [FakeEmbedding(values)]
+        def __init__(self, values_by_text: list[list[float]]) -> None:
+            self.embeddings = [FakeEmbedding(values) for values in values_by_text]
 
     class FakeModels:
         calls: list[dict[str, object]] = []
 
-        def embed_content(self, *, model: str, contents: str, config: object) -> FakeResponse:
+        def embed_content(self, *, model: str, contents: list[str], config: object) -> FakeResponse:
             self.calls.append(
                 {
                     "model": model,
@@ -22,7 +22,7 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
                     "output_dimensionality": getattr(config, "output_dimensionality"),
                 }
             )
-            return FakeResponse([float(len(self.calls)), 0.5])
+            return FakeResponse([[float(index + 1), 0.5] for index, _ in enumerate(contents)])
 
     class FakeClient:
         created: list[dict[str, object]] = []
@@ -60,14 +60,8 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
     assert FakeModels.calls == [
         {
             "model": "gemini-embedding-001",
-            "contents": "症状片段",
+            "contents": ["症状片段", "评分片段"],
             "task_type": "RETRIEVAL_DOCUMENT",
             "output_dimensionality": 3072,
-        },
-        {
-            "model": "gemini-embedding-001",
-            "contents": "评分片段",
-            "task_type": "RETRIEVAL_DOCUMENT",
-            "output_dimensionality": 3072,
-        },
+        }
     ]
