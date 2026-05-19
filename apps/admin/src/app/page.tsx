@@ -1851,7 +1851,7 @@ function AdminAccountMenu({
         {authUser ? authUser.email : "管理员登录"}
       </button>
       {isOpen ? (
-        <div className="absolute right-0 z-40 mt-2 w-72 rounded-lg border border-[#E6DFD2] bg-white p-2 shadow-xl">
+        <div className="absolute right-0 z-40 mt-2 w-72 rounded-[24px] border border-[#E6DFD2] bg-white p-2 shadow-xl">
           <div className="rounded-md bg-[#FAF9F5] px-3 py-2">
             <p className="text-xs font-semibold text-[#AE5630]">当前账号</p>
             <p className="mt-1 break-all text-sm font-semibold text-[#141413]">{authUser?.email ?? "未登录"}</p>
@@ -2727,9 +2727,9 @@ export default function AdminDashboardPage() {
     isAdminNavigatorCollapsed ? "xl:grid-cols-[76px_minmax(0,1fr)]" : "xl:grid-cols-[220px_minmax(0,1fr)]",
   ].join(" ");
   const adminWorkspaceFrameClassName = "min-w-0 space-y-4";
-  const adminModuleShellClassName = "scroll-mt-6";
-  const adminPanelCardClassName = "rounded-lg border border-[#E6DFD2] bg-white/85 p-4 shadow-sm";
-  const adminDrawerPanelClassName = "rounded-lg border border-[#E6DFD2] bg-white p-4 shadow-lg";
+  const adminModuleShellClassName = "scroll-mt-6 rounded-[28px] border border-white/70 bg-white/75 p-4 shadow-[0_18px_50px_rgb(73_49_34_/_0.10)] backdrop-blur-xl";
+  const adminPanelCardClassName = "rounded-[24px] border border-[#E6DFD2] bg-white/85 p-4 shadow-sm";
+  const adminDrawerPanelClassName = "rounded-[24px] border border-[#E6DFD2] bg-white p-4 shadow-lg";
   const adminWidePanelCardClassName = `${adminPanelCardClassName} xl:col-span-2`;
   const adminEvidenceGridClassName = "mt-4 grid gap-5";
   const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"
@@ -2741,7 +2741,7 @@ export default function AdminDashboardPage() {
     <main className="min-h-screen bg-[#FAF9F5] px-6 py-8 text-[#141413]">
       <div className={isAdminLoginDialogOpen ? "pointer-events-none blur-sm" : ""}>
         <div className="mx-auto max-w-[100rem]">
-        <header className="rounded-lg border border-[#E6DFD2] bg-white/85 px-4 py-3 shadow-sm">
+        <header className="rounded-[28px] border border-white/70 bg-white/85 px-4 py-3 shadow-[0_18px_50px_rgb(73_49_34_/_0.10)] backdrop-blur-xl">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-[#8A7D6F]">TraceOSCE Admin</p>
@@ -3202,7 +3202,7 @@ export default function AdminDashboardPage() {
             )}
           </div>
           </div>
-          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-import", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-import", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">病例 / Rubric 导入</p>
@@ -3262,7 +3262,7 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-knowledge", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-knowledge", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">RAG 知识库</p>
@@ -3573,7 +3573,7 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-sources", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
+          <section className={getAdminSubsectionPanelClassName(activeResourcesSubsectionId === "resources-sources", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">数据来源登记表</p>
@@ -4338,7 +4338,7 @@ export default function AdminDashboardPage() {
                   sectionId="evaluation"
                 />
               </div>
-              <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-batches", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
+              <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-batches", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold">系统评测</h3>
@@ -4451,7 +4451,7 @@ export default function AdminDashboardPage() {
                 )}
               </div>
               {selectedEvaluation ? (
-                <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-cases" || activeEvaluationSubsectionId === "evaluation-export", "mt-4 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
+                <article className={getAdminSubsectionPanelClassName(activeEvaluationSubsectionId === "evaluation-cases" || activeEvaluationSubsectionId === "evaluation-export", "mt-4 rounded-[24px] border border-[#E6DFD2] bg-[#FAF9F5] p-4")}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-[#AE5630]">{getPassLabel(selectedEvaluation.passed)}</p>

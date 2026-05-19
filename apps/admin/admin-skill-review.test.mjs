@@ -394,8 +394,10 @@ test("admin workspace subsection tabs render distinct panes", () => {
   assert.doesNotMatch(adminPageSource, /activeSkillSubsectionId !== "skill-effects"/);
 });
 
-test("admin workspace removes outer cards and fills session tab details", () => {
-  assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6";/);
+test("admin workspace keeps module cards with navigator-like radius and fills session tab details", () => {
+  assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6 rounded-\[28px\] border border-white\/70 bg-white\/75 p-4 shadow-\[0_18px_50px_rgb\(73_49_34_\/_0\.10\)\] backdrop-blur-xl";/);
+  assert.match(adminPageSource, /const adminPanelCardClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white\/85 p-4 shadow-sm";/);
+  assert.match(adminPageSource, /const adminDrawerPanelClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white p-4 shadow-lg";/);
   assert.match(adminPageSource, /const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"/);
   assert.match(adminPageSource, /const selectedSessionSummary = sessions\.find/);
   assert.match(adminPageSource, />Session 详情</);
