@@ -900,8 +900,33 @@ const EMPTY_ADMIN_RAG_DOCUMENT_FORM: AdminRagDocumentUploadForm = {
 };
 const ADMIN_CASE_COURSE_MODULES = ["腹痛", "胸痛", "发热", "头痛", "咳嗽", "呼吸困难", "心悸", "消瘦", "黄疸", "水肿"];
 const ADMIN_CASE_DIFFICULTIES = ["初级", "中级", "高级"];
-const ADMIN_RAG_KNOWLEDGE_SCOPES = ["global", "case", "skill", "source"];
-const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ["pre_submit_safe", "post_submit_review", "admin_only", "source_only", "secret_scoring_only"];
+const ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS = [
+  { value: "global", label: "全局通用" },
+  { value: "case", label: "病例绑定" },
+  { value: "skill", label: "Skill 策略" },
+  { value: "source", label: "来源材料" },
+] as const;
+const ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS = [
+  { value: "pre_submit_safe", label: "训练前可用于教学提示" },
+  { value: "post_submit_review", label: "仅提交后复盘" },
+  { value: "admin_only", label: "仅管理员可见" },
+  { value: "source_only", label: "仅作为来源台账" },
+  { value: "secret_scoring_only", label: "标准答案保护区" },
+] as const;
+const ADMIN_RAG_AGENT_OPTIONS = [
+  { value: "coach", label: "教练提示" },
+  { value: "reflection", label: "训练后复盘" },
+  { value: "skill_generation", label: "Skill 生成" },
+  { value: "skill_approval", label: "Skill 审批" },
+] as const;
+const ADMIN_RAG_CONTENT_KIND_OPTIONS = [
+  { value: "teaching_note", label: "教学提示材料" },
+  { value: "case_note", label: "病例补充资料" },
+  { value: "source_note", label: "来源解释" },
+  { value: "skill_strategy", label: "Skill 策略素材" },
+] as const;
+const ADMIN_RAG_KNOWLEDGE_SCOPES = ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((option) => option.value);
+const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((option) => option.value);
 const adminWorkspaceSections: readonly AdminWorkspaceSection[] = [
   { id: "system", label: "配置", eyebrow: "模型与检索", targetId: "admin-system" },
   { id: "resources", label: "资源", eyebrow: "教学资源", targetId: "admin-resources" },
@@ -1134,6 +1159,24 @@ function splitAdminCsvInput(value: string): readonly string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function toggleAdminCsvToken(value: string, token: string, checked: boolean): string {
+  const nextTokens = new Set(splitAdminCsvInput(value));
+  if (checked) {
+    nextTokens.add(token);
+  } else {
+    nextTokens.delete(token);
+  }
+  return Array.from(nextTokens).join(",");
+}
+
+function getAdminOptionLabel(options: readonly { readonly value: string; readonly label: string }[], value: string): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
+
+function getAdminSourceSelectLabel(source: AdminSourceRegistryEntry): string {
+  return `${source.source_name || source.source_id}（${source.source_id}）`;
 }
 
 function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRagKnowledgeItemPayload {
@@ -3265,7 +3308,7 @@ export default function AdminDashboardPage() {
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">RAG 知识库</p>
                 <h3 className="mt-1 text-sm font-semibold">全局知识库 / 病例知识库</h3>
-                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">知识条目只服务 Coach、复盘、Skill 审批和可追溯解释，不参与评分裁判；需要绑定来源时使用 source_id。</p>
+                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">默认推荐：上传文档知识库。教师资料启用后只服务 Coach、复盘、Skill 生成 / 审批和可追溯解释，不参与评分裁判。</p>
               </div>
               <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragKnowledgeItems.length} 条知识</p>
             </div>
@@ -3274,7 +3317,7 @@ export default function AdminDashboardPage() {
                 <div>
                   <p className="text-xs font-semibold text-[#AE5630]">全局文档知识库 / 病例文档知识库</p>
                   <h4 className="mt-1 text-sm font-semibold">上传并切分文档</h4>
-                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf 等资料后，后端会按标题、页码和段落切分为可追溯 chunk；默认进入 Coach、复盘、Skill 生成和审批 Agent，但不参与评分裁判。</p>
+                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf、docx 或 html 后，后端会按标题、页码和段落切分为可追溯 chunk；默认进入 Coach、复盘、Skill 生成和审批 Agent，但不参与评分裁判。</p>
                 </div>
                 <p className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs text-[#6F6257]">{ragDocuments.length} 份文档</p>
               </div>
@@ -3311,13 +3354,13 @@ export default function AdminDashboardPage() {
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, visibility: event.target.value }))}
                     value={ragDocumentForm.visibility}
                   >
-                    {ADMIN_RAG_KNOWLEDGE_VISIBILITIES.map((visibility) => (
-                      <option key={visibility} value={visibility}>{visibility}</option>
+                    {ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((visibility) => (
+                      <option key={visibility.value} value={visibility.value}>{visibility.label}</option>
                     ))}
                   </select>
                 </label>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  source_id
+                  关联来源（可选）
                   <select
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
                     onChange={(event) => setRagDocumentForm((current) => ({ ...current, source_id: event.target.value }))}
@@ -3325,7 +3368,7 @@ export default function AdminDashboardPage() {
                   >
                     <option value="">不绑定来源</option>
                     {sources.map((source) => (
-                      <option key={source.source_id} value={source.source_id}>{source.source_id}</option>
+                      <option key={source.source_id} value={source.source_id}>{getAdminSourceSelectLabel(source)}</option>
                     ))}
                   </select>
                 </label>
@@ -3338,14 +3381,24 @@ export default function AdminDashboardPage() {
                     type="file"
                   />
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  allowed_agents
-                  <input
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagDocumentForm((current) => ({ ...current, allowed_agents: event.target.value }))}
-                    value={ragDocumentForm.allowed_agents}
-                  />
-                </label>
+                <fieldset className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
+                  <legend>可使用模块</legend>
+                  <div className="flex flex-wrap gap-2">
+                    {ADMIN_RAG_AGENT_OPTIONS.map((agent) => {
+                      const selectedAgents = splitAdminCsvInput(ragDocumentForm.allowed_agents);
+                      return (
+                        <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]" key={agent.value}>
+                          <input
+                            checked={selectedAgents.includes(agent.value)}
+                            onChange={(event) => setRagDocumentForm((current) => ({ ...current, allowed_agents: toggleAdminCsvToken(current.allowed_agents, agent.value, event.target.checked) }))}
+                            type="checkbox"
+                          />
+                          {agent.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
                   标签
                   <input
@@ -3400,10 +3453,10 @@ export default function AdminDashboardPage() {
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{document.scope === "global" ? "全局" : "病例"}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{document.case_id || "全局通用"}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">片段：{document.chunk_count}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">可见性：{document.visibility}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">可见性：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, document.visibility)}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{document.source_id || "未绑定"}</span>
                     </div>
-                    <p className="mt-2 break-words">Agent：{document.allowed_agents.length > 0 ? document.allowed_agents.join("、") : "未开放给 agent"}</p>
+                    <p className="mt-2 break-words">可使用模块：{document.allowed_agents.length > 0 ? document.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
                     <p className="mt-1 text-[#8A7D6F]">更新：{document.updated_by || "未知"} · {document.updated_at}</p>
                   </article>
                 ))
@@ -3411,10 +3464,15 @@ export default function AdminDashboardPage() {
                 <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-white p-4 text-sm text-[#6F6257]">暂无全局或病例文档知识库。</p>
               )}
             </div>
-            <form className="mt-3 grid gap-3 rounded-xl border border-[#E6DFD2] bg-white p-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
+            <details className="mt-3 rounded-[24px] border border-[#E6DFD2] bg-white p-3">
+              <summary className="cursor-pointer list-none rounded-2xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] px-4 py-3">
+                <span className="block text-sm font-semibold text-[#141413]">高级手工录入知识条目</span>
+                <span className="mt-1 block text-xs leading-5 text-[#8A7D6F]">仅在无法上传文档或需要补充短条目时使用；常规资料请优先上传文档知识库。</span>
+              </summary>
+            <form className="mt-3 grid gap-3" onSubmit={(event) => void handleUpsertRagKnowledgeItem(event)}>
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  知识 ID
+                  条目编号（可选）
                   <input
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
                     onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, knowledge_id: event.target.value }))}
@@ -3423,14 +3481,14 @@ export default function AdminDashboardPage() {
                   />
                 </label>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  知识范围
+                  适用范围
                   <select
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
                     onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, scope: event.target.value }))}
                     value={ragKnowledgeForm.scope}
                   >
-                    {ADMIN_RAG_KNOWLEDGE_SCOPES.map((scope) => (
-                      <option key={scope} value={scope}>{scope}</option>
+                    {ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((scope) => (
+                      <option key={scope.value} value={scope.value}>{scope.label}</option>
                     ))}
                   </select>
                 </label>
@@ -3449,11 +3507,15 @@ export default function AdminDashboardPage() {
                 </label>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
                   内容类型
-                  <input
+                  <select
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
                     onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, content_kind: event.target.value }))}
                     value={ragKnowledgeForm.content_kind}
-                  />
+                  >
+                    {ADMIN_RAG_CONTENT_KIND_OPTIONS.map((kind) => (
+                      <option key={kind.value} value={kind.value}>{kind.label}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
                   可见性
@@ -3462,13 +3524,13 @@ export default function AdminDashboardPage() {
                     onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, visibility: event.target.value }))}
                     value={ragKnowledgeForm.visibility}
                   >
-                    {ADMIN_RAG_KNOWLEDGE_VISIBILITIES.map((visibility) => (
-                      <option key={visibility} value={visibility}>{visibility}</option>
+                    {ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((visibility) => (
+                      <option key={visibility.value} value={visibility.value}>{visibility.label}</option>
                     ))}
                   </select>
                 </label>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
-                  source_id
+                  关联来源（可选）
                   <select
                     className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
                     onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, source_id: event.target.value }))}
@@ -3476,19 +3538,28 @@ export default function AdminDashboardPage() {
                   >
                     <option value="">不绑定来源</option>
                     {sources.map((source) => (
-                      <option key={source.source_id} value={source.source_id}>{source.source_id}</option>
+                      <option key={source.source_id} value={source.source_id}>{getAdminSourceSelectLabel(source)}</option>
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
-                  allowed_agents
-                  <input
-                    className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm font-normal text-[#6F6257] outline-none transition focus:border-[#AE5630]"
-                    onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, allowed_agents: event.target.value }))}
-                    placeholder="coach,skill_approval,reflection"
-                    value={ragKnowledgeForm.allowed_agents}
-                  />
-                </label>
+                <fieldset className="grid gap-2 text-xs font-semibold text-[#141413] md:col-span-2">
+                  <legend>可使用模块</legend>
+                  <div className="flex flex-wrap gap-2">
+                    {ADMIN_RAG_AGENT_OPTIONS.map((agent) => {
+                      const selectedAgents = splitAdminCsvInput(ragKnowledgeForm.allowed_agents);
+                      return (
+                        <label className="flex items-center gap-2 rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs font-medium text-[#6F6257]" key={agent.value}>
+                          <input
+                            checked={selectedAgents.includes(agent.value)}
+                            onChange={(event) => setRagKnowledgeForm((current) => ({ ...current, allowed_agents: toggleAdminCsvToken(current.allowed_agents, agent.value, event.target.checked) }))}
+                            type="checkbox"
+                          />
+                          {agent.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
                 <label className="grid gap-2 text-xs font-semibold text-[#141413]">
                   版本
                   <input
@@ -3534,14 +3605,15 @@ export default function AdminDashboardPage() {
                   disabled={isRagKnowledgeBusy}
                   type="submit"
                 >
-                  {isRagKnowledgeBusy ? "保存中" : "保存知识条目"}
+                  {isRagKnowledgeBusy ? "保存中" : "保存手工条目"}
                 </button>
-                <p className="text-xs leading-5 text-[#8A7D6F]">secret_scoring_only 不允许暴露给 coach、reflection、skill_approval 或 skill_generation。</p>
+                <p className="text-xs leading-5 text-[#8A7D6F]">选择“标准答案保护区”时，不会开放给教练提示、训练后复盘、Skill 生成或 Skill 审批。</p>
               </div>
               {ragKnowledgeStatusText ? (
                 <p className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">{ragKnowledgeStatusText}</p>
               ) : null}
             </form>
+            </details>
             <div className="admin-panel-scrollbar mt-3 grid max-h-96 gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
               {ragKnowledgeItems.length > 0 ? (
                 ragKnowledgeItems.map((item) => (
@@ -3551,16 +3623,16 @@ export default function AdminDashboardPage() {
                         <p className="font-mono text-[11px] text-[#AE5630]">{item.knowledge_id}</p>
                         <h4 className="mt-1 text-sm font-semibold text-[#141413]">{item.title}</h4>
                       </div>
-                      <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{item.visibility}</span>
+                      <span className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS, item.visibility)}</span>
                     </div>
                     <p className="mt-2">{item.text}</p>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{item.scope}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">范围：{getAdminOptionLabel(ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS, item.scope)}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">病例：{item.case_id || "全局"}</span>
-                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{item.content_kind}</span>
+                      <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">类型：{getAdminOptionLabel(ADMIN_RAG_CONTENT_KIND_OPTIONS, item.content_kind)}</span>
                       <span className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-2 py-1">来源：{item.source_id || "未绑定"}</span>
                     </div>
-                    <p className="mt-2">allowed_agents：{item.allowed_agents.length > 0 ? item.allowed_agents.join("、") : "未开放给 agent"}</p>
+                    <p className="mt-2">可使用模块：{item.allowed_agents.length > 0 ? item.allowed_agents.map((agent) => getAdminOptionLabel(ADMIN_RAG_AGENT_OPTIONS, agent)).join("、") : "未开放给教学模块"}</p>
                     <p className="mt-1">标签：{item.tags.length > 0 ? item.tags.join("、") : "无"}</p>
                     <p className="mt-1 text-[#8A7D6F]">更新：{item.updated_by || "未知"} · {item.updated_at}</p>
                   </article>
