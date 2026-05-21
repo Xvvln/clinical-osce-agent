@@ -11,6 +11,16 @@ type AdminSessionSummary = Readonly<{
   stage_label?: string;
   created_at: string;
   updated_at: string;
+  active_skill_context?: AdminActiveSkillContext;
+}>;
+
+type AdminActiveSkillSkippedReason = Readonly<{
+  skill_id: string;
+  reason: string;
+}>;
+
+type AdminActiveSkillContext = Readonly<{
+  skipped_reasons?: readonly AdminActiveSkillSkippedReason[];
 }>;
 
 type ReportRecommendation = Readonly<{
@@ -439,10 +449,19 @@ type AgentTurnPayload = Readonly<{
   turn_analysis: Record<string, unknown> | null;
   agent_path: readonly string[];
   selected_skill_ids: readonly string[];
+  selected_skill_reasons: readonly AdminSkillSelectionReason[];
   skill_context: readonly string[];
   revealed_fact_id: string | null;
   source_references: readonly string[];
   safety_flags: readonly string[];
+}>;
+
+type AdminSkillSelectionReason = Readonly<{
+  skill_id: string;
+  title: string;
+  why_selected_label: string;
+  trigger_item_labels: readonly string[];
+  effect_status: string;
 }>;
 
 type AdminCaseSummary = Readonly<{
@@ -1121,6 +1140,28 @@ function getStringArrayValue(record: Record<string, unknown>, key: string): read
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function getSkillSelectionReasonsValue(record: Record<string, unknown>): readonly AdminSkillSelectionReason[] {
+  const value = record.selected_skill_reasons;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const itemRecord = getRecordValue(item);
+    if (!itemRecord) {
+      return [];
+    }
+    return [
+      {
+        skill_id: getStringValue(itemRecord, "skill_id"),
+        title: getStringValue(itemRecord, "title"),
+        why_selected_label: getStringValue(itemRecord, "why_selected_label"),
+        trigger_item_labels: getStringArrayValue(itemRecord, "trigger_item_labels"),
+        effect_status: getStringValue(itemRecord, "effect_status"),
+      },
+    ];
+  });
+}
+
 function formatAgentDecisionValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value.length > 0 ? value.map((item) => formatAgentDecisionValue(item)).join("、") : "暂无";
@@ -1159,6 +1200,7 @@ function getAgentTurnPayload(event: TrainingEventRecord): AgentTurnPayload | nul
     turn_analysis: getRecordValue(turnPayload.turn_analysis),
     agent_path: getStringArrayValue(turnPayload, "agent_path"),
     selected_skill_ids: getStringArrayValue(turnPayload, "selected_skill_ids"),
+    selected_skill_reasons: getSkillSelectionReasonsValue(turnPayload),
     skill_context: getStringArrayValue(turnPayload, "skill_context"),
     revealed_fact_id: getNullableStringValue(turnPayload, "revealed_fact_id"),
     source_references: getStringArrayValue(turnPayload, "source_references"),
@@ -4039,6 +4081,20 @@ export default function AdminDashboardPage() {
                       <dd className="mt-1 break-words text-sm font-medium">{selectedSessionSummary.updated_at}</dd>
                     </div>
                   </dl>
+                  <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
+                    <h4 className="text-sm font-semibold">Skill 跳过原因</h4>
+                    <div className="mt-2 grid gap-2">
+                      {(selectedSessionSummary.active_skill_context?.skipped_reasons ?? []).length > 0 ? (
+                        selectedSessionSummary.active_skill_context?.skipped_reasons?.map((item) => (
+                          <p className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs leading-5 text-[#6F6257]" key={`${item.skill_id}-${item.reason}`}>
+                            {item.skill_id}：{item.reason}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-xs leading-5 text-[#8A7D6F]">本 Session 暂无 Skill 跳过记录。</p>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
@@ -4379,6 +4435,17 @@ export default function AdminDashboardPage() {
                             <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">
                               本轮选中 Skill：{turnPayload.selected_skill_ids.join("、") || "暂无"}
                             </p>
+                            {turnPayload.selected_skill_reasons.length > 0 ? (
+                              <div className="mt-2 grid gap-1">
+                                {turnPayload.selected_skill_reasons.map((reason) => (
+                                  <div className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]" key={reason.skill_id}>
+                                    <p className="font-semibold text-[#141413]">选中依据：{reason.title || reason.skill_id}</p>
+                                    <p className="mt-1">{reason.why_selected_label || "暂无选中原因"}</p>
+                                    <p className="mt-1">触发训练点：{reason.trigger_item_labels.join("、") || "未标注"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
                             {turnPayload.skill_context.length > 0 ? (
                               <div className="mt-2 grid gap-1">
                                 {turnPayload.skill_context.map((skillContext) => (

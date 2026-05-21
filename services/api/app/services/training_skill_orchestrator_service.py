@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping
 
+from app.services.admin_display_resolver import trigger_item_labels
+
 
 FEMALE_REPRODUCTIVE_TERMS = (
     "妇科",
@@ -65,6 +67,10 @@ def build_active_skill_context(
         if skip_reason:
             skipped_reasons.append({"skill_id": skill_id, "reason": skip_reason})
             continue
+        profile_state = _profile_skill_state(skill_id, skill_states)
+        if profile_state in {"cooldown", "retired"}:
+            skipped_reasons.append({"skill_id": skill_id, "reason": f"profile_state_{profile_state}"})
+            continue
         trigger_item_ids = _trigger_item_ids(skill)
         priority = _skill_priority(
             skill_id=skill_id,
@@ -79,6 +85,12 @@ def build_active_skill_context(
                 "priority": priority,
                 "trigger_item_ids": trigger_item_ids,
                 "why_candidate": _why_candidate(trigger_item_ids, missing_item_set, recent_error_item_ids),
+                "why_selected_label": _why_selected_label(
+                    trigger_item_ids,
+                    current_missing_evidence=missing_item_set,
+                    recent_error_item_ids=recent_error_item_ids,
+                    case_id=case_id,
+                ),
             }
         )
 
@@ -198,30 +210,43 @@ def _skill_priority(
     return priority
 
 
+def _profile_skill_state(skill_id: str, skill_states: Mapping[str, Any]) -> str:
+    state = skill_states.get(skill_id, {})
+    if not isinstance(state, Mapping):
+        return ""
+    return str(state.get("state", "")).strip()
+
+
 def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
+    trigger_items = list(candidate["trigger_item_ids"])
     return {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
         "scope": str(skill.get("scope", "global")),
         "stage_scope": _stage_scope(skill),
-        "trigger_item_ids": list(candidate["trigger_item_ids"]),
+        "trigger_item_ids": trigger_items,
+        "trigger_item_labels": trigger_item_labels(trigger_items, _case_ids(skill)),
         "priority": int(candidate["priority"]),
         "why_candidate": str(candidate["why_candidate"]),
+        "why_selected_label": str(candidate["why_selected_label"]),
     }
 
 
 def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
+    trigger_items = list(candidate["trigger_item_ids"])
     return {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
         "suggested_strategy": str(skill.get("suggested_strategy", "")),
         "skill_type": str(skill.get("skill_type", "reasoning_bridge")),
         "stage_scope": _stage_scope(skill),
-        "trigger_item_ids": list(candidate["trigger_item_ids"]),
+        "trigger_item_ids": trigger_items,
+        "trigger_item_labels": trigger_item_labels(trigger_items, _case_ids(skill)),
         "priority": int(candidate["priority"]),
         "why_candidate": str(candidate["why_candidate"]),
+        "why_selected_label": str(candidate["why_selected_label"]),
         "effect_status": str(skill.get("effect_status", "insufficient_samples")),
     }
 
@@ -241,6 +266,16 @@ def _stage_scope(skill: Mapping[str, Any]) -> list[str]:
     if not isinstance(applies_when, Mapping):
         applies_when = {}
     return _normalized_string_list(skill.get("stage_scope")) or _normalized_string_list(applies_when.get("stage_scope"))
+
+
+def _case_ids(skill: Mapping[str, Any]) -> list[str]:
+    case_ids = _normalized_string_list(skill.get("case_ids"))
+    if case_ids:
+        return case_ids
+    applies_when = skill.get("applies_when", {})
+    if not isinstance(applies_when, Mapping):
+        return []
+    return _normalized_string_list(applies_when.get("case_ids"))
 
 
 def _normalized_string_list(value: Any) -> list[str]:
@@ -269,3 +304,21 @@ def _why_candidate(
     if trigger_item_ids:
         return f"适用训练点 {', '.join(trigger_item_ids)}"
     return "通用教学策略"
+
+
+def _why_selected_label(
+    trigger_item_ids: list[str],
+    *,
+    current_missing_evidence: set[str],
+    recent_error_item_ids: set[str],
+    case_id: str,
+) -> str:
+    missing_hits = [item_id for item_id in trigger_item_ids if item_id in current_missing_evidence]
+    if missing_hits:
+        return f"当前缺口命中：{'、'.join(trigger_item_labels(missing_hits, [case_id]))}。"
+    recent_hits = [item_id for item_id in trigger_item_ids if item_id in recent_error_item_ids]
+    if recent_hits:
+        return f"近期画像命中：{'、'.join(trigger_item_labels(recent_hits, [case_id]))}。"
+    if trigger_item_ids:
+        return f"适用训练点：{'、'.join(trigger_item_labels(trigger_item_ids, [case_id]))}。"
+    return "通用教学策略。"

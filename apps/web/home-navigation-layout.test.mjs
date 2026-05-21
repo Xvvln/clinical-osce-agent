@@ -774,6 +774,16 @@ test("profile page exposes readable Skill profile orchestration summary", () => 
   assert.match(profileSource, /暂无近期漏项/);
 });
 
+test("training chat exposes readable selected Skill reasons on coach turns", () => {
+  assert.match(pageSource, /type SkillSelectionReason = Readonly<\{/);
+  assert.match(pageSource, /selected_skill_reasons\?: readonly SkillSelectionReason\[];/);
+  assert.match(pageSource, /skillSelectionReasons\?: readonly SkillSelectionReason\[];/);
+  assert.match(pageSource, /message\.skillSelectionReasons/);
+  assert.match(pageSource, /本轮 Skill 依据/);
+  assert.match(pageSource, /reason\.why_selected_label/);
+  assert.match(pageSource, /reason\.trigger_item_labels\.join\("、"\)/);
+});
+
 test("profile page gives Skill accumulation its own detailed module", () => {
   const asideStart = profileSource.indexOf("<aside");
   const asideEnd = profileSource.indexOf("</aside>", asideStart);

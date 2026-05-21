@@ -25,6 +25,7 @@ def build_skill_profile_summary(
             recent_error_item_ids,
             recent_error_set,
             recent_error_item_by_id,
+            report_list,
         )
         for skill in enabled_skills
         if str(skill.get("skill_id", "")).strip()
@@ -68,6 +69,7 @@ def _skill_state(
     recent_error_item_ids: list[str],
     recent_error_set: set[str],
     recent_error_item_by_id: Mapping[str, Mapping[str, str]],
+    reports: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     trigger_item_ids = _trigger_item_ids(skill)
     matched_recent_error_item_ids = [item_id for item_id in recent_error_item_ids if item_id in set(trigger_item_ids)]
@@ -79,7 +81,7 @@ def _skill_state(
         for item_id in matched_recent_error_item_ids
     ]
     effect_status = str(skill.get("effect_status", "insufficient_samples"))
-    state = _state_for_skill(effect_status, matched_recent_error_item_ids, trigger_item_ids)
+    state = _state_for_skill(effect_status, matched_recent_error_item_ids, trigger_item_ids, reports or [], skill)
     priority = _priority_for_skill(
         skill,
         state=state,
@@ -110,16 +112,25 @@ def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:
     return [trigger_item_id] if trigger_item_id else []
 
 
-def _state_for_skill(effect_status: str, matched_recent_error_item_ids: list[str], trigger_item_ids: list[str]) -> str:
+def _state_for_skill(
+    effect_status: str,
+    matched_recent_error_item_ids: list[str],
+    trigger_item_ids: list[str],
+    reports: list[Mapping[str, Any]],
+    skill: Mapping[str, Any],
+) -> str:
+    if not trigger_item_ids:
+        return "inactive"
+    lifecycle_state = _lifecycle_state_from_reports(trigger_item_ids, reports, skill)
+    if lifecycle_state:
+        return lifecycle_state
     if matched_recent_error_item_ids:
         return "active"
     if effect_status == "improving":
         return "cooldown"
     if effect_status == "retired":
         return "retired"
-    if trigger_item_ids:
-        return "available"
-    return "inactive"
+    return "available"
 
 
 def _state_label(state: str) -> str:
@@ -128,18 +139,22 @@ def _state_label(state: str) -> str:
         "available": "可用未命中",
         "inactive": "缺少触发项",
         "cooldown": "冷却观察",
+        "reactivated": "重新激活",
         "retired": "已退休",
     }.get(state, "状态待观察")
 
 
 def _selection_reason(matched_recent_error_items: list[dict[str, str]], state: str) -> str:
+    if state == "cooldown":
+        return "近期已补上该 Skill 训练点，暂进入冷却观察。"
+    if state == "retired":
+        return "近期连续覆盖该 Skill 训练点，默认不再进入本轮提示。"
+    if state == "reactivated" and matched_recent_error_items:
+        labels = [item["label"] for item in matched_recent_error_items[:3]]
+        return f"近期又出现该 Skill 相关缺口：{'、'.join(labels)}。"
     if matched_recent_error_items:
         labels = [item["label"] for item in matched_recent_error_items[:3]]
         return f"近期画像命中：{'、'.join(labels)}。"
-    if state == "cooldown":
-        return "近期未命中该 Skill 训练点，暂作为冷却观察。"
-    if state == "retired":
-        return "该 Skill 已退休，默认不参与本轮提示。"
     if state == "available":
         return "近期未命中该 Skill 训练点，仅作为备用教学策略。"
     return "该 Skill 缺少可匹配训练点，需管理员复核后再进入提示编排。"
@@ -172,6 +187,55 @@ def _priority_for_skill(
     if set(_trigger_item_ids(skill)) & recent_error_set:
         priority += min(int(skill.get("support_count") or 0), 3)
     return priority
+
+
+def _lifecycle_state_from_reports(
+    trigger_item_ids: list[str],
+    reports: list[Mapping[str, Any]],
+    skill: Mapping[str, Any],
+    *,
+    stable_coverage_window: int = 3,
+) -> str:
+    relevant_reports = [
+        report for report in reports if _report_relevant_to_skill(report, skill)
+    ]
+    if not relevant_reports:
+        return ""
+    recent_reports = relevant_reports[:stable_coverage_window]
+    latest_report = relevant_reports[0]
+    if _report_misses_any(latest_report, trigger_item_ids):
+        previous_stable_reports = relevant_reports[1 : stable_coverage_window + 1]
+        older_reports = relevant_reports[stable_coverage_window + 1 :]
+        if (
+            len(previous_stable_reports) >= stable_coverage_window
+            and all(not _report_misses_any(report, trigger_item_ids) for report in previous_stable_reports)
+            and any(_report_misses_any(report, trigger_item_ids) for report in older_reports)
+        ):
+            return "reactivated"
+        return "active"
+    historical_miss_count = sum(1 for report in relevant_reports if _report_misses_any(report, trigger_item_ids))
+    if historical_miss_count == 0:
+        return ""
+    if len(recent_reports) >= stable_coverage_window and all(
+        not _report_misses_any(report, trigger_item_ids) for report in recent_reports
+    ):
+        return "retired"
+    return "cooldown"
+
+
+def _report_relevant_to_skill(report: Mapping[str, Any], skill: Mapping[str, Any]) -> bool:
+    case_ids = _case_ids(skill)
+    if not case_ids:
+        return True
+    return str(report.get("case_id", "")).strip() in set(case_ids)
+
+
+def _report_misses_any(report: Mapping[str, Any], trigger_item_ids: list[str]) -> bool:
+    missed_items = report.get("missed_items", [])
+    if not isinstance(missed_items, list):
+        return False
+    missed_item_set = {str(item_id).strip() for item_id in missed_items if str(item_id).strip()}
+    return bool(set(trigger_item_ids) & missed_item_set)
 
 
 def _normalized_string_list(value: Any) -> list[str]:

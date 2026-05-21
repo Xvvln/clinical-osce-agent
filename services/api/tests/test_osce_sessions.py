@@ -10,6 +10,7 @@ from app.services.osce_session_service import osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.report_store import ReportStore
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.student_profile_store import StudentProfileStore
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
@@ -605,6 +606,38 @@ def test_current_user_profile_recent_session_uses_readable_stage_label(tmp_path)
     recent_session = response.json()["profile"]["recent_sessions"][0]
     assert recent_session["stage"] == "history_taking"
     assert recent_session["stage_label"] == "问诊阶段"
+
+
+def test_completed_report_persists_student_profile_snapshot(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service.student_profile_store = StudentProfileStore(tmp_path / "student_profiles.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断。"},
+    )
+
+    report_response = client.get(f"/api/me/sessions/{session_id}/report")
+    stored_profile = osce_session_service.student_profile_store.get_profile(authenticated_user["user_id"])
+
+    assert create_response.status_code == 200
+    assert report_response.status_code == 200
+    assert stored_profile is not None
+    assert stored_profile["student_id"] == authenticated_user["user_id"]
+    assert stored_profile["last_updated_from_report_count"] == 1
+    assert stored_profile["current_focus_items"][0]["label"] == "追问疼痛部位及转移特征"
+    assert stored_profile["skill_states"]
 
 
 def test_new_session_skill_selection_uses_recent_profile_errors(tmp_path) -> None:

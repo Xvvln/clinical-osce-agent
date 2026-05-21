@@ -50,7 +50,6 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
-from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.user_model_config_store import user_model_config_store
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_auto_approval_service import (
@@ -986,10 +985,7 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
         "learning_path": _build_learning_path(reports, weakest_dimension),
         "recent_sessions": [enrich_session_summary(dict(session)) for session in sessions[:5]],
         "skill_accumulation": _build_skill_accumulation(user["user_id"], sessions),
-        "skill_profile_summary": build_skill_profile_summary(
-            reports=reports,
-            enabled_skills=visible_enabled_skills,
-        ),
+        "skill_profile_summary": osce_session_service.build_student_profile_summary(user["user_id"]),
     }
 
 

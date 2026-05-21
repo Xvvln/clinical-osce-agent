@@ -191,9 +191,90 @@ def test_skill_orchestrator_returns_compact_index_without_full_strategy_text() -
             "scope": "global",
             "stage_scope": ["case_intro"],
             "trigger_item_ids": ["ht_onset"],
+            "trigger_item_labels": ["追问起病时间"],
             "priority": 4,
             "why_candidate": "当前缺口命中 ht_onset",
+            "why_selected_label": "当前缺口命中：追问起病时间。",
         }
     ]
     assert context["skill_index"][0].get("suggested_strategy") is None
     assert context["selected_skills"][0]["suggested_strategy"] == strategy
+
+
+def test_skill_orchestrator_skips_profile_cooldown_and_retired_skills() -> None:
+    context = build_active_skill_context(
+        [
+            {
+                "skill_id": "skill_cooldown",
+                "title": "已改善的迁移追问训练",
+                "suggested_strategy": "暂不打扰学生。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["ht_migration"],
+                "support_count": 9,
+            },
+            {
+                "skill_id": "skill_retired",
+                "title": "已退休训练",
+                "suggested_strategy": "不再进入提示。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["ht_character"],
+                "support_count": 8,
+            },
+            {
+                "skill_id": "skill_active",
+                "title": "仍需补强的疼痛程度追问",
+                "suggested_strategy": "提示学生补齐疼痛程度。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["ht_severity"],
+                "support_count": 1,
+            },
+        ],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="case_intro",
+        rubric_item_ids=["ht_migration", "ht_character", "ht_severity"],
+        current_missing_evidence=["ht_migration", "ht_character", "ht_severity"],
+        student_profile={
+            "skill_states": {
+                "skill_cooldown": {"state": "cooldown", "priority": -100},
+                "skill_retired": {"state": "retired", "priority": -100},
+                "skill_active": {"state": "active", "priority": 8},
+            }
+        },
+    )
+
+    assert [skill["skill_id"] for skill in context["selected_skills"]] == ["skill_active"]
+    assert {item["skill_id"]: item["reason"] for item in context["skipped_reasons"]} == {
+        "skill_cooldown": "profile_state_cooldown",
+        "skill_retired": "profile_state_retired",
+    }
+
+
+def test_skill_orchestrator_adds_readable_selection_reason_and_trigger_labels() -> None:
+    context = build_active_skill_context(
+        [
+            {
+                "skill_id": "skill_ht_migration",
+                "title": "疼痛迁移追问训练",
+                "suggested_strategy": "提示学生围绕疼痛迁移过程追问。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["ht_migration"],
+                "support_count": 1,
+            }
+        ],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="case_intro",
+        rubric_item_ids=["ht_migration"],
+        current_missing_evidence=["ht_migration"],
+    )
+
+    selected = context["selected_skills"][0]
+    assert selected["trigger_item_labels"] == ["追问疼痛部位及转移特征"]
+    assert selected["why_selected_label"] == "当前缺口命中：追问疼痛部位及转移特征。"
+    assert context["skill_index"][0]["trigger_item_labels"] == ["追问疼痛部位及转移特征"]
+    assert context["skill_index"][0]["why_selected_label"] == "当前缺口命中：追问疼痛部位及转移特征。"

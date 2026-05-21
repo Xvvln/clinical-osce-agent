@@ -1005,6 +1005,28 @@ def _selected_skill_ids(state: OsceGraphState) -> list[str]:
     return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(legacy_candidates)]
 
 
+def _selected_skill_reason_items(state: OsceGraphState) -> list[dict[str, Any]]:
+    reason_items: list[dict[str, Any]] = []
+    for skill in _selected_skill_items(state):
+        skill_id = str(skill.get("skill_id", "")).strip()
+        if not skill_id:
+            continue
+        reason_items.append(
+            {
+                "skill_id": skill_id,
+                "title": str(skill.get("title", "")),
+                "why_selected_label": str(skill.get("why_selected_label", "") or skill.get("why_candidate", "")),
+                "trigger_item_labels": [
+                    str(label).strip()
+                    for label in skill.get("trigger_item_labels", [])
+                    if str(label).strip()
+                ],
+                "effect_status": str(skill.get("effect_status", "insufficient_samples")),
+            }
+        )
+    return reason_items
+
+
 def _is_safety_boundary_message(message: str) -> bool:
     normalized = message.lower()
     safety_keywords = [
@@ -1494,6 +1516,9 @@ def _append_agent_turn_memory(
         turn_payload["retrieved_knowledge_context"] = turn_knowledge_context
     if selected_skill_ids:
         turn_payload["selected_skill_ids"] = list(selected_skill_ids)
+    selected_skill_reasons = _selected_skill_reason_items(state)
+    if selected_skill_reasons:
+        turn_payload["selected_skill_reasons"] = selected_skill_reasons
     if skill_context:
         turn_payload["skill_context"] = list(skill_context)
     turn_memory.append(turn_payload)

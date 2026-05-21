@@ -13,6 +13,7 @@ from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.patient_language_service import build_patient_opening_utterance
 from app.services.report_store import ReportStore, report_store
+from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore, training_skill_candidate_store
 from app.services.student_profile_summary_service import build_skill_profile_summary
@@ -61,6 +62,7 @@ class OsceSessionService:
         training_skill_store: TrainingSkillStore = training_skill_store,
         training_skill_candidate_store: TrainingSkillCandidateStore = training_skill_candidate_store,
         session_store: OsceSessionStore = osce_session_store,
+        student_profile_store: StudentProfileStore = student_profile_store,
         personal_skill_service: Any | None = None,
         graph: Any | None = None,
         patient_responder: Any | None = None,
@@ -75,6 +77,7 @@ class OsceSessionService:
         self.training_skill_store = training_skill_store
         self.training_skill_candidate_store = training_skill_candidate_store
         self.session_store = session_store
+        self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
 
     def list_cases(self) -> list[dict[str, Any]]:
@@ -301,6 +304,9 @@ class OsceSessionService:
 
         return build_session_teaching_focus(session)
 
+    def build_student_profile_summary(self, student_id: str) -> dict[str, Any]:
+        return self._refresh_student_profile(student_id)
+
     def submit_diagnosis(self, session_id: str, diagnosis: str, reasoning: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
@@ -337,6 +343,7 @@ class OsceSessionService:
                 session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
                 self._save_session(session)
                 self.report_store.save_report(session.feedback_report)
+                self._refresh_student_profile(session.student_id)
                 self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
                 self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
                 return session.feedback_report
@@ -357,6 +364,7 @@ class OsceSessionService:
             session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
             self._save_session(session)
             self.report_store.save_report(session.feedback_report)
+            self._refresh_student_profile(session.student_id)
             self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
             self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
         else:
@@ -397,21 +405,33 @@ class OsceSessionService:
         return active_skill_context
 
     def _build_skill_profile_summary(self, student_id: str, enabled_skills: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._refresh_student_profile(student_id, enabled_skills=enabled_skills)
+
+    def _refresh_student_profile(
+        self,
+        student_id: str,
+        *,
+        enabled_skills: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         sessions = self.session_store.list_user_session_summaries(student_id)
         reports = [
             report
             for session in sessions
             if (report := self.report_store.get_report(str(session["session_id"]))) is not None
         ]
+        if enabled_skills is None:
+            enabled_skills = self.training_skill_store.list_enabled_skills()
         visible_enabled_skills = [
             skill
             for skill in enabled_skills
             if str(skill.get("scope", "global")) != "personal" or str(skill.get("owner_student_id", "")) == student_id
         ]
-        return build_skill_profile_summary(
+        profile = build_skill_profile_summary(
             reports=reports,
             enabled_skills=visible_enabled_skills,
         )
+        self.student_profile_store.save_profile(student_id, profile)
+        return profile
 
     def _save_session(self, session: OsceSession) -> None:
         self._sessions[session.session_id] = session

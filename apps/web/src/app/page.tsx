@@ -367,9 +367,20 @@ type AgentTurnMemoryItem = Readonly<{
   current_intent: string;
   turn_policy: string;
   agent_path: readonly string[];
+  selected_skill_ids?: readonly string[];
+  selected_skill_reasons?: readonly SkillSelectionReason[];
+  skill_context?: readonly string[];
   revealed_fact_id: string | null;
   source_references: readonly string[];
   safety_flags: readonly string[];
+}>;
+
+type SkillSelectionReason = Readonly<{
+  skill_id: string;
+  title: string;
+  why_selected_label: string;
+  trigger_item_labels: readonly string[];
+  effect_status: string;
 }>;
 
 type ReflectionPrompt = Readonly<{
@@ -434,6 +445,7 @@ type ChatMessage = {
   readonly text: string;
   readonly finalText?: string;
   readonly isPending?: boolean;
+  readonly skillSelectionReasons?: readonly SkillSelectionReason[];
 };
 
 type EvidenceItem = {
@@ -1016,7 +1028,7 @@ function getDiagnosticRoleLabel(role: string): string {
   return labels[role] ?? "教学证据";
 }
 
-function mapApiMessage(message: ApiMessage, index: number): ChatMessage {
+function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession): ChatMessage {
   const id = `${message.role}-${index}-${message.content}`;
 
   if (message.role === "student") {
@@ -1034,6 +1046,7 @@ function mapApiMessage(message: ApiMessage, index: number): ChatMessage {
       speaker: "coach",
       label: getCoachMessageLabel(message.content),
       text: message.content,
+      skillSelectionReasons: getSkillSelectionReasonsForReply(session, message.content),
     };
   }
 
@@ -1043,6 +1056,19 @@ function mapApiMessage(message: ApiMessage, index: number): ChatMessage {
     label: "标准化病人",
     text: message.content,
   };
+}
+
+function getSkillSelectionReasonsForReply(
+  session: OsceSession | undefined,
+  replyText: string,
+): readonly SkillSelectionReason[] {
+  if (!session) {
+    return [];
+  }
+  const matchingTurn = [...session.agent_turn_memory].reverse().find(
+    (turn) => turn.reply === replyText && turn.reply_role === "coach",
+  );
+  return matchingTurn?.selected_skill_reasons ?? [];
 }
 
 function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<ChatMessage, "speaker" | "label"> {
@@ -2423,7 +2449,9 @@ function HomeContent() {
     if (session) {
       baseMessages = [
         ...baseMessages,
-        ...getVisibleApiMessagesDuringPendingReply(session.messages, pendingPatientMessage).map(mapApiMessage),
+        ...getVisibleApiMessagesDuringPendingReply(session.messages, pendingPatientMessage).map((message, index) =>
+          mapApiMessage(message, index, session),
+        ),
       ];
     }
 
@@ -3102,6 +3130,22 @@ function HomeContent() {
                         {message.label}
                       </p>
                       <p className="mt-1">{message.isPending && !message.finalText ? <PendingThinkingIndicator /> : message.text}</p>
+                      {isCoach && message.skillSelectionReasons && message.skillSelectionReasons.length > 0 ? (
+                        <div className="mt-3 rounded-lg border border-[#E7C98B] bg-white/70 p-3 text-xs leading-5 text-[#6F6257]">
+                          <p className="font-semibold text-[#8A5A00]">本轮 Skill 依据</p>
+                          <div className="mt-2 grid gap-2">
+                            {message.skillSelectionReasons.map((reason) => (
+                              <div className="rounded-md border border-[#E6DFD2] bg-background px-3 py-2" key={reason.skill_id}>
+                                <p className="font-medium text-foreground">{reason.title || reason.skill_id}</p>
+                                <p className="mt-1">{reason.why_selected_label}</p>
+                                <p className="mt-1 text-muted-foreground">
+                                  关联训练点：{reason.trigger_item_labels.join("、") || "未标注"}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 );

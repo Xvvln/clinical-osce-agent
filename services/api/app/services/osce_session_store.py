@@ -155,4 +155,5 @@ def _session_completion_summary(session_json: str, stage: str) -> dict[str, obje
         "can_continue": not is_completed,
         "has_report": has_report,
         "completion_status": completion_status,
+        "active_skill_context": payload.get("active_skill_context") if isinstance(payload.get("active_skill_context"), dict) else {},
     }
