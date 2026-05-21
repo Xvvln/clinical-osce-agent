@@ -1237,6 +1237,8 @@ def _unknown_patient_context_answer(case: Any, unknown_kind: str = "") -> str:
         return f"这个我不太了解，我这次主要是{complaint}来看的。"
     if unknown_kind == "unsupported_case_question":
         return "这个我不太清楚，病例里没有这方面信息。"
+    if unknown_kind == "unclassified_input":
+        return "我没太听明白您具体想问哪方面，可以再问得具体一点吗？"
     return build_patient_context_redirect_utterance(str(case.chief_complaint))
 
 
@@ -1254,6 +1256,8 @@ def _turn_policy_for_patient_response(intent: str, revealed_fact_id: str | None,
             return "off_topic_redirect"
         if unknown_kind == "unsupported_case_question":
             return "unsupported_case_question"
+        if unknown_kind == "unclassified_input":
+            return "unclassified_input"
         return "patient_context_redirect"
     return "patient_limited_answer"
 
@@ -1311,6 +1315,8 @@ def _build_passive_coach_hint(
             return "病例脚本没有提供这方面信息。可以换成与本次症状相关的具体问法。"
         if unknown_kind == "off_topic":
             return "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。"
+        if unknown_kind == "unclassified_input":
+            return "本轮输入未能稳定识别为具体问诊意图。请换成更具体的问法，例如起病时间、疼痛部位、性质、程度或伴随症状。"
         return "可以先从起病时间、疼痛部位、性质、程度和伴随症状开始问。"
     if is_off_topic:
         return "可以先从起病时间、疼痛部位、性质、程度和伴随症状开始问。"

@@ -115,15 +115,49 @@ test("home history input disables browser autofill history", () => {
   assert.match(pageSource, /id="history-question"[\s\S]*?autoComplete="off"[\s\S]*?autoCorrect="off"[\s\S]*?spellCheck=\{false\}/);
 });
 
+test("home inquiry composer does not show canned history shortcut or example placeholder", () => {
+  assert.doesNotMatch(pageSource, />\s*问现病史\s*<\/button>/);
+  assert.doesNotMatch(pageSource, /setInputValue\("什么时候开始疼的？"\)/);
+  assert.doesNotMatch(pageSource, /placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"/);
+  assert.match(pageSource, /placeholder="输入问诊问题，开始诊断训练"/);
+});
+
 test("home evidence and coverage map hide raw backend evidence ids", () => {
   assert.match(pageSource, /function getEvidenceItem\(factId: string, trainingProgress: TrainingProgress \| null, fallbackIndex: number\): EvidenceItem/);
   assert.match(pageSource, /trainingProgress\?\.coverage_map\.history/);
+  assert.ok(
+    pageSource.indexOf("const coveredHistoryItem = trainingProgress?.coverage_map.history.find")
+      < pageSource.indexOf("const knownEvidenceItem = evidenceByFactId[factId]"),
+    "revealed evidence should prefer backend coverage_map labels before static fallbacks",
+  );
   assert.match(pageSource, /const visibleLabel = item\.label;/);
   assert.doesNotMatch(pageSource, /getPendingCoverageLabel\(title, itemIndex\)/);
   assert.doesNotMatch(pageSource, /label: factId, detail: "后端已披露该结构化事实。"/);
   assert.doesNotMatch(pageSource, /未覆盖素材：\$\{item\.id\}/);
   assert.doesNotMatch(pageSource, /未覆盖项只显示素材 ID/);
   assert.doesNotMatch(pageSource, /未覆盖项只显示通用占位/);
+});
+
+test("home evidence panel scrolls to the newest revealed clue and highlights it", () => {
+  assert.match(pageSource, /const \[latestRevealedFactId, setLatestRevealedFactId\] = useState<string \| null>\(null\);/);
+  assert.match(pageSource, /const previousRevealedFactIdsRef = useRef<readonly string\[] \| null>\(null\);/);
+  assert.match(pageSource, /const latestEvidenceItemRef = useRef<HTMLDivElement \| null>\(null\);/);
+  assert.match(pageSource, /const newestRevealedFactId = \[\.\.\.currentRevealedFactIds\]\.reverse\(\)\.find/);
+  assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) => currentStates\.evidence \? currentStates : \{ \.\.\.currentStates, evidence: true \}\);/);
+  assert.match(pageSource, /latestEvidenceItemRef\.current\?\.scrollIntoView\(\{[\s\S]*?behavior: "smooth"[\s\S]*?block: "center"[\s\S]*?\}\);/);
+  assert.match(pageSource, /data-latest-revealed-fact=\{isLatestRevealedFact \? "true" : undefined\}/);
+  assert.match(pageSource, /clinical-osce-evidence-glow overflow-hidden/);
+  assert.match(globalsSource, /@keyframes clinical-osce-evidence-glow/);
+  assert.match(globalsSource, /\.clinical-osce-evidence-glow::before/);
+  assert.match(globalsSource, /animation: clinical-osce-evidence-glow 1\.25s ease-in-out 2 both;/);
+  assert.match(globalsSource, /background: transparent;/);
+  assert.match(globalsSource, /border: 1px solid rgb\(214 165 79 \/ 0\.58\);/);
+  assert.match(pageSource, /\}, 2600\);/);
+  assert.match(globalsSource, /inset: 2px;/);
+  assert.doesNotMatch(globalsSource, /radial-gradient\(circle at 50% 50%/);
+  assert.doesNotMatch(globalsSource, /linear-gradient\(135deg/);
+  assert.doesNotMatch(globalsSource, /inset: -6px;/);
+  assert.doesNotMatch(globalsSource, /box-shadow: 0 0 0 10px/);
 });
 
 test("home dialogue speaker labels render as plain text labels", () => {
@@ -283,7 +317,7 @@ test("home page keeps agent pedagogy data available without showing a student-fa
   assert.match(pageSource, /pedagogy_state: PedagogyState;/);
   assert.match(pageSource, /agent_decision_trace: readonly AgentDecisionTraceItem\[];/);
   assert.match(pageSource, /reflection_summary: ReflectionSummary \| null;/);
-  assert.match(pageSource, /type RightPanelKey = "evidence" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "evidence" \| "report";/);
   assert.doesNotMatch(pageSource, /agent: false,/);
   assert.doesNotMatch(pageSource, /rightPanelOpenStates\.agent/);
   assert.doesNotMatch(pageSource, /toggleRightPanel\("agent"\)/);
@@ -780,6 +814,9 @@ test("training chat exposes readable selected Skill reasons on coach turns", () 
   assert.match(pageSource, /skillSelectionReasons\?: readonly SkillSelectionReason\[];/);
   assert.match(pageSource, /message\.skillSelectionReasons/);
   assert.match(pageSource, /本轮 Skill 依据/);
+  assert.match(pageSource, /<details className="mt-3 rounded-lg border border-\[#E7C98B\] bg-white\/70 p-3 text-xs leading-5 text-\[#6F6257\]">/);
+  assert.match(pageSource, /<summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold text-\[#8A5A00\]">/);
+  assert.doesNotMatch(pageSource, /<details open className="mt-3 rounded-lg border border-\[#E7C98B\] bg-white\/70 p-3 text-xs leading-5 text-\[#6F6257\]">/);
   assert.match(pageSource, /reason\.why_selected_label/);
   assert.match(pageSource, /reason\.trigger_item_labels\.join\("、"\)/);
 });
@@ -939,13 +976,15 @@ test("home dialogue header shows the selected case prominently", () => {
 
 
 test("home right sidebar starts with progress and keeps collapsible cards bounded", () => {
-  assert.match(pageSource, /type RightPanelKey = "evidence" \| "hypotheses" \| "report";/);
+  assert.match(pageSource, /type RightPanelKey = "evidence" \| "report";/);
   assert.match(pageSource, /function CollapsiblePanel\(/);
   assert.match(pageSource, /maxContentHeightClass = "max-h-64"/);
   assert.match(pageSource, /overflow-y-scroll pr-1 student-rail-scrollbar/);
   assert.match(pageSource, /const \[rightPanelOpenStates, setRightPanelOpenStates\] = useState<Record<RightPanelKey, boolean>>/);
   assert.doesNotMatch(pageSource, /focus: false,/);
   assert.doesNotMatch(pageSource, /agent: false,/);
+  assert.doesNotMatch(pageSource, /hypotheses: true,/);
+  assert.doesNotMatch(pageSource, /rightPanelOpenStates\.hypotheses/);
   assert.doesNotMatch(pageSource, /procedures: true,/);
   assert.match(pageSource, /report: true,/);
   assert.match(pageSource, /setRightPanelOpenStates\(\(currentStates\) =>/);
@@ -965,7 +1004,9 @@ test("home right sidebar starts with progress and keeps collapsible cards bounde
   assert.doesNotMatch(pageSource, /<CollapsiblePanel[\s\S]*title="智能体教学详情"[\s\S]*maxContentHeightClass="max-h-96"/);
   assert.doesNotMatch(pageSource, /title="查体与检查申请"/);
   assert.doesNotMatch(pageSource, /toggleRightPanel\("procedures"\)/);
-  assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"[\s\S]*maxContentHeightClass="max-h-48"/);
+  assert.doesNotMatch(pageSource, /<CollapsiblePanel[\s\S]*title="诊断假设"/);
+  assert.doesNotMatch(pageSource, /toggleRightPanel\("hypotheses"\)/);
+  assert.match(pageSource, /<section className="rounded-xl border border-border bg-card p-3 shadow-xs"[\s\S]*?<h2 className="text-sm font-semibold tracking-tight">诊断假设<\/h2>/);
   assert.match(pageSource, /<CollapsiblePanel[\s\S]*title="评分报告"[\s\S]*maxContentHeightClass="max-h-96"/);
 });
 
@@ -987,7 +1028,7 @@ test("home sidebars prioritize a compact student task flow", () => {
   const focusPanelIndex = pageSource.indexOf('title="教学重点与问诊提示"', rightAsideIndex);
   const agentPanelIndex = pageSource.indexOf('title="智能体教学详情"', rightAsideIndex);
   const evidencePanelIndex = pageSource.indexOf('title="已收集线索"', rightAsideIndex);
-  const hypothesisPanelIndex = pageSource.indexOf('title="诊断假设"', rightAsideIndex);
+  const hypothesisPanelIndex = pageSource.indexOf('>诊断假设</h2>', rightAsideIndex);
   assert.equal(focusPanelIndex, -1);
   assert.equal(agentPanelIndex, -1);
   assert.notEqual(evidencePanelIndex, -1);
@@ -1084,6 +1125,8 @@ test("home diagnosis hypothesis panel can record in-progress hypotheses", () => 
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/hypotheses/);
   assert.match(pageSource, /id="hypothesis-input"/);
   assert.match(pageSource, />\{isRecordingHypothesis \? "记录中" : "记录假设"\}<\/button>/);
+  assert.match(pageSource, /className="mt-2 grid gap-2"/);
+  assert.doesNotMatch(pageSource, /训练中可先记录诊断假设，最终诊断仍在下方提交。/);
 });
 
 

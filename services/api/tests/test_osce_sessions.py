@@ -278,24 +278,32 @@ def test_current_user_sessions_list_only_owned_sessions(tmp_path, authenticated_
     assert current_response.status_code == 200
     assert other_response.status_code == 200
     assert response.status_code == 200
-    assert response.json() == {
-        "sessions": [
-            {
-                "session_id": current_response.json()["session_id"],
-                "case_id": "appendicitis_001",
-                "stage": "case_intro",
-                "created_at": response.json()["sessions"][0]["created_at"],
-                "updated_at": response.json()["sessions"][0]["updated_at"],
-                "is_completed": False,
-                "can_continue": True,
-                "has_report": False,
-                "completion_status": "in_progress",
-            }
+    sessions = response.json()["sessions"]
+    assert len(sessions) == 1
+    assert {
+        key: sessions[0][key]
+        for key in [
+            "session_id",
+            "case_id",
+            "stage",
+            "is_completed",
+            "can_continue",
+            "has_report",
+            "completion_status",
         ]
+    } == {
+        "session_id": current_response.json()["session_id"],
+        "case_id": "appendicitis_001",
+        "stage": "case_intro",
+        "is_completed": False,
+        "can_continue": True,
+        "has_report": False,
+        "completion_status": "in_progress",
     }
-    assert response.json()["sessions"][0]["session_id"] != other_response.json()["session_id"]
-    assert response.json()["sessions"][0]["created_at"]
-    assert response.json()["sessions"][0]["updated_at"]
+    assert sessions[0]["session_id"] != other_response.json()["session_id"]
+    assert sessions[0]["created_at"]
+    assert sessions[0]["updated_at"]
+    assert isinstance(sessions[0]["active_skill_context"], dict)
 
 
 def test_current_user_sessions_mark_completed_after_diagnosis_submission(
@@ -981,8 +989,10 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
             "scope": "global",
             "stage_scope": ["case_intro"],
             "trigger_item_ids": ["ht_migration"],
+            "trigger_item_labels": ["追问疼痛部位及转移特征"],
             "priority": 0,
             "why_candidate": "适用训练点 ht_migration",
+            "why_selected_label": "适用训练点：追问疼痛部位及转移特征。",
         }
     ]
     assert active_skill_context["selected_skills"][0]["suggested_strategy"] == "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。"

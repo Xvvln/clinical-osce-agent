@@ -304,6 +304,68 @@ def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint
     assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_hint"
 
 
+def test_osce_graph_routes_unclassified_unknown_kind_without_claiming_missing_case_info() -> None:
+    captured_patient_requests: list[object] = []
+    captured_coach_requests: list[object] = []
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    def fake_coach_agent(request: object) -> dict[str, object]:
+        captured_coach_requests.append(request)
+        return {
+            "should_emit": False,
+            "hint": "",
+            "trigger_kind": "none",
+        }
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=fake_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "嗯",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intent"] == "unknown_history_intent"
+    assert result["reply"] == "我没太听明白您具体想问哪方面，可以再问得具体一点吗？"
+    assert result["messages"][-1] == {
+        "role": "coach",
+        "content": "本轮输入未能稳定识别为具体问诊意图。请换成更具体的问法，例如起病时间、疼痛部位、性质、程度或伴随症状。",
+    }
+    assert result["revealed_facts"] == []
+    assert getattr(captured_patient_requests[0], "turn_policy") == "unclassified_input"
+    assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "unclassified_input"
+    assert getattr(captured_coach_requests[0], "base_hint") == (
+        "本轮输入未能稳定识别为具体问诊意图。请换成更具体的问法，例如起病时间、疼痛部位、性质、程度或伴随症状。"
+    )
+    assert result["agent_turn_memory"][0]["turn_analysis"]["unknown_kind"] == "unclassified_input"
+    assert result["agent_turn_memory"][0]["turn_policy"] == "unclassified_input"
+    assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_hint"
+
+
 def test_osce_graph_answers_patient_profile_gender_without_falling_back_to_unknown() -> None:
     captured_patient_requests: list[object] = []
 

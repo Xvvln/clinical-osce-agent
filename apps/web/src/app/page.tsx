@@ -19,7 +19,7 @@ type WorkflowStepDefinition = Readonly<{
   label: string;
 }>;
 
-type RightPanelKey = "evidence" | "hypotheses" | "report";
+type RightPanelKey = "evidence" | "report";
 
 type OsceDockMenuGroup = "training" | "system";
 
@@ -1150,11 +1150,6 @@ function getEvidenceLabelFromDetail(detail: string, fallbackIndex: number): stri
 }
 
 function getEvidenceItem(factId: string, trainingProgress: TrainingProgress | null, fallbackIndex: number): EvidenceItem {
-  const knownEvidenceItem = evidenceByFactId[factId];
-  if (knownEvidenceItem) {
-    return knownEvidenceItem;
-  }
-
   const shortFactId = getShortEvidenceId(factId);
   const coveredHistoryItem = trainingProgress?.coverage_map.history.find(
     (item) => item.id === factId || item.id === shortFactId,
@@ -1164,6 +1159,11 @@ function getEvidenceItem(factId: string, trainingProgress: TrainingProgress | nu
       label: getEvidenceLabelFromDetail(coveredHistoryItem.label, fallbackIndex),
       detail: coveredHistoryItem.label,
     };
+  }
+
+  const knownEvidenceItem = evidenceByFactId[factId];
+  if (knownEvidenceItem) {
+    return knownEvidenceItem;
   }
 
   return {
@@ -1868,7 +1868,6 @@ function HomeContent() {
   const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active);
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
-    hypotheses: true,
     report: true,
   });
   const [session, setSession] = useState<OsceSession | null>(null);
@@ -1896,6 +1895,7 @@ function HomeContent() {
   const [feedbackReport, setFeedbackReport] = useState<FeedbackReport | null>(null);
   const [procedureResults, setProcedureResults] = useState<readonly ProcedureResult[]>([]);
   const [selectedProcedureResult, setSelectedProcedureResult] = useState<ProcedureResult | null>(null);
+  const [latestRevealedFactId, setLatestRevealedFactId] = useState<string | null>(null);
   const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -1919,6 +1919,9 @@ function HomeContent() {
   const osceDockContainerRef = useRef<HTMLDivElement | null>(null);
   const procedureActionContainerRef = useRef<HTMLDivElement | null>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const latestEvidenceItemRef = useRef<HTMLDivElement | null>(null);
+  const previousRevealedFactIdsRef = useRef<readonly string[] | null>(null);
+  const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -2218,6 +2221,68 @@ function HomeContent() {
     );
   }, [feedbackReport, session?.feedback_report]);
 
+  useEffect(() => {
+    const currentSessionId = session?.session_id ?? null;
+    const currentRevealedFactIds = session?.revealed_facts ?? [];
+
+    if (!currentSessionId) {
+      previousRevealedFactsSessionIdRef.current = null;
+      previousRevealedFactIdsRef.current = null;
+      setLatestRevealedFactId(null);
+      return;
+    }
+
+    if (previousRevealedFactsSessionIdRef.current !== currentSessionId) {
+      previousRevealedFactsSessionIdRef.current = currentSessionId;
+      previousRevealedFactIdsRef.current = currentRevealedFactIds;
+      setLatestRevealedFactId(null);
+      return;
+    }
+
+    const previousRevealedFactIds = previousRevealedFactIdsRef.current ?? [];
+    previousRevealedFactIdsRef.current = currentRevealedFactIds;
+    const previousRevealedFactIdSet = new Set(previousRevealedFactIds);
+    const newestRevealedFactId = [...currentRevealedFactIds].reverse().find((factId) => !previousRevealedFactIdSet.has(factId));
+
+    if (!newestRevealedFactId) {
+      return;
+    }
+
+    setLatestRevealedFactId(newestRevealedFactId);
+    setRightPanelOpenStates((currentStates) => currentStates.evidence ? currentStates : { ...currentStates, evidence: true });
+  }, [session?.revealed_facts, session?.session_id]);
+
+  useEffect(() => {
+    if (!latestRevealedFactId || !rightPanelOpenStates.evidence) {
+      return;
+    }
+
+    const scrollTimer = window.setTimeout(() => {
+      latestEvidenceItemRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 100);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+    };
+  }, [latestRevealedFactId, rightPanelOpenStates.evidence]);
+
+  useEffect(() => {
+    if (!latestRevealedFactId) {
+      return;
+    }
+
+    const glowTimer = window.setTimeout(() => {
+      setLatestRevealedFactId((currentFactId) => currentFactId === latestRevealedFactId ? null : currentFactId);
+    }, 2600);
+
+    return () => {
+      window.clearTimeout(glowTimer);
+    };
+  }, [latestRevealedFactId]);
+
   function toggleRightPanel(panelKey: RightPanelKey) {
     setRightPanelOpenStates((currentStates) => ({
       ...currentStates,
@@ -2500,7 +2565,10 @@ function HomeContent() {
       return [];
     }
 
-    return session.revealed_facts.map((factId, itemIndex) => getEvidenceItem(factId, session.training_progress, itemIndex));
+    return session.revealed_facts.map((factId, itemIndex) => ({
+      id: factId,
+      ...getEvidenceItem(factId, session.training_progress, itemIndex),
+    }));
   }, [session]);
 
   const requestedItems = useMemo(
@@ -3131,9 +3199,14 @@ function HomeContent() {
                       </p>
                       <p className="mt-1">{message.isPending && !message.finalText ? <PendingThinkingIndicator /> : message.text}</p>
                       {isCoach && message.skillSelectionReasons && message.skillSelectionReasons.length > 0 ? (
-                        <div className="mt-3 rounded-lg border border-[#E7C98B] bg-white/70 p-3 text-xs leading-5 text-[#6F6257]">
-                          <p className="font-semibold text-[#8A5A00]">本轮 Skill 依据</p>
-                          <div className="mt-2 grid gap-2">
+                        <details className="mt-3 rounded-lg border border-[#E7C98B] bg-white/70 p-3 text-xs leading-5 text-[#6F6257]">
+                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold text-[#8A5A00]">
+                            <span>本轮 Skill 依据</span>
+                            <span className="rounded-full border border-[#E7C98B] bg-[#FFF8E8] px-2 py-0.5 text-[11px] font-medium">
+                              {message.skillSelectionReasons.length} 条
+                            </span>
+                          </summary>
+                          <div className="mt-3 grid gap-2">
                             {message.skillSelectionReasons.map((reason) => (
                               <div className="rounded-md border border-[#E6DFD2] bg-background px-3 py-2" key={reason.skill_id}>
                                 <p className="font-medium text-foreground">{reason.title || reason.skill_id}</p>
@@ -3144,7 +3217,7 @@ function HomeContent() {
                               </div>
                             ))}
                           </div>
-                        </div>
+                        </details>
                       ) : null}
                     </div>
                   </div>
@@ -3154,14 +3227,6 @@ function HomeContent() {
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10">
               <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
-                <button
-                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                  disabled={isCurrentSessionCompleted}
-                  onClick={() => setInputValue("什么时候开始疼的？")}
-                  type="button"
-                >
-                  问现病史
-                </button>
                 <button
                   className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingHint}
@@ -3331,7 +3396,7 @@ function HomeContent() {
                     autoComplete="off"
                     autoCorrect="off"
                     onChange={(event) => setInputValue(event.target.value)}
-                    placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"
+                    placeholder="输入问诊问题，开始诊断训练"
                     spellCheck={false}
                     value={inputValue}
                   />
@@ -3445,12 +3510,27 @@ function HomeContent() {
             >
               {evidenceItems.length > 0 ? (
                 <div className="space-y-2">
-                  {evidenceItems.map((item) => (
-                    <div className="rounded-lg border border-border bg-muted/60 p-3" key={item.label}>
-                      <p className="text-sm font-medium">{item.label}</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.detail}</p>
-                    </div>
-                  ))}
+                  {evidenceItems.map((item) => {
+                    const isLatestRevealedFact = item.id === latestRevealedFactId;
+                    return (
+                      <div
+                        className={`rounded-lg border p-3 transition ${isLatestRevealedFact ? "clinical-osce-evidence-glow overflow-hidden border-[#D6A54F] bg-[#FFF8E8]" : "border-border bg-muted/60"}`}
+                        data-latest-revealed-fact={isLatestRevealedFact ? "true" : undefined}
+                        key={item.id}
+                        ref={isLatestRevealedFact ? latestEvidenceItemRef : undefined}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium">{item.label}</p>
+                          {isLatestRevealedFact ? (
+                            <span className="shrink-0 rounded-full border border-[#D6A54F]/40 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-[#8A5A00]">
+                              刚命中
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
@@ -3459,13 +3539,16 @@ function HomeContent() {
               )}
             </CollapsiblePanel>
 
-            <CollapsiblePanel
-              title="诊断假设"
-              isOpen={rightPanelOpenStates.hypotheses}
-              maxContentHeightClass="max-h-48"
-              onToggle={() => toggleRightPanel("hypotheses")}
-            >
-              <div className="space-y-3">
+            <section className="rounded-xl border border-border bg-card p-3 shadow-xs">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold tracking-tight">诊断假设</h2>
+                {session?.student_hypotheses.length ? (
+                  <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
+                    {session.student_hypotheses.length} 条
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-2 grid gap-2">
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <label className="sr-only" htmlFor="hypothesis-input">
                     输入训练中的诊断假设
@@ -3486,20 +3569,16 @@ function HomeContent() {
                   >{isRecordingHypothesis ? "记录中" : "记录假设"}</button>
                 </div>
                 {session?.student_hypotheses.length ? (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex max-h-20 flex-wrap gap-2 overflow-y-auto pr-1 student-rail-scrollbar" onScroll={handleStudentRailScroll}>
                     {session.student_hypotheses.map((hypothesis, index) => (
                       <span className="rounded-full border border-border bg-background px-3 py-1 text-xs" key={`${hypothesis}-${index}`}>
                         {hypothesis}
                       </span>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    训练中可先记录诊断假设，最终诊断仍在下方提交。
-                  </p>
-                )}
+                ) : null}
               </div>
-            </CollapsiblePanel>
+            </section>
 
             <CollapsiblePanel
               title="评分报告"

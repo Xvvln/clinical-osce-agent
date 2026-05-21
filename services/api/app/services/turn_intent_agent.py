@@ -6,7 +6,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.gemini_patient_responder import GeminiPatientSettings, _apply_process_proxy
@@ -44,6 +44,7 @@ KNOWN_UNKNOWN_KINDS = [
     "unsupported_case_question",
     "off_topic",
     "possible_missed_medical_intent",
+    "unclassified_input",
 ]
 
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控意图识别 Agent，只负责理解学生本轮输入属于哪类问诊意图。
@@ -54,7 +55,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控意图识别 Agent，�
 - 不得推断或输出诊断、治疗方案、用药剂量、标准答案、rubric 或病例隐藏事实。
 - 如果学生询问患者年龄、性别或职业，可选择对应患者公开画像意图。
 - 如果没有提出可映射的问诊问题，输出 unknown_history_intent，并同时输出 unknown_kind：
-  social_greeting=问候；patient_identity_unclear=笼统问身份；unsupported_case_question=病例脚本未提供的信息；off_topic=明显偏题；possible_missed_medical_intent=疑似医学问诊但表达太宽泛或未命中意图。
+  social_greeting=问候；patient_identity_unclear=笼统问身份；unsupported_case_question=病例脚本未提供的信息；off_topic=明显偏题；possible_missed_medical_intent=疑似医学问诊但表达太宽泛或未命中意图；unclassified_input=无法稳定归入医学问诊、病例缺失信息或偏题类别的含混输入。
 - possible_missed_medical_intent 可在 possible_intents 中给出 1-4 个可能的 allowed_intents，但不能替学生决定最终事实披露。
 - rationale 用一句中文说明判断依据，不超过 40 个汉字。
 - 只输出 JSON。
@@ -79,6 +80,16 @@ class TurnIntentResponse(BaseModel):
     rationale: str = ""
     unknown_kind: str = ""
     possible_intents: list[str] = Field(default_factory=list)
+
+    @field_validator("unknown_kind", mode="before")
+    @classmethod
+    def _coerce_unknown_kind(cls, value: Any) -> str:
+        return "" if value is None else value
+
+    @field_validator("possible_intents", mode="before")
+    @classmethod
+    def _coerce_possible_intents(cls, value: Any) -> list[str]:
+        return [] if value is None else value
 
 
 class DeterministicTurnIntentAgent:
@@ -209,7 +220,7 @@ def normalize_turn_intent_response(response: TurnIntentResponse | dict[str, Any]
 def classify_unknown_history_message(message: str) -> dict[str, Any]:
     normalized = message.strip().lower()
     if not normalized:
-        return _unknown_analysis("unsupported_case_question", False, [], "学生输入为空或缺少可识别问诊内容。")
+        return _unknown_analysis("unclassified_input", False, [], "学生输入为空或缺少可识别问诊内容。")
     if _contains_any(normalized, ["你好", "您好", "早上好", "下午好", "晚上好", "嗨", "hello", "hi"]):
         return _unknown_analysis("social_greeting", False, [], "学生在寒暄问候。")
     if _contains_any(normalized, ["身份证", "手机号", "电话号码", "微信", "qq", "住址", "详细地址", "叫什么名字", "真名"]):
@@ -225,7 +236,7 @@ def classify_unknown_history_message(message: str) -> dict[str, Any]:
             _possible_intents_for_broad_medical_question(normalized),
             "学生可能在问症状，但表达过于宽泛。",
         )
-    return _unknown_analysis("unsupported_case_question", False, [], "未命中当前病例可映射问诊意图。")
+    return _unknown_analysis("unclassified_input", False, [], "未能稳定识别学生输入意图。")
 
 
 def _unknown_analysis(

@@ -48,6 +48,26 @@ class FakeOpenAICompatibleTurnIntentResponse:
         }
 
 
+class FakeOpenAICompatibleNullUnknownKindTurnIntentResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"current_intent":"ask_onset","confidence":0.91,'
+                            '"is_off_topic":false,"rationale":"学生在询问起病时间。",'
+                            '"unknown_kind":null,"possible_intents":null}'
+                        ),
+                    },
+                }
+            ],
+        }
+
+
 class FakeOpenAICompatibleHttpClient:
     calls: list[dict[str, object]] = []
 
@@ -85,6 +105,18 @@ class FakePlainTextOpenAICompatibleHttpClient(FakeOpenAICompatibleHttpClient):
     def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakePlainTextOpenAICompatibleTurnIntentResponse:
         self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
         return FakePlainTextOpenAICompatibleTurnIntentResponse()
+
+
+class FakeNullUnknownKindOpenAICompatibleHttpClient(FakeOpenAICompatibleHttpClient):
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> FakeOpenAICompatibleNullUnknownKindTurnIntentResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        return FakeOpenAICompatibleNullUnknownKindTurnIntentResponse()
 
 
 class FakeAnthropicTurnIntentResponse:
@@ -177,6 +209,7 @@ def test_deterministic_turn_intent_agent_classifies_unknown_history_kind() -> No
         ("你喜欢打游戏吗？", "off_topic", True, []),
         ("你的身份证号是多少？", "unsupported_case_question", False, []),
         ("还有没有其他不舒服？", "possible_missed_medical_intent", False, ["ask_associated_nausea", "ask_fever"]),
+        ("嗯", "unclassified_input", False, []),
     ]
 
     for message, expected_unknown_kind, expected_off_topic, expected_possible_intents in examples:
@@ -214,6 +247,31 @@ def test_create_configured_turn_intent_agent_uses_runtime_openai_compatible_conf
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-proxy"
     assert "hidden_fact" not in str(FakeOpenAICompatibleHttpClient.calls[0]["json"])
+
+
+def test_openai_compatible_turn_intent_agent_tolerates_null_optional_fields(monkeypatch) -> None:
+    FakeNullUnknownKindOpenAICompatibleHttpClient.calls = []
+    runtime_model_config_store.clear()
+    runtime_model_config_store.apply_config(
+        {
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "gemini-via-proxy",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        }
+    )
+    monkeypatch.setattr(openai_module.httpx, "Client", FakeNullUnknownKindOpenAICompatibleHttpClient)
+
+    try:
+        agent = module._create_configured_turn_intent_agent()
+        response = module.normalize_turn_intent_response(agent(_request_with_keyword("ask_onset")))
+    finally:
+        runtime_model_config_store.clear()
+
+    assert response["current_intent"] == "ask_onset"
+    assert "unknown_kind" not in response
+    assert "possible_intents" not in response
 
 
 def test_lazy_turn_intent_agent_raises_when_provider_returns_plain_text(monkeypatch) -> None:
