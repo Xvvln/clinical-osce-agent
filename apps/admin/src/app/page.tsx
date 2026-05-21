@@ -17,6 +17,9 @@ type AdminSessionSummary = Readonly<{
 type AdminActiveSkillSkippedReason = Readonly<{
   skill_id: string;
   reason: string;
+  reason_label?: string;
+  reason_group?: string;
+  reason_description?: string;
 }>;
 
 type AdminActiveSkillContext = Readonly<{
@@ -1012,6 +1015,28 @@ const ADMIN_CANDIDATE_STATUS_FILTERS: readonly {
   { value: "processed", label: "已处理", hint: "已批准或拒绝" },
   { value: "all", label: "全部", hint: "完整审计" },
 ];
+const ADMIN_SKILL_SKIP_REASON_LABELS: Record<string, string> = {
+  case_mismatch: "病例不匹配",
+  student_mismatch: "非当前学员个人 Skill",
+  stage_mismatch: "阶段不匹配",
+  trigger_items_missing: "缺少触发训练点",
+  missing_evidence_mismatch: "当前缺口未命中",
+  context_safety_mismatch: "病例安全边界不匹配",
+  profile_state_cooldown: "画像冷却观察",
+  profile_state_retired: "画像已退休",
+  not_selected_top_k: "优先级截断",
+};
+const ADMIN_SKILL_SKIP_REASON_DESCRIPTIONS: Record<string, string> = {
+  case_mismatch: "该 Skill 绑定的病例或评分项不适用于当前病例，本轮暂不注入。",
+  student_mismatch: "该个人 Skill 属于其他学员，本轮暂不注入。",
+  stage_mismatch: "该 Skill 适用阶段与当前训练阶段不同，本轮暂不注入。",
+  trigger_items_missing: "该 Skill 缺少可匹配的训练点，暂不注入。",
+  missing_evidence_mismatch: "当前会话缺口未命中该 Skill 的训练点，本轮暂不注入。",
+  context_safety_mismatch: "该 Skill 内容与当前患者人口学或病例安全约束不一致，本轮暂不注入。",
+  profile_state_cooldown: "学习画像显示该训练点近期已稳定，暂时观察。",
+  profile_state_retired: "学习画像显示该训练点长期稳定，默认不再注入。",
+  not_selected_top_k: "该 Skill 可用，但本轮优先级低于已注入 Skill。",
+};
 const ADMIN_RAG_KNOWLEDGE_SCOPES = ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((option) => option.value);
 const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((option) => option.value);
 const adminRagFieldClassName = "grid min-w-0 gap-2 text-xs font-semibold text-[#141413]";
@@ -1333,6 +1358,21 @@ function getAdminDisplayListPreview(
     return values.join("、");
   }
   return `${values.slice(0, limit).join("、")} 等 ${values.length} 项`;
+}
+
+function getAdminSkillSkipReasonLabel(reason: string): string {
+  return ADMIN_SKILL_SKIP_REASON_LABELS[reason] ?? (reason || "未记录跳过原因");
+}
+
+function getAdminSkillSkipReasonDescription(reason: string): string {
+  return ADMIN_SKILL_SKIP_REASON_DESCRIPTIONS[reason] ?? "该 Skill 本轮未注入，原始原因请查看技术细节。";
+}
+
+function getAdminVisibleSkippedReasons(
+  skippedReasons: readonly AdminActiveSkillSkippedReason[] | undefined,
+  limit = 6,
+): readonly AdminActiveSkillSkippedReason[] {
+  return skippedReasons?.slice(0, limit) ?? [];
 }
 
 function formatTrainingSkillCandidateSupport(candidate: Pick<TrainingSkillCandidateSummary, "support_count" | "source_report_count">): string {
@@ -4083,17 +4123,37 @@ export default function AdminDashboardPage() {
                   </dl>
                   <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
                     <h4 className="text-sm font-semibold">Skill 跳过原因</h4>
-                    <div className="mt-2 grid gap-2">
-                      {(selectedSessionSummary.active_skill_context?.skipped_reasons ?? []).length > 0 ? (
-                        selectedSessionSummary.active_skill_context?.skipped_reasons?.map((item) => (
-                          <p className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-xs leading-5 text-[#6F6257]" key={`${item.skill_id}-${item.reason}`}>
-                            {item.skill_id}：{item.reason}
-                          </p>
-                        ))
-                      ) : (
-                        <p className="text-xs leading-5 text-[#8A7D6F]">本 Session 暂无 Skill 跳过记录。</p>
-                      )}
-                    </div>
+                    <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">这里只说明 enabled Skill 为什么没有进入本轮 Coach 上下文，便于审计编排边界。</p>
+                    {(() => {
+                      const skippedReasons = selectedSessionSummary.active_skill_context?.skipped_reasons ?? [];
+                      const visibleSkippedReasons = getAdminVisibleSkippedReasons(skippedReasons);
+                      if (skippedReasons.length === 0) {
+                        return <p className="mt-2 text-xs leading-5 text-[#8A7D6F]">本 Session 暂无 Skill 跳过记录。</p>;
+                      }
+                      return (
+                        <div className="mt-2 grid gap-2">
+                          {visibleSkippedReasons.map((item) => (
+                            <article className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]" key={`${item.skill_id}-${item.reason}`}>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-semibold text-[#141413]">{item.reason_label ?? getAdminSkillSkipReasonLabel(item.reason)}</p>
+                                <span className="rounded-full border border-[#AE5630]/20 bg-white px-2 py-1 text-[11px] text-[#AE5630]">{item.reason_group ?? "其他"}</span>
+                              </div>
+                              <p className="mt-1">{item.reason_description ?? getAdminSkillSkipReasonDescription(item.reason)}</p>
+                              <details className="mt-2 rounded-md border border-[#E6DFD2] bg-white px-2 py-1">
+                                <summary className="cursor-pointer font-semibold text-[#141413]">展开技术原因</summary>
+                                <p className="mt-1 break-all">技术原因：{item.reason}</p>
+                                <p className="mt-1 break-all">技术 ID：{item.skill_id}</p>
+                              </details>
+                            </article>
+                          ))}
+                          {skippedReasons.length > visibleSkippedReasons.length ? (
+                            <p className="rounded-lg border border-dashed border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#8A7D6F]">
+                              还有 {skippedReasons.length - visibleSkippedReasons.length} 条跳过记录，导出当前 Session 页 JSON 可查看完整列表。
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button

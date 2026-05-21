@@ -168,6 +168,9 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /active_skill_context/);
   assert.match(adminPageSource, /skipped_reasons/);
   assert.match(adminPageSource, /Skill 跳过原因/);
+  assert.match(adminPageSource, /reason_label\?: string;/);
+  assert.match(adminPageSource, /reason_group\?: string;/);
+  assert.match(adminPageSource, /reason_description\?: string;/);
   assert.match(adminPageSource, /智能体决策轨迹/);
   assert.match(adminPageSource, /agentDecisionEvents/);
   assert.match(adminPageSource, /event\.event_type === "agent_decision_traced"/);
@@ -465,6 +468,24 @@ test("admin workspace keeps module cards with navigator-like radius and fills se
   assert.match(adminPageSource, />Session 详情</);
   assert.match(adminPageSource, /xl:items-stretch/);
   assert.match(adminPageSource, /max-h-\[44rem\]/);
+});
+
+test("admin session skill audit explains skipped reasons in Chinese before raw codes", () => {
+  assert.match(adminPageSource, /const ADMIN_SKILL_SKIP_REASON_LABELS: Record<string, string> =/);
+  assert.match(adminPageSource, /const ADMIN_SKILL_SKIP_REASON_DESCRIPTIONS: Record<string, string> =/);
+  assert.match(adminPageSource, /function getAdminSkillSkipReasonLabel\(reason: string\): string/);
+  assert.match(adminPageSource, /function getAdminSkillSkipReasonDescription\(reason: string\): string/);
+  assert.match(adminPageSource, /function getAdminVisibleSkippedReasons/);
+  assert.match(adminPageSource, /画像冷却观察/);
+  assert.match(adminPageSource, /画像已退休/);
+  assert.match(adminPageSource, /优先级截断/);
+  assert.match(adminPageSource, /当前缺口未命中/);
+  assert.match(adminPageSource, /\{item\.reason_label \?\? getAdminSkillSkipReasonLabel\(item\.reason\)\}/);
+  assert.match(adminPageSource, /\{item\.reason_description \?\? getAdminSkillSkipReasonDescription\(item\.reason\)\}/);
+  assert.match(adminPageSource, /技术原因：\{item\.reason\}/);
+  assert.match(adminPageSource, /技术 ID：\{item\.skill_id\}/);
+  assert.match(adminPageSource, />展开技术原因</);
+  assert.doesNotMatch(adminPageSource, /\{item\.skill_id\}：\{item\.reason\}/);
 });
 
 test("admin dashboard renders readable display labels before technical ids", () => {

@@ -84,6 +84,42 @@ EFFECT_STATUS_LABELS: dict[str, str] = {
     "declining": "需要复核",
 }
 
+SKILL_SKIP_REASON_LABELS: dict[str, str] = {
+    "case_mismatch": "病例不匹配",
+    "student_mismatch": "非当前学员个人 Skill",
+    "stage_mismatch": "阶段不匹配",
+    "trigger_items_missing": "缺少触发训练点",
+    "missing_evidence_mismatch": "当前缺口未命中",
+    "context_safety_mismatch": "病例安全边界不匹配",
+    "profile_state_cooldown": "画像冷却观察",
+    "profile_state_retired": "画像已退休",
+    "not_selected_top_k": "优先级截断",
+}
+
+SKILL_SKIP_REASON_GROUPS: dict[str, str] = {
+    "case_mismatch": "适用范围",
+    "student_mismatch": "适用范围",
+    "stage_mismatch": "适用范围",
+    "trigger_items_missing": "数据质量",
+    "missing_evidence_mismatch": "当前缺口",
+    "context_safety_mismatch": "安全边界",
+    "profile_state_cooldown": "学习画像",
+    "profile_state_retired": "学习画像",
+    "not_selected_top_k": "排序截断",
+}
+
+SKILL_SKIP_REASON_DESCRIPTIONS: dict[str, str] = {
+    "case_mismatch": "该 Skill 绑定的病例或评分项不适用于当前病例，本轮暂不注入。",
+    "student_mismatch": "该个人 Skill 属于其他学员，本轮暂不注入。",
+    "stage_mismatch": "该 Skill 适用阶段与当前训练阶段不同，本轮暂不注入。",
+    "trigger_items_missing": "该 Skill 缺少可匹配的训练点，暂不注入。",
+    "missing_evidence_mismatch": "当前会话缺口未命中该 Skill 的训练点，本轮暂不注入。",
+    "context_safety_mismatch": "该 Skill 内容与当前患者人口学或病例安全约束不一致，本轮暂不注入。",
+    "profile_state_cooldown": "学习画像显示该训练点近期已稳定，暂时观察。",
+    "profile_state_retired": "学习画像显示该训练点长期稳定，默认不再注入。",
+    "not_selected_top_k": "该 Skill 可用，但本轮优先级低于已注入 Skill。",
+}
+
 TRIGGER_ITEM_LABELS: dict[str, str] = {
     "turn_intent:unknown_history_intent": "未命中明确病史意图",
     "turn_policy:patient_context_redirect": "引导回患者上下文",
@@ -201,6 +237,21 @@ def skill_type_label(skill_type: str) -> str:
 
 def effect_status_label(effect_status: str) -> str:
     return EFFECT_STATUS_LABELS.get(str(effect_status or ""), str(effect_status or "") or "未知效果状态")
+
+
+def skill_skip_reason_label(reason: str) -> str:
+    normalized_reason = str(reason or "").strip()
+    return SKILL_SKIP_REASON_LABELS.get(normalized_reason, normalized_reason or "未记录跳过原因")
+
+
+def skill_skip_reason_group(reason: str) -> str:
+    normalized_reason = str(reason or "").strip()
+    return SKILL_SKIP_REASON_GROUPS.get(normalized_reason, "其他")
+
+
+def skill_skip_reason_description(reason: str) -> str:
+    normalized_reason = str(reason or "").strip()
+    return SKILL_SKIP_REASON_DESCRIPTIONS.get(normalized_reason, "该 Skill 本轮未注入，原始原因请查看技术细节。")
 
 
 def stage_scope_labels(stage_scope: Iterable[str]) -> list[str]:
@@ -360,6 +411,31 @@ def enrich_session_summary(session: dict[str, Any]) -> dict[str, Any]:
         **session,
         "case_title": case_title(str(session.get("case_id", ""))),
         "stage_label": stage_label(str(session.get("stage", ""))),
+        "active_skill_context": enrich_active_skill_context(session.get("active_skill_context")),
+    }
+
+
+def enrich_active_skill_context(active_skill_context: Any) -> dict[str, Any]:
+    if not isinstance(active_skill_context, dict):
+        return {}
+    skipped_reasons = active_skill_context.get("skipped_reasons", [])
+    return {
+        **active_skill_context,
+        "skipped_reasons": [
+            enrich_active_skill_skipped_reason(item)
+            for item in skipped_reasons
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def enrich_active_skill_skipped_reason(item: dict[str, Any]) -> dict[str, Any]:
+    reason = str(item.get("reason", "")).strip()
+    return {
+        **item,
+        "reason_label": skill_skip_reason_label(reason),
+        "reason_group": skill_skip_reason_group(reason),
+        "reason_description": skill_skip_reason_description(reason),
     }
 
 

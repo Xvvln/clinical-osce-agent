@@ -1599,6 +1599,14 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
             student_id="student_b",
             case_id="hyperthyroid_001",
             stage="diagnosis_submitted",
+            active_skill_context={
+                "skill_index": [],
+                "selected_skills": [],
+                "skipped_reasons": [
+                    {"skill_id": "skill_history_bundle", "reason": "stage_mismatch"},
+                    {"skill_id": "skill_retired_history", "reason": "profile_state_retired"},
+                ],
+            },
         )
     )
     monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
@@ -1616,6 +1624,22 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
     assert payload["sessions"][0]["stage_label"] == "诊断已提交"
     assert isinstance(payload["sessions"][0]["created_at"], str)
     assert isinstance(payload["sessions"][0]["updated_at"], str)
+    assert payload["sessions"][0]["active_skill_context"]["skipped_reasons"] == [
+        {
+            "skill_id": "skill_history_bundle",
+            "reason": "stage_mismatch",
+            "reason_label": "阶段不匹配",
+            "reason_group": "适用范围",
+            "reason_description": "该 Skill 适用阶段与当前训练阶段不同，本轮暂不注入。",
+        },
+        {
+            "skill_id": "skill_retired_history",
+            "reason": "profile_state_retired",
+            "reason_label": "画像已退休",
+            "reason_group": "学习画像",
+            "reason_description": "学习画像显示该训练点长期稳定，默认不再注入。",
+        },
+    ]
     assert payload["pagination"] == {"limit": 2, "offset": 0, "total": 2}
 
 
