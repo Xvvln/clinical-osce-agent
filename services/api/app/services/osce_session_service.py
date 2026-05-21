@@ -15,6 +15,8 @@ from app.services.patient_language_service import build_patient_opening_utteranc
 from app.services.report_store import ReportStore, report_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore, training_skill_candidate_store
+from app.services.student_profile_summary_service import build_skill_profile_summary
+from app.services.training_skill_orchestrator_service import build_active_skill_context
 from app.services.training_skill_store import TrainingSkillStore, training_skill_store
 from app.services.vertex_gemini_scorer import create_default_vertex_gemini_scorer
 from app.validators.case_validator import validate_case
@@ -44,6 +46,7 @@ class OsceSession:
     feedback_report: dict[str, Any] | None = None
     safety_flags: list[str] = field(default_factory=list)
     evolution_candidates: list[str] = field(default_factory=list)
+    active_skill_context: dict[str, Any] = field(default_factory=dict)
     agent_turn_memory: list[dict[str, Any]] = field(default_factory=list)
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
@@ -94,11 +97,23 @@ class OsceSessionService:
     def create_session(self, case_id: str, student_id: str) -> dict[str, Any]:
         graph_state = self.osce_graph.invoke(_initial_graph_state(case_id))
         case = load_case_node(graph_state["case_id"])
+        all_enabled_skills = self.training_skill_store.list_enabled_skills()
+        rubric_item_ids = _rubric_item_ids(case.case_id)
+        student_profile = self._build_skill_profile_summary(student_id, all_enabled_skills)
         enabled_skills = _enabled_skills_for_case(
-            self.training_skill_store.list_enabled_skills(),
+            all_enabled_skills,
             case,
             graph_state["stage"],
             student_id,
+        )
+        active_skill_context = build_active_skill_context(
+            all_enabled_skills,
+            case_id=case.case_id,
+            student_id=student_id,
+            stage=graph_state["stage"],
+            rubric_item_ids=rubric_item_ids,
+            student_profile=student_profile,
+            patient_profile={"gender": case.patient_profile.gender},
         )
         session = OsceSession(
             session_id=str(uuid4()),
@@ -106,6 +121,7 @@ class OsceSessionService:
             case_id=graph_state["case_id"],
             stage=graph_state["stage"],
             evolution_candidates=_enabled_skill_prompts(enabled_skills),
+            active_skill_context=active_skill_context,
         )
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
@@ -143,8 +159,10 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, message))
         _apply_graph_state(session, graph_state)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
@@ -192,8 +210,10 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
         _apply_graph_state(session, graph_state)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
@@ -216,8 +236,10 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
         _apply_graph_state(session, graph_state)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
@@ -241,6 +263,7 @@ class OsceSessionService:
         if session is None:
             return None
         session.student_hypotheses.append(hypothesis)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         self._append_event(session, "hypothesis_recorded", {"hypothesis": hypothesis})
@@ -251,8 +274,10 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, hint_requested=True))
         _apply_graph_state(session, graph_state)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
@@ -280,6 +305,7 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(
             _graph_state_from_session(
                 session,
@@ -288,6 +314,7 @@ class OsceSessionService:
             )
         )
         _apply_graph_state(session, graph_state)
+        self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
         self._append_event(session, "diagnosis_submitted", {"diagnosis": diagnosis, "reasoning": reasoning})
@@ -350,6 +377,41 @@ class OsceSessionService:
         session = OsceSession(**session_payload)
         self._sessions[session.session_id] = session
         return session
+
+    def _refresh_active_skill_context(self, session: OsceSession) -> dict[str, Any]:
+        case = load_case_node(session.case_id)
+        enabled_skills = self.training_skill_store.list_enabled_skills()
+        student_profile = self._build_skill_profile_summary(session.student_id, enabled_skills)
+        active_skill_context = build_active_skill_context(
+            enabled_skills,
+            case_id=case.case_id,
+            student_id=session.student_id,
+            stage=session.stage,
+            rubric_item_ids=_rubric_item_ids(case.case_id),
+            current_missing_evidence=_current_missing_evidence(session),
+            student_profile=student_profile,
+            patient_profile={"gender": case.patient_profile.gender},
+        )
+        session.active_skill_context = active_skill_context
+        session.evolution_candidates = _enabled_skill_prompts_from_active_context(active_skill_context)
+        return active_skill_context
+
+    def _build_skill_profile_summary(self, student_id: str, enabled_skills: list[dict[str, Any]]) -> dict[str, Any]:
+        sessions = self.session_store.list_user_session_summaries(student_id)
+        reports = [
+            report
+            for session in sessions
+            if (report := self.report_store.get_report(str(session["session_id"]))) is not None
+        ]
+        visible_enabled_skills = [
+            skill
+            for skill in enabled_skills
+            if str(skill.get("scope", "global")) != "personal" or str(skill.get("owner_student_id", "")) == student_id
+        ]
+        return build_skill_profile_summary(
+            reports=reports,
+            enabled_skills=visible_enabled_skills,
+        )
 
     def _save_session(self, session: OsceSession) -> None:
         self._sessions[session.session_id] = session
@@ -490,6 +552,7 @@ def _graph_state_from_session(
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
@@ -668,6 +731,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "feedback_report": None,
         "safety_flags": [],
         "evolution_candidates": [],
+        "active_skill_context": _empty_active_skill_context(),
         "agent_turn_memory": [],
         "pedagogy_state": {},
         "agent_decision_trace": [],
@@ -971,6 +1035,37 @@ def _enabled_skill_prompts(skills: list[dict[str, Any]]) -> list[str]:
     return [f"{skill['title']}：{skill['suggested_strategy']}" for skill in skills]
 
 
+def _enabled_skill_prompts_from_active_context(active_skill_context: dict[str, Any]) -> list[str]:
+    selected_skills = active_skill_context.get("selected_skills", [])
+    if not isinstance(selected_skills, list):
+        return []
+    prompts: list[str] = []
+    for skill in selected_skills:
+        if not isinstance(skill, dict):
+            continue
+        title = str(skill.get("title") or "").strip()
+        strategy = str(skill.get("suggested_strategy") or "").strip()
+        if title and strategy:
+            prompts.append(f"{title}：{strategy}")
+        elif title:
+            prompts.append(title)
+        elif strategy:
+            prompts.append(strategy)
+    return prompts
+
+
+def _current_missing_evidence(session: OsceSession) -> list[str]:
+    if session.missed_items:
+        return [str(item_id) for item_id in session.missed_items if str(item_id)]
+    feedback_report = session.feedback_report
+    if not isinstance(feedback_report, dict):
+        return []
+    missing_items = feedback_report.get("missing_items", [])
+    if not isinstance(missing_items, list):
+        return []
+    return [str(item_id) for item_id in missing_items if str(item_id)]
+
+
 def _enabled_skills_for_case(
     skills: list[dict[str, Any]],
     case: Case,
@@ -1023,6 +1118,8 @@ def _enabled_skill_applies_to_stage(skill: dict[str, Any], stage: str) -> bool:
     if not isinstance(applies_when, dict):
         applies_when = {}
     stage_scope = [str(stage_name) for stage_name in skill.get("stage_scope") or applies_when.get("stage_scope", [])]
+    if stage == "history_taking" and "case_intro" in stage_scope:
+        return True
     return not stage_scope or "any" in stage_scope or stage in stage_scope
 
 
@@ -1128,11 +1225,16 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
         "evolution_candidates": session.evolution_candidates,
+        "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,
     }
+
+
+def _empty_active_skill_context() -> dict[str, list[dict[str, Any]]]:
+    return {"skill_index": [], "selected_skills": [], "skipped_reasons": []}
 
 
 osce_session_service = OsceSessionService()

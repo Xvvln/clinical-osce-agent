@@ -60,6 +60,7 @@ def test_evaluation_result_store_persists_batch_result_across_instances(tmp_path
 
     assert loaded_result == {
         "batch_id": "batch_demo",
+        "batch_label": "系统评测批次",
         "total_cases": 2,
         "passed_cases": 1,
         "failed_cases": 1,
@@ -195,6 +196,7 @@ def test_evaluation_result_store_lists_batch_summaries_in_insert_order(tmp_path)
     assert summaries == [
         {
             "batch_id": "batch_one",
+            "batch_label": "系统评测批次",
             "total_cases": 1,
             "passed_cases": 1,
             "failed_cases": 0,
@@ -202,6 +204,7 @@ def test_evaluation_result_store_lists_batch_summaries_in_insert_order(tmp_path)
         },
         {
             "batch_id": "batch_two",
+            "batch_label": "系统评测批次",
             "total_cases": 2,
             "passed_cases": 1,
             "failed_cases": 1,

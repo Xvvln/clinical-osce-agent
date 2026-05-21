@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from typing import Any
+
+from app.services.admin_display_resolver import effect_status_label, rubric_item_label, trigger_item_labels
+
+
+def build_skill_profile_summary(
+    *,
+    reports: Iterable[Mapping[str, Any]],
+    enabled_skills: Iterable[Mapping[str, Any]],
+    recent_error_limit: int = 8,
+    current_focus_limit: int = 3,
+) -> dict[str, Any]:
+    report_list = list(reports)
+    recent_error_items = _recent_error_items(report_list, limit=recent_error_limit)
+    recent_error_item_ids = [item["item_id"] for item in recent_error_items]
+    current_focus_items = recent_error_items[:current_focus_limit]
+    recent_error_set = set(recent_error_item_ids)
+    recent_error_item_by_id = {item["item_id"]: item for item in recent_error_items}
+    skill_states = {
+        str(skill.get("skill_id")): _skill_state(
+            skill,
+            recent_error_item_ids,
+            recent_error_set,
+            recent_error_item_by_id,
+        )
+        for skill in enabled_skills
+        if str(skill.get("skill_id", "")).strip()
+    }
+    return {
+        "recent_error_item_ids": recent_error_item_ids,
+        "recent_error_items": recent_error_items,
+        "current_focus_item_ids": recent_error_item_ids[:current_focus_limit],
+        "current_focus_items": current_focus_items,
+        "skill_states": skill_states,
+        "last_updated_from_report_count": len(report_list),
+    }
+
+
+def _recent_error_items(reports: Iterable[Mapping[str, Any]], *, limit: int) -> list[dict[str, str]]:
+    recent_items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for report in reports:
+        case_id = str(report.get("case_id", "")).strip()
+        missed_items = report.get("missed_items", [])
+        if not isinstance(missed_items, list):
+            continue
+        for item_id in missed_items:
+            normalized_item_id = str(item_id).strip()
+            if not normalized_item_id or normalized_item_id in seen:
+                continue
+            seen.add(normalized_item_id)
+            recent_items.append(
+                {
+                    "item_id": normalized_item_id,
+                    "label": rubric_item_label(normalized_item_id, [case_id] if case_id else ()),
+                }
+            )
+            if len(recent_items) >= limit:
+                return recent_items
+    return recent_items
+
+
+def _skill_state(
+    skill: Mapping[str, Any],
+    recent_error_item_ids: list[str],
+    recent_error_set: set[str],
+    recent_error_item_by_id: Mapping[str, Mapping[str, str]],
+) -> dict[str, Any]:
+    trigger_item_ids = _trigger_item_ids(skill)
+    matched_recent_error_item_ids = [item_id for item_id in recent_error_item_ids if item_id in set(trigger_item_ids)]
+    matched_recent_error_items = [
+        {
+            "item_id": item_id,
+            "label": str(recent_error_item_by_id.get(item_id, {}).get("label") or item_id),
+        }
+        for item_id in matched_recent_error_item_ids
+    ]
+    effect_status = str(skill.get("effect_status", "insufficient_samples"))
+    state = _state_for_skill(effect_status, matched_recent_error_item_ids, trigger_item_ids)
+    priority = _priority_for_skill(
+        skill,
+        state=state,
+        matched_recent_error_item_ids=matched_recent_error_item_ids,
+        recent_error_set=recent_error_set,
+    )
+    return {
+        "state": state,
+        "state_label": _state_label(state),
+        "priority": priority,
+        "trigger_item_ids": trigger_item_ids,
+        "trigger_item_labels": trigger_item_labels(trigger_item_ids, _case_ids(skill)),
+        "matched_recent_error_item_ids": matched_recent_error_item_ids,
+        "matched_recent_error_items": matched_recent_error_items,
+        "effect_status": effect_status,
+        "effect_status_label": effect_status_label(effect_status),
+        "selection_reason": _selection_reason(matched_recent_error_items, state),
+    }
+
+
+def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:
+    trigger_item_ids = _normalized_string_list(skill.get("trigger_item_ids"))
+    if trigger_item_ids:
+        return trigger_item_ids
+    trigger_item_id = str(skill.get("trigger_item_id", "")).strip()
+    if not _is_concrete_trigger_item_id(trigger_item_id):
+        return []
+    return [trigger_item_id] if trigger_item_id else []
+
+
+def _state_for_skill(effect_status: str, matched_recent_error_item_ids: list[str], trigger_item_ids: list[str]) -> str:
+    if matched_recent_error_item_ids:
+        return "active"
+    if effect_status == "improving":
+        return "cooldown"
+    if effect_status == "retired":
+        return "retired"
+    if trigger_item_ids:
+        return "available"
+    return "inactive"
+
+
+def _state_label(state: str) -> str:
+    return {
+        "active": "正在生效",
+        "available": "可用未命中",
+        "inactive": "缺少触发项",
+        "cooldown": "冷却观察",
+        "retired": "已退休",
+    }.get(state, "状态待观察")
+
+
+def _selection_reason(matched_recent_error_items: list[dict[str, str]], state: str) -> str:
+    if matched_recent_error_items:
+        labels = [item["label"] for item in matched_recent_error_items[:3]]
+        return f"近期画像命中：{'、'.join(labels)}。"
+    if state == "cooldown":
+        return "近期未命中该 Skill 训练点，暂作为冷却观察。"
+    if state == "retired":
+        return "该 Skill 已退休，默认不参与本轮提示。"
+    if state == "available":
+        return "近期未命中该 Skill 训练点，仅作为备用教学策略。"
+    return "该 Skill 缺少可匹配训练点，需管理员复核后再进入提示编排。"
+
+
+def _case_ids(skill: Mapping[str, Any]) -> list[str]:
+    case_ids = _normalized_string_list(skill.get("case_ids"))
+    if case_ids:
+        return case_ids
+    applies_when = skill.get("applies_when")
+    if isinstance(applies_when, Mapping):
+        return [str(case_id).strip() for case_id in applies_when.get("case_ids", []) if str(case_id).strip()]
+    return []
+
+
+def _priority_for_skill(
+    skill: Mapping[str, Any],
+    *,
+    state: str,
+    matched_recent_error_item_ids: list[str],
+    recent_error_set: set[str],
+) -> int:
+    if state in {"cooldown", "retired", "inactive"}:
+        return -100
+    if state == "available":
+        return 0
+    priority = 0
+    if matched_recent_error_item_ids:
+        priority += 8
+    if set(_trigger_item_ids(skill)) & recent_error_set:
+        priority += min(int(skill.get("support_count") or 0), 3)
+    return priority
+
+
+def _normalized_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (str(raw_item).strip() for raw_item in value) if item]
+
+
+def _is_concrete_trigger_item_id(value: str) -> bool:
+    if not value:
+        return False
+    return not value.startswith(("training_pattern_", "turn_pattern_", "personal_skill_candidate_"))

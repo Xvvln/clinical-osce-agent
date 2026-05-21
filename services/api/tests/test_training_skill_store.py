@@ -1,3 +1,6 @@
+import json
+import sqlite3
+
 from app.services.training_skill_store import TrainingSkillStore
 
 
@@ -177,6 +180,47 @@ def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
     assert loaded_skill["success_metrics"] == candidate["success_metrics"]
 
 
+def test_training_skill_store_hydrates_legacy_null_metadata_without_false_trigger(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    store = TrainingSkillStore(database_path)
+    store._initialize()
+    legacy_skill = {
+        "skill_id": "skill_training_pattern_dxd_crohn_dxd_ectopic_plus_2",
+        "source_candidate_id": "skill_candidate_training_pattern_dxd_crohn_dxd_ectopic_plus_2",
+        "trigger_item_id": "training_pattern_dxd_crohn_dxd_ectopic_plus_2",
+        "trigger_item_ids": None,
+        "case_ids": None,
+        "stage_scope": None,
+        "applies_when": None,
+        "teaching_action_plan": None,
+        "related_recommendations": None,
+        "title": "旧版急腹症训练 Skill",
+        "description": "旧版库中缺少数组型元数据。",
+        "suggested_strategy": "提醒学生完整复盘证据链，但不透露标准答案。",
+        "status": "enabled",
+        "source_report_count": 2,
+        "support_count": 2,
+    }
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO training_skills (skill_id, skill_json) VALUES (?, ?)",
+            (legacy_skill["skill_id"], json.dumps(legacy_skill, ensure_ascii=False)),
+        )
+
+    [loaded_skill] = TrainingSkillStore(database_path).list_enabled_skills()
+
+    assert loaded_skill["trigger_item_ids"] == []
+    assert loaded_skill["case_ids"] == []
+    assert loaded_skill["stage_scope"] == ["case_intro"]
+    assert loaded_skill["applies_when"]["trigger_item_ids"] == []
+    assert loaded_skill["teaching_action_plan"] == _expected_action_plan(
+        ["case_intro"],
+        [],
+        "提醒学生完整复盘证据链，但不透露标准答案。",
+    )
+    assert "当训练状态匹配该 Skill 条件时触发" in loaded_skill["activation_summary"]
+
+
 def test_training_skill_store_does_not_enable_unapproved_candidate(tmp_path) -> None:
     database_path = tmp_path / "training_skills.sqlite3"
     candidate = {
@@ -256,7 +300,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "skill_id": "skill_reasoning_core",
             "source_candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
-            "trigger_item_ids": [],
+            "trigger_item_ids": ["reasoning_core"],
             "case_ids": [],
             "skill_type": "reasoning_bridge",
             "stage_scope": ["case_intro"],
@@ -264,7 +308,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "applies_when": {
                 "case_ids": [],
                 "stage_scope": ["case_intro"],
-                "trigger_item_ids": [],
+                "trigger_item_ids": ["reasoning_core"],
                 "current_missing_evidence": [],
                 "min_support_count": 2,
             },
@@ -279,7 +323,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "scope_label": "全局 Skill",
             "teaching_action_plan": _expected_action_plan(
                 ["case_intro"],
-                [],
+                ["reasoning_core"],
                 "提醒学生组织证据链，但不透露标准诊断或隐藏事实。",
             ),
             "prohibited_content_policy": _expected_policy(),
@@ -293,7 +337,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "skill_id": "skill_ht_location",
             "source_candidate_id": "skill_candidate_ht_location",
             "trigger_item_id": "ht_location",
-            "trigger_item_ids": [],
+            "trigger_item_ids": ["ht_location"],
             "case_ids": [],
             "skill_type": "reasoning_bridge",
             "stage_scope": ["case_intro"],
@@ -301,7 +345,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "applies_when": {
                 "case_ids": [],
                 "stage_scope": ["case_intro"],
-                "trigger_item_ids": [],
+                "trigger_item_ids": ["ht_location"],
                 "current_missing_evidence": [],
                 "min_support_count": 2,
             },
@@ -316,7 +360,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "scope_label": "全局 Skill",
             "teaching_action_plan": _expected_action_plan(
                 ["case_intro"],
-                [],
+                ["ht_location"],
                 "提醒学生补充疼痛部位与转移问题。",
             ),
             "prohibited_content_policy": _expected_policy(),

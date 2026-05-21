@@ -108,21 +108,37 @@ class TrainingSkillStore:
 
 
 def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-    trigger_item_ids = list(candidate.get("trigger_item_ids", []))
-    case_ids = list(candidate.get("case_ids", []))
-    stage_scope = list(candidate.get("stage_scope", []))
-    if not stage_scope:
-        stage_scope = list(candidate.get("applies_when", {}).get("stage_scope", []))
-    if not stage_scope:
-        stage_scope = ["case_intro"]
+    trigger_item_id = _non_empty_string(candidate.get("trigger_item_id"))
     applies_when = candidate.get("applies_when")
     if not isinstance(applies_when, dict):
+        applies_when = {}
+    trigger_item_ids = _normalized_string_list(candidate.get("trigger_item_ids"))
+    if not trigger_item_ids:
+        trigger_item_ids = _normalized_string_list(applies_when.get("trigger_item_ids"))
+    if not trigger_item_ids and _is_concrete_trigger_item_id(trigger_item_id):
+        trigger_item_ids = [trigger_item_id]
+    case_ids = _normalized_string_list(candidate.get("case_ids"))
+    stage_scope = _normalized_string_list(candidate.get("stage_scope"))
+    if not stage_scope:
+        stage_scope = _normalized_string_list(applies_when.get("stage_scope"))
+    if not stage_scope:
+        stage_scope = ["case_intro"]
+    if not applies_when:
         applies_when = {
             "case_ids": case_ids,
             "stage_scope": stage_scope,
             "trigger_item_ids": trigger_item_ids,
             "current_missing_evidence": [],
             "min_support_count": candidate.get("support_count", 0),
+        }
+    else:
+        applies_when = {
+            **applies_when,
+            "case_ids": _normalized_string_list(applies_when.get("case_ids")) or case_ids,
+            "stage_scope": _normalized_string_list(applies_when.get("stage_scope")) or stage_scope,
+            "trigger_item_ids": _normalized_string_list(applies_when.get("trigger_item_ids")) or trigger_item_ids,
+            "current_missing_evidence": _normalized_string_list(applies_when.get("current_missing_evidence")),
+            "min_support_count": _safe_int(applies_when.get("min_support_count") or candidate.get("support_count")),
         }
     teaching_action_plan = candidate.get("teaching_action_plan")
     if not isinstance(teaching_action_plan, list) or not teaching_action_plan:
@@ -140,7 +156,7 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     skill = {
         "skill_id": f"skill_{candidate['trigger_item_id']}",
         "source_candidate_id": candidate["candidate_id"],
-        "trigger_item_id": candidate["trigger_item_id"],
+        "trigger_item_id": trigger_item_id,
         "trigger_item_ids": trigger_item_ids,
         "case_ids": case_ids,
         "skill_type": str(candidate.get("skill_type", "reasoning_bridge")),
@@ -177,7 +193,7 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _hydrate_skill_student_metadata(skill: dict[str, Any]) -> dict[str, Any]:
-    hydrated_skill = dict(skill)
+    hydrated_skill = _normalize_skill_core_metadata(dict(skill))
     support_count = _safe_int(hydrated_skill.get("support_count"))
     source_report_count = _safe_int(hydrated_skill.get("source_report_count"))
     effect_status = str(hydrated_skill.get("effect_status", "insufficient_samples"))
@@ -200,23 +216,69 @@ def _hydrate_skill_student_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     hydrated_skill["scope_label"] = _non_empty_string(hydrated_skill.get("scope_label")) or _scope_label(
         hydrated_skill
     )
+    if not isinstance(hydrated_skill.get("teaching_action_plan"), list) or not hydrated_skill["teaching_action_plan"]:
+        hydrated_skill["teaching_action_plan"] = build_teaching_action_plan(
+            stage_scope=_normalized_string_list(hydrated_skill.get("stage_scope")),
+            trigger_item_ids=_normalized_string_list(hydrated_skill.get("trigger_item_ids")),
+            suggested_strategy=suggested_strategy,
+        )
+    if not isinstance(hydrated_skill.get("prohibited_content_policy"), dict):
+        hydrated_skill["prohibited_content_policy"] = build_prohibited_content_policy()
+    if not isinstance(hydrated_skill.get("success_metrics"), list) or not hydrated_skill["success_metrics"]:
+        hydrated_skill["success_metrics"] = build_success_metrics()
+    hydrated_skill["related_recommendations"] = _normalized_string_list(hydrated_skill.get("related_recommendations"))
     return hydrated_skill
 
 
+def _normalize_skill_core_metadata(skill: dict[str, Any]) -> dict[str, Any]:
+    trigger_item_id = _non_empty_string(skill.get("trigger_item_id"))
+    applies_when = skill.get("applies_when")
+    if not isinstance(applies_when, dict):
+        applies_when = {}
+
+    trigger_item_ids = _normalized_string_list(skill.get("trigger_item_ids"))
+    if not trigger_item_ids:
+        trigger_item_ids = _normalized_string_list(applies_when.get("trigger_item_ids"))
+    if not trigger_item_ids and _is_concrete_trigger_item_id(trigger_item_id):
+        trigger_item_ids = [trigger_item_id]
+
+    case_ids = _normalized_string_list(skill.get("case_ids"))
+    if not case_ids:
+        case_ids = _normalized_string_list(applies_when.get("case_ids"))
+
+    stage_scope = _normalized_string_list(skill.get("stage_scope"))
+    if not stage_scope:
+        stage_scope = _normalized_string_list(applies_when.get("stage_scope"))
+    if not stage_scope:
+        stage_scope = ["case_intro"]
+
+    skill["trigger_item_id"] = trigger_item_id
+    skill["trigger_item_ids"] = trigger_item_ids
+    skill["case_ids"] = case_ids
+    skill["stage_scope"] = stage_scope
+    skill["applies_when"] = {
+        **applies_when,
+        "case_ids": _normalized_string_list(applies_when.get("case_ids")) or case_ids,
+        "stage_scope": _normalized_string_list(applies_when.get("stage_scope")) or stage_scope,
+        "trigger_item_ids": _normalized_string_list(applies_when.get("trigger_item_ids")) or trigger_item_ids,
+        "current_missing_evidence": _normalized_string_list(applies_when.get("current_missing_evidence")),
+        "min_support_count": _safe_int(applies_when.get("min_support_count") or skill.get("support_count")),
+    }
+    return skill
+
+
 def _build_activation_summary(skill: dict[str, Any]) -> str:
-    case_ids = [str(case_id) for case_id in skill.get("case_ids", []) if str(case_id)]
+    case_ids = _normalized_string_list(skill.get("case_ids"))
     case_summary = "适用于所有当前开放病例"
     if case_ids:
         case_summary = f"适用于{'、'.join(_case_title(case_id) for case_id in case_ids)}"
 
-    stage_scope = [str(stage) for stage in skill.get("stage_scope", []) if str(stage)]
+    stage_scope = _normalized_string_list(skill.get("stage_scope"))
     stage_summary = "匹配训练阶段时"
     if stage_scope:
         stage_summary = f"{'、'.join(STAGE_SCOPE_LABELS.get(stage, stage) for stage in stage_scope)}时"
 
-    trigger_item_ids = [str(item_id) for item_id in skill.get("trigger_item_ids", []) if str(item_id)]
-    if not trigger_item_ids and str(skill.get("trigger_item_id", "")):
-        trigger_item_ids = [str(skill["trigger_item_id"])]
+    trigger_item_ids = _normalized_string_list(skill.get("trigger_item_ids"))
     if trigger_item_ids:
         return f"{case_summary}；{stage_summary}，当当前缺口命中 {len(trigger_item_ids)} 个关联训练点时触发。"
     return f"{case_summary}；{stage_summary}，当训练状态匹配该 Skill 条件时触发。"
@@ -252,6 +314,18 @@ def _non_empty_string(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalized_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (_non_empty_string(raw_item) for raw_item in value) if item]
+
+
+def _is_concrete_trigger_item_id(value: str) -> bool:
+    if not value:
+        return False
+    return not value.startswith(("training_pattern_", "turn_pattern_", "personal_skill_candidate_"))
 
 
 training_skill_store = TrainingSkillStore()

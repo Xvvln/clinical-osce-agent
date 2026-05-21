@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from app.services.admin_display_resolver import (
+    enrich_training_insight_learning_recommendation,
     enrich_training_insight_missed_item,
     enrich_training_insight_source_reference,
     enrich_training_insight_turn_pattern,
@@ -98,11 +99,13 @@ class TrainingInsightService:
                 for item_id, count in sorted(missed_item_counts.items(), key=lambda item: (-item[1], item[0]))
             ],
             "frequent_learning_recommendations": [
-                {
-                    "reference": reference,
-                    "title": recommendation_titles[reference],
-                    "count": count,
-                }
+                enrich_training_insight_learning_recommendation(
+                    {
+                        "reference": reference,
+                        "title": recommendation_titles[reference],
+                        "count": count,
+                    }
+                )
                 for reference, count in sorted(
                     recommendation_counts.items(),
                     key=lambda item: (-item[1], _recommendation_kind_rank(item[0]), item[0]),

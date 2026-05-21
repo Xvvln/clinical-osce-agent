@@ -20,6 +20,7 @@ type ReportRecommendation = Readonly<{
 
 type AdminSourceReferenceItem = Readonly<{
   reference: string;
+  reference_label?: string;
   source_type: string;
   title: string;
   metadata: Readonly<Record<string, unknown>>;
@@ -200,6 +201,7 @@ type FrequentMissedItem = Readonly<{
 
 type FrequentLearningRecommendation = Readonly<{
   reference: string;
+  reference_label?: string;
   title: string;
   count: number;
 }>;
@@ -238,11 +240,31 @@ type AdminTrainingInsights = Readonly<{
 type TrainingSkillCandidateSummary = Readonly<{
   candidate_id: string;
   trigger_item_id: string;
+  trigger_item_ids?: readonly string[];
+  trigger_item_labels?: readonly string[];
+  case_ids?: readonly string[];
+  case_titles?: readonly string[];
+  skill_type?: string;
+  skill_type_label?: string;
+  stage_scope?: readonly string[];
+  stage_scope_labels?: readonly string[];
+  effect_status?: string;
+  effect_status_label?: string;
+  related_recommendations?: readonly string[];
+  related_recommendation_labels?: readonly string[];
   title: string;
   status: string;
   regression_passed: boolean;
   source_report_count: number;
   support_count: number;
+}>;
+
+type TrainingSkillCandidateStatusFilter = "ready_for_review" | "blocked_by_regression" | "processed" | "all";
+
+type TrainingSkillCandidateContextViolation = Readonly<{
+  case_id?: string;
+  reason?: string;
+  terms?: readonly string[];
 }>;
 
 type TrainingSkillCandidateReview = Readonly<{
@@ -253,6 +275,8 @@ type TrainingSkillCandidateReview = Readonly<{
   evaluation_passed_cases: number;
   evaluation_failed_cases: number;
   blocking_failures: readonly unknown[];
+  candidate_context_violations?: readonly TrainingSkillCandidateContextViolation[];
+  candidate_safety_violations?: readonly string[];
   reviewer_id?: string;
   approval_mode?: string;
 }>;
@@ -297,9 +321,12 @@ type TrainingSkillExternalEvidenceCheck = Readonly<{
 
 type TrainingSkillTeachingAction = Readonly<{
   action_type: string;
+  action_type_label?: string;
   level: number;
   stage_scope: readonly string[];
+  stage_scope_labels?: readonly string[];
   trigger_item_ids: readonly string[];
+  trigger_item_labels?: readonly string[];
   message_template: string;
 }>;
 
@@ -307,14 +334,19 @@ type TrainingSkillCandidateDetail = Readonly<{
   candidate_id: string;
   trigger_item_id: string;
   trigger_item_ids: readonly string[];
+  trigger_item_labels?: readonly string[];
   case_ids: readonly string[];
+  case_titles?: readonly string[];
   scope?: string;
   owner_student_id?: string;
   source_session_id?: string;
   skill_type: string;
+  skill_type_label?: string;
   stage_scope: readonly string[];
+  stage_scope_labels?: readonly string[];
   applies_when: Readonly<Record<string, unknown>>;
   effect_status: string;
+  effect_status_label?: string;
   title: string;
   description: string;
   suggested_strategy: string;
@@ -332,6 +364,7 @@ type TrainingSkillCandidateDetail = Readonly<{
   web_check_status?: string;
   external_evidence_checks?: readonly TrainingSkillExternalEvidenceCheck[];
   related_recommendations: readonly string[];
+  related_recommendation_labels?: readonly string[];
   review: TrainingSkillCandidateReview;
   approval_agent_review?: TrainingSkillApprovalAgentReview;
 }>;
@@ -362,17 +395,23 @@ type TrainingSkillEffectSummary = Readonly<{
 type AdminTeachingFocusPattern = Readonly<{
   focus_id: string;
   scope: string;
+  scope_label?: string;
   pattern: string;
   title: string;
   description: string;
   training_suggestion: string;
   trigger_item_ids: readonly string[];
+  trigger_item_labels?: readonly string[];
   case_ids: readonly string[];
+  case_titles?: readonly string[];
   support_count: number;
   source_report_count: number;
   source_reference_ids: readonly string[];
+  source_reference_labels?: readonly string[];
   severity: string;
+  severity_label?: string;
   visibility_level: string;
+  visibility_level_label?: string;
   why_now: string;
 }>;
 
@@ -399,6 +438,8 @@ type AgentTurnPayload = Readonly<{
   turn_policy: string;
   turn_analysis: Record<string, unknown> | null;
   agent_path: readonly string[];
+  selected_skill_ids: readonly string[];
+  skill_context: readonly string[];
   revealed_fact_id: string | null;
   source_references: readonly string[];
   safety_flags: readonly string[];
@@ -548,6 +589,7 @@ type AdminListQuery = Readonly<{
   limit: number;
   offset: number;
   q: string;
+  reviewStatus?: TrainingSkillCandidateStatusFilter;
 }>;
 
 type AdminSessionsResponse = Readonly<{
@@ -941,6 +983,16 @@ const ADMIN_RAG_CONTENT_KIND_OPTIONS = [
   { value: "source_note", label: "来源解释" },
   { value: "skill_strategy", label: "Skill 策略素材" },
 ] as const;
+const ADMIN_CANDIDATE_STATUS_FILTERS: readonly {
+  value: TrainingSkillCandidateStatusFilter;
+  label: string;
+  hint: string;
+}[] = [
+  { value: "ready_for_review", label: "待审核", hint: "可批准或拒绝" },
+  { value: "blocked_by_regression", label: "回归阻塞", hint: "不进入 Skill 库" },
+  { value: "processed", label: "已处理", hint: "已批准或拒绝" },
+  { value: "all", label: "全部", hint: "完整审计" },
+];
 const ADMIN_RAG_KNOWLEDGE_SCOPES = ADMIN_RAG_KNOWLEDGE_SCOPE_OPTIONS.map((option) => option.value);
 const ADMIN_RAG_KNOWLEDGE_VISIBILITIES = ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS.map((option) => option.value);
 const adminRagFieldClassName = "grid min-w-0 gap-2 text-xs font-semibold text-[#141413]";
@@ -1106,6 +1158,8 @@ function getAgentTurnPayload(event: TrainingEventRecord): AgentTurnPayload | nul
     turn_policy: getStringValue(turnPayload, "turn_policy"),
     turn_analysis: getRecordValue(turnPayload.turn_analysis),
     agent_path: getStringArrayValue(turnPayload, "agent_path"),
+    selected_skill_ids: getStringArrayValue(turnPayload, "selected_skill_ids"),
+    skill_context: getStringArrayValue(turnPayload, "skill_context"),
     revealed_fact_id: getNullableStringValue(turnPayload, "revealed_fact_id"),
     source_references: getStringArrayValue(turnPayload, "source_references"),
     safety_flags: getStringArrayValue(turnPayload, "safety_flags"),
@@ -1221,6 +1275,31 @@ function getAdminSourceDisplayTitle(sourceId: string | undefined, sourceTitle: s
 function getAdminDisplayList(displayValues: readonly string[] | undefined, fallbackValues: readonly string[] | undefined, emptyText = "无"): string {
   const values = displayValues && displayValues.length > 0 ? displayValues : fallbackValues;
   return values && values.length > 0 ? values.join("、") : emptyText;
+}
+
+function getAdminDisplayListPreview(
+  displayValues: readonly string[] | undefined,
+  fallbackValues: readonly string[] | undefined,
+  emptyText = "无",
+  limit = 4,
+): string {
+  const values = displayValues && displayValues.length > 0 ? displayValues : fallbackValues;
+  if (!values || values.length === 0) {
+    return emptyText;
+  }
+  if (values.length <= limit) {
+    return values.join("、");
+  }
+  return `${values.slice(0, limit).join("、")} 等 ${values.length} 项`;
+}
+
+function formatTrainingSkillCandidateSupport(candidate: Pick<TrainingSkillCandidateSummary, "support_count" | "source_report_count">): string {
+  const supportCount = Math.max(0, candidate.support_count);
+  const sourceReportCount = Math.max(0, candidate.source_report_count);
+  if (sourceReportCount > 0) {
+    return `支持 ${supportCount} 次 · 来源 ${sourceReportCount} 份报告`;
+  }
+  return `支持 ${supportCount} 次`;
 }
 
 function buildAdminRagKnowledgePayload(form: AdminRagKnowledgeItemForm): AdminRagKnowledgeItemPayload {
@@ -1495,7 +1574,12 @@ async function runAdminEvaluation(batchId: string): Promise<EvaluationBatchDetai
 }
 
 async function getTrainingSkillCandidates(query: AdminListQuery): Promise<CandidateListResponse> {
-  const response = await fetch(`/api/admin/evolution/candidates?${buildAdminListSearchParams(query)}`, { method: "GET" });
+  const reviewStatus = query.reviewStatus ?? "all";
+  const statusSearchParam = reviewStatus === "all" ? "" : `&review_status=${encodeURIComponent(reviewStatus)}`;
+  const response =
+    reviewStatus === "all"
+      ? await fetch(`/api/admin/evolution/candidates?${buildAdminListSearchParams(query)}`, { method: "GET" })
+      : await fetch(`/api/admin/evolution/candidates?${buildAdminListSearchParams(query)}${statusSearchParam}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取候选 Skill");
   const payload = (await response.json()) as CandidateListResponse;
   return payload;
@@ -1566,6 +1650,59 @@ async function rejectTrainingSkillCandidate(candidateId: string): Promise<void> 
 
 function getPassLabel(passed: boolean): string {
   return passed ? "通过" : "未通过";
+}
+
+function getTrainingSkillReviewStatusLabel(status: string): string {
+  if (status === "ready_for_review") {
+    return "待审核";
+  }
+  if (status === "blocked_by_regression") {
+    return "回归阻塞";
+  }
+  if (status === "approved") {
+    return "已批准";
+  }
+  if (status === "rejected") {
+    return "已拒绝";
+  }
+  return status || "未知状态";
+}
+
+function getTrainingSkillReviewStatusHelp(status: string): string {
+  if (status === "blocked_by_regression") {
+    return "候选当前不会进入 enabled Skill 库；请查看回归或上下文安全阻塞原因。";
+  }
+  if (status === "approved") {
+    return "候选已处理并通过审核，后续是否生效以 enabled Skill 库为准。";
+  }
+  if (status === "rejected") {
+    return "候选已被拒绝，不会进入 enabled Skill 库。";
+  }
+  if (status === "ready_for_review") {
+    return "候选正在等待管理员批准或拒绝。";
+  }
+  return "候选已离开待审核队列，请查看审计记录确认最终处理结果。";
+}
+
+function getTrainingSkillContextViolationText(violation: TrainingSkillCandidateContextViolation): string {
+  const termsText = violation.terms && violation.terms.length > 0 ? `命中词：${violation.terms.join("、")}。` : "";
+  if (violation.reason === "male_patient_incompatible_reproductive_content") {
+    return `关联病例为男性患者，但候选 Skill 文案或触发项包含女性生殖系统相关内容，因此被安全门禁阻塞。${termsText}`;
+  }
+  return `候选 Skill 与病例上下文不匹配，已被安全门禁阻塞。${termsText}`;
+}
+
+function getTrainingSkillWebCheckStatusLabel(status: string | undefined): string {
+  if (!status || status === "not_configured") {
+    return "未配置真实联网核查";
+  }
+  if (status === "passed") {
+    return "联网核查通过";
+  }
+  if (status === "failed") {
+    return "联网核查未通过";
+  }
+  return status;
 }
 
 function formatRetrievalMetric(value: number): string {
@@ -2008,6 +2145,7 @@ export default function AdminDashboardPage() {
   const [candidates, setCandidates] = useState<readonly TrainingSkillCandidateSummary[]>([]);
   const [candidatePagination, setCandidatePagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [selectedCandidate, setSelectedCandidate] = useState<TrainingSkillCandidateDetail | null>(null);
+  const [isCandidateDetailDialogOpen, setIsCandidateDetailDialogOpen] = useState(false);
   const [autoApprovalSettings, setAutoApprovalSettings] = useState<TrainingSkillAutoApprovalSettings | null>(null);
   const [caseSearchText, setCaseSearchText] = useState("");
   const [caseImportJsonText, setCaseImportJsonText] = useState("");
@@ -2019,6 +2157,7 @@ export default function AdminDashboardPage() {
   const [reportSearchText, setReportSearchText] = useState("");
   const [evaluationSearchText, setEvaluationSearchText] = useState("");
   const [candidateSearchText, setCandidateSearchText] = useState("");
+  const [candidateReviewStatusFilter, setCandidateReviewStatusFilter] = useState<TrainingSkillCandidateStatusFilter>("ready_for_review");
   const [auditSearchText, setAuditSearchText] = useState("");
   const [candidateAuditEvents, setCandidateAuditEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [auditEvents, setAuditEvents] = useState<readonly TrainingEventRecord[]>([]);
@@ -2069,6 +2208,7 @@ export default function AdminDashboardPage() {
 
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
+    const initialCandidateQuery: AdminListQuery = { ...initialListQuery, reviewStatus: candidateReviewStatusFilter };
     const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
@@ -2081,7 +2221,7 @@ export default function AdminDashboardPage() {
       getAdminTeachingFocusPatterns(),
       getTrainingSkillEffects(),
       getAdminEvaluations(initialListQuery),
-      getTrainingSkillCandidates(initialListQuery),
+      getTrainingSkillCandidates(initialCandidateQuery),
       getAdminAuditEvents(initialListQuery),
       getTrainingSkillAutoApprovalSettings(),
     ]);
@@ -2127,11 +2267,9 @@ export default function AdminDashboardPage() {
     if (nextEvaluationPage.evaluations[0]) {
       setSelectedEvaluation(await getAdminEvaluation(nextEvaluationPage.evaluations[0].batch_id));
     }
-    if (nextCandidatePage.candidates[0]) {
-      const candidateId = nextCandidatePage.candidates[0].candidate_id;
-      setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
-      setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
-    }
+    setSelectedCandidate(null);
+    setCandidateAuditEvents([]);
+    setIsCandidateDetailDialogOpen(false);
   }
 
   async function loadRetrievalEval() {
@@ -2609,18 +2747,24 @@ export default function AdminDashboardPage() {
   }
 
   async function refreshAdminCandidates(offset: number) {
+    await refreshAdminCandidatesForStatus(offset, candidateReviewStatusFilter);
+  }
+
+  async function refreshAdminCandidatesForStatus(offset: number, reviewStatus: TrainingSkillCandidateStatusFilter) {
     try {
       const nextCandidatePage = await getTrainingSkillCandidates({
         limit: ADMIN_LIST_PAGE_SIZE,
         offset,
         q: candidateSearchText,
+        reviewStatus,
       });
       setCandidates(nextCandidatePage.candidates);
       setCandidatePagination(nextCandidatePage.pagination);
-      if (nextCandidatePage.candidates.length > 0 && !nextCandidatePage.candidates.some((candidate) => candidate.candidate_id === selectedCandidate?.candidate_id)) {
-        const candidateId = nextCandidatePage.candidates[0].candidate_id;
-        setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
-        setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
+      const isSelectedCandidateStillVisible = nextCandidatePage.candidates.some((candidate) => candidate.candidate_id === selectedCandidate?.candidate_id);
+      if (!isSelectedCandidateStillVisible) {
+        setSelectedCandidate(null);
+        setCandidateAuditEvents([]);
+        setIsCandidateDetailDialogOpen(false);
       }
       setStatusText("已按服务端筛选刷新候选 Skill。");
     } catch (error: unknown) {
@@ -2631,6 +2775,11 @@ export default function AdminDashboardPage() {
         setIsAdminLoginDialogOpen(true);
       }
     }
+  }
+
+  async function handleCandidateStatusFilterSelect(nextFilter: TrainingSkillCandidateStatusFilter) {
+    setCandidateReviewStatusFilter(nextFilter);
+    await refreshAdminCandidatesForStatus(0, nextFilter);
   }
 
   async function refreshAdminAuditEvents(offset: number) {
@@ -2707,7 +2856,7 @@ export default function AdminDashboardPage() {
     setStatusText("正在从训练日志生成候选 Skill...");
     try {
       const result = await generateTrainingSkillCandidates();
-      const listQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
+      const listQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "", reviewStatus: candidateReviewStatusFilter };
       const [nextInsights, nextSkillEffects, nextCandidatePage, nextEvaluationPage, nextAuditPage] = await Promise.all([
         getAdminInsights(),
         getTrainingSkillEffects(),
@@ -2723,14 +2872,9 @@ export default function AdminDashboardPage() {
       setEvaluationPagination(nextEvaluationPage.pagination);
       setAuditEvents(nextAuditPage.events);
       setAuditPagination(nextAuditPage.pagination);
-      if (nextCandidatePage.candidates[0]) {
-        const candidateId = nextCandidatePage.candidates[0].candidate_id;
-        setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
-        setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
-      } else {
-        setSelectedCandidate(null);
-        setCandidateAuditEvents([]);
-      }
+      setSelectedCandidate(null);
+      setCandidateAuditEvents([]);
+      setIsCandidateDetailDialogOpen(false);
       setStatusText(
         result.auto_apply_enabled
           ? `已从训练日志生成 ${result.generated_count} 个候选 Skill，审批 Agent 自动启用 ${result.auto_approved_count} 个，修订 ${result.approval_agent_modified_count} 个，${result.blocked_by_regression_count} 个被回归阻塞。`
@@ -2749,8 +2893,13 @@ export default function AdminDashboardPage() {
   }
 
   async function handleSelectCandidate(candidateId: string) {
-    setSelectedCandidate(await getTrainingSkillCandidate(candidateId));
-    setCandidateAuditEvents(await getTrainingSkillCandidateEvents(candidateId));
+    const [candidateDetail, nextCandidateAuditEvents] = await Promise.all([
+      getTrainingSkillCandidate(candidateId),
+      getTrainingSkillCandidateEvents(candidateId),
+    ]);
+    setSelectedCandidate(candidateDetail);
+    setCandidateAuditEvents(nextCandidateAuditEvents);
+    setIsCandidateDetailDialogOpen(true);
   }
 
   async function handleToggleAutoApproval() {
@@ -2783,7 +2932,7 @@ export default function AdminDashboardPage() {
       return;
     }
     if (selectedCandidate.review.status !== "ready_for_review") {
-      setStatusText(`候选已审核，当前状态为 ${selectedCandidate.review.status}，不能重复审核。`);
+      setStatusText(`候选已审核，当前状态为 ${getTrainingSkillReviewStatusLabel(selectedCandidate.review.status)}，不能重复审核。`);
       return;
     }
     if (action === "approve") {
@@ -2792,7 +2941,7 @@ export default function AdminDashboardPage() {
       await rejectTrainingSkillCandidate(selectedCandidate.candidate_id);
     }
     const [nextCandidatePage, nextAuditPage, nextSkillEffects] = await Promise.all([
-      getTrainingSkillCandidates({ limit: ADMIN_LIST_PAGE_SIZE, offset: candidatePagination.offset, q: candidateSearchText }),
+      getTrainingSkillCandidates({ limit: ADMIN_LIST_PAGE_SIZE, offset: candidatePagination.offset, q: candidateSearchText, reviewStatus: candidateReviewStatusFilter }),
       getAdminAuditEvents({ limit: ADMIN_LIST_PAGE_SIZE, offset: auditPagination.offset, q: auditSearchText }),
       getTrainingSkillEffects(),
     ]);
@@ -4225,6 +4374,23 @@ export default function AdminDashboardPage() {
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">来源：{turnPayload.source_references.join("、") || "暂无"}</p>
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">安全标记：{turnPayload.safety_flags.join("、") || "无"}</p>
                           </div>
+                          <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
+                            <p className="text-xs font-semibold text-[#AE5630]">Skill 编排</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">
+                              本轮选中 Skill：{turnPayload.selected_skill_ids.join("、") || "暂无"}
+                            </p>
+                            {turnPayload.skill_context.length > 0 ? (
+                              <div className="mt-2 grid gap-1">
+                                {turnPayload.skill_context.map((skillContext) => (
+                                  <p className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]" key={skillContext}>
+                                    {skillContext}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-[11px] leading-5 text-[#8A7D6F]">本轮未启用可展开的 Skill 策略。</p>
+                            )}
+                          </div>
                         </div>
                       </article>
                     );
@@ -4332,11 +4498,14 @@ export default function AdminDashboardPage() {
                             <div className="flex items-center justify-between gap-3">
                               <div>
                                 <p className="text-sm font-semibold">{item.item_label ?? item.item_id}</p>
-                                <p className="mt-1 break-all font-mono text-[11px] text-[#8A7D6F]">技术 ID：{item.item_id}</p>
                               </div>
                               <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{item.count} 次</span>
                             </div>
                             <p className="mt-2 text-xs leading-5 text-[#6F6257]">涉及病例：{getAdminDisplayList(item.case_titles, item.case_ids)}</p>
+                            <details className="mt-2 text-xs leading-5 text-[#8A7D6F]">
+                              <summary className="cursor-pointer font-medium text-[#6F6257]">展开漏项技术 ID</summary>
+                              <p className="mt-1 break-all font-mono">{item.item_id}</p>
+                            </details>
                           </div>
                         ))
                       ) : (
@@ -4353,13 +4522,16 @@ export default function AdminDashboardPage() {
                             <div className="flex flex-wrap items-start justify-between gap-2">
                               <div>
                                 <p className="font-semibold text-[#141413]">{pattern.title}</p>
-                                <p className="font-mono text-[11px] text-[#AE5630]">{pattern.pattern_id}</p>
                               </div>
                               <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{pattern.count} 次</span>
                             </div>
                             <p className="mt-2 text-xs text-[#8A7D6F]">类型：{pattern.pattern_type_label ?? pattern.pattern_type} · 报告：{pattern.source_report_count} 份</p>
                             <p className="mt-1 break-words text-xs text-[#8A7D6F]">触发：{getAdminDisplayList(pattern.trigger_item_labels, pattern.trigger_item_ids, "历史数据未记录")}</p>
                             <p className="mt-1 text-xs text-[#8A7D6F]">涉及病例：{getAdminDisplayList(pattern.case_titles, pattern.case_ids)}</p>
+                            <details className="mt-2 text-xs leading-5 text-[#8A7D6F]">
+                              <summary className="cursor-pointer font-medium text-[#6F6257]">展开话轮模式技术 ID</summary>
+                              <p className="mt-1 break-all font-mono">{pattern.pattern_id}</p>
+                            </details>
                           </article>
                         ))
                       ) : (
@@ -4372,9 +4544,15 @@ export default function AdminDashboardPage() {
                     <div className="mt-2 grid gap-2">
                       {insights.frequent_learning_recommendations.length > 0 ? (
                         insights.frequent_learning_recommendations.map((recommendation) => (
-                          <p className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]" key={recommendation.reference}>
-                            {recommendation.title} · {recommendation.count} 次 · {recommendation.reference}
-                          </p>
+                          <article className="rounded-xl border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]" key={recommendation.reference}>
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="font-semibold text-[#141413]">{recommendation.title}</p>
+                                <p className="text-xs text-[#8A7D6F]">{recommendation.reference_label ?? recommendation.reference}</p>
+                              </div>
+                              <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{recommendation.count} 次</span>
+                            </div>
+                          </article>
                         ))
                       ) : (
                         <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-sm text-[#6F6257]">暂无高频学习建议。</p>
@@ -4392,7 +4570,7 @@ export default function AdminDashboardPage() {
                               <div className="flex flex-wrap items-start justify-between gap-2">
                                 <div>
                                   <p className="font-semibold text-[#141413]">{sourceReference.title}</p>
-                                  <p className="font-mono text-[11px] text-[#AE5630]">{sourceReference.reference}</p>
+                                  <p className="text-xs text-[#8A7D6F]">{sourceReference.reference_label ?? sourceReference.reference}</p>
                                 </div>
                                 <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{sourceReference.count} 次</span>
                               </div>
@@ -4431,8 +4609,8 @@ export default function AdminDashboardPage() {
                         type="button"
                       >
                         <span className="text-sm font-semibold">{pattern.title}</span>
-                        <span className="mt-1 block font-mono text-[11px] text-[#AE5630]">{pattern.focus_id}</span>
-                        <span className="mt-1 block text-xs text-[#6F6257]">触发项 {pattern.trigger_item_ids.length} 个 · {pattern.severity}</span>
+                        <span className="mt-1 block text-xs text-[#8A7D6F]">{pattern.scope_label ?? pattern.scope} · {getAdminDisplayList(pattern.case_titles, pattern.case_ids, "未限定病例")}</span>
+                        <span className="mt-1 block text-xs text-[#6F6257]">触发项 {pattern.trigger_item_ids.length} 个 · {pattern.severity_label ?? pattern.severity}</span>
                       </button>
                     ))
                   ) : (
@@ -4441,20 +4619,27 @@ export default function AdminDashboardPage() {
                 </div>
                 {selectedTeachingFocusPattern ? (
                   <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
-                    <p className="text-xs font-medium text-[#AE5630]">{selectedTeachingFocusPattern.scope}</p>
+                    <p className="text-xs font-medium text-[#AE5630]">{selectedTeachingFocusPattern.scope_label ?? selectedTeachingFocusPattern.scope}</p>
                     <h3 className="mt-1 text-lg font-semibold">{selectedTeachingFocusPattern.title}</h3>
                     <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedTeachingFocusPattern.description}</p>
                     <p className="mt-3 rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]">{selectedTeachingFocusPattern.training_suggestion}</p>
                     <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <dt className="font-semibold text-[#141413]">触发 Rubric 项</dt>
-                        <dd className="mt-2 break-words font-mono text-[#6F6257]">{selectedTeachingFocusPattern.trigger_item_ids.join("、")}</dd>
+                        <dd className="mt-2 break-words text-[#6F6257]">{getAdminDisplayList(selectedTeachingFocusPattern.trigger_item_labels, selectedTeachingFocusPattern.trigger_item_ids)}</dd>
                       </div>
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <dt className="font-semibold text-[#141413]">来源引用</dt>
-                        <dd className="mt-2 break-words font-mono text-[#6F6257]">{selectedTeachingFocusPattern.source_reference_ids.join("、")}</dd>
+                        <dd className="mt-2 break-words text-[#6F6257]">{getAdminDisplayList(selectedTeachingFocusPattern.source_reference_labels, selectedTeachingFocusPattern.source_reference_ids)}</dd>
                       </div>
                     </dl>
+                    <details className="mt-3 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                      <summary className="cursor-pointer font-semibold text-[#141413]">展开教学重点技术 ID</summary>
+                      <p className="mt-2 break-words">范围：{selectedTeachingFocusPattern.scope}</p>
+                      <p className="mt-1 break-words">重点：{selectedTeachingFocusPattern.focus_id}</p>
+                      <p className="mt-1 break-words">触发项：{selectedTeachingFocusPattern.trigger_item_ids.join("、")}</p>
+                      <p className="mt-1 break-words">来源：{selectedTeachingFocusPattern.source_reference_ids.join("、")}</p>
+                    </details>
                     <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">生成依据：{selectedTeachingFocusPattern.why_now}</p>
                   </article>
                 ) : (
@@ -4837,6 +5022,27 @@ export default function AdminDashboardPage() {
                   候选筛选
                 </button>
               </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {ADMIN_CANDIDATE_STATUS_FILTERS.map((filter) => {
+                  const isActive = candidateReviewStatusFilter === filter.value;
+                  return (
+                    <button
+                      className={[
+                        "rounded-xl border px-3 py-2 text-left transition whitespace-nowrap",
+                        isActive
+                          ? "border-[#AE5630]/35 bg-[#AE5630]/10 text-[#AE5630]"
+                          : "border-[#E6DFD2] bg-white text-[#6F6257] hover:border-[#AE5630]/30 hover:bg-[#FAF9F5]",
+                      ].join(" ")}
+                      key={filter.value}
+                      onClick={() => void handleCandidateStatusFilterSelect(filter.value)}
+                      type="button"
+                    >
+                      <span className="block text-sm font-semibold">{filter.label}</span>
+                      <span className="mt-0.5 block text-[11px]">{filter.hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6F6257]">
                 <span>{formatAdminPaginationRange(candidatePagination, candidates.length)}</span>
                 <div className="flex gap-2">
@@ -4876,10 +5082,16 @@ export default function AdminDashboardPage() {
                     >
                       <span className="text-sm font-semibold">{candidate.title}</span>
                       <span className="mt-1 block text-xs text-[#6F6257]">
-                        {candidate.trigger_item_id} · 支持 {candidate.support_count}/{candidate.source_report_count}
+                        状态：{getTrainingSkillReviewStatusLabel(candidate.status)} · {formatTrainingSkillCandidateSupport(candidate)}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-[#6F6257]">
+                        训练点：{getAdminDisplayListPreview(candidate.trigger_item_labels, candidate.trigger_item_ids ?? [candidate.trigger_item_id], "未记录训练点")}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-[#8A7D6F]">
+                        病例：{getAdminDisplayList(candidate.case_titles, candidate.case_ids, "未限定病例")}
                       </span>
                       <span className="mt-2 inline-flex rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">
-                        {candidate.regression_passed ? "回归通过" : "回归阻塞"}
+                        {getTrainingSkillReviewStatusLabel(candidate.status)}
                       </span>
                     </button>
                   ))
@@ -4887,55 +5099,88 @@ export default function AdminDashboardPage() {
                   <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">没有匹配的候选 Skill。请调整服务端筛选条件。</p>
                 )}
               </div>
-              {selectedCandidate ? (
-                <article className="mt-4 rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
+              {isCandidateDetailDialogOpen && selectedCandidate ? (
+                <div
+                  aria-label="候选 Skill 详情"
+                  aria-modal="true"
+                  className="fixed inset-0 z-40 flex items-center justify-center bg-[#141413]/35 p-4 backdrop-blur-sm"
+                  onClick={() => setIsCandidateDetailDialogOpen(false)}
+                  role="dialog"
+                >
+                <article className="admin-panel-scrollbar max-h-[88vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-[#E6DFD2] bg-[#FAF9F5] p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
-                      <p className="text-xs font-medium text-[#AE5630]">{selectedCandidate.review.status}</p>
+                      <p className="text-xs font-medium text-[#AE5630]">{getTrainingSkillReviewStatusLabel(selectedCandidate.review.status)}</p>
                       <h3 className="mt-1 text-lg font-semibold">{selectedCandidate.title}</h3>
                     </div>
-                    {canReviewSelectedCandidate ? (
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
-                          onClick={() => void handleReview("approve")}
-                          type="button"
-                        >
-                          批准并启用
-                        </button>
+                    <div className="flex flex-wrap items-start justify-end gap-2">
+                      {canReviewSelectedCandidate ? (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
+                            onClick={() => void handleReview("approve")}
+                            type="button"
+                          >
+                            批准并启用
+                          </button>
+                          <button
+                            className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2]"
+                            onClick={() => void handleReview("reject")}
+                            type="button"
+                          >
+                            拒绝候选
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257]">
+                          {getTrainingSkillReviewStatusHelp(selectedCandidate.review.status)}
+                        </p>
+                      )}
                         <button
                           className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2]"
-                          onClick={() => void handleReview("reject")}
+                          onClick={() => setIsCandidateDetailDialogOpen(false)}
                           type="button"
+                          aria-label="关闭候选 Skill 详情"
                         >
-                          拒绝候选
+                          关闭
                         </button>
-                      </div>
-                    ) : (
-                      <p className="rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm font-medium text-[#6F6257]">
-                        候选已审核，当前状态为 {selectedCandidate.review.status}。
-                      </p>
-                    )}
+                    </div>
                   </div>
-                  <div className="admin-panel-scrollbar mt-4 grid max-h-[42rem] gap-3 overflow-y-auto pr-1">
+                  <div className="mt-4 grid gap-3">
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                        <p className="text-xs text-[#8A7D6F]">关联病例</p>
+                        <p className="mt-1 break-words text-sm font-semibold">{getAdminDisplayList(selectedCandidate.case_titles, selectedCandidate.case_ids, "未限定病例")}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <p className="text-xs text-[#8A7D6F]">模式类型</p>
-                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.skill_type}</p>
+                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.skill_type_label ?? selectedCandidate.skill_type}</p>
                       </div>
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <p className="text-xs text-[#8A7D6F]">效果状态</p>
-                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.effect_status}</p>
+                        <p className="mt-1 break-words text-sm font-semibold">{selectedCandidate.effect_status_label ?? selectedCandidate.effect_status}</p>
                       </div>
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <p className="text-xs text-[#8A7D6F]">适用阶段</p>
-                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{(selectedCandidate.stage_scope ?? []).join("、") || "未限定"}</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{getAdminDisplayList(selectedCandidate.stage_scope_labels, selectedCandidate.stage_scope, "未限定")}</p>
                       </div>
                       <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
                         <p className="text-xs text-[#8A7D6F]">触发漏项</p>
-                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{(selectedCandidate.trigger_item_ids ?? []).join("、") || selectedCandidate.trigger_item_id}</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-[#6F6257]">{getAdminDisplayList(selectedCandidate.trigger_item_labels, selectedCandidate.trigger_item_ids, selectedCandidate.trigger_item_id)}</p>
                       </div>
                     </div>
+                    {(selectedCandidate.review.candidate_context_violations ?? []).length > 0 ? (
+                      <div className="rounded-xl border border-[#AE5630]/25 bg-[#AE5630]/10 p-3">
+                        <h4 className="text-sm font-semibold text-[#AE5630]">上下文安全阻塞</h4>
+                        <div className="mt-2 grid gap-2 text-sm leading-6 text-[#6F6257]">
+                          {selectedCandidate.review.candidate_context_violations?.map((violation) => (
+                            <p className="rounded-lg border border-[#AE5630]/15 bg-white px-3 py-2" key={`${violation.case_id ?? "case"}-${violation.reason ?? "context"}`}>
+                              {getTrainingSkillContextViolationText(violation)}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     {selectedCandidate.scope || selectedCandidate.owner_student_id || selectedCandidate.source_session_id ? (
                       <div>
                         <h4 className="text-sm font-semibold">个人 Skill 范围</h4>
@@ -4948,15 +5193,24 @@ export default function AdminDashboardPage() {
                     ) : null}
                     <div>
                       <h4 className="text-sm font-semibold">应用条件</h4>
-                      <pre className="mt-2 whitespace-pre-wrap rounded-md border border-[#E6DFD2] bg-white p-3 text-[11px] leading-5 text-[#6F6257]">
-                        {JSON.stringify(selectedCandidate.applies_when ?? {}, null, 2)}
-                      </pre>
+                      <details className="mt-2 rounded-md border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                        <summary className="cursor-pointer font-semibold text-[#141413]">展开结构化条件</summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-[#6F6257]">
+                          {JSON.stringify(selectedCandidate.applies_when ?? {}, null, 2)}
+                        </pre>
+                      </details>
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">相关来源引用</h4>
                       <p className="mt-2 break-words text-sm leading-6 text-[#6F6257]">
-                        {selectedCandidate.related_recommendations.length > 0 ? selectedCandidate.related_recommendations.join("、") : "暂无关联学习建议引用"}
+                        {getAdminDisplayList(selectedCandidate.related_recommendation_labels, selectedCandidate.related_recommendations, "暂无关联学习建议引用")}
                       </p>
+                      {(selectedCandidate.related_recommendations ?? []).length > 0 ? (
+                        <details className="mt-2 rounded-md border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
+                          <summary className="cursor-pointer font-semibold text-[#141413]">展开原始引用 ID</summary>
+                          <p className="mt-2 break-words">{selectedCandidate.related_recommendations.join("、")}</p>
+                        </details>
+                      ) : null}
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">来源报告与话轮模式</h4>
@@ -4968,9 +5222,12 @@ export default function AdminDashboardPage() {
                             selectedCandidate.source_turn_patterns?.map((pattern) => (
                               <article className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-2" key={pattern.pattern_id}>
                                 <p className="font-medium text-[#141413]">{pattern.title}</p>
-                                <p className="font-mono text-[11px] text-[#AE5630]">{pattern.pattern_id}</p>
-                                <p className="mt-1">类型：{pattern.pattern_type} · 支持：{pattern.count} 次 · 报告：{pattern.source_report_count} 份</p>
-                                <p className="mt-1 break-words">触发项：{pattern.trigger_item_ids.join("、") || "历史数据未记录"}</p>
+                                <p className="mt-1">类型：{pattern.pattern_type_label ?? pattern.pattern_type} · 支持：{pattern.count} 次 · 报告：{pattern.source_report_count} 份</p>
+                                <p className="mt-1 break-words">触发项：{getAdminDisplayList(pattern.trigger_item_labels, pattern.trigger_item_ids, "历史数据未记录")}</p>
+                                <details className="mt-2 text-xs leading-5 text-[#8A7D6F]">
+                                  <summary className="cursor-pointer font-medium text-[#6F6257]">展开候选来源模式技术 ID</summary>
+                                  <p className="mt-1 break-all font-mono">{pattern.pattern_id}</p>
+                                </details>
                               </article>
                             ))
                           ) : (
@@ -5006,7 +5263,7 @@ export default function AdminDashboardPage() {
                     <div>
                       <h4 className="text-sm font-semibold">联网核查状态</h4>
                       <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3 text-xs leading-5 text-[#6F6257]">
-                        <p>状态：{selectedCandidate.web_check_status ?? "not_configured"}</p>
+                        <p>状态：{getTrainingSkillWebCheckStatusLabel(selectedCandidate.web_check_status)}</p>
                         <div className="mt-2 grid gap-2">
                           {(selectedCandidate.external_evidence_checks ?? []).length > 0 ? (
                             selectedCandidate.external_evidence_checks?.map((check) => (
@@ -5080,10 +5337,16 @@ export default function AdminDashboardPage() {
                           selectedCandidate.teaching_action_plan.map((action, index) => (
                             <div className="border-t border-[#E6DFD2] pt-2 text-xs leading-5 text-[#6F6257]" key={`${action.action_type}-${index}`}>
                               <p className="font-medium text-[#141413]">
-                                {action.action_type} · Level {action.level}
+                                {action.action_type_label ?? action.action_type} · Level {action.level}
                               </p>
-                              <p>阶段：{action.stage_scope.join("、") || "未限定"}</p>
-                              <p>触发项：{action.trigger_item_ids.join("、") || "未限定"}</p>
+                              <p>阶段：{getAdminDisplayList(action.stage_scope_labels, action.stage_scope, "未限定")}</p>
+                              <p>触发项：{getAdminDisplayList(action.trigger_item_labels, action.trigger_item_ids, "未限定")}</p>
+                              <details className="mt-1 rounded-md border border-[#E6DFD2] bg-white p-2">
+                                <summary className="cursor-pointer font-semibold text-[#141413]">展开动作技术 ID</summary>
+                                <p className="mt-1 break-words">动作：{action.action_type}</p>
+                                <p className="mt-1 break-words">阶段：{action.stage_scope.join("、") || "未限定"}</p>
+                                <p className="mt-1 break-words">触发项：{action.trigger_item_ids.join("、") || "未限定"}</p>
+                              </details>
                               <p className="mt-1">{action.message_template}</p>
                             </div>
                           ))
@@ -5109,7 +5372,7 @@ export default function AdminDashboardPage() {
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold">审核审计事件</h4>
-                      <div className="admin-panel-scrollbar mt-2 grid max-h-64 gap-2 overflow-auto pr-1">
+                      <div className="mt-2 grid gap-2">
                         {candidateAuditEvents.length > 0 ? (
                           candidateAuditEvents.map((event) => (
                             <div className="rounded-lg border border-[#E6DFD2] bg-white p-3" key={`${event.event_type}-${event.created_at}`}>
@@ -5131,20 +5394,19 @@ export default function AdminDashboardPage() {
                     </div>
                   </div>
                 </article>
-              ) : (
-                <p className="mt-4 rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">请选择一个候选 Skill。</p>
-              )}
+                </div>
+              ) : null}
               </div>
               <div className={getAdminSubsectionPanelClassName(activeSkillSubsectionId === "skill-approval-records", "mt-4 grid gap-3")}>
                 <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4">
                   <h3 className="text-lg font-semibold">审批 Agent 修订记录</h3>
                   <p className="mt-1 text-sm leading-6 text-[#6F6257]">选择候选 Skill 后查看审批 Agent 决策、修改字段和审计事件。</p>
                 </div>
-                {selectedCandidate ? (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <article className="rounded-xl border border-[#E6DFD2] bg-white p-4">
-                      <p className="text-xs font-semibold text-[#AE5630]">{selectedCandidate.review.status}</p>
-                      <h4 className="mt-1 text-base font-semibold">{selectedCandidate.title}</h4>
+                    {selectedCandidate ? (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <article className="rounded-xl border border-[#E6DFD2] bg-white p-4">
+                          <p className="text-xs font-semibold text-[#AE5630]">{getTrainingSkillReviewStatusLabel(selectedCandidate.review.status)}</p>
+                          <h4 className="mt-1 text-base font-semibold">{selectedCandidate.title}</h4>
                       <p className="mt-2 text-sm leading-6 text-[#6F6257]">{selectedCandidate.description}</p>
                       {selectedCandidate.approval_agent_review ? (
                         <div className="mt-3 rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">

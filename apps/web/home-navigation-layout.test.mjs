@@ -708,14 +708,35 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /平均分/);
   assert.match(profileSource, /薄弱项/);
   assert.match(profileSource, /type LearningPathItem = Readonly<\{/);
+  assert.match(profileSource, /task_type_label: string;/);
+  assert.match(profileSource, /case_title: string;/);
+  assert.match(profileSource, /target_rubric_item_labels: readonly string\[];/);
+  assert.match(profileSource, /source_reference_labels: readonly string\[];/);
+  assert.match(profileSource, /case_title: string;/);
+  assert.match(profileSource, /stage_label: string;/);
   assert.match(profileSource, /learning_path: readonly LearningPathItem\[];/);
   assert.match(profileSource, /learningPath: readonly LearningPathItem\[];/);
   assert.match(profileSource, /profile\.learningPath\.map/);
   assert.match(profileSource, /个性化学习路径/);
-  assert.match(profileSource, /target_rubric_items/);
-  assert.match(profileSource, /source_references/);
+  assert.match(profileSource, /task\.task_type_label/);
+  assert.match(profileSource, /task\.case_title/);
+  assert.match(profileSource, /task\.target_rubric_item_labels/);
+  assert.match(profileSource, /task\.source_reference_labels/);
+  assert.match(profileSource, /session\.case_title/);
+  assert.match(profileSource, /session\.stage_label/);
+  assert.doesNotMatch(profileSource, /病例：\{task\.case_id\}/);
+  assert.doesNotMatch(profileSource, /\{task\.target_rubric_items\.map/);
+  assert.doesNotMatch(profileSource, /来源：\{task\.source_references\.join/);
+  assert.doesNotMatch(profileSource, /当前阶段：\{session\.stage\}/);
   assert.match(profileSource, /Skill 积累/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
+  assert.match(profileSource, /type SkillProfileItem = Readonly<\{/);
+  assert.match(profileSource, /type SkillProfileSkillState = Readonly<\{/);
+  assert.match(profileSource, /type SkillProfileSummary = Readonly<\{/);
+  assert.match(profileSource, /skill_profile_summary: SkillProfileSummary;/);
+  assert.match(profileSource, /skillProfileSummary: SkillProfileSummary;/);
+  assert.match(profileSource, /const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = \{/);
+  assert.match(profileSource, /skillProfileSummary: payload\.skill_profile_summary \?\? EMPTY_SKILL_PROFILE_SUMMARY/);
   assert.match(profileSource, /student_visible_summary: string;/);
   assert.match(profileSource, /description: string;/);
   assert.match(profileSource, /learning_action: string;/);
@@ -735,6 +756,22 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /支持次数/);
   assert.match(profileSource, /效果状态/);
   assert.match(profileSource, /暂无已启用 Skill/);
+});
+
+test("profile page exposes readable Skill profile orchestration summary", () => {
+  assert.match(profileSource, /function SkillProfileSummarySection\(\{ summary \}: Readonly<\{ summary: SkillProfileSummary \}>\)/);
+  assert.match(profileSource, /<SkillProfileSummarySection summary=\{profile\.skillProfileSummary\} \/>/);
+  assert.match(profileSource, /当前训练问题/);
+  assert.match(profileSource, /近期漏项/);
+  assert.match(profileSource, /Skill 编排依据/);
+  assert.match(profileSource, /summary\.current_focus_items\.map/);
+  assert.match(profileSource, /focusItem\.label/);
+  assert.match(profileSource, /state\.matched_recent_error_items\.map/);
+  assert.match(profileSource, /item\.label/);
+  assert.match(profileSource, /state\.selection_reason/);
+  assert.match(profileSource, /state\.state_label/);
+  assert.match(profileSource, /state\.effect_status_label/);
+  assert.match(profileSource, /暂无近期漏项/);
 });
 
 test("profile page gives Skill accumulation its own detailed module", () => {

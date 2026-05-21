@@ -58,9 +58,40 @@ def base_hint_state(**overrides: object) -> dict[str, object]:
         "feedback_report": None,
         "safety_flags": [],
         "evolution_candidates": [],
+        "active_skill_context": {"skill_index": [], "selected_skills": [], "skipped_reasons": []},
     }
     state.update(overrides)
     return state
+
+
+def active_skill_context() -> dict[str, list[dict[str, object]]]:
+    return {
+        "skill_index": [
+            {
+                "skill_id": "skill_selected_history",
+                "title": "腹痛迁移追问训练",
+                "scope": "personal",
+                "stage_scope": ["history_taking"],
+                "trigger_item_ids": ["ht_migration"],
+                "priority": 12,
+                "why_candidate": "当前缺口命中 ht_migration",
+            }
+        ],
+        "selected_skills": [
+            {
+                "skill_id": "skill_selected_history",
+                "title": "腹痛迁移追问训练",
+                "suggested_strategy": "先围绕疼痛迁移和加重过程做聚焦追问。",
+                "stage_scope": ["history_taking"],
+                "trigger_item_ids": ["ht_migration"],
+                "priority": 12,
+                "why_candidate": "当前缺口命中 ht_migration",
+            }
+        ],
+        "skipped_reasons": [
+            {"skill_id": "skill_legacy_generic", "reason": "not_selected_top_k"},
+        ],
+    }
 
 
 def test_osce_graph_loads_case_intro_state() -> None:
@@ -1270,6 +1301,65 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
     ]
     assert agent_turn["knowledge_references"] == agent_turn["source_references"]
     assert agent_turn["retrieved_knowledge_context"]
+
+
+def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    result = graph.invoke(
+        base_hint_state(
+            active_skill_context=active_skill_context(),
+            evolution_candidates=["旧技能：旧策略不应再进入 Coach 提示。"],
+        )
+    )
+
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "skill_context") == ["腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"]
+    assert "腹痛迁移追问训练" in getattr(captured_requests[0], "base_hint")
+    assert "旧技能" not in getattr(captured_requests[0], "base_hint")
+    assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
+    assert result["agent_turn_memory"][-1]["skill_context"] == [
+        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"
+    ]
+
+
+def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() -> None:
+    captured_requests: list[object] = []
+
+    def silent_capturing_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+
+    graph = build_osce_graph(
+        patient_responder=canonical_patient_responder,
+        coach_agent=silent_capturing_coach_agent,
+    )
+
+    result = graph.invoke(
+        base_hint_state(
+            active_skill_context=active_skill_context(),
+            evolution_candidates=["旧技能：旧策略不应再进入 Coach 提示。"],
+            hint_requested=False,
+            student_message="什么时候开始疼的？",
+            current_intent="",
+            reply="",
+        )
+    )
+
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "prompt_kind") == "passive_turn_review"
+    assert getattr(captured_requests[0], "skill_context") == ["腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"]
+    assert "旧技能" not in str(getattr(captured_requests[0], "model_dump")())
+    assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
+    assert result["agent_turn_memory"][-1]["skill_context"] == [
+        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"
+    ]
 
 
 def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, monkeypatch) -> None:

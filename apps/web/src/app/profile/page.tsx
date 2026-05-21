@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 type PersistedSessionSummary = Readonly<{
   session_id: string;
   case_id: string;
+  case_title: string;
   stage: string;
+  stage_label: string;
   created_at: string;
   updated_at: string;
   is_completed: boolean;
@@ -36,6 +38,33 @@ type EnabledSkillSummary = Readonly<{
   effect_status: string;
 }>;
 
+type SkillProfileItem = Readonly<{
+  item_id: string;
+  label: string;
+}>;
+
+type SkillProfileSkillState = Readonly<{
+  state: string;
+  state_label: string;
+  priority: number;
+  trigger_item_ids: readonly string[];
+  trigger_item_labels: readonly string[];
+  matched_recent_error_item_ids: readonly string[];
+  matched_recent_error_items: readonly SkillProfileItem[];
+  effect_status: string;
+  effect_status_label: string;
+  selection_reason: string;
+}>;
+
+type SkillProfileSummary = Readonly<{
+  recent_error_item_ids: readonly string[];
+  recent_error_items: readonly SkillProfileItem[];
+  current_focus_item_ids: readonly string[];
+  current_focus_items: readonly SkillProfileItem[];
+  skill_states: Readonly<Record<string, SkillProfileSkillState>>;
+  last_updated_from_report_count: number;
+}>;
+
 type SkillAccumulation = Readonly<{
   status: string;
   description: string;
@@ -46,11 +75,15 @@ type SkillAccumulation = Readonly<{
 
 type LearningPathItem = Readonly<{
   task_type: string;
+  task_type_label: string;
   case_id: string;
+  case_title: string;
   objective: string;
   target_rubric_items: readonly string[];
+  target_rubric_item_labels: readonly string[];
   source_report_count: number;
   source_references: readonly string[];
+  source_reference_labels: readonly string[];
 }>;
 
 type CurrentUserProfilePayload = Readonly<{
@@ -65,6 +98,7 @@ type CurrentUserProfilePayload = Readonly<{
   learning_path: readonly LearningPathItem[];
   recent_sessions: readonly PersistedSessionSummary[];
   skill_accumulation: SkillAccumulation;
+  skill_profile_summary: SkillProfileSummary;
 }>;
 
 type CurrentUserProfileResponse = Readonly<{
@@ -82,7 +116,17 @@ type LearningProfile = Readonly<{
   learningPath: readonly LearningPathItem[];
   recentSessions: readonly PersistedSessionSummary[];
   skillAccumulation: SkillAccumulation;
+  skillProfileSummary: SkillProfileSummary;
 }>;
+
+const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = {
+  recent_error_item_ids: [],
+  recent_error_items: [],
+  current_focus_item_ids: [],
+  current_focus_items: [],
+  skill_states: {},
+  last_updated_from_report_count: 0,
+};
 
 const EMPTY_LEARNING_PROFILE: LearningProfile = {
   totalSessions: 0,
@@ -101,6 +145,7 @@ const EMPTY_LEARNING_PROFILE: LearningProfile = {
     applied_skill_count: 0,
     enabled_skills: [],
   },
+  skillProfileSummary: EMPTY_SKILL_PROFILE_SUMMARY,
 };
 
 function formatSavedAt(savedAt: string): string {
@@ -127,6 +172,7 @@ function toLearningProfile(payload: CurrentUserProfilePayload): LearningProfile 
     learningPath: payload.learning_path,
     recentSessions: payload.recent_sessions,
     skillAccumulation: payload.skill_accumulation,
+    skillProfileSummary: payload.skill_profile_summary ?? EMPTY_SKILL_PROFILE_SUMMARY,
   };
 }
 
@@ -176,6 +222,80 @@ function formatSkillEffectSummary(skill: EnabledSkillSummary): string {
     return `当前效果：${effectStatusLabel}。`;
   }
   return "";
+}
+
+function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfileSummary }>) {
+  const skillStateEntries = Object.entries(summary.skill_states);
+
+  return (
+    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-medium text-brand">Skill 编排依据</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">当前训练问题</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+            由最近评分报告中的未覆盖训练点派生，Coach 会优先参考这些问题选择少量相关 Skill。
+          </p>
+        </div>
+        <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {summary.last_updated_from_report_count} 份报告
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <div className="rounded-xl border border-border bg-muted/30 p-4">
+          <h3 className="text-sm font-semibold">近期漏项</h3>
+          {summary.current_focus_items.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {summary.current_focus_items.map((focusItem) => (
+                <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand" key={focusItem.item_id}>
+                  {focusItem.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+              暂无近期漏项。完成训练报告后，这里会显示当前最需要补的训练点。
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-muted/30 p-4">
+          <h3 className="text-sm font-semibold">Skill 编排依据</h3>
+          {skillStateEntries.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {skillStateEntries.slice(0, 3).map(([skillId, state]) => (
+                <article className="rounded-lg border border-border bg-background p-3" key={skillId}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{state.selection_reason}</p>
+                    <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
+                      {state.state_label || state.effect_status_label}
+                    </span>
+                  </div>
+                  {state.matched_recent_error_items.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      命中训练点：{state.matched_recent_error_items.map((item) => item.label).join("、")}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      当前未命中近期漏项，作为可用教学策略保留。
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    效果状态：{state.effect_status_label || "样本不足"} · 优先级 {state.priority}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+              暂无可编排 Skill。管理员审核启用 Skill 后，这里会显示 Coach 的选择依据。
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: SkillAccumulation }>) {
@@ -354,32 +474,32 @@ export default function ProfilePage() {
           </div>
           {profile.learningPath.length > 0 ? (
             <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {profile.learningPath.map((task) => (
-                <article className="rounded-xl border border-border bg-muted/30 p-4" key={`${task.task_type}-${task.case_id}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-mono text-[11px] text-muted-foreground">{task.task_type}</p>
-                      <h3 className="mt-1 text-sm font-semibold">病例：{task.case_id}</h3>
-                    </div>
+                  {profile.learningPath.map((task) => (
+                    <article className="rounded-xl border border-border bg-muted/30 p-4" key={`${task.task_type}-${task.case_id}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-medium text-muted-foreground">{task.task_type_label || task.task_type}</p>
+                          <h3 className="mt-1 text-sm font-semibold">病例：{task.case_title || task.case_id}</h3>
+                        </div>
                     <span className="rounded-full border border-brand/20 bg-background px-2 py-1 text-[11px] font-medium text-brand">
                       {task.source_report_count} 份报告
                     </span>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-muted-foreground">{task.objective}</p>
-                  {task.target_rubric_items.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {task.target_rubric_items.map((itemId) => (
-                        <span className="rounded-full border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground" key={`${task.case_id}-${itemId}`}>
-                          {itemId}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {task.source_references.length > 0 ? (
-                    <p className="mt-3 break-words font-mono text-[11px] leading-5 text-muted-foreground">
-                      来源：{task.source_references.join(" · ")}
-                    </p>
-                  ) : null}
+                      {(task.target_rubric_item_labels ?? []).length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {(task.target_rubric_item_labels ?? []).map((itemLabel, index) => (
+                            <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground" key={`${task.case_id}-${task.target_rubric_items[index] ?? itemLabel}`}>
+                              {itemLabel}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {(task.source_reference_labels ?? []).length > 0 ? (
+                        <p className="mt-3 break-words text-[11px] leading-5 text-muted-foreground">
+                          来源：{(task.source_reference_labels ?? []).join(" · ")}
+                        </p>
+                      ) : null}
                 </article>
               ))}
             </div>
@@ -438,6 +558,8 @@ export default function ProfilePage() {
           </aside>
         </section>
 
+        <SkillProfileSummarySection summary={profile.skillProfileSummary} />
+
         <SkillAccumulationSection accumulation={profile.skillAccumulation} />
 
         <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
@@ -456,12 +578,12 @@ export default function ProfilePage() {
                 <article className="rounded-xl border border-border bg-muted/40 p-4" key={session.session_id}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
-                      <h3 className="mt-1 text-sm font-semibold">病例：{session.case_id}</h3>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        当前阶段：{session.stage} · {session.is_completed ? "已结束" : "训练中"} · 更新：
-                        {formatSavedAt(session.updated_at)}
-                      </p>
+                          <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
+                          <h3 className="mt-1 text-sm font-semibold">病例：{session.case_title || session.case_id}</h3>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            当前阶段：{session.stage_label || session.stage} · {session.is_completed ? "已结束" : "训练中"} · 更新：
+                            {formatSavedAt(session.updated_at)}
+                          </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {session.can_continue ? (

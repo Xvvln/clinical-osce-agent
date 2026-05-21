@@ -81,6 +81,7 @@ class OsceGraphState(TypedDict, total=False):
     feedback_report: dict[str, Any] | None
     safety_flags: list[str]
     evolution_candidates: list[str]
+    active_skill_context: dict[str, Any]
     agent_turn_memory: list[dict[str, Any]]
     pedagogy_state: dict[str, Any]
     agent_decision_trace: list[dict[str, Any]]
@@ -393,6 +394,8 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     case = _load_case(state["case_id"])
     pedagogy_state = build_pedagogy_state(dict(state))
     base_hint = _build_socratic_hint(state, pedagogy_state)
+    selected_skill_context = _selected_skill_context_strings(state)
+    selected_skill_ids = _selected_skill_ids(state)
     forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
     retrieved_knowledge_context = _retrieve_coach_knowledge_context(
         state,
@@ -413,7 +416,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
                     prior_messages=state.get("messages", []),
                     pedagogy_state=pedagogy_state,
                     clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                    skill_context=state.get("evolution_candidates", []),
+                    skill_context=selected_skill_context,
                     retrieved_knowledge_context=retrieved_knowledge_context,
                     forbidden_terms=[],
                 )
@@ -438,6 +441,8 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             safety_flags=list(state.get("safety_flags", [])),
             source_references=[item["reference"] for item in retrieved_knowledge_context],
             retrieved_knowledge_context=retrieved_knowledge_context,
+            selected_skill_ids=selected_skill_ids,
+            skill_context=selected_skill_context,
         ),
     }
 
@@ -834,7 +839,7 @@ def _append_evidence_references(
 def _build_socratic_hint(state: OsceGraphState, pedagogy_state: dict[str, Any] | None = None) -> str:
     if state.get("final_submission") is not None:
         return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
-    skill_hint = _build_enabled_skill_hint(state.get("evolution_candidates", []))
+    skill_hint = _build_enabled_skill_hint(_selected_skill_context_strings(state))
     if skill_hint:
         return skill_hint
     clinical_reasoning_state = (pedagogy_state or {}).get("clinical_reasoning_state", {})
@@ -882,7 +887,7 @@ def _retrieve_coach_knowledge_context(
             case.chief_complaint,
             str(state.get("stage", "")),
             str(state.get("training_progress_next_focus", "")),
-            " ".join(str(skill) for skill in state.get("evolution_candidates", []) if str(skill)),
+            " ".join(_selected_skill_context_strings(state)),
         ],
         allowed_visibilities=COACH_RAG_VISIBILITIES,
         forbidden_terms=forbidden_terms,
@@ -960,6 +965,44 @@ def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
         normalized_strategy = normalized_strategy.replace("学生", "你")
         return f"本轮训练重点是{title}。{normalized_strategy}"
     return ""
+
+
+def _selected_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:
+    active_skill_context = state.get("active_skill_context", {})
+    if not isinstance(active_skill_context, dict):
+        return []
+    selected_skills = active_skill_context.get("selected_skills", [])
+    if not isinstance(selected_skills, list):
+        return []
+    return [skill for skill in selected_skills if isinstance(skill, dict)]
+
+
+def _selected_skill_context_strings(state: OsceGraphState) -> list[str]:
+    selected_skill_texts: list[str] = []
+    for skill in _selected_skill_items(state):
+        title = str(skill.get("title") or "").strip()
+        strategy = str(skill.get("suggested_strategy") or "").strip()
+        if title and strategy:
+            selected_skill_texts.append(f"{title}：{strategy}")
+        elif title:
+            selected_skill_texts.append(title)
+        elif strategy:
+            selected_skill_texts.append(strategy)
+    if selected_skill_texts:
+        return selected_skill_texts
+    return [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
+
+
+def _selected_skill_ids(state: OsceGraphState) -> list[str]:
+    selected_skill_ids = [
+        str(skill.get("skill_id"))
+        for skill in _selected_skill_items(state)
+        if str(skill.get("skill_id") or "").strip()
+    ]
+    if selected_skill_ids:
+        return selected_skill_ids
+    legacy_candidates = [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
+    return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(legacy_candidates)]
 
 
 def _is_safety_boundary_message(message: str) -> bool:
@@ -1281,6 +1324,8 @@ def _apply_passive_coach_review(
         query=" ".join([base_hint, student_message, patient_reply]),
         forbidden_terms=forbidden_terms,
     )
+    selected_skill_context = _selected_skill_context_strings(state)
+    selected_skill_ids = _selected_skill_ids(state)
     pedagogy_state = build_pedagogy_state(
         {
             **dict(state),
@@ -1306,7 +1351,7 @@ def _apply_passive_coach_review(
                         "revealed_fact_id": revealed_fact_id,
                     },
                     clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                    skill_context=state.get("evolution_candidates", []),
+                    skill_context=selected_skill_context,
                     retrieved_knowledge_context=retrieved_knowledge_context,
                     forbidden_terms=forbidden_terms,
                 )
@@ -1329,6 +1374,8 @@ def _apply_passive_coach_review(
             agent_path=["input_router_node", "patient_response_node", "coach_agent_unavailable"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
+            selected_skill_ids=selected_skill_ids,
+            skill_context=selected_skill_context,
         )
     forced_hint = base_hint.strip()
     response_hint = coach_response.hint.strip()
@@ -1357,6 +1404,8 @@ def _apply_passive_coach_review(
         safety_flags=list(state.get("safety_flags", [])),
         source_references=[item["reference"] for item in retrieved_knowledge_context] if should_emit else [],
         retrieved_knowledge_context=retrieved_knowledge_context if should_emit else [],
+        selected_skill_ids=selected_skill_ids,
+        skill_context=selected_skill_context,
     )
     return next_messages, next_agent_turn_memory
 
@@ -1395,7 +1444,7 @@ def _coach_reply_from_agent(
                     "turn_analysis": turn_analysis,
                 },
                 clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                skill_context=state.get("evolution_candidates", []),
+                skill_context=_selected_skill_context_strings(state),
                 retrieved_knowledge_context=retrieved_knowledge_context,
                 forbidden_terms=forbidden_terms,
             )
@@ -1418,6 +1467,8 @@ def _append_agent_turn_memory(
     safety_flags: list[str],
     source_references: list[str] | None = None,
     retrieved_knowledge_context: list[dict[str, Any]] | None = None,
+    selected_skill_ids: list[str] | None = None,
+    skill_context: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
     turn_source_references = [f"case:{state['case_id']}.history.{revealed_fact_id}"] if revealed_fact_id else []
@@ -1441,6 +1492,10 @@ def _append_agent_turn_memory(
     if turn_knowledge_context:
         turn_payload["knowledge_references"] = [item["reference"] for item in turn_knowledge_context]
         turn_payload["retrieved_knowledge_context"] = turn_knowledge_context
+    if selected_skill_ids:
+        turn_payload["selected_skill_ids"] = list(selected_skill_ids)
+    if skill_context:
+        turn_payload["skill_context"] = list(skill_context)
     turn_memory.append(turn_payload)
     return turn_memory
 

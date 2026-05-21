@@ -105,16 +105,19 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
         "frequent_learning_recommendations": [
             {
                 "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                "reference_label": "评分项：右下腹痛教学病例 / reasoning_core（当前 Rubric 未收录）",
                 "title": "推理链覆盖关键证据并能自圆其说",
                 "count": 1,
             },
             {
                 "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
+                "reference_label": "评分项：推理链覆盖感染症状、体征和影像证据",
                 "title": "推理链覆盖关键证据并能自圆其说",
                 "count": 1,
             },
             {
                 "reference": "knowledge:appendicitis_001.rp_03",
+                "reference_label": "知识条目：右下腹痛教学病例",
                 "title": "急性阑尾炎诊断依据",
                 "count": 1,
             },
@@ -124,6 +127,7 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "reference": "source:fareez_osce_2022",
                 "source_type": "source",
                 "title": "Fareez OSCE 数据集",
+                "reference_label": "来源：A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
                 "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
@@ -133,6 +137,7 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
                 "source_type": "rubric",
                 "title": "推理链覆盖关键证据并能自圆其说",
+                "reference_label": "评分项：右下腹痛教学病例 / reasoning_core（当前 Rubric 未收录）",
                 "count": 1,
                 "case_ids": ["appendicitis_001"],
                 "case_titles": ["右下腹痛教学病例"],

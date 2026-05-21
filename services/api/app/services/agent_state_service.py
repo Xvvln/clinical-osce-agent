@@ -6,7 +6,7 @@ from typing import Any
 def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
     stage = str(state.get("stage") or "case_intro")
     missed_items = _string_list(state.get("missed_items", []))
-    skill_context_ids = _skill_context_ids(state.get("evolution_candidates", []))
+    skill_context_ids = _skill_context_ids(state)
     active_goal, next_best_action, evidence_gap, differential_gap = _phase_plan(state)
     clinical_reasoning_state = build_clinical_reasoning_state(state)
     if clinical_reasoning_state.get("sequence_flags"):
@@ -377,13 +377,24 @@ def _phase_plan(state: dict[str, Any]) -> tuple[str, str, str, str]:
 def _coaching_mode(state: dict[str, Any]) -> str:
     if state.get("final_submission") is not None or state.get("stage") == "feedback":
         return "reflective"
-    if _string_list(state.get("evolution_candidates", [])):
+    if _skill_context_ids(state):
         return "skill_guided"
     return "socratic"
 
 
-def _skill_context_ids(evolution_candidates: Any) -> list[str]:
-    skills = _string_list(evolution_candidates)
+def _skill_context_ids(state: dict[str, Any]) -> list[str]:
+    active_skill_context = state.get("active_skill_context", {})
+    if isinstance(active_skill_context, dict):
+        selected_skills = active_skill_context.get("selected_skills", [])
+        if isinstance(selected_skills, list):
+            selected_ids = [
+                str(skill.get("skill_id"))
+                for skill in selected_skills
+                if isinstance(skill, dict) and str(skill.get("skill_id") or "").strip()
+            ]
+            if selected_ids:
+                return selected_ids
+    skills = _string_list(state.get("evolution_candidates", []))
     return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(skills)]
 
 

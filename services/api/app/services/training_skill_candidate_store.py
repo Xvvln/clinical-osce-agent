@@ -100,6 +100,12 @@ def _candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "candidate_id": candidate["candidate_id"],
         "trigger_item_id": candidate["trigger_item_id"],
+        "trigger_item_ids": list(candidate.get("trigger_item_ids", [])),
+        "case_ids": list(candidate.get("case_ids", [])),
+        "skill_type": str(candidate.get("skill_type", "")),
+        "stage_scope": list(candidate.get("stage_scope", [])),
+        "effect_status": str(candidate.get("effect_status", "")),
+        "related_recommendations": list(candidate.get("related_recommendations", [])),
         "title": candidate["title"],
         "status": review["status"],
         "regression_passed": review["regression_passed"],

@@ -19,6 +19,10 @@ from app.services.admin_display_resolver import (
     enrich_rag_knowledge_item,
     enrich_report,
     enrich_session_summary,
+    enrich_teaching_focus_pattern,
+    enrich_training_skill_candidate,
+    reference_labels,
+    rubric_item_labels,
 )
 from app.services.auth_store import auth_store
 from app.services.derived_teaching_focus_service import (
@@ -46,6 +50,7 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
+from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.user_model_config_store import user_model_config_store
 from app.services.training_insight_service import TrainingInsightService
 from app.services.training_skill_auto_approval_service import (
@@ -100,6 +105,11 @@ RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["coach", "reflection", "skill_generation"
 RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
+LEARNING_TASK_TYPE_LABELS = {
+    "start_first_case": "开始首例训练",
+    "redo_same_case": "复训当前病例",
+    "contrast_case": "推荐对照病例",
+}
 SOURCE_REGISTRY_PATH = RUBRICS_DIR.parent / "attribution" / "source_registry" / "sources.json"
 ADMIN_EVALUATION_CASES = [
     EvaluationCase(
@@ -171,6 +181,17 @@ def _build_paginated_admin_payload(
         key: filtered_items[offset : offset + effective_limit],
         "pagination": {"limit": effective_limit, "offset": offset, "total": len(filtered_items)},
     }
+
+
+def _filter_training_skill_candidate_items_by_review_status(
+    items: list[dict[str, Any]],
+    review_status: str,
+) -> list[dict[str, Any]]:
+    normalized_status = review_status.strip()
+    if not normalized_status or normalized_status == "all":
+        return items
+    accepted_statuses = {"approved", "rejected"} if normalized_status == "processed" else {normalized_status}
+    return [item for item in items if str(item.get("status", "")).strip() in accepted_statuses]
 
 
 PROFILE_DIMENSION_LABELS: dict[str, str] = {
@@ -510,15 +531,20 @@ def _append_admin_skill_candidate_review_event(
 def _summarize_training_skill_candidate(candidate: dict[str, Any]) -> dict[str, object]:
     candidate = candidate_with_context_safety_review(candidate)
     review = candidate["review"]
-    return {
+    return enrich_training_skill_candidate({
         "candidate_id": candidate["candidate_id"],
         "trigger_item_id": candidate["trigger_item_id"],
+        "trigger_item_ids": list(candidate.get("trigger_item_ids", [])),
+        "case_ids": list(candidate.get("case_ids", [])),
+        "skill_type": str(candidate.get("skill_type", "")),
+        "stage_scope": list(candidate.get("stage_scope", [])),
+        "effect_status": str(candidate.get("effect_status", "")),
         "title": candidate["title"],
         "status": review["status"],
         "regression_passed": review["regression_passed"],
         "source_report_count": candidate["source_report_count"],
         "support_count": candidate["support_count"],
-    }
+    })
 
 
 def _list_admin_skill_candidate_review_events() -> list[dict[str, Any]]:
@@ -575,14 +601,16 @@ def _get_dimension_averages(reports: list[dict[str, Any]]) -> list[dict[str, obj
 def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[str, object] | None) -> list[dict[str, object]]:
     if not reports:
         return [
-            {
-                "task_type": "start_first_case",
-                "case_id": "appendicitis_001",
-                "objective": "先完成一次右下腹痛教学病例的完整 OSCE 训练，形成可评分报告后再生成个性化路径。",
-                "target_rubric_items": [],
-                "source_report_count": 0,
-                "source_references": ["case:appendicitis_001"],
-            }
+            _enrich_learning_path_task(
+                {
+                    "task_type": "start_first_case",
+                    "case_id": "appendicitis_001",
+                    "objective": "先完成一次右下腹痛教学病例的完整 OSCE 训练，形成可评分报告后再生成个性化路径。",
+                    "target_rubric_items": [],
+                    "source_report_count": 0,
+                    "source_references": ["case:appendicitis_001"],
+                }
+            )
         ]
 
     latest_report = reports[0]
@@ -593,22 +621,44 @@ def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[
     source_report_count = len(reports)
 
     learning_path: list[dict[str, object]] = [
-        {
-            "task_type": "redo_same_case",
-            "case_id": latest_case_id,
-            "objective": f"复训{_get_case_title(latest_case_id)}，优先补强{weakest_label}并补齐本轮反复缺失的评分项。",
-            "target_rubric_items": target_item_ids,
-            "source_report_count": source_report_count,
-            "source_references": [
-                f"rubric:{item['case_id']}_rubric.item.{item['item_id']}"
-                for item in target_items
-            ],
-        }
+        _enrich_learning_path_task(
+            {
+                "task_type": "redo_same_case",
+                "case_id": latest_case_id,
+                "objective": f"复训{_get_case_title(latest_case_id)}，优先补强{weakest_label}并补齐本轮反复缺失的评分项。",
+                "target_rubric_items": target_item_ids,
+                "source_report_count": source_report_count,
+                "source_references": [
+                    f"rubric:{item['case_id']}_rubric.item.{item['item_id']}"
+                    for item in target_items
+                ],
+            },
+            rubric_label_case_id=latest_case_id,
+        )
     ]
     contrast_task = _build_contrast_learning_task(reports, latest_case_id, target_item_ids, source_report_count)
     if contrast_task is not None:
-        learning_path.append(contrast_task)
+        learning_path.append(_enrich_learning_path_task(contrast_task, rubric_label_case_id=latest_case_id))
     return learning_path
+
+
+def _enrich_learning_path_task(
+    task: dict[str, object],
+    *,
+    rubric_label_case_id: str | None = None,
+) -> dict[str, object]:
+    case_id = str(task.get("case_id") or "")
+    task_type = str(task.get("task_type") or "")
+    target_rubric_items = [str(item_id) for item_id in task.get("target_rubric_items", []) if str(item_id)]
+    source_references = [str(reference) for reference in task.get("source_references", []) if str(reference)]
+    label_case_id = rubric_label_case_id or case_id
+    return {
+        **task,
+        "task_type_label": LEARNING_TASK_TYPE_LABELS.get(task_type, task_type or "训练任务"),
+        "case_title": _get_case_title(case_id),
+        "target_rubric_item_labels": rubric_item_labels(target_rubric_items, [label_case_id]),
+        "source_reference_labels": reference_labels(source_references),
+    }
 
 
 def _get_top_missed_profile_items(reports: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
@@ -916,6 +966,11 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
         for session in sessions
         if (report := osce_session_service.report_store.get_report(str(session["session_id"]))) is not None
     ]
+    visible_enabled_skills = [
+        skill
+        for skill in osce_session_service.training_skill_store.list_enabled_skills()
+        if _enabled_skill_visible_to_user(skill, user["user_id"])
+    ]
     dimension_averages = _get_dimension_averages(reports)
     weakest_dimension = dimension_averages[-1] if dimension_averages else None
 
@@ -929,8 +984,12 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
         "weakest_dimension": weakest_dimension,
         "next_focus": f"下一轮优先补强{weakest_dimension['label']}，并在训练记录中对比改进趋势。" if weakest_dimension else "先完成一次完整训练并生成评分报告。",
         "learning_path": _build_learning_path(reports, weakest_dimension),
-        "recent_sessions": sessions[:5],
+        "recent_sessions": [enrich_session_summary(dict(session)) for session in sessions[:5]],
         "skill_accumulation": _build_skill_accumulation(user["user_id"], sessions),
+        "skill_profile_summary": build_skill_profile_summary(
+            reports=reports,
+            enabled_skills=visible_enabled_skills,
+        ),
     }
 
 
@@ -1380,7 +1439,7 @@ def list_admin_teaching_focus_patterns(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"patterns": build_admin_teaching_focus_patterns()}
+    return {"patterns": [enrich_teaching_focus_pattern(pattern) for pattern in build_admin_teaching_focus_patterns()]}
 
 
 @app.get("/api/admin/teaching-focus/patterns/{focus_id}")
@@ -1392,7 +1451,7 @@ def get_admin_teaching_focus_pattern_detail(
     pattern = get_admin_teaching_focus_pattern(focus_id)
     if pattern is None:
         raise HTTPException(status_code=404, detail="teaching focus pattern not found")
-    return {"pattern": pattern}
+    return {"pattern": enrich_teaching_focus_pattern(pattern)}
 
 
 @app.get("/api/admin/model-config")
@@ -1546,12 +1605,20 @@ def list_admin_training_skill_candidates(
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
     q: str = Query(default=""),
+    review_status: str = Query(default=""),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
+    candidate_items = _filter_training_skill_candidate_items_by_review_status(
+        [
+            enrich_training_skill_candidate(candidate_item)
+            for candidate_item in training_skill_candidate_store.list_candidate_summaries()
+        ],
+        review_status,
+    )
     return _build_paginated_admin_payload(
         "candidates",
-        training_skill_candidate_store.list_candidate_summaries(),
+        candidate_items,
         limit,
         offset,
         q,
@@ -1698,7 +1765,7 @@ def get_admin_training_skill_candidate(
     candidate = training_skill_candidate_store.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="candidate not found")
-    return {"candidate": candidate_with_context_safety_review(candidate)}
+    return {"candidate": enrich_training_skill_candidate(candidate_with_context_safety_review(candidate))}
 
 
 @app.get("/api/admin/evolution/candidates/{candidate_id}/events")

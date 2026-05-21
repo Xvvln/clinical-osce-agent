@@ -413,6 +413,8 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["average_score"] == 32
     assert profile["recent_sessions"][0]["session_id"] == current_session_id
     assert profile["recent_sessions"][0]["session_id"] != other_response.json()["session_id"]
+    assert profile["recent_sessions"][0]["case_title"] == "右下腹痛教学病例"
+    assert profile["recent_sessions"][0]["stage_label"] == "报告已生成"
     assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 15}
     assert profile["weakest_dimension"] == {"key": "differential_diagnosis", "label": "鉴别诊断", "average": 0}
     assert profile["skill_accumulation"]["status"] == "active"
@@ -420,9 +422,55 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["skill_accumulation"]["applied_skill_count"] == 0
     assert profile["skill_accumulation"]["enabled_skills"][0]["skill_id"].startswith("skill_personal_")
     assert profile["skill_accumulation"]["enabled_skills"][0]["effect_status"] == "insufficient_samples"
+    personal_skill_id = profile["skill_accumulation"]["enabled_skills"][0]["skill_id"]
+    assert profile["skill_profile_summary"]["recent_error_item_ids"] == [
+        "ht_migration",
+        "ht_character",
+        "ht_severity",
+        "ht_associated_gi",
+        "ht_associated_fever",
+        "ht_past_medical",
+        "ht_allergy",
+        "ht_ice",
+    ]
+    assert profile["skill_profile_summary"]["current_focus_item_ids"] == [
+        "ht_migration",
+        "ht_character",
+        "ht_severity",
+    ]
+    assert profile["skill_profile_summary"]["current_focus_items"] == [
+        {"item_id": "ht_migration", "label": "追问疼痛部位及转移特征"},
+        {"item_id": "ht_character", "label": "追问疼痛性质"},
+        {"item_id": "ht_severity", "label": "追问疼痛程度"},
+    ]
+    assert profile["skill_profile_summary"]["last_updated_from_report_count"] == 1
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["state"] == "active"
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["state_label"] == "正在生效"
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["effect_status_label"] == "样本不足"
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["matched_recent_error_items"][0] == {
+        "item_id": "ht_migration",
+        "label": "追问疼痛部位及转移特征",
+    }
+    assert (
+        profile["skill_profile_summary"]["skill_states"][personal_skill_id]["selection_reason"]
+        == "近期画像命中：追问疼痛部位及转移特征、追问疼痛性质、追问疼痛程度。"
+    )
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["matched_recent_error_item_ids"] == [
+        "ht_migration",
+        "ht_character",
+        "ht_severity",
+        "ht_associated_gi",
+        "ht_associated_fever",
+        "ht_past_medical",
+        "ht_allergy",
+        "ht_ice",
+    ]
+    assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["priority"] >= 8
     assert profile["learning_path"][0] == {
         "task_type": "redo_same_case",
+        "task_type_label": "复训当前病例",
         "case_id": "appendicitis_001",
+        "case_title": "右下腹痛教学病例",
         "objective": "复训右下腹痛教学病例，优先补强鉴别诊断并补齐本轮反复缺失的评分项。",
         "target_rubric_items": [
             "ht_migration",
@@ -430,6 +478,13 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
             "ht_severity",
             "ht_associated_gi",
             "ht_associated_fever",
+        ],
+        "target_rubric_item_labels": [
+            "追问疼痛部位及转移特征",
+            "追问疼痛性质",
+            "追问疼痛程度",
+            "追问恶心呕吐腹泻",
+            "追问发热",
         ],
         "source_report_count": 1,
         "source_references": [
@@ -439,10 +494,19 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
             "rubric:appendicitis_001_rubric.item.ht_associated_gi",
             "rubric:appendicitis_001_rubric.item.ht_associated_fever",
         ],
+        "source_reference_labels": [
+            "评分项：追问疼痛部位及转移特征",
+            "评分项：追问疼痛性质",
+            "评分项：追问疼痛程度",
+            "评分项：追问恶心呕吐腹泻",
+            "评分项：追问发热",
+        ],
     }
     assert profile["learning_path"][1] == {
         "task_type": "contrast_case",
+        "task_type_label": "推荐对照病例",
         "case_id": "acs_001",
+        "case_title": "胸痛伴出汗教学病例",
         "objective": "对照胸痛伴出汗教学病例，迁移本轮薄弱维度的问诊、检查选择和证据链表达。",
         "target_rubric_items": [
             "ht_migration",
@@ -451,8 +515,16 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
             "ht_associated_gi",
             "ht_associated_fever",
         ],
+        "target_rubric_item_labels": [
+            "追问疼痛部位及转移特征",
+            "追问疼痛性质",
+            "追问疼痛程度",
+            "追问恶心呕吐腹泻",
+            "追问发热",
+        ],
         "source_report_count": 1,
         "source_references": ["case:acs_001"],
+        "source_reference_labels": ["病例：胸痛伴出汗教学病例"],
     }
 
 
@@ -513,6 +585,86 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             }
         ],
     }
+
+
+def test_current_user_profile_recent_session_uses_readable_stage_label(tmp_path) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    message_response = client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+
+    response = client.get("/api/me/profile")
+
+    assert create_response.status_code == 200
+    assert message_response.status_code == 200
+    assert response.status_code == 200
+    recent_session = response.json()["profile"]["recent_sessions"][0]
+    assert recent_session["stage"] == "history_taking"
+    assert recent_session["stage_label"] == "问诊阶段"
+
+
+def test_new_session_skill_selection_uses_recent_profile_errors(tmp_path) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    first_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    first_session_id = first_response.json()["session_id"]
+    osce_session_service.report_store.save_report(
+        {
+            "session_id": first_session_id,
+            "case_id": "appendicitis_001",
+            "total_score": 20,
+            "dimension_scores": {"history_taking": 1},
+            "missed_items": ["ht_migration"],
+        }
+    )
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_generic_lab",
+            "trigger_item_id": "ax_cbc",
+            "trigger_item_ids": ["ax_cbc"],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro"],
+            "title": "高支持次数通用检查训练",
+            "description": "通用检查训练。",
+            "suggested_strategy": "提醒学生考虑基础检查，但不泄露标准诊断。",
+            "source_report_count": 20,
+            "support_count": 20,
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_profile_migration",
+            "trigger_item_id": "ht_migration",
+            "trigger_item_ids": ["ht_migration"],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro"],
+            "title": "近期漏项腹痛迁移追问",
+            "description": "近期训练反复遗漏腹痛迁移。",
+            "suggested_strategy": "优先追问疼痛是否从上腹转移到右下腹，以及迁移前后变化。",
+            "source_report_count": 1,
+            "support_count": 1,
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    second_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    selected_skills = second_response.json()["active_skill_context"]["selected_skills"]
+    assert [skill["skill_id"] for skill in selected_skills[:2]] == [
+        "skill_ht_migration",
+        "skill_ax_cbc",
+    ]
+    assert selected_skills[0]["why_candidate"] == "近期画像命中 ht_migration"
 
 
 
@@ -762,6 +914,98 @@ def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> Non
     assert create_response.json()["evolution_candidates"] == [
         "临床推理链纠偏提示：在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
     ]
+
+
+def test_create_session_returns_structured_active_skill_context(tmp_path) -> None:
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_history_migration",
+            "trigger_item_id": "ht_migration",
+            "trigger_item_ids": ["ht_migration"],
+            "case_ids": ["appendicitis_001"],
+            "title": "腹痛迁移追问训练",
+            "description": "反复遗漏腹痛迁移过程。",
+            "suggested_strategy": "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。",
+            "source_report_count": 2,
+            "support_count": 3,
+            "related_recommendations": ["rubric:appendicitis_001_rubric.item.ht_migration"],
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "student_id": "student_demo"},
+    )
+
+    assert create_response.status_code == 200
+    active_skill_context = create_response.json()["active_skill_context"]
+    assert active_skill_context["skill_index"] == [
+        {
+            "skill_id": "skill_ht_migration",
+            "title": "腹痛迁移追问训练",
+            "scope": "global",
+            "stage_scope": ["case_intro"],
+            "trigger_item_ids": ["ht_migration"],
+            "priority": 0,
+            "why_candidate": "适用训练点 ht_migration",
+        }
+    ]
+    assert active_skill_context["selected_skills"][0]["suggested_strategy"] == "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。"
+    assert active_skill_context["selected_skills"][0]["skill_id"] == "skill_ht_migration"
+    assert active_skill_context["skipped_reasons"] == []
+
+
+def test_active_skill_context_refreshes_after_session_stage_changes(tmp_path) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service._sessions.clear()
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_history_migration",
+            "trigger_item_id": "ht_migration",
+            "trigger_item_ids": ["ht_migration"],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro"],
+            "title": "腹痛迁移追问训练",
+            "description": "反复遗漏腹痛迁移过程。",
+            "suggested_strategy": "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。",
+            "source_report_count": 2,
+            "support_count": 3,
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+    osce_session_service.training_skill_store.enable_candidate(
+        {
+            "candidate_id": "skill_candidate_physical_tenderness",
+            "trigger_item_id": "pe_tenderness",
+            "trigger_item_ids": ["pe_tenderness"],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["physical_exam"],
+            "title": "右下腹压痛查体训练",
+            "description": "进入查体阶段后提醒学生验证右下腹体征。",
+            "suggested_strategy": "已进入查体阶段，优先确认右下腹压痛和腹膜刺激征，不透露诊断答案。",
+            "source_report_count": 2,
+            "support_count": 4,
+            "review": {"status": "approved", "regression_passed": True},
+        }
+    )
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    exam_response = client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation"})
+    hint_response = client.post(f"/api/sessions/{session_id}/hint")
+
+    assert create_response.status_code == 200
+    assert create_response.json()["active_skill_context"]["selected_skills"][0]["skill_id"] == "skill_ht_migration"
+    assert exam_response.status_code == 200
+    assert exam_response.json()["stage"] == "physical_exam"
+    assert exam_response.json()["active_skill_context"]["selected_skills"][0]["skill_id"] == "skill_pe_tenderness"
+    assert hint_response.status_code == 200
+    assert "右下腹压痛查体训练" in hint_response.json()["hint"]
+    assert hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_pe_tenderness"]
 
 
 def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_case(tmp_path) -> None:

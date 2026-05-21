@@ -682,6 +682,11 @@ def test_admin_can_list_dynamic_teaching_focus_patterns(tmp_path, monkeypatch) -
     assert "case_baseline:acs_001:auxiliary_test" in pattern_ids
     acs_pattern = next(pattern for pattern in payload["patterns"] if pattern["focus_id"] == "case_baseline:acs_001:auxiliary_test")
     assert acs_pattern["trigger_item_ids"] == ["at_ecg", "at_troponin"]
+    assert acs_pattern["trigger_item_labels"] == ["申请心电图", "申请肌钙蛋白"]
+    assert acs_pattern["source_reference_labels"] == ["评分项：申请心电图", "评分项：申请肌钙蛋白"]
+    assert acs_pattern["case_titles"] == ["胸痛伴出汗教学病例"]
+    assert acs_pattern["scope_label"] == "病例基础教学重点"
+    assert acs_pattern["severity_label"] == "中等优先级"
     assert acs_pattern["source_report_count"] == 0
     assert acs_pattern["visibility_level"] == "student_safe"
     visible_text = "\n".join(
@@ -704,6 +709,8 @@ def test_admin_can_read_dynamic_teaching_focus_pattern_detail(tmp_path, monkeypa
     payload = response.json()
     assert payload["pattern"]["focus_id"] == "case_baseline:appendicitis_001:history_taking"
     assert payload["pattern"]["trigger_item_ids"][:2] == ["ht_onset", "ht_migration"]
+    assert payload["pattern"]["trigger_item_labels"][:2] == ["追问起病时间", "追问疼痛部位及转移特征"]
+    assert payload["pattern"]["source_reference_labels"][:2] == ["评分项：追问起病时间", "评分项：追问疼痛部位及转移特征"]
 
 
 def test_admin_can_read_retrieval_eval_metrics(tmp_path, monkeypatch) -> None:
@@ -1302,20 +1309,32 @@ def test_admin_can_list_training_skill_candidate_summaries(tmp_path, monkeypatch
         response = client.get("/api/admin/evolution/candidates")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "candidates": [
-            {
-                "candidate_id": "skill_candidate_reasoning_core",
-                "trigger_item_id": "reasoning_core",
-                "title": "临床推理链纠偏提示",
-                "status": "ready_for_review",
-                "regression_passed": True,
-                "source_report_count": 3,
-                "support_count": 2,
-            }
-        ],
-        "pagination": {"limit": 1, "offset": 0, "total": 1},
+    payload = response.json()
+    assert payload["pagination"] == {"limit": 1, "offset": 0, "total": 1}
+    assert len(payload["candidates"]) == 1
+    candidate = payload["candidates"][0]
+    assert {
+        "candidate_id": candidate["candidate_id"],
+        "trigger_item_id": candidate["trigger_item_id"],
+        "title": candidate["title"],
+        "status": candidate["status"],
+        "regression_passed": candidate["regression_passed"],
+        "source_report_count": candidate["source_report_count"],
+        "support_count": candidate["support_count"],
+    } == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "trigger_item_id": "reasoning_core",
+        "title": "临床推理链纠偏提示",
+        "status": "ready_for_review",
+        "regression_passed": True,
+        "source_report_count": 3,
+        "support_count": 2,
     }
+    assert "trigger_item_labels" in candidate
+    assert "case_titles" in candidate
+    assert "skill_type_label" in candidate
+    assert "stage_scope_labels" in candidate
+    assert "effect_status_label" in candidate
 
 
 def test_admin_candidate_summary_marks_case_incompatible_approved_candidate_blocked(tmp_path, monkeypatch) -> None:
@@ -1399,6 +1418,169 @@ def test_admin_can_paginate_and_filter_training_skill_candidate_summaries(tmp_pa
     filtered_payload = filtered_response.json()
     assert [candidate["candidate_id"] for candidate in filtered_payload["candidates"]] == ["skill_candidate_reasoning_core"]
     assert filtered_payload["pagination"] == {"limit": 5, "offset": 0, "total": 1}
+
+
+def test_admin_can_filter_training_skill_candidates_by_review_status(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_ready",
+            "trigger_item_id": "ht_onset",
+            "trigger_item_ids": ["ht_onset"],
+            "case_ids": ["appendicitis_001"],
+            "skill_type": "history_bundle",
+            "stage_scope": ["history_taking"],
+            "effect_status": "insufficient_samples",
+            "applies_when": {
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["history_taking"],
+                "trigger_item_ids": ["ht_onset"],
+            },
+            "title": "临床推理链纠偏提示",
+            "status": "draft",
+            "source_report_count": 3,
+            "support_count": 2,
+        },
+        {
+            "candidate_id": "skill_candidate_ready",
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 2,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_blocked",
+            "trigger_item_id": "training_pattern_dxd_ectopic",
+            "trigger_item_ids": ["dxd_ectopic"],
+            "case_ids": ["appendicitis_001"],
+            "title": "急腹症鉴别诊断与全面评估逻辑训练",
+            "description": "急腹症鉴别诊断反复遗漏，需补充妇科和泌尿系统排除。",
+            "suggested_strategy": "面对急性腹痛患者时，请系统排除妇科、异位妊娠、泌尿科及肠道相关疾病。",
+            "status": "draft",
+            "source_report_count": 7,
+            "support_count": 7,
+            "related_recommendations": [
+                "rubric:appendicitis_001_rubric.item.dxd_urolith",
+                "rubric:appendicitis_001_rubric.item.dxd_ectopic",
+            ],
+        },
+        {
+            "candidate_id": "skill_candidate_blocked",
+            "status": "approved",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_rejected",
+            "trigger_item_id": "history_gap",
+            "title": "问诊漏项提醒",
+            "status": "draft",
+            "source_report_count": 1,
+            "support_count": 1,
+        },
+        {
+            "candidate_id": "skill_candidate_rejected",
+            "status": "rejected",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        ready_response = client.get("/api/admin/evolution/candidates", params={"review_status": "ready_for_review"})
+        blocked_response = client.get("/api/admin/evolution/candidates", params={"review_status": "blocked_by_regression"})
+        processed_response = client.get("/api/admin/evolution/candidates", params={"review_status": "processed"})
+        detail_response = client.get("/api/admin/evolution/candidates/skill_candidate_ready")
+
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert [candidate["candidate_id"] for candidate in ready_payload["candidates"]] == ["skill_candidate_ready"]
+    assert ready_payload["pagination"]["total"] == 1
+    assert ready_payload["candidates"][0]["case_titles"] == ["右下腹痛教学病例"]
+    assert ready_payload["candidates"][0]["trigger_item_labels"] == ["追问起病时间"]
+    assert ready_payload["candidates"][0]["skill_type_label"] == "病史采集训练"
+    assert ready_payload["candidates"][0]["stage_scope_labels"] == ["问诊阶段"]
+    assert ready_payload["candidates"][0]["effect_status_label"] == "样本不足"
+
+    assert blocked_response.status_code == 200
+    blocked_payload = blocked_response.json()
+    assert [candidate["candidate_id"] for candidate in blocked_payload["candidates"]] == ["skill_candidate_blocked"]
+    assert blocked_payload["candidates"][0]["status"] == "blocked_by_regression"
+    assert blocked_payload["pagination"]["total"] == 1
+    assert blocked_payload["candidates"][0]["trigger_item_labels"] == ["鉴别诊断：异位妊娠（历史字段）"]
+    assert blocked_payload["candidates"][0]["related_recommendation_labels"] == [
+        "评分项：提出输尿管结石并说明排除依据",
+        "评分项：鉴别诊断：异位妊娠（历史字段）",
+    ]
+
+    assert processed_response.status_code == 200
+    assert [candidate["candidate_id"] for candidate in processed_response.json()["candidates"]] == ["skill_candidate_rejected"]
+    assert processed_response.json()["pagination"]["total"] == 1
+
+    assert detail_response.status_code == 200
+    detail_candidate = detail_response.json()["candidate"]
+    assert detail_candidate["case_titles"] == ["右下腹痛教学病例"]
+    assert detail_candidate["trigger_item_labels"] == ["追问起病时间"]
+    assert detail_candidate["skill_type_label"] == "病史采集训练"
+    assert detail_candidate["stage_scope_labels"] == ["问诊阶段"]
+    assert detail_candidate["effect_status_label"] == "样本不足"
+
+
+def test_admin_enriches_skill_candidate_labels_from_related_references(tmp_path, monkeypatch) -> None:
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    candidate_store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_reference_labels",
+            "trigger_item_id": "training_pattern_dxd_urolith",
+            "trigger_item_ids": ["dxd_urolith"],
+            "title": "鉴别诊断证据链训练",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+            "related_recommendations": [
+                "rubric:appendicitis_001_rubric.item.dxd_urolith",
+            ],
+        },
+        {
+            "candidate_id": "skill_candidate_reference_labels",
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+    monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        list_response = client.get("/api/admin/evolution/candidates", params={"review_status": "ready_for_review"})
+        detail_response = client.get("/api/admin/evolution/candidates/skill_candidate_reference_labels")
+
+    assert list_response.status_code == 200
+    candidate_summary = list_response.json()["candidates"][0]
+    assert candidate_summary["case_titles"] == ["右下腹痛教学病例"]
+    assert candidate_summary["trigger_item_labels"] == ["提出输尿管结石并说明排除依据"]
+    assert candidate_summary["related_recommendation_labels"] == ["评分项：提出输尿管结石并说明排除依据"]
+
+    assert detail_response.status_code == 200
+    detail_candidate = detail_response.json()["candidate"]
+    assert detail_candidate["case_titles"] == ["右下腹痛教学病例"]
+    assert detail_candidate["trigger_item_labels"] == ["提出输尿管结石并说明排除依据"]
+    assert detail_candidate["related_recommendation_labels"] == ["评分项：提出输尿管结石并说明排除依据"]
 
 
 def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> None:
@@ -1667,11 +1849,13 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             "frequent_learning_recommendations": [
                 {
                     "reference": "rubric:appendicitis_001_rubric.item.reasoning_core",
+                    "reference_label": "评分项：右下腹痛教学病例 / reasoning_core（当前 Rubric 未收录）",
                     "title": "补充临床推理证据链",
                     "count": 1,
                 },
                 {
                     "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
+                    "reference_label": "评分项：推理链覆盖感染症状、体征和影像证据",
                     "title": "补充临床推理证据链",
                     "count": 1,
                 },
@@ -1679,6 +1863,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             "frequent_source_references": [
                 {
                     "reference": "source:fareez_osce_2022",
+                    "reference_label": "来源：A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
                     "source_type": "source",
                     "title": "Fareez OSCE 数据集",
                     "count": 2,
@@ -2233,7 +2418,16 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         "support_count": 2,
     }
     assert response.status_code == 200
-    assert response.json() == {
+    response_payload = response.json()
+    assert {key: response_payload[key] for key in [
+        "generated_count",
+        "saved_count",
+        "ready_for_review_count",
+        "blocked_by_regression_count",
+        "auto_apply_enabled",
+        "auto_approved_count",
+        "approval_agent_modified_count",
+    ]} == {
         "generated_count": 1,
         "saved_count": 1,
         "ready_for_review_count": 1,
@@ -2241,13 +2435,16 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         "auto_apply_enabled": False,
         "auto_approved_count": 0,
         "approval_agent_modified_count": 0,
-        "candidates": [expected_candidate_summary],
     }
+    assert len(response_payload["candidates"]) == 1
+    assert {key: response_payload["candidates"][0][key] for key in expected_candidate_summary} == expected_candidate_summary
+    assert response_payload["candidates"][0]["case_titles"] == ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"]
     assert candidates_response.status_code == 200
-    assert candidates_response.json() == {
-        "candidates": [expected_candidate_summary],
-        "pagination": {"limit": 1, "offset": 0, "total": 1},
-    }
+    candidates_payload = candidates_response.json()
+    assert candidates_payload["pagination"] == {"limit": 1, "offset": 0, "total": 1}
+    assert len(candidates_payload["candidates"]) == 1
+    assert {key: candidates_payload["candidates"][0][key] for key in expected_candidate_summary} == expected_candidate_summary
+    assert candidates_payload["candidates"][0]["case_titles"] == ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"]
     assert evaluation_store.get_batch_result("admin_skill_candidate_generation_smoke")["passed"] is True
     assert audit_response.status_code == 200
     assert audit_response.json()["pagination"] == {"limit": 1, "offset": 0, "total": 1}
@@ -2695,28 +2892,43 @@ def test_admin_can_read_training_skill_candidate_detail(tmp_path, monkeypatch) -
         response = client.get("/api/admin/evolution/candidates/skill_candidate_reasoning_core")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "candidate": {
+    candidate = response.json()["candidate"]
+    assert {
+        "candidate_id": candidate["candidate_id"],
+        "trigger_item_id": candidate["trigger_item_id"],
+        "title": candidate["title"],
+        "description": candidate["description"],
+        "suggested_strategy": candidate["suggested_strategy"],
+        "status": candidate["status"],
+        "source_report_count": candidate["source_report_count"],
+        "support_count": candidate["support_count"],
+        "related_recommendations": candidate["related_recommendations"],
+        "review": candidate["review"],
+    } == {
+        "candidate_id": "skill_candidate_reasoning_core",
+        "trigger_item_id": "reasoning_core",
+        "title": "临床推理链纠偏提示",
+        "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
+        "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
+        "status": "draft",
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": ["补充鉴别诊断证据链"],
+        "review": {
             "candidate_id": "skill_candidate_reasoning_core",
-            "trigger_item_id": "reasoning_core",
-            "title": "临床推理链纠偏提示",
-            "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
-            "suggested_strategy": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
-            "status": "draft",
-            "source_report_count": 2,
-            "support_count": 2,
-            "related_recommendations": ["补充鉴别诊断证据链"],
-            "review": {
-                "candidate_id": "skill_candidate_reasoning_core",
-                "status": "ready_for_review",
-                "regression_passed": True,
-                "evaluation_total_cases": 2,
-                "evaluation_passed_cases": 2,
-                "evaluation_failed_cases": 0,
-                "blocking_failures": [],
-            },
-        }
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 2,
+            "evaluation_passed_cases": 2,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
     }
+    assert "trigger_item_labels" in candidate
+    assert "case_titles" in candidate
+    assert "skill_type_label" in candidate
+    assert "stage_scope_labels" in candidate
+    assert "effect_status_label" in candidate
 
 
 def test_admin_candidate_detail_returns_404_for_missing_candidate(tmp_path, monkeypatch) -> None:

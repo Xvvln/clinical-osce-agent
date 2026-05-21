@@ -53,6 +53,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /item_label\?: string;/);
   assert.match(adminPageSource, /case_titles\?: readonly string\[];/);
   assert.match(adminPageSource, /type FrequentLearningRecommendation = Readonly<\{/);
+  assert.match(adminPageSource, /reference_label\?: string;/);
   assert.match(adminPageSource, /type FrequentTurnPattern = Readonly<\{/);
   assert.match(adminPageSource, /pattern_type_label\?: string;/);
   assert.match(adminPageSource, /trigger_item_labels\?: readonly string\[];/);
@@ -74,6 +75,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /success_metrics: readonly string\[];/);
   assert.match(adminPageSource, /type TrainingSkillEffectSummary = Readonly<\{/);
   assert.match(adminPageSource, /type AdminTeachingFocusPattern = Readonly<\{/);
+  assert.match(adminPageSource, /scope_label\?: string;/);
+  assert.match(adminPageSource, /severity_label\?: string;/);
+  assert.match(adminPageSource, /trigger_item_labels\?: readonly string\[];/);
+  assert.match(adminPageSource, /source_reference_labels\?: readonly string\[];/);
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
@@ -122,10 +127,14 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /由病例结构、Rubric 和当前会话进度派生/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_ids/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_ids/);
+  assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_labels/);
+  assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_labels/);
+  assert.doesNotMatch(adminPageSource, />\{selectedTeachingFocusPattern\.scope\}<\/p>/);
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /训练话轮模式/);
   assert.match(adminPageSource, /insights\.frequent_turn_patterns/);
   assert.match(adminPageSource, /学习建议/);
+  assert.match(adminPageSource, /recommendation\.reference_label/);
   assert.match(adminPageSource, /结构化证据覆盖/);
   assert.match(adminPageSource, /结构化追溯链/);
   assert.match(adminPageSource, /结构化评分依据/);
@@ -147,8 +156,13 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /turnPayload\.turn_policy/);
   assert.match(adminPageSource, /turnPayload\.turn_analysis/);
   assert.match(adminPageSource, /turnPayload\.agent_path/);
+  assert.match(adminPageSource, /turnPayload\.selected_skill_ids/);
+  assert.match(adminPageSource, /turnPayload\.skill_context/);
   assert.match(adminPageSource, /事实门禁/);
   assert.match(adminPageSource, /意图分析/);
+  assert.match(adminPageSource, /Skill 编排/);
+  assert.match(adminPageSource, /本轮选中 Skill/);
+  assert.match(adminPageSource, /turnPayload\.skill_context\.map/);
   assert.match(adminPageSource, /智能体决策轨迹/);
   assert.match(adminPageSource, /agentDecisionEvents/);
   assert.match(adminPageSource, /event\.event_type === "agent_decision_traced"/);
@@ -259,7 +273,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /auditEvents\.length > 0/);
   assert.match(adminPageSource, /candidateAuditEvents\.length > 0/);
   assert.match(adminPageSource, /setAuditEvents\(nextAuditPage\.events\)/);
-  assert.match(adminPageSource, /setCandidateAuditEvents\(await getTrainingSkillCandidateEvents\(candidateId\)\)/);
+  assert.match(adminPageSource, /getTrainingSkillCandidateEvents\(candidateId\)/);
+  assert.match(adminPageSource, /setCandidateAuditEvents\(nextCandidateAuditEvents\)/);
 });
 
 test("admin dashboard organizes the long workspace with a report-style side navigator", () => {
@@ -471,6 +486,10 @@ test("admin dashboard renders readable display labels before technical ids", () 
   }
   assert.match(adminPageSource, /技术 ID/);
   assert.match(adminPageSource, /原始 ID/);
+  assert.match(adminPageSource, /展开教学重点技术 ID/);
+  assert.match(adminPageSource, /展开话轮模式技术 ID/);
+  assert.doesNotMatch(adminPageSource, /<span className="mt-1 block font-mono text-\[11px\] text-\[#AE5630\]">\{pattern\.focus_id\}<\/span>/);
+  assert.doesNotMatch(adminPageSource, /<p className="font-mono text-\[11px\] text-\[#AE5630\]">\{pattern\.pattern_id\}<\/p>/);
 });
 
 test("admin action buttons keep Chinese labels on one line", () => {
@@ -492,7 +511,60 @@ test("admin review actions are only available for ready candidates", () => {
   assert.match(adminPageSource, /const canReviewSelectedCandidate = selectedCandidate\?\.review\.status === "ready_for_review"/);
   assert.match(adminPageSource, /if \(selectedCandidate\.review\.status !== "ready_for_review"\) \{/);
   assert.match(adminPageSource, /\{canReviewSelectedCandidate \? \(/);
-  assert.match(adminPageSource, /候选已审核，当前状态为 \{selectedCandidate\.review\.status\}/);
+  assert.match(adminPageSource, /getTrainingSkillReviewStatusLabel\(selectedCandidate\.review\.status\)/);
+  assert.match(adminPageSource, /候选当前不会进入 enabled Skill 库/);
+});
+
+test("admin skill review defaults to pending candidates and separates blocked history", () => {
+  assert.match(adminPageSource, /type TrainingSkillCandidateStatusFilter = "ready_for_review" \| "blocked_by_regression" \| "processed" \| "all";/);
+  assert.match(adminPageSource, /useState<TrainingSkillCandidateStatusFilter>\("ready_for_review"\)/);
+  assert.match(adminPageSource, /ADMIN_CANDIDATE_STATUS_FILTERS/);
+  assert.match(adminPageSource, /review_status/);
+  assert.match(adminPageSource, /待审核/);
+  assert.match(adminPageSource, /回归阻塞/);
+  assert.match(adminPageSource, /已处理/);
+  assert.match(adminPageSource, /getTrainingSkillContextViolationText/);
+  assert.match(adminPageSource, /male_patient_incompatible_reproductive_content/);
+  assert.match(adminPageSource, /关联病例为男性患者/);
+});
+
+test("admin skill candidates prefer readable display labels over raw ids", () => {
+  for (const displayField of [
+    "case_titles?: readonly string[];",
+    "trigger_item_labels?: readonly string[];",
+    "skill_type_label?: string;",
+    "stage_scope_labels?: readonly string[];",
+    "effect_status_label?: string;",
+    "related_recommendation_labels?: readonly string[];",
+  ]) {
+    assert.match(adminPageSource, new RegExp(displayField.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(adminPageSource, /function formatTrainingSkillCandidateSupport/);
+  assert.match(adminPageSource, /function getAdminDisplayListPreview/);
+  assert.match(adminPageSource, /getAdminDisplayListPreview\(candidate\.trigger_item_labels, candidate\.trigger_item_ids/);
+  assert.match(adminPageSource, /formatTrainingSkillCandidateSupport\(candidate\)/);
+  assert.match(adminPageSource, /getAdminDisplayList\(selectedCandidate\.case_titles, selectedCandidate\.case_ids/);
+  assert.match(adminPageSource, /selectedCandidate\.skill_type_label \?\? selectedCandidate\.skill_type/);
+  assert.match(adminPageSource, /getAdminDisplayList\(selectedCandidate\.stage_scope_labels, selectedCandidate\.stage_scope/);
+  assert.match(adminPageSource, /selectedCandidate\.effect_status_label \?\? selectedCandidate\.effect_status/);
+  assert.match(adminPageSource, /getAdminDisplayList\(selectedCandidate\.related_recommendation_labels, selectedCandidate\.related_recommendations/);
+  assert.match(adminPageSource, /getAdminDisplayList\(pattern\.trigger_item_labels, pattern\.trigger_item_ids/);
+  assert.match(adminPageSource, /展开候选来源模式技术 ID/);
+});
+
+test("admin skill candidate details open in a modal instead of expanding under the list", () => {
+  assert.match(adminPageSource, /isCandidateDetailDialogOpen/);
+  assert.match(adminPageSource, /setIsCandidateDetailDialogOpen\(true\)/);
+  assert.match(adminPageSource, /setIsCandidateDetailDialogOpen\(false\)/);
+  assert.match(adminPageSource, /role="dialog"/);
+  assert.match(adminPageSource, /aria-label="候选 Skill 详情"/);
+  assert.match(adminPageSource, /关闭候选 Skill 详情/);
+  assert.match(adminPageSource, /onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(adminPageSource, /className="admin-panel-scrollbar max-h-\[88vh\][^"]*overflow-y-auto/);
+  assert.match(adminPageSource, /<div className="mt-4 grid gap-3">/);
+  assert.doesNotMatch(adminPageSource, /admin-panel-scrollbar mt-4 grid max-h-\[42rem\] gap-3 overflow-y-auto pr-1/);
+  assert.doesNotMatch(adminPageSource, /admin-panel-scrollbar mt-2 grid max-h-64 gap-2 overflow-auto pr-1/);
+  assert.doesNotMatch(adminPageSource, /请选择一个候选 Skill。<\/p>/);
 });
 
 test("admin dashboard shows dedicated prompts for authentication and authorization API responses", () => {
