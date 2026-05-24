@@ -178,8 +178,127 @@
   "distractor_clues": [],
   "negative_findings": [],
   "evidence_graph": {
-    "evidence_nodes": [],
-    "evidence_edges": []
+    "evidence_nodes": [
+      {
+        "node_id": "ev_progressive_dyspnea",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_01",
+        "label": "活动后气短进行性加重"
+      },
+      {
+        "node_id": "ev_orthopnea_pnd",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_02",
+        "label": "端坐呼吸和夜间阵发性呼吸困难"
+      },
+      {
+        "node_id": "ev_leg_edema_history",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_03",
+        "label": "双下肢近期浮肿"
+      },
+      {
+        "node_id": "ev_cardiac_history",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_04",
+        "label": "高血压和冠心病病史"
+      },
+      {
+        "node_id": "ev_tachypnea",
+        "node_type": "physical_exam",
+        "source_id": "resp.rate",
+        "label": "呼吸频率增快"
+      },
+      {
+        "node_id": "ev_lung_rales",
+        "node_type": "physical_exam",
+        "source_id": "lung.auscultation.rales",
+        "label": "双肺底湿啰音"
+      },
+      {
+        "node_id": "ev_pitting_edema",
+        "node_type": "physical_exam",
+        "source_id": "ext.pitting_edema",
+        "label": "下肢凹陷性水肿"
+      },
+      {
+        "node_id": "ev_bnp_high",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.bnp",
+        "label": "BNP 升高"
+      },
+      {
+        "node_id": "ev_echo_low_ef",
+        "node_type": "auxiliary_test",
+        "source_id": "img.echo",
+        "label": "超声心动图提示射血分数降低"
+      },
+      {
+        "node_id": "rp_symptom_spectrum",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_01",
+        "label": "心衰症状谱推理点"
+      },
+      {
+        "node_id": "rp_congestion_signs",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_02",
+        "label": "循环淤血体征推理点"
+      },
+      {
+        "node_id": "rp_objective_hf",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_03",
+        "label": "BNP 与心超客观证据推理点"
+      }
+    ],
+    "evidence_edges": [
+      {
+        "from_node": "ev_progressive_dyspnea",
+        "to_node": "rp_symptom_spectrum",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_orthopnea_pnd",
+        "to_node": "rp_symptom_spectrum",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_leg_edema_history",
+        "to_node": "rp_congestion_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_lung_rales",
+        "to_node": "rp_congestion_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_pitting_edema",
+        "to_node": "rp_congestion_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_cardiac_history",
+        "to_node": "rp_objective_hf",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_tachypnea",
+        "to_node": "rp_objective_hf",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_bnp_high",
+        "to_node": "rp_objective_hf",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_echo_low_ef",
+        "to_node": "rp_objective_hf",
+        "relation": "supports"
+      }
+    ]
   },
   "rubric_ref": {
     "rubric_id": "heart_failure_001_rubric",
@@ -187,9 +306,44 @@
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
   "teaching_focus": {
-    "learning_objectives": [],
-    "common_error_patterns": [],
-    "recommended_training_path": []
+    "learning_objectives": [
+      "围绕呼吸困难的进展、活动耐量变化、端坐呼吸和夜间憋醒建立心源性呼吸困难症状谱。",
+      "能主动追问下肢水肿和心血管既往史，并与肺部及下肢查体线索相互印证。",
+      "理解 BNP 和超声心动图在判断泵功能下降相关呼吸困难中的作用，并说明它们与症状体征的关系。",
+      "能区分心源性呼吸困难与 COPD 急性加重、肺炎等常见鉴别方向。"
+    ],
+    "common_error_patterns": [
+      {
+        "pattern_id": "heart_failure_001.pattern.dyspnea_history_gap",
+        "title": "呼吸困难进展史采集不足",
+        "focus": "把气短直接当作呼吸系统问题处理，漏问端坐呼吸和夜间阵发性呼吸困难。",
+        "related_rubric_items": ["ht_progression", "ht_orthopnea"]
+      },
+      {
+        "pattern_id": "heart_failure_001.pattern.congestion_history_gap",
+        "title": "体液潴留线索采集不足",
+        "focus": "只关注主诉气短，未追问水肿和既往心血管病史，导致心源性呼吸困难线索链不完整。",
+        "related_rubric_items": ["ht_edema", "pe_edema"]
+      },
+      {
+        "pattern_id": "heart_failure_001.pattern.congestion_exam_gap",
+        "title": "淤血体征整合不足",
+        "focus": "申请 BNP 或心超后没有结合湿啰音、下肢水肿解释循环淤血。",
+        "related_rubric_items": ["pe_rales", "pe_edema", "at_bnp", "at_echo"]
+      },
+      {
+        "pattern_id": "heart_failure_001.pattern.respiratory_differential_gap",
+        "title": "呼吸困难鉴别不足",
+        "focus": "过早提出诊断，未说明为什么当前证据不优先支持肺炎或 COPD 急性加重。",
+        "related_rubric_items": ["dd_copd", "reasoning_core"]
+      }
+    ],
+    "recommended_training_path": [
+      "先梳理呼吸困难的时间线、诱因、活动耐量和夜间加重情况。",
+      "补充端坐呼吸、夜间憋醒、下肢水肿和心血管既往史。",
+      "选择呼吸频率、肺底听诊和下肢水肿检查来验证淤血体征。",
+      "再申请 BNP 和超声心动图，并用结果完成支持证据与鉴别排除。"
+    ]
   },
   "source_attribution": {
     "source_id": "medcase_reasoning_2025",

@@ -171,8 +171,116 @@
   "distractor_clues": [],
   "negative_findings": [],
   "evidence_graph": {
-    "evidence_nodes": [],
-    "evidence_edges": []
+    "evidence_nodes": [
+      {
+        "node_id": "ev_fever_cough_course",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_01",
+        "label": "发热咳嗽伴右侧胸痛 3 天"
+      },
+      {
+        "node_id": "ev_purulent_sputum",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_02",
+        "label": "咳黄痰"
+      },
+      {
+        "node_id": "ev_pleuritic_chest_pain",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_03",
+        "label": "深呼吸和咳嗽时胸痛加重"
+      },
+      {
+        "node_id": "ev_no_chronic_lung_disease",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_04",
+        "label": "无慢性肺病史"
+      },
+      {
+        "node_id": "ev_temperature_high",
+        "node_type": "physical_exam",
+        "source_id": "vital.temperature",
+        "label": "体温升高"
+      },
+      {
+        "node_id": "ev_lung_crackle",
+        "node_type": "physical_exam",
+        "source_id": "resp.auscultation.crackle",
+        "label": "右下肺湿啰音"
+      },
+      {
+        "node_id": "ev_cbc_inflammation",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.cbc",
+        "label": "血常规提示炎症反应"
+      },
+      {
+        "node_id": "ev_xray_infiltrate",
+        "node_type": "auxiliary_test",
+        "source_id": "img.chest_xray",
+        "label": "胸片右下肺浸润影"
+      },
+      {
+        "node_id": "rp_infection_history",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_01",
+        "label": "下呼吸道感染病史推理点"
+      },
+      {
+        "node_id": "rp_lung_signs",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_02",
+        "label": "肺部感染体征推理点"
+      },
+      {
+        "node_id": "rp_objective_pneumonia",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_03",
+        "label": "炎症指标与胸片证据推理点"
+      }
+    ],
+    "evidence_edges": [
+      {
+        "from_node": "ev_fever_cough_course",
+        "to_node": "rp_infection_history",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_purulent_sputum",
+        "to_node": "rp_infection_history",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_pleuritic_chest_pain",
+        "to_node": "rp_infection_history",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_no_chronic_lung_disease",
+        "to_node": "rp_infection_history",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_temperature_high",
+        "to_node": "rp_lung_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_lung_crackle",
+        "to_node": "rp_lung_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_cbc_inflammation",
+        "to_node": "rp_objective_pneumonia",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_xray_infiltrate",
+        "to_node": "rp_objective_pneumonia",
+        "relation": "supports"
+      }
+    ]
   },
   "rubric_ref": {
     "rubric_id": "pneumonia_001_rubric",
@@ -180,9 +288,44 @@
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
   "teaching_focus": {
-    "learning_objectives": [],
-    "common_error_patterns": [],
-    "recommended_training_path": []
+    "learning_objectives": [
+      "围绕发热、咳嗽、咳痰和胸痛与呼吸动作关系建立下呼吸道感染病史链。",
+      "能通过体温和肺部听诊验证肺部感染体征，并把查体结果与病史相互印证。",
+      "理解血常规炎症反应和胸片浸润影对感染性肺部病变诊断方向的支持作用。",
+      "能说明急性支气管炎、肺栓塞等鉴别诊断为什么当前证据不足。"
+    ],
+    "common_error_patterns": [
+      {
+        "pattern_id": "pneumonia_001.pattern.infection_history_gap",
+        "title": "感染病史采集不足",
+        "focus": "只问发热和咳嗽，漏问痰色、痰量以及胸痛是否随咳嗽或深呼吸加重。",
+        "related_rubric_items": ["ht_onset", "ht_sputum", "ht_chest_pain"]
+      },
+      {
+        "pattern_id": "pneumonia_001.pattern.lung_exam_gap",
+        "title": "肺部查体不足",
+        "focus": "没有做肺部听诊就直接申请检查，导致体征链不完整。",
+        "related_rubric_items": ["pe_temperature", "pe_crackle"]
+      },
+      {
+        "pattern_id": "pneumonia_001.pattern.chest_pain_context_gap",
+        "title": "胸痛语境判断不足",
+        "focus": "看到胸痛后过早转向心血管诊断，忽略感染症状和呼吸相关胸痛特点。",
+        "related_rubric_items": ["ht_chest_pain", "dd_pulmonary_embolism"]
+      },
+      {
+        "pattern_id": "pneumonia_001.pattern.objective_evidence_gap",
+        "title": "客观证据闭环不足",
+        "focus": "提出感染性肺部病变诊断方向但未用血常规和胸片结果形成客观证据闭环。",
+        "related_rubric_items": ["at_cbc", "at_chest_xray", "reasoning_core"]
+      }
+    ],
+    "recommended_training_path": [
+      "先问清发热和咳嗽的起病时间、进展、体温变化和痰液特点。",
+      "补充胸痛与咳嗽、深呼吸的关系，以及呼吸困难、慢性肺病史和危险因素。",
+      "选择体温测量和肺部听诊，确认是否存在局灶性肺部体征。",
+      "再申请血常规和胸片，并用结果支持感染性肺部病变方向或排除主要鉴别诊断。"
+    ]
   },
   "source_attribution": {
     "source_id": "fareez_osce_2022",

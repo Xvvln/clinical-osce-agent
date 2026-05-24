@@ -171,8 +171,116 @@
   "distractor_clues": [],
   "negative_findings": [],
   "evidence_graph": {
-    "evidence_nodes": [],
-    "evidence_edges": []
+    "evidence_nodes": [
+      {
+        "node_id": "ev_ischemic_chest_pain",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_02",
+        "label": "胸骨后压榨样闷痛"
+      },
+      {
+        "node_id": "ev_exertional_onset",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_01",
+        "label": "活动后急性起病并持续 2 小时"
+      },
+      {
+        "node_id": "ev_pain_radiation",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_03",
+        "label": "疼痛向左肩和左上臂放射"
+      },
+      {
+        "node_id": "ev_cardiovascular_risk",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_04",
+        "label": "高血压与长期吸烟背景"
+      },
+      {
+        "node_id": "ev_high_blood_pressure",
+        "node_type": "physical_exam",
+        "source_id": "vital.blood_pressure",
+        "label": "血压升高"
+      },
+      {
+        "node_id": "ev_tachycardia",
+        "node_type": "physical_exam",
+        "source_id": "vital.heart_rate",
+        "label": "心率增快"
+      },
+      {
+        "node_id": "ev_st_elevation",
+        "node_type": "auxiliary_test",
+        "source_id": "ecg.st_segment",
+        "label": "下壁导联 ST 段抬高"
+      },
+      {
+        "node_id": "ev_troponin_elevated",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.troponin",
+        "label": "肌钙蛋白升高"
+      },
+      {
+        "node_id": "rp_typical_ischemia",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_01",
+        "label": "典型心肌缺血表现推理点"
+      },
+      {
+        "node_id": "rp_risk_context",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_02",
+        "label": "心血管危险因素推理点"
+      },
+      {
+        "node_id": "rp_objective_acs",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_03",
+        "label": "心电图与肌钙蛋白证据推理点"
+      }
+    ],
+    "evidence_edges": [
+      {
+        "from_node": "ev_exertional_onset",
+        "to_node": "rp_typical_ischemia",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_ischemic_chest_pain",
+        "to_node": "rp_typical_ischemia",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_pain_radiation",
+        "to_node": "rp_typical_ischemia",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_cardiovascular_risk",
+        "to_node": "rp_risk_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_high_blood_pressure",
+        "to_node": "rp_risk_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_tachycardia",
+        "to_node": "rp_risk_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_st_elevation",
+        "to_node": "rp_objective_acs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_troponin_elevated",
+        "to_node": "rp_objective_acs",
+        "relation": "supports"
+      }
+    ]
   },
   "rubric_ref": {
     "rubric_id": "acs_001_rubric",
@@ -180,9 +288,44 @@
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
   "teaching_focus": {
-    "learning_objectives": [],
-    "common_error_patterns": [],
-    "recommended_training_path": []
+    "learning_objectives": [
+      "围绕胸痛起病时间、诱因、性质、持续时间和放射部位建立缺血性胸痛线索链。",
+      "主动追问高血压、吸烟等心血管危险因素，并与生命体征异常结合判断风险背景。",
+      "能将心电图 ST 段改变和肌钙蛋白升高作为客观证据，与病史线索共同支持诊断假设。",
+      "在提出高危缺血性胸痛诊断方向时同步说明主动脉夹层、胃食管反流等鉴别诊断的排除依据。"
+    ],
+    "common_error_patterns": [
+      {
+        "pattern_id": "acs_001.pattern.chest_pain_history_gap",
+        "title": "胸痛特征采集不足",
+        "focus": "只问胸口疼痛部位，漏问压榨感、活动诱发、持续时间和放射部位。",
+        "related_rubric_items": ["ht_onset", "ht_character", "ht_radiation"]
+      },
+      {
+        "pattern_id": "acs_001.pattern.risk_context_gap",
+        "title": "心血管危险因素补充不足",
+        "focus": "先下诊断但没有补充高血压、吸烟等危险因素，导致推理链缺少背景风险。",
+        "related_rubric_items": ["pe_blood_pressure", "pe_heart_rate"]
+      },
+      {
+        "pattern_id": "acs_001.pattern.objective_evidence_gap",
+        "title": "客观检查证据回扣不足",
+        "focus": "申请心电图或肌钙蛋白后没有把结果回扣到缺血性胸痛假设。",
+        "related_rubric_items": ["at_ecg", "at_troponin", "reasoning_core"]
+      },
+      {
+        "pattern_id": "acs_001.pattern.high_risk_differential_gap",
+        "title": "高危胸痛鉴别不足",
+        "focus": "忽略主动脉夹层等高危胸痛鉴别，未说明为什么当前线索更支持缺血性胸痛方向。",
+        "related_rubric_items": ["dd_aortic_dissection", "dd_gerd", "reasoning_core"]
+      }
+    ],
+    "recommended_training_path": [
+      "先按胸痛时间线追问起病、诱因、性质、程度、持续时间和放射部位。",
+      "补充心血管危险因素和伴随症状，再选择血压、心率等关键生命体征。",
+      "优先申请心电图和肌钙蛋白，并明确这些结果如何改变诊断概率。",
+      "最后用支持证据和排除证据分别说明高危缺血性胸痛方向与主要鉴别诊断。"
+    ]
   },
   "source_attribution": {
     "source_id": "medcase_reasoning_2025",

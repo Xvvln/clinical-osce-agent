@@ -212,8 +212,138 @@
   "distractor_clues": [],
   "negative_findings": [],
   "evidence_graph": {
-    "evidence_nodes": [],
-    "evidence_edges": []
+    "evidence_nodes": [
+      {
+        "node_id": "ev_palpitations_tremor",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_01",
+        "label": "心慌和手抖持续 2 个月"
+      },
+      {
+        "node_id": "ev_hypermetabolic_symptoms",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_02",
+        "label": "怕热多汗、易饥和体重下降"
+      },
+      {
+        "node_id": "ev_bowel_change",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_03",
+        "label": "大便次数增多"
+      },
+      {
+        "node_id": "ev_menstrual_change",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_04",
+        "label": "月经量减少"
+      },
+      {
+        "node_id": "ev_tachycardia",
+        "node_type": "physical_exam",
+        "source_id": "vital.heart_rate",
+        "label": "静息心率增快"
+      },
+      {
+        "node_id": "ev_goiter",
+        "node_type": "physical_exam",
+        "source_id": "thy.inspect.goiter",
+        "label": "甲状腺轻度弥漫性肿大"
+      },
+      {
+        "node_id": "ev_hand_tremor",
+        "node_type": "physical_exam",
+        "source_id": "neuro.hand_tremor",
+        "label": "双手细颤"
+      },
+      {
+        "node_id": "ev_tsh_suppressed",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.tsh",
+        "label": "TSH 明显降低"
+      },
+      {
+        "node_id": "ev_ft4_elevated",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.ft4",
+        "label": "FT4 升高"
+      },
+      {
+        "node_id": "ev_thyroid_us_diffuse",
+        "node_type": "auxiliary_test",
+        "source_id": "img.thyroid_us",
+        "label": "甲状腺超声提示弥漫性改变"
+      },
+      {
+        "node_id": "rp_hypermetabolic_pattern",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_01",
+        "label": "高代谢症状群推理点"
+      },
+      {
+        "node_id": "rp_thyroid_signs",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_02",
+        "label": "甲状腺相关体征推理点"
+      },
+      {
+        "node_id": "rp_lab_confirm",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_03",
+        "label": "甲状腺功能与影像证据推理点"
+      }
+    ],
+    "evidence_edges": [
+      {
+        "from_node": "ev_palpitations_tremor",
+        "to_node": "rp_hypermetabolic_pattern",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_hypermetabolic_symptoms",
+        "to_node": "rp_hypermetabolic_pattern",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_bowel_change",
+        "to_node": "rp_hypermetabolic_pattern",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_menstrual_change",
+        "to_node": "rp_hypermetabolic_pattern",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_tachycardia",
+        "to_node": "rp_thyroid_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_goiter",
+        "to_node": "rp_thyroid_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_hand_tremor",
+        "to_node": "rp_thyroid_signs",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_tsh_suppressed",
+        "to_node": "rp_lab_confirm",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_ft4_elevated",
+        "to_node": "rp_lab_confirm",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_thyroid_us_diffuse",
+        "to_node": "rp_lab_confirm",
+        "relation": "supports"
+      }
+    ]
   },
   "rubric_ref": {
     "rubric_id": "hyperthyroid_001_rubric",
@@ -221,9 +351,44 @@
   },
   "safety_notes": "本病例仅用于医学教育模拟，不替代真实诊疗决策。",
   "teaching_focus": {
-    "learning_objectives": [],
-    "common_error_patterns": [],
-    "recommended_training_path": []
+    "learning_objectives": [
+      "围绕心慌、手抖、怕热、多汗、易饥、体重下降和大便改变识别高代谢症状群。",
+      "能把心率增快、甲状腺肿大和手颤作为甲状腺激素作用增强的查体支持线索。",
+      "理解 TSH、FT4 和甲状腺超声结果如何共同支持甲状腺激素过多状态的诊断方向。",
+      "能在焦虑障碍、嗜铬细胞瘤等鉴别诊断中说明内分泌证据的重要性。"
+    ],
+    "common_error_patterns": [
+      {
+        "pattern_id": "hyperthyroid_001.pattern.hypermetabolic_history_gap",
+        "title": "高代谢症状群采集不足",
+        "focus": "只追问心慌，漏问怕热多汗、体重下降、大便次数和月经变化。",
+        "related_rubric_items": ["ht_onset", "ht_hypermetabolic", "ht_bowel_change", "ht_menstrual"]
+      },
+      {
+        "pattern_id": "hyperthyroid_001.pattern.endocrine_workup_gap",
+        "title": "内分泌证据验证不足",
+        "focus": "把症状过早归因于焦虑，未完成甲状腺查体和内分泌检查。",
+        "related_rubric_items": ["pe_goiter", "pe_tremor", "at_tsh", "at_ft4"]
+      },
+      {
+        "pattern_id": "hyperthyroid_001.pattern.lab_interpretation_gap",
+        "title": "甲功结果解释不足",
+        "focus": "申请甲功后没有解释 TSH 降低和 FT4 升高的组合意义。",
+        "related_rubric_items": ["at_tsh", "at_ft4", "reasoning_core"]
+      },
+      {
+        "pattern_id": "hyperthyroid_001.pattern.thyroid_exam_gap",
+        "title": "甲状腺查体整合不足",
+        "focus": "忽略甲状腺肿大和手颤等体征，导致病史与查体之间缺少相互印证。",
+        "related_rubric_items": ["pe_heart_rate", "pe_goiter", "pe_tremor"]
+      }
+    ],
+    "recommended_training_path": [
+      "先问清心慌手抖的起病、持续时间、诱因和伴随症状。",
+      "系统补充高代谢表现、大便改变、月经变化、家族史和用药背景。",
+      "选择心率、甲状腺视诊触诊和手颤检查来建立查体证据。",
+      "再申请 TSH、FT4 和甲状腺超声，并完成与焦虑障碍、嗜铬细胞瘤的鉴别。"
+    ]
   },
   "source_attribution": {
     "source_id": "easymed_repo",

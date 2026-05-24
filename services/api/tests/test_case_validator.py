@@ -647,3 +647,7 @@ def test_acs_001_roundtrip() -> None:
 
 def test_heart_failure_001_roundtrip() -> None:
     _assert_case_rubric_roundtrip("heart_failure_001")
+
+
+def test_hyperthyroid_001_roundtrip() -> None:
+    _assert_case_rubric_roundtrip("hyperthyroid_001")
