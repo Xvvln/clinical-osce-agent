@@ -12,6 +12,7 @@ WORKDIR /app
 
 COPY services/api/pyproject.toml services/api/uv.lock ./services/api/
 COPY services/api/app ./services/api/app
+COPY services/api/evals ./services/api/evals
 COPY data ./data
 
 RUN pip install --no-cache-dir --upgrade pip \

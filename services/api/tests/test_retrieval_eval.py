@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.graph.osce_graph import evaluation_node
@@ -8,6 +10,12 @@ from app.services.retrieval_eval_service import (
     run_retrieval_eval,
 )
 from app.services.retrieval_index import RetrievalDocument
+
+
+def test_api_docker_image_copies_retrieval_eval_gold_set() -> None:
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY services/api/evals ./services/api/evals" in dockerfile
 
 
 def test_retrieval_eval_metrics_compute_correctly() -> None:
