@@ -6,6 +6,7 @@ from threading import Thread
 from typing import Any
 
 from pydantic import BaseModel
+import httpx
 
 from app.services import openai_compatible_chat_client as module
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
@@ -53,6 +54,50 @@ class FakeHttpxClient:
         return FakeChatCompletionResponse()
 
 
+class FakePrimaryFailureResponse:
+    status_code = 503
+
+    def raise_for_status(self) -> None:
+        request = httpx.Request("POST", "https://primary.example/v1/chat/completions")
+        response = httpx.Response(self.status_code, request=request, text="primary unavailable")
+        raise httpx.HTTPStatusError("primary unavailable", request=request, response=response)
+
+    def json(self) -> dict[str, object]:
+        return {}
+
+
+class FakeFallbackSuccessResponse(FakeChatCompletionResponse):
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"message":"备用 MiMo 模型返回的结构化内容"}',
+                    },
+                }
+            ],
+        }
+
+
+class FakeFallbackHttpxClient:
+    calls: list[dict[str, Any]] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "FakeFallbackHttpxClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakePrimaryFailureResponse | FakeFallbackSuccessResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json, "kwargs": self.kwargs})
+        if "primary.example" in url:
+            return FakePrimaryFailureResponse()
+        return FakeFallbackSuccessResponse()
+
+
 def test_openai_compatible_chat_client_posts_chat_completion_with_proxy_and_auth(monkeypatch) -> None:
     FakeHttpxClient.instances = []
     monkeypatch.setattr(module.httpx, "Client", FakeHttpxClient)
@@ -91,6 +136,42 @@ def test_openai_compatible_chat_client_posts_chat_completion_with_proxy_and_auth
         },
     ]
     assert request_body["response_format"] == {"type": "json_object"}
+
+
+def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_fails(monkeypatch) -> None:
+    FakeFallbackHttpxClient.calls = []
+    monkeypatch.setattr(module.httpx, "Client", FakeFallbackHttpxClient)
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "mimo-secret-value")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "MiMo-V2.5-Pro")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="primary-secret-value",
+            base_url="https://primary.example/v1",
+            model="gemini-primary",
+            proxy_url="direct",
+        )
+    )
+
+    result = client.complete_json(
+        system_prompt="只输出 JSON。",
+        payload={"case_id": "appendicitis_001"},
+        response_model=DemoJsonResponse,
+    )
+
+    assert result == DemoJsonResponse(message="备用 MiMo 模型返回的结构化内容")
+    assert [call["url"] for call in FakeFallbackHttpxClient.calls] == [
+        "https://primary.example/v1/chat/completions",
+        "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
+    ]
+    assert [call["json"]["model"] for call in FakeFallbackHttpxClient.calls] == ["gemini-primary", "MiMo-V2.5-Pro"]
+    assert FakeFallbackHttpxClient.calls[0]["headers"]["Authorization"] == "Bearer primary-secret-value"
+    assert FakeFallbackHttpxClient.calls[1]["headers"]["Authorization"] == "Bearer mimo-secret-value"
+    assert "proxy" not in FakeFallbackHttpxClient.calls[1]["kwargs"]
 
 
 class RecordingOpenAICompatibleHandler(BaseHTTPRequestHandler):

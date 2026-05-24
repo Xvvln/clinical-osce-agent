@@ -105,7 +105,8 @@ test("home page renders backend patient opening utterance instead of raw chief c
 
 test("home chat keeps patient streaming before coach process hints", () => {
   assert.match(pageSource, /function getVisibleApiMessagesDuringPendingReply\(/);
-  assert.match(pageSource, /const pendingReplyIndex = messages\.findIndex/);
+  assert.match(pageSource, /pendingPatientMessage\.apiMessageIndex === undefined/);
+  assert.match(pageSource, /messages\.slice\(0, pendingPatientMessage\.apiMessageIndex \+ 1\)/);
   assert.match(pageSource, /message\.role === "coach"/);
   assert.match(pageSource, /pendingPatientMessage\?\.finalText/);
   assert.match(pageSource, /getVisibleApiMessagesDuringPendingReply\(session\.messages, pendingPatientMessage\)/);
@@ -122,6 +123,34 @@ test("home inquiry composer does not show canned history shortcut or example pla
   assert.match(pageSource, /placeholder="输入问诊问题，开始诊断训练"/);
 });
 
+test("home message failure status is not limited to backend downtime", () => {
+  assert.match(pageSource, /setStatusText\("问诊处理失败，请查看错误详情。"\);/);
+  assert.doesNotMatch(pageSource, /setStatusText\("问诊发送失败，请确认后端仍在运行。"\);/);
+});
+
+test("home diagnosis submit does not report submit failure when only report retrieval fails", () => {
+  assert.match(pageSource, /const submittedSession = await submitDiagnosis\(activeSession\.session_id, diagnosis, reasoning\);/);
+  assert.match(pageSource, /setSession\(submittedSession\);/);
+  assert.match(pageSource, /setStatusText\("诊断已提交，正在生成评分报告\.\.\."\);/);
+  assert.match(pageSource, /try \{[\s\S]*?const report = await getSessionReport\(submittedSession\.session_id\);[\s\S]*?setFeedbackReport\(report\);[\s\S]*?\} catch \(reportError\) \{/);
+  assert.match(pageSource, /setErrorText\(`诊断已提交，但报告暂时未取回：\$\{reportMessage\}`\);/);
+  assert.match(pageSource, /setStatusText\("诊断已提交；评分报告暂时未取回，可稍后从训练记录打开。"\);/);
+  assert.match(pageSource, /setStatusText\("诊断提交失败，请确认后端仍在运行。"\);/);
+}
+);
+
+test("history page renders Chinese case title instead of raw case id as primary label", () => {
+  assert.match(historySource, /case_title: string;/);
+  assert.match(historySource, /病例：\{session\.case_title \?\? session\.case_id\}/);
+  assert.doesNotMatch(historySource, /病例：\{session\.case_id\}/);
+});
+
+test("report context prefers Chinese case title from backend session", () => {
+  assert.match(reportSource, /case_title\?: string;/);
+  assert.match(reportSource, /backendSession\?\.case_title \?\? report\?\.case_id \?\? "待读取"/);
+  assert.doesNotMatch(reportSource, /<dd className="mt-1 font-medium">\{report\?\.case_id \?\? "待读取"\}<\/dd>/);
+});
+
 test("home evidence and coverage map hide raw backend evidence ids", () => {
   assert.match(pageSource, /function getEvidenceItem\(factId: string, trainingProgress: TrainingProgress \| null, fallbackIndex: number\): EvidenceItem/);
   assert.match(pageSource, /trainingProgress\?\.coverage_map\.history/);
@@ -136,6 +165,17 @@ test("home evidence and coverage map hide raw backend evidence ids", () => {
   assert.doesNotMatch(pageSource, /未覆盖素材：\$\{item\.id\}/);
   assert.doesNotMatch(pageSource, /未覆盖项只显示素材 ID/);
   assert.doesNotMatch(pageSource, /未覆盖项只显示通用占位/);
+});
+
+test("home page labels collected clues from coverage metadata instead of symptom keywords", () => {
+  assert.match(pageSource, /type CoverageMapItem = Readonly<\{/);
+  assert.match(pageSource, /topic\?: string \| null;/);
+  assert.match(pageSource, /slot\?: string \| null;/);
+  assert.match(pageSource, /linked_rubric_items\?: readonly string\[\];/);
+  assert.match(pageSource, /function getEvidenceLabelFromCoverageItem\(item: CoverageMapItem, fallbackIndex: number\): string/);
+  assert.match(pageSource, /const topicLabel = getEvidenceTopicLabel\(item\.topic\);/);
+  assert.match(pageSource, /const slotLabel = getEvidenceSlotLabel\(item\.slot\);/);
+  assert.doesNotMatch(pageSource, /if \(\x2F持续\|胀痛\|隐痛\|加重\x2F\.test\(detail\)\) \{\s*return "疼痛性质";\s*\}/);
 });
 
 test("home evidence panel scrolls to the newest revealed clue and highlights it", () => {
@@ -239,9 +279,14 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, /defaultProxyUrl: ""/);
   assert.match(pageSource, /defaultProxyUrl: "http:\/\/127\.0\.0\.1:7897"/);
   assert.match(pageSource, /id: "anthropic",[\s\S]*?label: "Anthropic",[\s\S]*?defaultModel: "claude-3-5-sonnet-latest"/);
-  assert.match(pageSource, /\{isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled \? \(/);
+  assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);
   assert.match(pageSource, /aria-label="关闭 API 配置说明"/);
   assert.match(pageSource, />\s*API 配置\s*</);
+  assert.match(pageSource, /const isStudentApiConfigEditable = isStudentRuntimeApiConfigEnabled;/);
+  assert.match(pageSource, /服务器演示模式已由后端统一配置 Gemini/);
+  assert.match(pageSource, /disabled=\{!isStudentApiConfigEditable \|\| studentApiConfig\.provider === "vertex_gemini_adc"\}/);
+  assert.match(pageSource, /disabled=\{!isStudentApiConfigEditable \|\| isApplyingStudentApiConfig\}/);
+  assert.match(pageSource, /disabled=\{!isStudentApiConfigEditable \|\| isTestingStudentApiConfig\}/);
   assert.match(pageSource, />\s*服务端\s*</);
   assert.match(pageSource, /label: "自定义后端"/);
   assert.match(pageSource, /label: "Gemini Developer API"/);
@@ -260,7 +305,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, /grid grid-cols-1 gap-2 sm:grid-cols-2/);
   assert.doesNotMatch(pageSource, /选择服务端并测试连通性；OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置会同步应用到本次后端运行时/);
   assert.match(pageSource, /id="student-api-key-input"/);
-  assert.match(pageSource, /disabled=\{studentApiConfig\.provider === "vertex_gemini_adc"\}/);
+  assert.match(pageSource, /disabled=\{!isStudentApiConfigEditable \|\| studentApiConfig\.provider === "vertex_gemini_adc"\}/);
   assert.match(pageSource, /studentApiConfig\.provider !== "vertex_gemini_api_key"/);
   assert.match(pageSource, /id="student-api-model-input"/);
   assert.match(pageSource, /id="student-api-base-url-input"/);
@@ -271,7 +316,7 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.match(pageSource, />\{isTestingStudentApiConfig \? "测试中" : "测试连通性"\}<\/button>/);
   assert.doesNotMatch(pageSource, />\s*打开管理端配置\s*<\/a>/);
   assert.match(pageSource, /setIsApiConfigHelpOpen\(false\)/);
-  assert.match(pageSource, /OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端/);
+  assert.doesNotMatch(pageSource, /OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端/);
 });
 
 test("student README documents blank diagnosis drafts and all runtime model providers", () => {
@@ -283,12 +328,15 @@ test("student README documents blank diagnosis drafts and all runtime model prov
   assert.doesNotMatch(webReadmeSource, /学生端配置保存到浏览器 `localStorage`/);
 });
 
-test("home production deployment hides student runtime API config entry", () => {
+test("home production deployment keeps student API config visible but read-only", () => {
   assert.match(pageSource, /const DEPLOYMENT_MODE = process\.env\.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE \?\? "local-dev";/);
   assert.match(pageSource, /const PRODUCTION_DEPLOYMENT_MODES = new Set\(\["single-node-prod", "vertex-prod"\]\);/);
   assert.match(pageSource, /const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES\.has\(DEPLOYMENT_MODE\);/);
-  assert.match(pageSource, /\{isStudentRuntimeApiConfigEnabled \? \([\s\S]*?>\s*API 配置\s*<\/button>[\s\S]*?\) : null\}/);
-  assert.match(pageSource, /\{isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled \? \(/);
+  assert.match(pageSource, /const isStudentApiConfigEditable = isStudentRuntimeApiConfigEnabled;/);
+  assert.doesNotMatch(pageSource, /\{isStudentRuntimeApiConfigEnabled \? \([\s\S]*?>\s*API 配置\s*<\/button>[\s\S]*?\) : null\}/);
+  assert.match(pageSource, />\s*API 配置\s*<\/button>/);
+  assert.match(pageSource, /\{isApiConfigHelpOpen \? \(/);
+  assert.match(pageSource, /服务器演示模式已由后端统一配置 Gemini，失败时自动切换备用模型；前端不接收自定义 API Key。/);
   assert.match(webDockerfileSource, /ARG NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo/);
   assert.match(webDockerfileSource, /NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE=\$\{NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE\}/);
 });
@@ -546,13 +594,14 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 2/);
   assert.match(reportSource, /onSectionSelect\(section\.id\)/);
   assert.doesNotMatch(reportSource, /xl:grid-cols-\[320px_minmax\(0,1fr\)\]/);
-  for (const label of ["总览", "图表", "结论", "复盘", "训练", "对话", "依据"]) {
+  for (const label of ["总览", "复盘", "Skill", "图表", "结论", "对话", "推荐", "依据"]) {
     assert.match(reportSource, new RegExp(`label: "${label}"`));
   }
   for (const targetId of [
     "report-overview",
+    "report-reflection",
+    "report-personal-skill",
     "report-dimensions",
-    "report-skill",
     "report-recommendations",
     "report-conversation",
     "report-evidence",
@@ -563,12 +612,16 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /targetId: "report-feedback"/);
   assert.match(reportSource, /sectionId="report-feedback"/);
   assert.match(reportSource, /href=\{`#\$\{section\.targetId\}`\}/);
-  assert.ok(reportSource.indexOf('label: "图表"') < reportSource.indexOf('label: "结论"'));
-  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "复盘"'));
-  assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "训练"'));
+  assert.ok(reportSource.indexOf('label: "总览"') < reportSource.indexOf('label: "复盘"'));
+  assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "Skill"'));
+  assert.ok(reportSource.indexOf('label: "Skill"') < reportSource.indexOf('label: "图表"'));
+  assert.ok(reportSource.indexOf('label: "对话"') < reportSource.indexOf('label: "推荐"'));
+  assert.ok(reportSource.indexOf('label: "推荐"') < reportSource.indexOf('label: "依据"'));
   assert.doesNotMatch(reportSource, /targetId: "report-ai-evaluation"/);
-  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"'));
-  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf("<ConversationDetailsSection"));
+  assert.ok(reportSource.indexOf("<AiReflectionReviewSection") < reportSource.indexOf("<PersonalTrainingSkillSection"));
+  assert.ok(reportSource.indexOf("<PersonalTrainingSkillSection") < reportSource.indexOf("<DimensionChartSection"));
+  assert.ok(reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"') < reportSource.indexOf("<ConversationDetailsSection"));
+  assert.ok(reportSource.indexOf("<ConversationDetailsSection") < reportSource.indexOf("<CaseRecommendations"));
 });
 
 test("report section navigator keeps clicked sections selected instead of drifting to the next section", () => {
@@ -578,7 +631,7 @@ test("report section navigator keeps clicked sections selected instead of drifti
   assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
   assert.match(reportSource, /function StudentReportSummary\(\{ report, sectionId \}: Readonly<\{ report: FeedbackReport; sectionId: string \}>\)/);
   assert.match(reportSource, /<section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id=\{sectionId\}>/);
-  assert.match(reportSource, /<div className="grid gap-4 xl:grid-cols-2">/);
+  assert.doesNotMatch(reportSource, /<div className="grid gap-4 xl:grid-cols-2">\s*\{report \? \(/);
   assert.doesNotMatch(reportSource, /<div className="grid scroll-mt-6 gap-4 xl:grid-cols-2" id="report-feedback">/);
 });
 
@@ -590,7 +643,8 @@ test("report page prioritizes student learning over repeated source proof", () =
   assert.match(reportSource, /function StudentReportSummary/);
   assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
   assert.match(reportSource, /本轮结论/);
-  assert.match(reportSource, /教练复盘/);
+  assert.match(reportSource, /教师复盘/);
+  assert.doesNotMatch(reportSource, /教练复盘/);
   assert.match(reportSource, /推荐训练病例/);
   assert.doesNotMatch(summarySource, /最需要补的部分/);
   assert.doesNotMatch(summarySource, /下一轮训练计划/);
@@ -608,6 +662,7 @@ test("report page prioritizes student learning over repeated source proof", () =
 
 test("report page renders AI reflection review and personal training skill status", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
+  assert.match(reportModelSource, /export type TeacherReflectionMajorIssue = Readonly<\{/);
   assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
   assert.match(reportModelSource, /ai_reflection_review\?: Partial<AiReflectionReview>;/);
   assert.match(reportModelSource, /personal_skill_candidate\?: Partial<PersonalTrainingSkillCandidate>;/);
@@ -617,7 +672,13 @@ test("report page renders AI reflection review and personal training skill statu
   assert.match(reportSource, /function PersonalTrainingSkillSection/);
   assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
   assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
-  assert.match(reportSource, /教练复盘/);
+  assert.match(reportSource, /教师复盘/);
+  assert.match(reportSource, /总体判断/);
+  assert.match(reportSource, /老师指出的问题/);
+  assert.match(reportSource, /为什么重要/);
+  assert.match(reportSource, /正确做法/);
+  assert.match(reportSource, /下一轮具体练法/);
+  assert.match(reportSource, /推理链点评/);
   assert.match(reportSource, /个人训练 Skill/);
   assert.match(reportSource, /review\.source_reference_items\.map/);
   assert.match(reportSource, /candidate\.rag_evidence_items\.map/);
@@ -629,7 +690,7 @@ test("report page keeps long AI evidence source lists collapsed with clear expan
   assert.match(reportSource, /<details className="mt-3 rounded-xl border border-border bg-muted\/20 p-3">/);
   assert.match(reportSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);
   assert.match(reportSource, /复盘来源/);
-  assert.match(reportSource, /默认折叠，可展开查看 AI 复盘引用的结构化来源。/);
+  assert.match(reportSource, /默认折叠，可展开查看教师复盘引用的结构化来源。/);
   assert.match(reportSource, /RAG 证据来源/);
   assert.match(reportSource, /默认折叠，可展开查看 Skill 生成与审批使用的来源。/);
   assert.doesNotMatch(reportSource, /<h3 className="text-xs font-semibold">复盘来源<\/h3>\s*\{review\.source_reference_items\.length > 0 \?/);
@@ -889,7 +950,7 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.match(pageSource, /if \(isCheckingAuth\) \{/);
   assert.match(pageSource, /if \(!authUser\) \{/);
   assert.match(pageSource, /setStatusText\("请先登录后再开始或恢复训练。"\);/);
-  assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\([\s\S]*?selectedCaseId[\s\S]*?\? isTrainingModelConfigReady[\s\S]*?\? "已选择病例，发送问诊或点击训练操作后开始新会话。"[\s\S]*?: TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE[\s\S]*?: "请选择病例后再开始训练。"[\s\S]*?\);[\s\S]*?return;[\s\S]*?\}/);
+  assert.match(pageSource, /if \(!requestedSessionId\) \{[\s\S]*?setStatusText\([\s\S]*?selectedCaseId[\s\S]*?\? isTrainingModelConfigReady[\s\S]*?\? "已选择病例，发送问诊或点击训练操作会自动创建训练会话。"[\s\S]*?: TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE[\s\S]*?: "请选择病例后再开始训练。"[\s\S]*?\);[\s\S]*?return;[\s\S]*?\}/);
   assert.match(pageSource, /const sessionIdToRestore = requestedSessionId;/);
   assert.match(pageSource, /const nextSession = await getSession\(sessionIdToRestore\);/);
   assert.match(pageSource, /function isCompletedOsceSession\(session: OsceSession \| null\): boolean \{/);
@@ -934,22 +995,31 @@ test("home workspace starts without a default case and only prepares a case afte
   assert.doesNotMatch(pageSource, /speaker: "patient"[\s\S]{0,240}请先选择一个病例；进入病例后/);
 });
 
-test("home workspace creates a new backend session only after a selected-case training action", () => {
+test("home workspace keeps implicit session creation and exposes explicit restart action", () => {
   assert.match(pageSource, /const \[isCreating, setIsCreating\] = useState\(false\);/);
   assert.match(pageSource, /const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";/);
-  assert.match(pageSource, /const isTrainingModelConfigReady = Boolean\(runtimeApiConfig\?\.active\);/);
+  assert.match(pageSource, /const isTrainingModelConfigReady = Boolean\(runtimeApiConfig\?\.active\) \|\| \(!isStudentApiConfigEditable && backendConnectionStatus === "online"\);/);
   assert.match(pageSource, /function promptTrainingModelConfigRequired\(\): void \{[\s\S]*?setStatusText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setErrorText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setIsApiConfigHelpOpen\(true\);[\s\S]*?\}/);
+  assert.match(pageSource, /async function handleStartNewSession\(\): Promise<void>/);
   assert.match(pageSource, /async function ensureActiveSession\(\): Promise<OsceSession \| null>/);
   assert.match(pageSource, /if \(session\) \{[\s\S]*?return session;[\s\S]*?\}/);
   assert.match(pageSource, /if \(!selectedCaseId\) \{[\s\S]*?setStatusText\("请先选择病例，再开始训练。"\);[\s\S]*?return null;[\s\S]*?\}/);
   assert.match(pageSource, /if \(!isTrainingModelConfigReady\) \{[\s\S]*?promptTrainingModelConfigRequired\(\);[\s\S]*?return null;[\s\S]*?\}/);
-  assert.match(pageSource, /const nextSession = await createSession\(selectedCaseId\);/);
+  assert.match(pageSource, /setStatusText\("正在创建训练会话\.\.\."\);/);
+  const ensureActiveSessionSource = pageSource.slice(
+    pageSource.indexOf("async function ensureActiveSession"),
+    pageSource.indexOf("async function animatePendingPatientReply"),
+  );
+  assert.match(ensureActiveSessionSource, /const nextSession = await createSession\(selectedCaseId\);/);
+  assert.match(ensureActiveSessionSource, /setSession\(nextSession\);/);
+  assert.match(ensureActiveSessionSource, /return nextSession;/);
   assert.match(pageSource, /const activeSession = await ensureActiveSession\(\);/);
   assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
   assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
   assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
   assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
   assert.ok(pageSource.indexOf("if (!isTrainingModelConfigReady)") < pageSource.indexOf("setOptimisticHistoryMessage({"));
+  assert.ok(pageSource.indexOf("const activeSession = await ensureActiveSession();") < pageSource.indexOf("setOptimisticHistoryMessage({"));
 });
 
 
@@ -958,9 +1028,12 @@ test("home case card points users to the case selection page", () => {
   assert.match(pageSource, />当前选择<\/p>/);
   assert.match(pageSource, /\{selectedCase \? \([\s\S]*?\) : \([\s\S]*?尚未选择病例/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
-  assert.match(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-border bg-muted\/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground/);
+  assert.match(pageSource, />\s*开启新会话\s*<\/button>/);
+  assert.match(pageSource, /onClick=\{\(\) => void handleStartNewSession\(\)\}/);
+  assert.match(pageSource, /className="flex flex-wrap items-center justify-center gap-2"/);
+  assert.match(pageSource, /className="flex w-fit items-center justify-center rounded-md border border-border bg-muted\/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground/);
+  assert.match(pageSource, /className="flex w-fit items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
   assert.doesNotMatch(pageSource, /className="mx-auto flex w-fit items-center justify-center rounded-md border border-\[#141413\] bg-\[#141413\]/);
-  assert.doesNotMatch(pageSource, /className="block rounded-md border border-brand bg-brand px-3 py-2 text-center text-xs font-medium whitespace-nowrap text-white/);
   assert.doesNotMatch(pageSource, /const \[isCaseSelectorOpen, setIsCaseSelectorOpen\]/);
   assert.doesNotMatch(pageSource, /caseOptionsState\.map\(\(caseOption\) =>/);
   assert.doesNotMatch(pageSource, /<Panel[\s\S]*title="病例信息与选择"/);
@@ -1218,10 +1291,9 @@ test("home workspace auto-scrolls to the newest dialogue and keeps status in the
 test("home inquiry submit shows optimistic student message and neutral streaming placeholder", () => {
   assert.match(pageSource, /const \[optimisticHistoryMessage, setOptimisticHistoryMessage\] = useState<ChatMessage \| null>\(null\);/);
   assert.match(pageSource, /const \[pendingPatientMessage, setPendingPatientMessage\] = useState<ChatMessage \| null>\(null\);/);
-  assert.match(pageSource, /function hasMessageWithSpeakerAndText\([\s\S]*?messages: readonly ChatMessage\[],[\s\S]*?speaker: ChatMessage\["speaker"\],[\s\S]*?text: string,[\s\S]*?\): boolean/);
-  assert.match(pageSource, /function getReplyMessageMetadata\(session: OsceSession, replyText: string\): Pick<ChatMessage, "speaker" \| "label">/);
-  assert.match(pageSource, /const matchingReplyMessage = \[\.\.\.session\.messages\]\.reverse\(\)\.find/);
-  assert.match(pageSource, /matchingReplyMessage\?\.role === "coach"[\s\S]*?speaker: "coach",[\s\S]*?label: getCoachMessageLabel\(replyText\),/);
+  assert.match(pageSource, /function getReplyMessageMetadata\(session: OsceSession, replyText: string\): Pick<ChatMessage, "speaker" \| "label" \| "apiMessageIndex">/);
+  assert.match(pageSource, /session\.messages[\s\S]*?\.map\(\(message, index\) => \(\{ message, index \}\)\)[\s\S]*?\.reverse\(\)[\s\S]*?\.find/);
+  assert.match(pageSource, /matchingReplyMessage\?\.message\.role === "coach"[\s\S]*?speaker: "coach",[\s\S]*?label: getCoachMessageLabel\(replyText\),[\s\S]*?apiMessageIndex: matchingReplyMessage\.index,/);
   assert.match(pageSource, /let didReplacePendingPatientMessage = false;/);
   assert.match(pageSource, /return pendingPatientMessage;/);
   assert.match(pageSource, /if \(pendingPatientMessage && !didReplacePendingPatientMessage\)/);
@@ -1246,10 +1318,22 @@ test("home inquiry submit shows optimistic student message and neutral streaming
   assert.match(pageSource, /if \(replyMessageMetadata\.speaker === "coach"\) \{[\s\S]*?setPendingPatientMessage\(\(currentMessage\) => currentMessage\?\.id === pendingPatientReplyId \? null : currentMessage\);[\s\S]*?setSession\(updatedSession\);/);
   assert.match(pageSource, /\.\.\.replyMessageMetadata,[\s\S]*?finalText: replyText,/);
   assert.match(pageSource, /await animatePendingPatientReply\(pendingPatientReplyId, updatedSession\.reply \?\? ""\);/);
-  assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{updatedSession\.current_intent \?\? "未识别意图"\}`\);/);
-  assert.doesNotMatch(pageSource, /setStatusText\(`已收到标准化病人回复：\$\{updatedSession\.current_intent \?\? "未识别意图"\}`\);/);
+  assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{formatIntentList\(updatedSession\.current_intents\)\}`\);/);
+  assert.doesNotMatch(pageSource, /updatedSession\.current_intent(?!s)/);
   assert.ok(pageSource.indexOf("setOptimisticHistoryMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
   assert.ok(pageSource.indexOf("setPendingPatientMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
+});
+
+test("home inquiry submit keeps repeated identical turns as separate dialogue messages", () => {
+  assert.match(pageSource, /readonly apiMessageIndex\?: number;/);
+  assert.match(pageSource, /const clientChatMessageSequenceRef = useRef\(0\);/);
+  assert.match(pageSource, /function createClientChatMessageId\(prefix: string\): string/);
+  assert.match(pageSource, /const optimisticQuestionId = createClientChatMessageId\("optimistic-student"\);/);
+  assert.match(pageSource, /pendingPatientReplyId = createClientChatMessageId\("pending-patient"\);/);
+  assert.doesNotMatch(pageSource, /const requestTimestamp = Date\.now\(\);/);
+  assert.doesNotMatch(pageSource, /!hasMessageWithSpeakerAndText\(nextMessages, optimisticHistoryMessage\.speaker, optimisticHistoryMessage\.text\)/);
+  assert.doesNotMatch(pageSource, /message\.content === pendingPatientMessage\.finalText/);
+  assert.match(pageSource, /message\.apiMessageIndex === pendingPatientMessage\.apiMessageIndex/);
 });
 
 test("home secondary menus close from outside clicks and after action selection", () => {
@@ -1394,7 +1478,7 @@ test("home workspace relies on backend persisted records instead of local traini
 test("report page reads current user's backend session snapshot for original dialogue", () => {
   assert.match(reportSource, /type BackendSession = Readonly<\{/);
   assert.match(reportSource, /const \[backendSession, setBackendSession\] = useState<BackendSession \| null>\(null\);/);
-  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`\)/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`/);
   assert.match(reportSource, /requestJson<BackendSession>\(`\/api\/me\/sessions\/\$\{nextSessionId\}`\)/);
   assert.match(reportSource, /fetch\(path, \{/);
   assert.match(reportSource, /credentials: "same-origin"/);
@@ -1411,17 +1495,32 @@ test("report page reads current user's backend session snapshot for original dia
   assert.match(reportSource, /从后端训练 session 读取/);
   assert.match(reportSource, /默认折叠，可展开查看完整训练过程。/);
   assert.match(reportSource, /后端 session 暂无原始对话记录/);
-  assert.match(reportSource, /const workbenchHref = sessionId \? `\/\?session_id=\$\{sessionId\}` : "\/";/);
+  assert.doesNotMatch(reportSource, /const workbenchHref = sessionId \? `\/\?session_id=\$\{sessionId\}` : "\/";/);
+  assert.match(reportSource, /const workbenchHref = "\/";/);
   assert.match(reportSource, /href=\{workbenchHref\}[\s\S]*?>\s*返回工作台\s*<\/Link>/);
+});
+
+test("report page surfaces backend report failures as readable error cards", () => {
+  assert.match(reportSource, /const REPORT_REQUEST_TIMEOUT_MS = /);
+  assert.match(reportSource, /function formatRequestErrorMessage/);
+  assert.match(reportSource, /AbortController/);
+  assert.match(reportSource, /模型服务调用失败/);
+  assert.match(
+    reportSource,
+    /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`, \{ timeoutMs: REPORT_REQUEST_TIMEOUT_MS \}\)/,
+  );
+  assert.match(reportSource, /setErrorText\(formatRequestErrorMessage\(error\)\);/);
+  assert.match(reportSource, /role="alert"/);
+  assert.match(reportSource, /报告读取失败/);
 });
 
 test("report page uses larger section titles for scanability", () => {
   assert.match(reportSource, /const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";/);
-  for (const title of ["本轮结论", "教练复盘", "AI 评分审计", "推荐训练病例", "维度图表", "原始对话记录", "评分依据与来源"]) {
+  for (const title of ["本轮结论", "教师复盘", "个人训练 Skill", "AI 评分审计", "推荐训练病例", "维度图表", "原始对话记录", "评分依据与来源"]) {
     assert.match(reportSource, new RegExp(`<h2 className=\\{sectionHeadingClassName\\}>${title}<\\/h2>`));
   }
   assert.doesNotMatch(reportSource, /<h2 className="text-lg font-semibold">/);
-  assert.doesNotMatch(reportSource, /<h2 className="text-sm font-semibold">(?:本轮结论|教练复盘|AI 评分审计|推荐训练病例|维度图表|原始对话记录|评分依据与来源)<\/h2>/);
+  assert.doesNotMatch(reportSource, /<h2 className="text-sm font-semibold">(?:本轮结论|教师复盘|个人训练 Skill|AI 评分审计|推荐训练病例|维度图表|原始对话记录|评分依据与来源)<\/h2>/);
 });
 
 test("report score status uses a non-action low score label", () => {
@@ -1522,6 +1621,15 @@ test("home page renders login/register dialog on the existing workspace", () => 
   assert.match(pageSource, /id="auth-email-input"/);
   assert.match(pageSource, /id="auth-password-input"/);
   assert.match(pageSource, /id="auth-display-name-input"/);
-  assert.match(pageSource, />\{isSubmittingAuth \? "处理中" : authMode === "login" \? "登录" : "注册"\}<\/button>/);
+  assert.match(pageSource, />\{isSubmittingAuth \? "处理中" : authMode === "login" \|\| !isAccountRegistrationEnabled \? "登录" : "注册"\}<\/button>/);
   assert.match(pageSource, />\s*退出登录\s*</);
+});
+
+test("home production deployment disables account creation in the login dialog", () => {
+  assert.match(pageSource, /const isAccountRegistrationEnabled = !PRODUCTION_DEPLOYMENT_MODES\.has\(DEPLOYMENT_MODE\);/);
+  assert.match(pageSource, /if \(!isAccountRegistrationEnabled && authMode === "register"\) \{[\s\S]*?setAuthMode\("login"\);[\s\S]*?\}/);
+  assert.match(pageSource, /<h2 className="mt-2 text-xl font-semibold">\{isAccountRegistrationEnabled \? "登录 \/ 注册" : "登录"\}<\/h2>/);
+  assert.match(pageSource, /\{isAccountRegistrationEnabled \? \([\s\S]*?>\s*注册\s*<\/button>[\s\S]*?\) : null\}/);
+  assert.match(pageSource, /const effectiveAuthMode = isAccountRegistrationEnabled \? authMode : "login";/);
+  assert.match(pageSource, /effectiveAuthMode === "login"\s*\? await loginUser\(email, authPassword\)\s*:\s*await registerUser/);
 });

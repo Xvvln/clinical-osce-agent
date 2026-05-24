@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.services.retrieval_index import RetrievalDocument, search_retrieval_documents
+from app.services.retrieval_index import (
+    RetrievalDocument,
+    search_retrieval_documents,
+    search_retrieval_documents_batch,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_RETRIEVAL_GOLD_PATH = ROOT_DIR / "services" / "api" / "evals" / "retrieval" / "gold_queries.json"
@@ -24,12 +28,26 @@ def run_retrieval_eval(
     *,
     gold_path: Path = DEFAULT_RETRIEVAL_GOLD_PATH,
     search_fn: Callable[[str, int], Sequence[RetrievalDocument]] = search_retrieval_documents,
+    batch_search_fn: Callable[[Sequence[str], int], Sequence[Sequence[RetrievalDocument]]] | None = None,
 ) -> dict[str, Any]:
     gold_queries = load_retrieval_gold_queries(gold_path)
     results: list[dict[str, Any]] = []
     results_by_query: dict[str, list[str]] = {}
-    for gold_query in gold_queries:
-        retrieved_documents = list(search_fn(gold_query.query, 5))
+    if batch_search_fn is None and search_fn is search_retrieval_documents:
+        batch_search_fn = search_retrieval_documents_batch
+    if batch_search_fn is not None:
+        retrieved_documents_by_query = [
+            list(documents)
+            for documents in batch_search_fn([gold_query.query for gold_query in gold_queries], 5)
+        ]
+    else:
+        retrieved_documents_by_query = [
+            list(search_fn(gold_query.query, 5))
+            for gold_query in gold_queries
+        ]
+    if len(retrieved_documents_by_query) < len(gold_queries):
+        retrieved_documents_by_query.extend([] for _ in range(len(gold_queries) - len(retrieved_documents_by_query)))
+    for gold_query, retrieved_documents in zip(gold_queries, retrieved_documents_by_query):
         retrieved_references = [document.reference for document in retrieved_documents]
         results_by_query[gold_query.query_id] = retrieved_references
         results.append(

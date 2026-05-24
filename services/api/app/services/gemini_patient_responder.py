@@ -7,7 +7,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
@@ -21,6 +21,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 硬性规则：
 - patient_private_context 是完整但受控的标准化病人私有上下文，只用于保持身份、语气和病史一致，不得整段复述。
 - answerable_fact_candidates 是本轮允许披露的病例事实；只能表达 canonical_answer 和 answerable_fact_candidates 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
+- revealed_fact_ids 是此前或本轮已经披露给学生的事实编号；dialogue_context 是最近对话、已问问题和本轮意图摘要，只用于保持上下文连贯。
+- 可以参考 dialogue_context 判断学生是否在延续前文、追问同一主题或切换主题，但仍只能表达 canonical_answer 和 answerable_fact_candidates。
 - 输出 JSON 必须包含 reply 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
 - forbidden_context 中的诊断、rubric、治疗、剂量、处置边界均不得泄露。
 - 不得主动说出 forbidden_terms 中的任何词。
@@ -40,14 +42,16 @@ class PatientResponderRequest(BaseModel):
     case_title: str
     chief_complaint: str
     student_message: str
-    current_intent: str
+    current_intents: list[str] = Field(default_factory=list)
     canonical_answer: str
     revealed_fact_id: str | None = None
+    revealed_fact_ids: list[str] = Field(default_factory=list)
     patient_private_context: dict[str, Any] = Field(default_factory=dict)
     answerable_fact_candidates: list[dict[str, Any]] = Field(default_factory=list)
     forbidden_terms: list[str] = Field(default_factory=list)
     forbidden_context: dict[str, Any] = Field(default_factory=dict)
     prior_messages: list[dict[str, str]] = Field(default_factory=list)
+    dialogue_context: dict[str, Any] = Field(default_factory=dict)
     turn_policy: str = "history_fact_disclosure"
     deterministic_hints: dict[str, Any] = Field(default_factory=dict)
 
@@ -158,7 +162,12 @@ class LazyGeminiPatientResponder:
         if self._responder is None or self._cache_key != cache_key:
             self._responder = _create_configured_responder()
             self._cache_key = cache_key
-        return self._responder(request)
+        try:
+            return self._responder(request)
+        except (RuntimeError, ValidationError, ValueError):
+            # Only model-output contract failures fall back here. Provider connectivity
+            # and authentication errors should still surface to the API caller.
+            return DeterministicPatientResponder()(request)
 
 
 def create_default_gemini_patient_responder() -> LazyGeminiPatientResponder:

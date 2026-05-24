@@ -35,8 +35,9 @@ class TrainingInsightService:
         turn_pattern_source_report_ids: dict[str, set[str]] = defaultdict(set)
         report_count = 0
 
+        events_by_session = _list_events_by_session(self.event_store, session_ids)
         for session_id in session_ids:
-            events = self.event_store.list_session_events(session_id)
+            events = events_by_session.get(session_id, [])
             session_report_ids = [
                 str(event["payload"].get("report_id"))
                 for event in events
@@ -175,11 +176,12 @@ def _turn_patterns_from_training_event(
     payload = event.get("payload", {})
     agent_turn = payload.get("agent_turn") if isinstance(payload, dict) else None
     if isinstance(agent_turn, dict):
-        current_intent = str(agent_turn.get("current_intent", ""))
+        current_intents = _current_intents_from_agent_turn(agent_turn)
+        primary_intent = current_intents[0] if current_intents else "unknown_history_intent"
         turn_policy = str(agent_turn.get("turn_policy", ""))
         turn_analysis = agent_turn.get("turn_analysis", {})
         is_off_topic = isinstance(turn_analysis, dict) and bool(turn_analysis.get("is_off_topic"))
-        if is_off_topic or (current_intent == "unknown_history_intent" and turn_policy == "patient_context_redirect"):
+        if is_off_topic or (primary_intent == "unknown_history_intent" and turn_policy == "patient_context_redirect"):
             patterns.append(
                 {
                     "pattern_id": "turn_pattern_off_topic_redirect",
@@ -191,7 +193,7 @@ def _turn_patterns_from_training_event(
                     ],
                 }
             )
-        if current_intent == "answer_request_redirect" or turn_policy == "answer_boundary_redirect":
+        if primary_intent == "answer_request_redirect" or turn_policy == "answer_boundary_redirect":
             patterns.append(
                 {
                     "pattern_id": "turn_pattern_premature_answer_request",
@@ -203,7 +205,7 @@ def _turn_patterns_from_training_event(
                     ],
                 }
             )
-        if current_intent == "safety_boundary" or turn_policy == "safety_boundary_redirect":
+        if primary_intent == "safety_boundary" or turn_policy == "safety_boundary_redirect":
             patterns.append(
                 {
                     "pattern_id": "turn_pattern_safety_boundary_request",
@@ -249,4 +251,20 @@ def _turn_patterns_from_training_event(
     return patterns
 
 
+def _current_intents_from_agent_turn(agent_turn: dict[str, Any]) -> list[str]:
+    raw_current_intents = agent_turn.get("current_intents")
+    if isinstance(raw_current_intents, list):
+        return [str(intent) for intent in raw_current_intents if intent and intent != "unknown_history_intent"]
+    legacy_intent = str(agent_turn.get("current_intent", "") or "")
+    if legacy_intent and legacy_intent != "unknown_history_intent":
+        return [legacy_intent]
+    return []
+
+
 training_insight_service = TrainingInsightService()
+
+
+def _list_events_by_session(event_store: TrainingEventStore, session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    if hasattr(event_store, "list_events_for_sessions"):
+        return event_store.list_events_for_sessions(session_ids)
+    return {session_id: event_store.list_session_events(session_id) for session_id in session_ids}

@@ -9,7 +9,11 @@ from app.services.chroma_retriever import (
     build_chroma_manifest_status,
 )
 from app.services.rag_knowledge_store import RagKnowledgeStore
-from app.services.retrieval_index import search_retrieval_documents, search_retrieval_documents_with_embeddings
+from app.services.retrieval_index import (
+    search_retrieval_documents,
+    search_retrieval_documents_batch,
+    search_retrieval_documents_with_embeddings,
+)
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 
@@ -126,6 +130,26 @@ def test_search_retrieval_documents_returns_case_for_clinical_query(monkeypatch)
     assert results[0].title == "右下腹痛教学病例"
     assert "转移性右下腹痛" in results[0].snippet
     assert results[0].score > 0
+
+
+def test_search_retrieval_documents_uses_local_embedding_when_vertex_is_not_configured(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("右下腹痛"),
+    )
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert results
+    assert results[0].reference == "case:appendicitis_001"
+    assert results[0].source_type == "case"
 
 
 def test_search_retrieval_documents_returns_rubric_item_for_exam_query(monkeypatch) -> None:
@@ -359,6 +383,46 @@ def test_chroma_retrieval_index_skips_document_embedding_when_manifest_is_curren
 
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert ("RETRIEVAL_QUERY", 1) in counting_client.calls
+    assert not any(task_type == "RETRIEVAL_DOCUMENT" for task_type, _ in counting_client.calls)
+
+
+def test_chroma_retrieval_index_batches_query_embeddings_when_manifest_is_current(tmp_path) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference="knowledge:appendicitis_001.rp_03",
+            source_type="knowledge",
+            title="急性阑尾炎诊断依据",
+            snippet="白细胞升高提示炎症反应。",
+        ),
+        ChromaSourceDocument(
+            reference="case:appendicitis_001",
+            source_type="case",
+            title="右下腹痛教学病例",
+            snippet="转移性右下腹痛。",
+        ),
+    ]
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+    )
+    first_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    first_index.search("炎症实验室证据", limit=2)
+    counting_client = CountingFakeEmbeddingClient()
+    second_index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=counting_client,
+        documents=documents,
+    )
+
+    results_by_query = second_index.search_batch(["炎症实验室证据", "右下腹痛病例"], limit=2)
+
+    assert len(results_by_query) == 2
+    assert results_by_query[0][0].reference == "knowledge:appendicitis_001.rp_03"
+    assert ("RETRIEVAL_QUERY", 2) in counting_client.calls
     assert not any(task_type == "RETRIEVAL_DOCUMENT" for task_type, _ in counting_client.calls)
 
 
@@ -624,3 +688,22 @@ def test_search_retrieval_documents_uses_chroma_by_default_when_embedding_client
     assert results
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert (tmp_path / "chroma").exists()
+
+
+def test_search_retrieval_documents_batch_uses_chroma_once_for_multiple_queries(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    counting_client = CountingFakeEmbeddingClient()
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: counting_client,
+    )
+
+    results_by_query = search_retrieval_documents_batch(["炎症实验室证据", "右下腹痛病例"], limit=3)
+
+    assert len(results_by_query) == 2
+    assert results_by_query[0]
+    assert results_by_query[0][0].reference == "knowledge:appendicitis_001.rp_03"
+    assert ("RETRIEVAL_QUERY", 2) in counting_client.calls

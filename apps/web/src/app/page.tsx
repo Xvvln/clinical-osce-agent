@@ -53,6 +53,8 @@ type StudentApiConfigRuntimeResponse = Readonly<{
   base_url: string;
   proxy_url: string;
   api_key_saved?: boolean;
+  runtime_write_supported?: boolean;
+  deployment_mode?: string;
   integration_targets: readonly string[];
   message: string;
 }>;
@@ -85,6 +87,9 @@ type CoverageMapItem = Readonly<{
   id: string;
   label: string;
   status: "covered" | "pending";
+  topic?: string | null;
+  slot?: string | null;
+  linked_rubric_items?: readonly string[];
 }>;
 
 type CoverageMapPayload = Readonly<{
@@ -364,13 +369,14 @@ type AgentTurnMemoryItem = Readonly<{
   student_message: string;
   reply: string;
   reply_role: "student" | "patient" | "coach" | string;
-  current_intent: string;
+  current_intents: readonly string[];
   turn_policy: string;
   agent_path: readonly string[];
   selected_skill_ids?: readonly string[];
   selected_skill_reasons?: readonly SkillSelectionReason[];
   skill_context?: readonly string[];
   revealed_fact_id: string | null;
+  revealed_fact_ids?: readonly string[];
   source_references: readonly string[];
   safety_flags: readonly string[];
 }>;
@@ -435,7 +441,7 @@ type OsceSession = Readonly<{
   agent_decision_trace: readonly AgentDecisionTraceItem[];
   reflection_summary: ReflectionSummary | null;
   reply?: string;
-  current_intent?: string;
+  current_intents?: readonly string[];
 }>;
 
 type ChatMessage = {
@@ -443,6 +449,7 @@ type ChatMessage = {
   readonly speaker: "student" | "patient" | "coach";
   readonly label: string;
   readonly text: string;
+  readonly apiMessageIndex?: number;
   readonly finalText?: string;
   readonly isPending?: boolean;
   readonly skillSelectionReasons?: readonly SkillSelectionReason[];
@@ -674,6 +681,9 @@ const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
 const PRODUCTION_DEPLOYMENT_MODES = new Set(["single-node-prod", "vertex-prod"]);
 const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES.has(DEPLOYMENT_MODE);
+const isStudentApiConfigEditable = isStudentRuntimeApiConfigEnabled;
+const isAccountRegistrationEnabled = !PRODUCTION_DEPLOYMENT_MODES.has(DEPLOYMENT_MODE);
+const SERVER_MANAGED_API_CONFIG_MESSAGE = "服务器演示模式已由后端统一配置 Gemini，失败时自动切换备用模型；前端不接收自定义 API Key。";
 const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";
 const OSCE_DOCK_POSITION_STORAGE_KEY = "clinical_osce_osce_dock_position";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
@@ -949,7 +959,7 @@ function getWorkflowStepStatus(stepKey: WorkflowStepDefinition["key"], session: 
 
 function getNextWorkflowSuggestion(session: OsceSession | null, feedbackReport: FeedbackReport | null): string {
   if (!session) {
-    return "选择病例后，发送问诊或点击训练操作才会创建新会话。";
+    return "选择病例后，发送问诊或点击训练操作会自动创建训练会话。";
   }
 
   if (feedbackReport || session.feedback_report) {
@@ -1004,6 +1014,10 @@ function formatStage(stage: string | undefined): string {
   return stageLabel ?? "等待会话";
 }
 
+function formatIntentList(currentIntents: readonly string[] | undefined): string {
+  return currentIntents && currentIntents.length > 0 ? currentIntents.join("、") : "未识别意图";
+}
+
 function getCoachMessageLabel(content: string): "安全边界" | "答题边界" | "问诊引导" | "过程提示" {
   if (content.includes("本系统仅用于 OSCE 教学模拟训练")) {
     return "安全边界";
@@ -1037,6 +1051,7 @@ function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession
       speaker: "student",
       label: "学生",
       text: message.content,
+      apiMessageIndex: index,
     };
   }
 
@@ -1046,6 +1061,7 @@ function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession
       speaker: "coach",
       label: getCoachMessageLabel(message.content),
       text: message.content,
+      apiMessageIndex: index,
       skillSelectionReasons: getSkillSelectionReasonsForReply(session, message.content),
     };
   }
@@ -1055,6 +1071,7 @@ function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession
     speaker: "patient",
     label: "标准化病人",
     text: message.content,
+    apiMessageIndex: index,
   };
 }
 
@@ -1071,21 +1088,24 @@ function getSkillSelectionReasonsForReply(
   return matchingTurn?.selected_skill_reasons ?? [];
 }
 
-function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<ChatMessage, "speaker" | "label"> {
-  const matchingReplyMessage = [...session.messages].reverse().find(
-    (message) => message.content === replyText && (message.role === "coach" || message.role === "patient"),
-  );
+function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<ChatMessage, "speaker" | "label" | "apiMessageIndex"> {
+  const matchingReplyMessage = session.messages
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find(({ message }) => message.content === replyText && (message.role === "coach" || message.role === "patient"));
 
-  if (matchingReplyMessage?.role === "coach") {
+  if (matchingReplyMessage?.message.role === "coach") {
     return {
       speaker: "coach",
       label: getCoachMessageLabel(replyText),
+      apiMessageIndex: matchingReplyMessage.index,
     };
   }
 
   return {
     speaker: "patient",
     label: "标准化病人",
+    apiMessageIndex: matchingReplyMessage?.index,
   };
 }
 
@@ -1093,29 +1113,15 @@ function getVisibleApiMessagesDuringPendingReply(
   messages: readonly ApiMessage[],
   pendingPatientMessage: ChatMessage | null,
 ): readonly ApiMessage[] {
-  if (!pendingPatientMessage?.finalText) {
+  if (!pendingPatientMessage?.finalText || pendingPatientMessage.apiMessageIndex === undefined) {
     return messages;
   }
 
-  const pendingReplyIndex = messages.findIndex(
-    (message) =>
-      message.content === pendingPatientMessage.finalText
-      && (message.role === "patient" || message.role === "coach"),
-  );
-
-  if (pendingReplyIndex === -1) {
+  if (pendingPatientMessage.apiMessageIndex < 0 || pendingPatientMessage.apiMessageIndex >= messages.length) {
     return messages.filter((message) => message.role !== "coach");
   }
 
-  return messages.slice(0, pendingReplyIndex + 1);
-}
-
-function hasMessageWithSpeakerAndText(
-  messages: readonly ChatMessage[],
-  speaker: ChatMessage["speaker"],
-  text: string,
-): boolean {
-  return messages.some((message) => message.speaker === speaker && message.text === text);
+  return messages.slice(0, pendingPatientMessage.apiMessageIndex + 1);
 }
 
 function getShortEvidenceId(factId: string): string {
@@ -1123,27 +1129,45 @@ function getShortEvidenceId(factId: string): string {
   return separatorIndex === -1 ? factId : factId.slice(separatorIndex + 1);
 }
 
-function getEvidenceLabelFromDetail(detail: string, fallbackIndex: number): string {
-  if (/恶心|呕|发热|腹泻|尿/.test(detail)) {
-    return "伴随症状";
+const evidenceSlotLabels: Readonly<Record<string, string>> = {
+  onset: "起病时间",
+  location: "症状部位",
+  migration: "部位变化",
+  character: "症状性质",
+  severity: "症状程度",
+  associated_symptom: "伴随表现",
+  past_medical: "既往史",
+  allergy: "过敏史",
+  personal: "个人史",
+  family: "家族史",
+  menstrual: "月经史",
+  medication: "用药史",
+  social: "社会史",
+  ice: "就诊想法",
+};
+
+function getEvidenceTopicLabel(topic?: string | null): string | null {
+  const normalizedTopic = topic?.trim();
+  return normalizedTopic ? normalizedTopic : null;
+}
+
+function getEvidenceSlotLabel(slot?: string | null): string | null {
+  const normalizedSlot = slot?.trim();
+  if (!normalizedSlot) {
+    return null;
   }
-  if (/过敏/.test(detail)) {
-    return "过敏史";
+
+  return evidenceSlotLabels[normalizedSlot] ?? normalizedSlot.replaceAll("_", " ");
+}
+
+function getEvidenceLabelFromCoverageItem(item: CoverageMapItem, fallbackIndex: number): string {
+  const topicLabel = getEvidenceTopicLabel(item.topic);
+  const slotLabel = getEvidenceSlotLabel(item.slot);
+  if (slotLabel) {
+    return slotLabel;
   }
-  if (/既往|手术|高血压|糖尿病|心脏病/.test(detail)) {
-    return "既往史";
-  }
-  if (/上腹|右下腹|部位|转移|固定/.test(detail)) {
-    return "疼痛部位";
-  }
-  if (/持续|胀痛|隐痛|加重/.test(detail)) {
-    return "疼痛性质";
-  }
-  if (/VAS|程度|分/.test(detail)) {
-    return "疼痛程度";
-  }
-  if (/担心|希望|害怕/.test(detail)) {
-    return "就诊想法";
+  if (topicLabel) {
+    return topicLabel;
   }
 
   return `问诊线索 ${fallbackIndex + 1}`;
@@ -1156,7 +1180,7 @@ function getEvidenceItem(factId: string, trainingProgress: TrainingProgress | nu
   );
   if (coveredHistoryItem) {
     return {
-      label: getEvidenceLabelFromDetail(coveredHistoryItem.label, fallbackIndex),
+      label: getEvidenceLabelFromCoverageItem(coveredHistoryItem, fallbackIndex),
       detail: coveredHistoryItem.label,
     };
   }
@@ -1860,19 +1884,21 @@ function HomeContent() {
   const [isApiConfigHelpOpen, setIsApiConfigHelpOpen] = useState(false);
   const [studentApiConfig, setStudentApiConfig] = useState<StudentApiConfig>(createDefaultStudentApiConfig());
   const [runtimeApiConfig, setRuntimeApiConfig] = useState<StudentApiConfigRuntimeResponse | null>(null);
-  const [apiConfigStatusText, setApiConfigStatusText] = useState("配置按当前登录账号保存在后端；密钥不会回显。");
+  const [apiConfigStatusText, setApiConfigStatusText] = useState(
+    isStudentApiConfigEditable ? "配置按当前登录账号保存在后端；密钥不会回显。" : SERVER_MANAGED_API_CONFIG_MESSAGE,
+  );
   const [apiConfigTestResult, setApiConfigTestResult] = useState<StudentApiConfigTestResponse | null>(null);
   const [isTestingStudentApiConfig, setIsTestingStudentApiConfig] = useState(false);
   const [isApplyingStudentApiConfig, setIsApplyingStudentApiConfig] = useState(false);
   const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>("checking");
-  const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active);
+  const isTrainingModelConfigReady = Boolean(runtimeApiConfig?.active) || (!isStudentApiConfigEditable && backendConnectionStatus === "online");
   const [rightPanelOpenStates, setRightPanelOpenStates] = useState<Record<RightPanelKey, boolean>>({
     evidence: true,
     report: true,
   });
   const [session, setSession] = useState<OsceSession | null>(null);
   const [inputValue, setInputValue] = useState("");
-  const [statusText, setStatusText] = useState("选择病例后，发送问诊或点击训练操作才会创建新会话。");
+  const [statusText, setStatusText] = useState("选择病例后，发送问诊或点击训练操作会自动创建训练会话。");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -1922,6 +1948,12 @@ function HomeContent() {
   const latestEvidenceItemRef = useRef<HTMLDivElement | null>(null);
   const previousRevealedFactIdsRef = useRef<readonly string[] | null>(null);
   const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
+  const clientChatMessageSequenceRef = useRef(0);
+
+  function createClientChatMessageId(prefix: string): string {
+    clientChatMessageSequenceRef.current += 1;
+    return `${prefix}-${clientChatMessageSequenceRef.current}`;
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -1951,13 +1983,16 @@ function HomeContent() {
   }, []);
 
   useEffect(() => {
-    if (!isStudentRuntimeApiConfigEnabled || isCheckingAuth) {
+    if (isCheckingAuth) {
       return;
     }
 
     if (!authUser) {
       setRuntimeApiConfig(null);
       setStudentApiConfig(createDefaultStudentApiConfig());
+      if (!isStudentApiConfigEditable) {
+        setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+      }
       return;
     }
 
@@ -1968,11 +2003,17 @@ function HomeContent() {
         if (isMounted) {
           setRuntimeApiConfig(runtimeConfig);
           setStudentApiConfig(createStudentApiConfigFromRuntime(runtimeConfig));
+          if (!isStudentApiConfigEditable) {
+            setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+          }
         }
       } catch {
         if (isMounted) {
           setRuntimeApiConfig(null);
           setStudentApiConfig(createDefaultStudentApiConfig());
+          if (!isStudentApiConfigEditable) {
+            setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+          }
         }
       }
     }
@@ -1984,7 +2025,7 @@ function HomeContent() {
   }, [authUser, isCheckingAuth]);
 
   useEffect(() => {
-    if (!isApiConfigHelpOpen || !isStudentRuntimeApiConfigEnabled || !authUser) {
+    if (!isApiConfigHelpOpen || !authUser) {
       return;
     }
 
@@ -1995,10 +2036,16 @@ function HomeContent() {
         if (isMounted) {
           setRuntimeApiConfig(runtimeConfig);
           setStudentApiConfig(createStudentApiConfigFromRuntime(runtimeConfig));
+          if (!isStudentApiConfigEditable) {
+            setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+          }
         }
       } catch {
         if (isMounted) {
           setRuntimeApiConfig(null);
+          if (!isStudentApiConfigEditable) {
+            setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+          }
         }
       }
     }
@@ -2041,6 +2088,12 @@ function HomeContent() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAccountRegistrationEnabled && authMode === "register") {
+      setAuthMode("login");
+    }
+  }, [authMode]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2100,7 +2153,7 @@ function HomeContent() {
       setStatusText(
         selectedCaseId
           ? isTrainingModelConfigReady
-            ? "已选择病例，发送问诊或点击训练操作后开始新会话。"
+            ? "已选择病例，发送问诊或点击训练操作会自动创建训练会话。"
             : TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE
           : "请选择病例后再开始训练。",
       );
@@ -2396,6 +2449,10 @@ function HomeContent() {
   }
 
   function handleStudentApiProviderChange(provider: ApiConfigProvider): void {
+    if (!isStudentApiConfigEditable) {
+      setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+      return;
+    }
     setStudentApiConfig((currentConfig) => ({
       ...currentConfig,
       provider,
@@ -2414,6 +2471,10 @@ function HomeContent() {
 
   async function handleSaveStudentApiConfig(): Promise<void> {
     setApiConfigTestResult(null);
+    if (!isStudentApiConfigEditable) {
+      setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+      return;
+    }
     if (!authUser) {
       setApiConfigStatusText("请先登录后再保存 API 配置。");
       setIsAuthDialogOpen(true);
@@ -2439,6 +2500,11 @@ function HomeContent() {
   }
 
   async function handleTestStudentApiConfig(): Promise<void> {
+    if (!isStudentApiConfigEditable) {
+      setApiConfigStatusText(SERVER_MANAGED_API_CONFIG_MESSAGE);
+      setApiConfigTestResult(null);
+      return;
+    }
     setIsTestingStudentApiConfig(true);
     setApiConfigStatusText("正在测试连通性...");
     setApiConfigTestResult(null);
@@ -2525,8 +2591,8 @@ function HomeContent() {
       baseMessages = baseMessages.map((message) => {
         if (
           !didReplacePendingPatientMessage
-          && message.speaker === pendingPatientMessage.speaker
-          && message.text === pendingPatientMessage.finalText
+          && message.apiMessageIndex !== undefined
+          && message.apiMessageIndex === pendingPatientMessage.apiMessageIndex
         ) {
           didReplacePendingPatientMessage = true;
           return pendingPatientMessage;
@@ -2536,10 +2602,7 @@ function HomeContent() {
     }
 
     const nextMessages = [...baseMessages];
-    if (
-      optimisticHistoryMessage &&
-      !hasMessageWithSpeakerAndText(nextMessages, optimisticHistoryMessage.speaker, optimisticHistoryMessage.text)
-    ) {
+    if (optimisticHistoryMessage) {
       nextMessages.push(optimisticHistoryMessage);
     }
     if (pendingPatientMessage && !didReplacePendingPatientMessage) {
@@ -2656,8 +2719,9 @@ function HomeContent() {
     setAuthErrorText(null);
 
     try {
+      const effectiveAuthMode = isAccountRegistrationEnabled ? authMode : "login";
       const nextUser =
-        authMode === "login"
+        effectiveAuthMode === "login"
           ? await loginUser(email, authPassword)
           : await registerUser(email, authPassword, authDisplayName.trim());
       setAuthUser(nextUser);
@@ -2701,6 +2765,63 @@ function HomeContent() {
     setStatusText(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE);
     setErrorText(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE);
     setIsApiConfigHelpOpen(true);
+  }
+
+  async function handleStartNewSession(): Promise<void> {
+    if (isCreating) {
+      return;
+    }
+
+    if (!authUser) {
+      setStatusText("请先登录后再开始或恢复训练。");
+      setIsAuthDialogOpen(true);
+      return;
+    }
+
+    if (!selectedCaseId) {
+      setStatusText("请先选择病例，再开启新会话。");
+      setErrorText("请先选择病例，再开启新会话。");
+      return;
+    }
+
+    if (!isTrainingModelConfigReady) {
+      promptTrainingModelConfigRequired();
+      return;
+    }
+
+    setIsCreating(true);
+    setErrorText(null);
+    setInputValue("");
+    setHypothesisValue("");
+    setDiagnosisValue("");
+    setDifferentialDiagnosisValue("");
+    setSupportingEvidenceValue("");
+    setExclusionEvidenceValue("");
+    setNextStepValue("");
+    setFeedbackReport(null);
+    setProcedureResults([]);
+    setSelectedProcedureResult(null);
+    setPendingPatientMessage(null);
+    setOptimisticHistoryMessage(null);
+    setIsPatientProfileOpen(false);
+    setStatusText("正在创建训练会话...");
+
+    try {
+      const nextSession = await createSession(selectedCaseId);
+      setSession(nextSession);
+      setSelectedCaseId(nextSession.case_id);
+      setStatusText("已创建训练会话，可以继续训练。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建训练会话失败。";
+      if (message === "请先登录后再继续训练。") {
+        setAuthUser(null);
+        setIsAuthDialogOpen(true);
+      }
+      setStatusText(message === "请先登录后再继续训练。" ? message : "训练会话创建失败，请确认后端仍在运行。");
+      setErrorText(message);
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   async function ensureActiveSession(): Promise<OsceSession | null> {
@@ -2790,39 +2911,38 @@ function HomeContent() {
       return;
     }
 
-    const requestTimestamp = Date.now();
-    const optimisticQuestionId = `optimistic-student-${requestTimestamp}`;
-    const pendingPatientReplyId = `pending-patient-${requestTimestamp}`;
     setIsSending(true);
     setErrorText(null);
-    setInputValue("");
-    setOptimisticHistoryMessage({
-      id: optimisticQuestionId,
-      speaker: "student",
-      label: "学生",
-      text: message,
-    });
-    setPendingPatientMessage({
-      id: pendingPatientReplyId,
-      speaker: "patient",
-      label: "标准化病人",
-      text: "",
-      isPending: true,
-    });
-    setStatusText("正在处理问诊");
+    let pendingPatientReplyId: string | null = null;
 
     try {
       const activeSession = await ensureActiveSession();
       if (!activeSession) {
-        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         return;
       }
       if (isCompletedOsceSession(activeSession)) {
-        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         setErrorText("训练已结束，请查看报告。");
         setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
+
+      const optimisticQuestionId = createClientChatMessageId("optimistic-student");
+      pendingPatientReplyId = createClientChatMessageId("pending-patient");
+      setInputValue("");
+      setOptimisticHistoryMessage({
+        id: optimisticQuestionId,
+        speaker: "student",
+        label: "学生",
+        text: message,
+      });
+      setPendingPatientMessage({
+        id: pendingPatientReplyId,
+        speaker: "patient",
+        label: "标准化病人",
+        text: "",
+        isPending: true,
+      });
+      setStatusText("正在处理问诊");
 
       const updatedSession = await sendHistoryMessage(activeSession.session_id, message);
       const replyText = updatedSession.reply ?? "";
@@ -2832,7 +2952,7 @@ function HomeContent() {
         setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         setSession(updatedSession);
         setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
-        setStatusText(`已收到${replyStatusLabel}：${updatedSession.current_intent ?? "未识别意图"}`);
+        setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
         return;
       }
       setPendingPatientMessage((currentMessage) =>
@@ -2848,11 +2968,13 @@ function HomeContent() {
       setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
       setStatusText(`正在显示${replyStatusLabel}...`);
       await animatePendingPatientReply(pendingPatientReplyId, updatedSession.reply ?? "");
-      setStatusText(`已收到${replyStatusLabel}：${updatedSession.current_intent ?? "未识别意图"}`);
+      setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
     } catch (error) {
-      setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
+      if (pendingPatientReplyId) {
+        setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
+      }
       setErrorText(error instanceof Error ? error.message : "发送问诊失败。");
-      setStatusText("问诊发送失败，请确认后端仍在运行。");
+      setStatusText("问诊处理失败，请查看错误详情。");
     } finally {
       setIsSending(false);
     }
@@ -3035,11 +3157,25 @@ function HomeContent() {
       }
 
       const submittedSession = await submitDiagnosis(activeSession.session_id, diagnosis, reasoning);
-      const report = await getSessionReport(submittedSession.session_id);
-      const updatedSession = await getSession(submittedSession.session_id);
-      setSession(updatedSession);
-      setFeedbackReport(report);
-      setStatusText(`已提交诊断并生成评分报告：${report.total_score} 分。`);
+      setSession(submittedSession);
+      setStatusText("诊断已提交，正在生成评分报告...");
+      try {
+        const report = await getSessionReport(submittedSession.session_id);
+        const updatedSession = await getSession(submittedSession.session_id);
+        setSession(updatedSession);
+        setFeedbackReport(report);
+        setStatusText(`已提交诊断并生成评分报告：${report.total_score} 分。`);
+      } catch (reportError) {
+        try {
+          const updatedSession = await getSession(submittedSession.session_id);
+          setSession(updatedSession);
+        } catch {
+          setSession(submittedSession);
+        }
+        const reportMessage = reportError instanceof Error ? reportError.message : "报告暂时不可用。";
+        setErrorText(`诊断已提交，但报告暂时未取回：${reportMessage}`);
+        setStatusText("诊断已提交；评分报告暂时未取回，可稍后从训练记录打开。");
+      }
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "提交诊断或获取报告失败。");
       setStatusText("诊断提交失败，请确认后端仍在运行。");
@@ -3080,12 +3216,22 @@ function HomeContent() {
               )}
             </div>
 
-            <Link
-              className="mx-auto flex w-fit items-center justify-center rounded-md border border-border bg-muted/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent"
-              href="/cases"
-            >
-              选择病例
-            </Link>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Link
+                className="flex w-fit items-center justify-center rounded-md border border-border bg-muted/80 px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent"
+                href="/cases"
+              >
+                选择病例
+              </Link>
+              <button
+                className="flex w-fit items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating}
+                onClick={() => void handleStartNewSession()}
+                type="button"
+              >
+                开启新会话
+              </button>
+            </div>
 
             <div className="space-y-2">
               {workflowStepDefinitions.map((step, index) => (
@@ -3735,18 +3881,16 @@ function HomeContent() {
               >
                 训练入口
               </button>
-              {isStudentRuntimeApiConfigEnabled ? (
-                <button
-                  className={osceDockButtonActionClass}
-                  onClick={() => {
-                    closeOsceDock();
-                    setIsApiConfigHelpOpen(true);
-                  }}
-                  type="button"
-                >
-                  API 配置
-                </button>
-              ) : null}
+              <button
+                className={osceDockButtonActionClass}
+                onClick={() => {
+                  closeOsceDock();
+                  setIsApiConfigHelpOpen(true);
+                }}
+                type="button"
+              >
+                API 配置
+              </button>
               <Link className={osceDockActionClass} href="/safety" onClick={closeOsceDock}>
                 安全声明
               </Link>
@@ -3927,13 +4071,18 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
-      {isApiConfigHelpOpen && isStudentRuntimeApiConfigEnabled ? (
+      {isApiConfigHelpOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsApiConfigHelpOpen(false)}>
           <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">系统与配置</p>
                 <h2 className="mt-1 text-base font-semibold">API 配置</h2>
+                {!isStudentApiConfigEditable ? (
+                  <p className="mt-2 rounded-lg border border-border bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    {SERVER_MANAGED_API_CONFIG_MESSAGE}
+                  </p>
+                ) : null}
               </div>
               <button
                 aria-label="关闭 API 配置说明"
@@ -3956,6 +4105,7 @@ function HomeContent() {
                         className={`rounded-lg border px-3 py-2 text-center text-sm font-medium whitespace-nowrap transition ${
                           isSelectedProvider ? "border-brand bg-brand text-white" : "border-border bg-muted text-foreground hover:bg-accent"
                         }`}
+                        disabled={!isStudentApiConfigEditable}
                         key={providerOption.id}
                         onClick={() => handleStudentApiProviderChange(providerOption.id)}
                         type="button"
@@ -3976,7 +4126,7 @@ function HomeContent() {
                   <input
                     autoComplete="off"
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
-                    disabled={studentApiConfig.provider === "vertex_gemini_adc"}
+                    disabled={!isStudentApiConfigEditable || studentApiConfig.provider === "vertex_gemini_adc"}
                     id="student-api-key-input"
                     onChange={(event) => {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, apiKey: event.target.value }));
@@ -4002,6 +4152,7 @@ function HomeContent() {
                   <span>模型</span>
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    disabled={!isStudentApiConfigEditable}
                     id="student-api-model-input"
                     onChange={(event) => {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, model: event.target.value }));
@@ -4015,6 +4166,7 @@ function HomeContent() {
                   <span>{apiConfigBaseUrlLabel}</span>
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    disabled={!isStudentApiConfigEditable}
                     id="student-api-base-url-input"
                     onChange={(event) => {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, baseUrl: event.target.value }));
@@ -4028,6 +4180,7 @@ function HomeContent() {
                   <span>代理</span>
                   <input
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    disabled={!isStudentApiConfigEditable}
                     id="student-api-proxy-url-input"
                     onChange={(event) => {
                       setStudentApiConfig((currentConfig) => ({ ...currentConfig, proxyUrl: event.target.value }));
@@ -4045,15 +4198,14 @@ function HomeContent() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isApplyingStudentApiConfig}
+                  disabled={!isStudentApiConfigEditable || isApplyingStudentApiConfig}
                   onClick={handleSaveStudentApiConfig}
                   type="button"
                 >
                   保存配置
                 </button>
-                <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
+                <button className="rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60" disabled={!isStudentApiConfigEditable || isTestingStudentApiConfig} onClick={() => void handleTestStudentApiConfig()} type="button">{isTestingStudentApiConfig ? "测试中" : "测试连通性"}</button>
               </div>
-              <p className="text-xs leading-5 text-muted-foreground">OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端，可用于标准化病人、llm_rubric 和 Skill 候选文案；规则评分和病例标准答案仍由后端确定性执行。</p>
             </div>
           </div>
         </div>
@@ -4065,12 +4217,12 @@ function HomeContent() {
           <section className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">临境 OSCE 智能体（TraceOSCE）</p>
-              <h2 className="mt-2 text-xl font-semibold">登录 / 注册</h2>
+              <h2 className="mt-2 text-xl font-semibold">{isAccountRegistrationEnabled ? "登录 / 注册" : "登录"}</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 {isCheckingAuth ? "正在读取登录状态..." : "登录后训练记录、报告和后续会话管理会逐步绑定到当前账号。"}
               </p>
             </div>
-            <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-muted p-1">
+            <div className={`mt-5 grid gap-2 rounded-xl bg-muted p-1 ${isAccountRegistrationEnabled ? "grid-cols-2" : "grid-cols-1"}`}>
               <button
                 className={`rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition ${
                   authMode === "login" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
@@ -4080,15 +4232,17 @@ function HomeContent() {
               >
                 登录
               </button>
-              <button
-                className={`rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition ${
-                  authMode === "register" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => setAuthMode("register")}
-                type="button"
-              >
-                注册
-              </button>
+              {isAccountRegistrationEnabled ? (
+                <button
+                  className={`rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition ${
+                    authMode === "register" ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setAuthMode("register")}
+                  type="button"
+                >
+                  注册
+                </button>
+              ) : null}
             </div>
             <form className="mt-5 space-y-4" onSubmit={handleAuthSubmit}>
               <div className="space-y-2">
@@ -4110,7 +4264,7 @@ function HomeContent() {
                   密码
                 </label>
                 <input
-                  autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                  autoComplete={authMode === "login" || !isAccountRegistrationEnabled ? "current-password" : "new-password"}
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                   id="auth-password-input"
                   onChange={(event) => setAuthPassword(event.target.value)}
@@ -4119,7 +4273,7 @@ function HomeContent() {
                   value={authPassword}
                 />
               </div>
-              {authMode === "register" ? (
+              {isAccountRegistrationEnabled && authMode === "register" ? (
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="auth-display-name-input">
                     显示名称
@@ -4140,7 +4294,7 @@ function HomeContent() {
                 className="w-full rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isCheckingAuth || isSubmittingAuth || !authEmail.trim() || !authPassword}
                 type="submit"
-              >{isSubmittingAuth ? "处理中" : authMode === "login" ? "登录" : "注册"}</button>
+              >{isSubmittingAuth ? "处理中" : authMode === "login" || !isAccountRegistrationEnabled ? "登录" : "注册"}</button>
             </form>
           </section>
         </div>

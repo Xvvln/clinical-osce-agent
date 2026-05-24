@@ -36,6 +36,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert payload["runtime_config"]["active"] is False
     assert payload["runtime_config"]["write_supported"] is False
     assert payload["policy"]["demo_admin_effective_enabled"] is False
+    assert payload["policy"]["account_registration_supported"] is False
 
     issue_codes = {issue["code"] for issue in payload["issues"]}
     assert {
@@ -51,7 +52,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert providers["openai_compatible"]["missing_env"] == ["OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"]
     assert providers["vertex_rubric_scorer"]["missing_env"] == ["OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"]
     assert providers["chroma_retrieval"]["missing_env"] == [
-        "Vertex embedding 配置",
+        "向量模型配置",
         "CHROMA_PERSIST_DIRECTORY",
         "OSCE_CHROMA_COLLECTION",
     ]
@@ -70,6 +71,32 @@ def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -
         )
 
     assert response.status_code == 401
+
+
+def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gemini_env(monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin-demo@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "configured")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setenv("OSCE_VERTEX_ENABLED", "false")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
+    monkeypatch.delenv("OSCE_GEMINI_PATIENT_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/health/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    issue_codes = {issue["code"] for issue in payload["issues"]}
+    demo_issue = next(issue for issue in payload["issues"] if issue["code"] == "demo_admin_enabled_in_production")
+    assert payload["overall_status"] == "ok"
+    assert "gemini_missing_env" not in issue_codes
+    assert demo_issue["severity"] == "warning"
 
 
 def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch) -> None:
@@ -111,10 +138,19 @@ def test_compose_health_path_remains_valid() -> None:
     api_healthcheck = api_service["healthcheck"]["test"]
 
     assert any("http://127.0.0.1:8000/health" in str(part) for part in api_healthcheck)
-    assert api_service["environment"]["CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-demo"
-    assert api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "true"
-    assert web_service["build"]["args"]["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-demo"
-    assert web_service["environment"]["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-demo"
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEPLOYMENT_MODE"]
+        == "${CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
+    )
+    assert api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "${CLINICAL_OSCE_DEMO_ADMIN_ENABLED:-true}"
+    assert (
+        web_service["build"]["args"]["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"]
+        == "${NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
+    )
+    assert (
+        web_service["environment"]["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"]
+        == "${NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
+    )
     with TestClient(main.app) as client:
         response = client.get("/health")
 

@@ -30,17 +30,21 @@ Thumbs.db
 
 # Local assistant and private correspondence
 .claude/
+.codex-runtime/
 .playwright-mcp/
 CLAUDE.md
 goal.md
+xwh.pem
 *.eml
 
 # Local references and raw datasets
 references/
 data/raw/
+data/processed/
 
 # Runtime artifacts
 logs/
+output/
 *.log
 *.sqlite3
 *.db

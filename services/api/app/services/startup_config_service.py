@@ -11,6 +11,7 @@ from app.services.deployment_config import (
     is_demo_admin_effectively_enabled,
     is_known_deployment_mode,
     is_production_deployment_mode,
+    is_account_registration_supported,
     is_runtime_model_config_write_supported,
 )
 from app.services.model_config_service import build_admin_model_config
@@ -44,6 +45,7 @@ def build_startup_config_self_check() -> dict[str, Any]:
         "policy": {
             "demo_admin_effective_enabled": is_demo_admin_effectively_enabled(mode),
             "runtime_write_supported": is_runtime_model_config_write_supported(mode),
+            "account_registration_supported": is_account_registration_supported(mode),
             "configuration_source": "environment_only" if production else "environment_or_runtime_memory",
         },
         "providers": model_config["providers"],
@@ -79,12 +81,15 @@ def _build_startup_config_issues(
         issues.append(
             _issue(
                 code="demo_admin_enabled_in_production",
-                message=f"{DEMO_ADMIN_ENABLED_ENV_NAME}=true is not suitable for production deployment modes.",
+                severity="warning",
+                message=f"{DEMO_ADMIN_ENABLED_ENV_NAME}=true is intended only for controlled demo deployments.",
                 missing_env=[],
             )
         )
 
     for provider in providers:
+        if not provider.get("enabled"):
+            continue
         missing_env = [str(name) for name in provider.get("missing_env", [])]
         if not missing_env:
             continue
@@ -115,13 +120,14 @@ def _provider_issue_code(provider_id: str) -> str:
 def _issue(
     *,
     code: str,
+    severity: str = "error",
     message: str,
     missing_env: list[str],
     provider_id: str = "",
 ) -> dict[str, Any]:
     return {
         "code": code,
-        "severity": "error",
+        "severity": severity,
         "message": message,
         "provider_id": provider_id,
         "missing_env": missing_env,

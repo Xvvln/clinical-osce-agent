@@ -839,6 +839,29 @@ def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monke
     assert manifest["manifest_path"].endswith("retrieval_index_manifest.json")
 
 
+def test_admin_model_config_reports_local_embedding_and_chroma(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_EMBEDDING_ENABLED", raising=False)
+    monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+    monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_DEVICE", "cpu")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/model-config")
+
+    assert response.status_code == 200
+    providers = {provider["provider_id"]: provider for provider in response.json()["providers"]}
+    assert providers["local_embedding_retrieval"]["enabled"] is True
+    assert providers["local_embedding_retrieval"]["configured"] is True
+    assert providers["local_embedding_retrieval"]["model"] == "BAAI/bge-small-zh-v1.5"
+    assert providers["local_embedding_retrieval"]["device"] == "cpu"
+    assert providers["local_embedding_retrieval"]["integration_status"] == "wired_optional"
+    assert providers["chroma_retrieval"]["enabled"] is True
+    assert providers["chroma_retrieval"]["configured"] is True
+    assert providers["chroma_retrieval"]["index_manifest"]["embedding_model"] == "BAAI/bge-small-zh-v1.5"
+
+
 def test_admin_model_config_does_not_merge_account_runtime_vertex_gemini_adc(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     runtime_model_config_store.clear()
@@ -3212,7 +3235,7 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "skill_id": "skill_reasoning_core",
         "source_candidate_id": "skill_candidate_reasoning_core",
         "trigger_item_id": "reasoning_core",
-        "trigger_item_ids": [],
+        "trigger_item_ids": ["reasoning_core"],
         "case_ids": [],
         "skill_type": "reasoning_bridge",
         "stage_scope": ["case_intro"],
@@ -3220,7 +3243,7 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "applies_when": {
             "case_ids": [],
             "stage_scope": ["case_intro"],
-            "trigger_item_ids": [],
+            "trigger_item_ids": ["reasoning_core"],
             "current_missing_evidence": [],
             "min_support_count": 2,
         },
@@ -3235,7 +3258,7 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "scope_label": "全局 Skill",
         "teaching_action_plan": expected_training_skill_action_plan(
             ["case_intro"],
-            [],
+            ["reasoning_core"],
             "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
         ),
         "prohibited_content_policy": expected_training_skill_policy(),

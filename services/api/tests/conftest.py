@@ -22,6 +22,11 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_OPENAI_BASE_URL",
         "OSCE_OPENAI_MODEL",
         "OSCE_OPENAI_PROXY_URL",
+        "OSCE_OPENAI_FALLBACK_ENABLED",
+        "OSCE_OPENAI_FALLBACK_API_KEY",
+        "OSCE_OPENAI_FALLBACK_BASE_URL",
+        "OSCE_OPENAI_FALLBACK_MODEL",
+        "OSCE_OPENAI_FALLBACK_PROXY_URL",
         "OSCE_ANTHROPIC_ENABLED",
         "OSCE_ANTHROPIC_API_KEY",
         "OSCE_ANTHROPIC_BASE_URL",
@@ -52,6 +57,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         monkeypatch.delenv(env_name, raising=False)
     for env_name in [
         "OSCE_OPENAI_API_KEY",
+        "OSCE_OPENAI_FALLBACK_API_KEY",
         "OSCE_ANTHROPIC_API_KEY",
         "OSCE_GEMINI_PATIENT_API_KEY",
         "OSCE_VERTEX_API_KEY",
@@ -60,6 +66,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     ]:
         monkeypatch.setenv(env_name, "")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "false")
     monkeypatch.setenv("OSCE_ANTHROPIC_ENABLED", "false")
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "false")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")

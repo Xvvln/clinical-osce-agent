@@ -32,9 +32,41 @@ class OpenAICompatibleSettings(BaseSettings):
         return bool(self.enabled and self.api_key and self.model)
 
 
+class OpenAICompatibleFallbackSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="OSCE_OPENAI_FALLBACK_",
+        env_file=(PROJECT_ROOT / ".env", ".env"),
+        extra="ignore",
+    )
+
+    enabled: bool = False
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    proxy_url: str = ""
+    timeout_seconds: float = 30.0
+    temperature: float = 0.2
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.enabled and self.api_key and self.base_url and self.model)
+
+    def to_openai_settings(self) -> OpenAICompatibleSettings:
+        return OpenAICompatibleSettings(
+            enabled=True,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            proxy_url=self.proxy_url,
+            timeout_seconds=self.timeout_seconds,
+            temperature=self.temperature,
+        )
+
+
 class OpenAICompatibleChatClient:
     def __init__(self, settings: OpenAICompatibleSettings) -> None:
         self._settings = settings
+        self._fallback_settings = OpenAICompatibleFallbackSettings()
 
     def complete_json(
         self,
@@ -44,35 +76,62 @@ class OpenAICompatibleChatClient:
         response_model: type[ResponseModelT],
         temperature: float | None = None,
     ) -> ResponseModelT:
-        response = self._post_chat_completion(
-            {
-                "model": self._settings.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                "temperature": self._settings.temperature if temperature is None else temperature,
-                "response_format": {"type": "json_object"},
+        request_payload = {
+            "model": self._settings.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            "temperature": self._settings.temperature if temperature is None else temperature,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            return self._complete_json_with_settings(
+                settings=self._settings,
+                payload=request_payload,
+                response_model=response_model,
+            )
+        except Exception:
+            if not self._fallback_settings.is_configured:
+                raise
+            fallback_settings = self._fallback_settings.to_openai_settings()
+            fallback_payload = {
+                **request_payload,
+                "model": fallback_settings.model,
+                "temperature": fallback_settings.temperature if temperature is None else temperature,
             }
-        )
+            return self._complete_json_with_settings(
+                settings=fallback_settings,
+                payload=fallback_payload,
+                response_model=response_model,
+            )
+
+    def _complete_json_with_settings(
+        self,
+        *,
+        settings: OpenAICompatibleSettings,
+        payload: dict[str, Any],
+        response_model: type[ResponseModelT],
+    ) -> ResponseModelT:
+        response = self._post_chat_completion(payload, settings=settings)
         content = _extract_message_content(response.json())
         return _validate_response_content(content, response_model=response_model)
 
-    def _post_chat_completion(self, payload: dict[str, Any]) -> httpx.Response:
+    def _post_chat_completion(self, payload: dict[str, Any], *, settings: OpenAICompatibleSettings) -> httpx.Response:
         client_options: dict[str, Any] = {
-            "timeout": self._settings.timeout_seconds,
+            "timeout": settings.timeout_seconds,
             "follow_redirects": True,
             "trust_env": False,
         }
-        if _should_use_proxy(self._settings.proxy_url):
-            client_options["proxy"] = self._settings.proxy_url
+        if _should_use_proxy(settings.proxy_url):
+            client_options["proxy"] = settings.proxy_url
 
         headers = {"Content-Type": "application/json"}
-        if self._settings.api_key:
-            headers["Authorization"] = f"Bearer {self._settings.api_key}"
+        if settings.api_key:
+            headers["Authorization"] = f"Bearer {settings.api_key}"
 
         with httpx.Client(**client_options) as client:
-            response = client.post(_chat_completions_url(self._settings.base_url), headers=headers, json=payload)
+            response = client.post(_chat_completions_url(settings.base_url), headers=headers, json=payload)
         response.raise_for_status()
         return response
 
@@ -180,5 +239,6 @@ def _single_text_alias_keys(field_name: str) -> list[str]:
 
 __all__ = [
     "OpenAICompatibleChatClient",
+    "OpenAICompatibleFallbackSettings",
     "OpenAICompatibleSettings",
 ]

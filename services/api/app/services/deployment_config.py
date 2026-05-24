@@ -26,6 +26,10 @@ def is_runtime_model_config_write_supported(mode: str | None = None) -> bool:
     return not is_production_deployment_mode(mode)
 
 
+def is_account_registration_supported(mode: str | None = None) -> bool:
+    return not is_production_deployment_mode(mode)
+
+
 def is_demo_admin_effectively_enabled(mode: str | None = None) -> bool:
     configured_value = os.environ.get(DEMO_ADMIN_ENABLED_ENV_NAME)
     if configured_value is None:
@@ -44,6 +48,7 @@ __all__ = [
     "DEPLOYMENT_MODE_ENV_NAME",
     "PRODUCTION_DEPLOYMENT_MODES",
     "get_deployment_mode",
+    "is_account_registration_supported",
     "is_demo_admin_effectively_enabled",
     "is_known_deployment_mode",
     "is_production_deployment_mode",

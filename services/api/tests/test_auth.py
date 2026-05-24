@@ -42,6 +42,20 @@ def test_register_sets_login_cookie_and_me_returns_current_user(client: TestClie
     assert me_response.json()["user"] == payload["user"]
 
 
+def test_register_is_disabled_in_production_deployment_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+
+    response = client.post(
+        "/api/auth/register",
+        json={"email": unique_email(), "password": "safe-password-123", "display_name": "学生甲"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "服务器演示模式不允许创建新账号，请使用预置学生或管理员账号登录。"
+    }
+
+
 def test_login_reuses_existing_user_and_logout_clears_session(client: TestClient) -> None:
     email = unique_email()
     password = "safe-password-456"

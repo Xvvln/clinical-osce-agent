@@ -71,6 +71,8 @@ type BackendAuxiliaryTestOption = Readonly<{
 
 type BackendSession = Readonly<{
   session_id: string;
+  case_id?: string;
+  case_title?: string;
   messages: readonly BackendMessage[];
   requested_exams: readonly string[];
   requested_tests: readonly string[];
@@ -84,11 +86,16 @@ type BackendProcedureResult = Readonly<{
   result: string;
 }>;
 
+type RequestJsonOptions = Readonly<{
+  timeoutMs?: number;
+}>;
+
 type ReportSectionId =
   | "overview"
+  | "reflection"
+  | "personal_skill"
   | "dimensions"
   | "feedback"
-  | "skill"
   | "recommendations"
   | "conversation"
   | "evidence";
@@ -122,15 +129,17 @@ const REPORT_BRAND_SCORE_TRACK_COLOR = "color-mix(in srgb, var(--brand) 12%, tra
 const REPORT_BRAND_GRID_OPACITY = 0.16;
 const REPORT_BRAND_FILL_OPACITY = 0.22;
 const REPORT_SECTION_ACTIVATION_OFFSET_PX = 96;
+const REPORT_REQUEST_TIMEOUT_MS = 45_000;
 const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 
 const reportSections: readonly ReportSection[] = [
   { id: "overview", label: "总览", eyebrow: "分数与上下文", targetId: "report-overview" },
+  { id: "reflection", label: "复盘", eyebrow: "教师点评", targetId: "report-reflection" },
+  { id: "personal_skill", label: "Skill", eyebrow: "个人策略", targetId: "report-personal-skill" },
   { id: "dimensions", label: "图表", eyebrow: "rubric 维度", targetId: "report-dimensions" },
   { id: "feedback", label: "结论", eyebrow: "本轮问题", targetId: "report-feedback" },
-  { id: "skill", label: "复盘", eyebrow: "老师式点评", targetId: "report-skill" },
-  { id: "recommendations", label: "训练", eyebrow: "推荐病例", targetId: "report-recommendations" },
   { id: "conversation", label: "对话", eyebrow: "训练过程", targetId: "report-conversation" },
+  { id: "recommendations", label: "推荐", eyebrow: "下一病例", targetId: "report-recommendations" },
   { id: "evidence", label: "依据", eyebrow: "折叠来源", targetId: "report-evidence" },
 ];
 
@@ -587,20 +596,65 @@ function buildBackendProcedureResults(session: BackendSession | null): readonly 
   return [...examResults, ...testResults];
 }
 
-async function requestJson<TResponse>(path: string): Promise<TResponse> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
+async function readResponseErrorMessage(response: Response): Promise<string> {
+  const responseText = await response.text();
+  if (!responseText) {
+    return response.statusText || "请求失败。";
   }
 
-  return (await response.json()) as TResponse;
+  try {
+    const parsedBody = JSON.parse(responseText) as { detail?: unknown; message?: unknown; error?: unknown };
+    const detail = parsedBody.detail ?? parsedBody.message ?? parsedBody.error;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail.trim();
+    }
+  } catch {
+    return responseText;
+  }
+
+  return responseText;
+}
+
+function formatRequestErrorMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "报告读取超时，请稍后从训练记录重新打开。";
+  }
+
+  const rawMessage = error instanceof Error ? error.message : "读取评分报告失败。";
+  if (/模型服务调用失败|HTTP 429|RESOURCE_EXHAUSTED|quota/i.test(rawMessage)) {
+    return `${rawMessage}\n\n模型服务暂时不可用或配额不足，本次报告可以稍后重新打开读取。`;
+  }
+
+  return rawMessage;
+}
+
+async function requestJson<TResponse>(path: string, options: RequestJsonOptions = {}): Promise<TResponse> {
+  const controller = options.timeoutMs ? new AbortController() : null;
+  const timeoutId = controller && options.timeoutMs
+    ? window.setTimeout(() => controller.abort(), options.timeoutMs)
+    : null;
+
+  try {
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: controller?.signal,
+    });
+
+    if (!response.ok) {
+      const errorMessage = await readResponseErrorMessage(response);
+      throw new Error(`HTTP ${response.status}：${errorMessage}`);
+    }
+
+    return (await response.json()) as TResponse;
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
 }
 
 function ReportSectionNavigator({
@@ -699,7 +753,7 @@ export default function ReportPage() {
     async function loadReport() {
       try {
         const [nextReport, nextSession] = await Promise.all([
-          requestJson<FeedbackReportPayload>(`/api/me/sessions/${nextSessionId}/report`),
+          requestJson<FeedbackReportPayload>(`/api/me/sessions/${nextSessionId}/report`, { timeoutMs: REPORT_REQUEST_TIMEOUT_MS }),
           requestJson<BackendSession>(`/api/me/sessions/${nextSessionId}`),
         ]);
         if (!isMounted) {
@@ -716,7 +770,7 @@ export default function ReportPage() {
         }
 
         setStatusText("评分报告读取失败，请确认后端仍在运行且会话已经提交诊断。");
-        setErrorText(error instanceof Error ? error.message : "读取评分报告失败。");
+        setErrorText(formatRequestErrorMessage(error));
       }
     }
 
@@ -798,7 +852,7 @@ export default function ReportPage() {
   const backendProcedureResults = useMemo(() => buildBackendProcedureResults(backendSession), [backendSession]);
   const totalPercent = report ? getScorePercent(report.total_score, 100) : 0;
   const scoreBackground = `conic-gradient(${REPORT_BRAND_COLOR} ${totalPercent * 3.6}deg, ${REPORT_BRAND_SCORE_TRACK_COLOR} 0deg)`;
-  const workbenchHref = sessionId ? `/?session_id=${sessionId}` : "/";
+  const workbenchHref = "/";
   const reportLayoutClassName = ["grid gap-4 transition-[grid-template-columns] duration-200", isReportNavigatorCollapsed ? "xl:grid-cols-[76px_minmax(0,1fr)]" : "xl:grid-cols-[240px_minmax(0,1fr)]"].join(" ");
 
   return (
@@ -878,7 +932,7 @@ export default function ReportPage() {
                     </div>
                     <div>
                       <dt className="text-xs text-muted-foreground">病例</dt>
-                      <dd className="mt-1 font-medium">{report?.case_id ?? "待读取"}</dd>
+                      <dd className="mt-1 font-medium">{backendSession?.case_title ?? report?.case_id ?? "待读取"}</dd>
                     </div>
                     <div>
                       <dt className="text-xs text-muted-foreground">使用边界</dt>
@@ -896,20 +950,22 @@ export default function ReportPage() {
               </div>
             </section>
             {errorText ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">{errorText}</div>
-            ) : null}
-            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
-
-            {report ? (
-              <div className="grid gap-4 xl:grid-cols-2">
-                <StudentReportSummary report={report} sectionId="report-feedback" />
-                <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
-                <CaseRecommendations items={report.knowledge_recommendations} />
-                <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700" role="alert">
+                <p className="font-semibold">报告读取失败</p>
+                <p className="mt-2 whitespace-pre-line">{errorText}</p>
               </div>
             ) : null}
+            {report ? (
+              <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
+            ) : null}
+            {report ? (
+              <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
+            ) : null}
+            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
+            {report ? <StudentReportSummary report={report} sectionId="report-feedback" /> : null}
 
             <ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} />
+            {report ? <CaseRecommendations items={report.knowledge_recommendations} /> : null}
             {report ? (
               <TraceabilityDetailsSection
                 explanationItems={report.explanation_source_items}
@@ -1219,35 +1275,108 @@ function AiReflectionReviewSection({
   review: AiReflectionReview;
   trainingPointLabelResolver: (itemId: string) => string;
 }>) {
+  const overallComment = review.overall_comment || review.summary;
+  const strengthsReview = review.strengths_review.length > 0 ? review.strengths_review : [];
+  const majorIssues = review.major_issues;
+  const nextPracticePlan = review.next_practice_plan.length > 0 ? review.next_practice_plan : review.next_focus ? [review.next_focus] : [];
   return (
-    <section className="scroll-mt-6 rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2" id="report-skill">
+    <section className="scroll-mt-6 rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2" id="report-reflection">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className={sectionHeadingClassName}>教练复盘</h2>
+          <h2 className={sectionHeadingClassName}>教师复盘</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            基于本轮训练表现生成老师式解释，重点回答为什么要这样改、下一次怎么练。
+            围绕当前病例和本轮证据链生成老师式点评，重点回答问题在哪、为什么要补、下一轮怎么练。
           </p>
         </div>
         <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
           {getAiReflectionStatusLabel(review.status)}
         </span>
       </div>
-      <p className="mt-4 rounded-xl border border-border bg-muted/35 p-4 text-sm leading-6 text-foreground">{review.summary}</p>
-      {review.teacher_feedback || review.next_focus ? (
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-border bg-muted/25 p-3">
-            <h3 className="text-xs font-semibold">老师式点评</h3>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.teacher_feedback || "暂无点评。"}</p>
+      <div className="mt-4 rounded-xl border border-brand/15 bg-brand/5 p-4">
+        <h3 className="text-sm font-semibold text-foreground">总体判断</h3>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{overallComment}</p>
+      </div>
+      {strengthsReview.length > 0 ? (
+        <div className="mt-3 rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">本轮可以保留的做法</h3>
+          <ul className="mt-2 grid gap-2 text-sm leading-6 text-muted-foreground">
+            {strengthsReview.map((strength) => (
+              <li className="rounded-lg bg-background px-3 py-2" key={strength}>
+                {strength}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {majorIssues.length > 0 ? (
+        <div className="mt-3">
+          <h3 className="text-sm font-semibold text-foreground">老师指出的问题</h3>
+          <div className="mt-2 grid gap-3">
+            {majorIssues.map((issue) => (
+              <article className="rounded-xl border border-border bg-muted/20 p-4" key={issue.title}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <h4 className="text-base font-semibold text-foreground">{issue.title}</h4>
+                  {issue.linked_items.length > 0 ? (
+                    <span className="w-fit rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+                      {issue.linked_items.length} 个相关训练点
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">本轮表现</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{issue.observed_behavior}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">为什么重要</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{issue.why_it_matters}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">正确做法</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{issue.correct_approach}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">下一轮具体练法</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{issue.next_action}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
-          <div className="rounded-xl border border-border bg-muted/25 p-3">
-            <h3 className="text-xs font-semibold">下一轮聚焦</h3>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.next_focus || "暂无下一轮聚焦。"}</p>
+        </div>
+      ) : review.teacher_feedback ? (
+        <div className="mt-3 rounded-xl border border-border bg-muted/25 p-3">
+          <h3 className="text-sm font-semibold">教师点评</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.teacher_feedback}</p>
+        </div>
+      ) : null}
+      {review.reasoning_chain_review || nextPracticePlan.length > 0 ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          {review.reasoning_chain_review ? (
+            <div className="rounded-xl border border-border bg-muted/25 p-4">
+              <h3 className="text-sm font-semibold">推理链点评</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{review.reasoning_chain_review}</p>
+            </div>
+          ) : null}
+          <div className="rounded-xl border border-border bg-muted/25 p-4">
+            <h3 className="text-sm font-semibold">下一轮练习步骤</h3>
+            {nextPracticePlan.length > 0 ? (
+              <ol className="mt-2 grid gap-2 text-sm leading-6 text-muted-foreground">
+                {nextPracticePlan.map((item, index) => (
+                  <li className="rounded-lg bg-background px-3 py-2" key={`${item}-${index}`}>
+                    {index + 1}. {item}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">暂无下一轮练习步骤。</p>
+            )}
           </div>
         </div>
       ) : null}
       {review.mistake_patterns.length > 0 ? (
         <div className="mt-3">
-          <h3 className="text-xs font-semibold">错误模式</h3>
+          <h3 className="text-xs font-semibold">相关训练点</h3>
           <div className="mt-2 flex flex-wrap gap-2">
             {review.mistake_patterns.map((pattern) => (
               <span className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground" key={pattern}>
@@ -1257,12 +1386,13 @@ function AiReflectionReviewSection({
           </div>
         </div>
       ) : null}
+      {review.teacher_note ? <p className="mt-3 rounded-xl border border-border bg-muted/20 p-3 text-xs leading-5 text-muted-foreground">{review.teacher_note}</p> : null}
       <details className="mt-3 rounded-xl border border-border bg-muted/20 p-3">
         <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
           <div>
             <h3 className="text-xs font-semibold">复盘来源</h3>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              默认折叠，可展开查看 AI 复盘引用的结构化来源。
+              默认折叠，可展开查看教师复盘引用的结构化来源。
             </p>
           </div>
           <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
@@ -1281,7 +1411,7 @@ function AiReflectionReviewSection({
           </ul>
         ) : (
           <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
-            历史报告暂无 AI 复盘来源链。
+            历史报告暂无教师复盘来源链。
           </p>
         )}
       </details>
@@ -1299,12 +1429,12 @@ function PersonalTrainingSkillSection({
 }>) {
   const approvalDialogue = candidate.approval_dialogue ?? [];
   return (
-    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2">
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id="report-personal-skill">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className={sectionHeadingClassName}>个人训练 Skill</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            完整训练后生成个人级训练策略，后续同一学生的新 session 会被 Coach 用作针对性提示上下文。
+            完整训练后生成个人级训练策略，后续同一学生的新 session 会作为针对性提示上下文。
           </p>
         </div>
         <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">

@@ -4,6 +4,7 @@ import json
 import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -75,7 +76,7 @@ class OsceSessionStore:
                 "stage": row[2],
                 "created_at": row[3],
                 "updated_at": row[4],
-                **_session_completion_summary(row[5], row[2]),
+                **_session_completion_summary(row[5], row[2], row[1]),
             }
             for row in rows
         ]
@@ -98,7 +99,7 @@ class OsceSessionStore:
                 "stage": row[3],
                 "created_at": row[4],
                 "updated_at": row[5],
-                **_session_completion_summary(row[6], row[3]),
+                **_session_completion_summary(row[6], row[3], row[2]),
             }
             for row in rows
         ]
@@ -130,7 +131,7 @@ class OsceSessionStore:
 osce_session_store = OsceSessionStore()
 
 
-def _session_completion_summary(session_json: str, stage: str) -> dict[str, object]:
+def _session_completion_summary(session_json: str, stage: str, case_id: str) -> dict[str, object]:
     try:
         payload = json.loads(session_json)
     except json.JSONDecodeError:
@@ -140,6 +141,7 @@ def _session_completion_summary(session_json: str, stage: str) -> dict[str, obje
 
     final_submission = payload.get("final_submission")
     feedback_report = payload.get("feedback_report")
+    case_title = payload.get("case_title")
     has_report = bool(feedback_report)
     has_final_submission = bool(final_submission)
     stage_is_closed = stage in {"diagnosis_submission", "feedback"}
@@ -151,9 +153,24 @@ def _session_completion_summary(session_json: str, stage: str) -> dict[str, obje
     else:
         completion_status = "in_progress"
     return {
+        "case_title": case_title if isinstance(case_title, str) and case_title.strip() else _case_title_for_case_id(case_id),
         "is_completed": is_completed,
         "can_continue": not is_completed,
         "has_report": has_report,
         "completion_status": completion_status,
         "active_skill_context": payload.get("active_skill_context") if isinstance(payload.get("active_skill_context"), dict) else {},
     }
+
+
+@lru_cache(maxsize=128)
+def _case_title_for_case_id(case_id: str) -> str:
+    normalized_case_id = str(case_id or "").strip()
+    if not normalized_case_id:
+        return ""
+    case_path = ROOT_DIR / "data" / "cases" / f"{normalized_case_id}.json"
+    try:
+        payload = json.loads(case_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return normalized_case_id
+    title = payload.get("case_title") if isinstance(payload, dict) else None
+    return title if isinstance(title, str) and title.strip() else normalized_case_id

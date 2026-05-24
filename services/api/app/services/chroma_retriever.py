@@ -69,14 +69,25 @@ class ChromaRetrievalIndex:
         )
 
     def search(self, query: str, *, limit: int = 5) -> list[ChromaRetrievalResult]:
-        normalized_query = query.strip()
-        if not normalized_query or limit <= 0 or not self._documents:
-            return []
+        results_by_query = self.search_batch([query], limit=limit)
+        return results_by_query[0] if results_by_query else []
+
+    def search_batch(self, queries: Sequence[str], *, limit: int = 5) -> list[list[ChromaRetrievalResult]]:
+        normalized_queries = [str(query).strip() for query in queries]
+        results_by_query: list[list[ChromaRetrievalResult]] = [[] for _ in normalized_queries]
+        active_queries = [
+            (index, query)
+            for index, query in enumerate(normalized_queries)
+            if query
+        ]
+        if limit <= 0 or not self._documents or not active_queries:
+            return results_by_query
 
         self.ensure_indexed()
-        query_vectors = self._embedding_client.embed_texts([normalized_query], task_type="RETRIEVAL_QUERY")
-        if len(query_vectors) != 1:
-            raise ValueError("embedding client must return one query vector")
+        query_texts = [query for _, query in active_queries]
+        query_vectors = self._embedding_client.embed_texts(query_texts, task_type="RETRIEVAL_QUERY")
+        if len(query_vectors) != len(query_texts):
+            raise ValueError("embedding client must return one vector for each query")
 
         try:
             raw_results = self._query_collection(query_vectors, limit=limit)
@@ -86,26 +97,30 @@ class ChromaRetrievalIndex:
             self._reset_collection()
             self.ensure_indexed()
             raw_results = self._query_collection(query_vectors, limit=limit)
-        metadatas = raw_results.get("metadatas", [[]])[0]
-        distances = raw_results.get("distances", [[]])[0]
 
-        results: list[ChromaRetrievalResult] = []
-        for metadata, distance in zip(metadatas, distances):
-            if not metadata:
-                continue
-            score = _distance_to_score(float(distance))
-            if score <= 0:
-                continue
-            results.append(
-                ChromaRetrievalResult(
-                    reference=str(metadata.get("reference", "")),
-                    source_type=str(metadata.get("source_type", "")),
-                    title=str(metadata.get("title", "")),
-                    snippet=str(metadata.get("snippet", "")),
-                    score=score,
+        metadatas_by_query = raw_results.get("metadatas", [])
+        distances_by_query = raw_results.get("distances", [])
+        for result_index, (original_index, _) in enumerate(active_queries):
+            metadatas = metadatas_by_query[result_index] if result_index < len(metadatas_by_query) else []
+            distances = distances_by_query[result_index] if result_index < len(distances_by_query) else []
+            query_results: list[ChromaRetrievalResult] = []
+            for metadata, distance in zip(metadatas, distances):
+                if not metadata:
+                    continue
+                score = _distance_to_score(float(distance))
+                if score <= 0:
+                    continue
+                query_results.append(
+                    ChromaRetrievalResult(
+                        reference=str(metadata.get("reference", "")),
+                        source_type=str(metadata.get("source_type", "")),
+                        title=str(metadata.get("title", "")),
+                        snippet=str(metadata.get("snippet", "")),
+                        score=score,
+                    )
                 )
-            )
-        return results
+            results_by_query[original_index] = query_results
+        return results_by_query
 
     def ensure_indexed(self) -> None:
         if not self._documents:
@@ -177,6 +192,7 @@ def build_chroma_retrieval_index_from_environment(
     embedding_client: EmbeddingClient,
     documents: Sequence[ChromaSourceDocument],
     root_dir: Path,
+    embedding_model: str = "",
 ) -> ChromaRetrievalIndex | None:
     if not _chroma_enabled_from_environment():
         return None
@@ -190,7 +206,7 @@ def build_chroma_retrieval_index_from_environment(
         settings=ChromaRetrievalSettings(
             persist_directory=persist_directory,
             collection_name=collection_name,
-            embedding_model=_env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
+            embedding_model=embedding_model or _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
         ),
         embedding_client=embedding_client,
         documents=documents,

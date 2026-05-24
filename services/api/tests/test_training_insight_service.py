@@ -2,6 +2,49 @@ from app.services.training_event_store import TrainingEventStore
 from app.services.training_insight_service import TrainingInsightService
 
 
+class BatchOnlyTrainingEventStore:
+    def __init__(self, events_by_session: dict[str, list[dict[str, object]]]) -> None:
+        self.events_by_session = events_by_session
+        self.batch_calls: list[list[str]] = []
+
+    def list_events_for_sessions(self, session_ids: list[str]) -> dict[str, list[dict[str, object]]]:
+        self.batch_calls.append(session_ids)
+        return {session_id: self.events_by_session.get(session_id, []) for session_id in session_ids}
+
+    def list_session_events(self, session_id: str) -> list[dict[str, object]]:
+        raise AssertionError(f"insight summary should batch-load events, got {session_id}")
+
+
+def test_training_insight_service_batch_loads_events_for_large_admin_summaries() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_one": [
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "student_id": "student_demo",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "session_one_report",
+                        "total_score": 55,
+                        "missed_items": ["ht_location"],
+                        "knowledge_recommendations": [],
+                        "source_reference_items": [],
+                    },
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                }
+            ],
+            "session_two": [],
+        }
+    )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_one", "session_two"])
+
+    assert store.batch_calls == [["session_one", "session_two"]]
+    assert insights["session_count"] == 2
+    assert insights["report_count"] == 1
+
+
 def test_training_insight_service_summarizes_frequent_missed_items_from_report_events(tmp_path) -> None:
     database_path = tmp_path / "training_events.sqlite3"
     store = TrainingEventStore(database_path)

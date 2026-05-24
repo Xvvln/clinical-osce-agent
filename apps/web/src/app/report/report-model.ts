@@ -28,16 +28,32 @@ export type ExplanationSourceItem = Readonly<{
   source_references: readonly string[];
 }>;
 
+export type TeacherReflectionMajorIssue = Readonly<{
+  title: string;
+  observed_behavior: string;
+  why_it_matters: string;
+  correct_approach: string;
+  next_action: string;
+  linked_items: readonly string[];
+}>;
+
 export type AiReflectionReview = Readonly<{
   status: string;
   reason?: string;
   summary: string;
+  overall_comment: string;
+  strengths_review: readonly string[];
+  major_issues: readonly TeacherReflectionMajorIssue[];
+  reasoning_chain_review: string;
+  next_practice_plan: readonly string[];
+  teacher_note: string;
   mistake_patterns: readonly string[];
   teacher_feedback: string;
   next_focus: string;
   source_references: readonly string[];
   source_reference_items: readonly SourceReferenceItem[];
   generated_by?: string;
+  teaching_prompt_version?: string;
   safety_note?: string;
 }>;
 
@@ -78,7 +94,13 @@ export type PersonalTrainingSkillCandidate = Readonly<{
 export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
   status: "legacy_report",
   reason: "ai_reflection_not_recorded",
-  summary: "该历史报告生成时尚未记录 AI 复盘回顾。",
+  summary: "该历史报告生成时尚未记录教师复盘。",
+  overall_comment: "",
+  strengths_review: [],
+  major_issues: [],
+  reasoning_chain_review: "",
+  next_practice_plan: [],
+  teacher_note: "",
   mistake_patterns: [],
   teacher_feedback: "",
   next_focus: "",
@@ -202,6 +224,9 @@ function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiRe
   return {
     ...DEFAULT_AI_REFLECTION_REVIEW,
     ...review,
+    strengths_review: review?.strengths_review ?? [],
+    major_issues: review?.major_issues ?? [],
+    next_practice_plan: review?.next_practice_plan ?? [],
     mistake_patterns: review?.mistake_patterns ?? [],
     source_references: review?.source_references ?? [],
     source_reference_items: review?.source_reference_items ?? [],

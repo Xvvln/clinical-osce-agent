@@ -51,7 +51,8 @@ class OsceGraphState(TypedDict, total=False):
     session_id: str
     student_message: str
     keyword_intent: str
-    current_intent: str
+    keyword_intents: list[str]
+    current_intents: list[str]
     turn_analysis: dict[str, Any]
     reply: str
     report_requested: bool
@@ -100,7 +101,8 @@ def load_case_node(state: OsceGraphState) -> dict[str, str]:
 
 def input_router_node(state: OsceGraphState, turn_intent_agent: TurnIntentAgent) -> dict[str, Any]:
     case = _load_case(state["case_id"])
-    keyword_intent = _keyword_intent_for_message(state.get("student_message", ""))
+    keyword_intents = _keyword_intents_for_message(state.get("student_message", ""))
+    keyword_intent = keyword_intents[0] if keyword_intents else "unknown_history_intent"
     turn_analysis = normalize_turn_intent_response(
         turn_intent_agent(
             TurnIntentRequest(
@@ -110,19 +112,27 @@ def input_router_node(state: OsceGraphState, turn_intent_agent: TurnIntentAgent)
                 stage=state.get("stage") or "case_intro",
                 student_message=state.get("student_message", ""),
                 keyword_intent=keyword_intent,
+                keyword_intents=keyword_intents,
                 prior_messages=state.get("messages", []),
             )
         )
     )
     turn_analysis = _complete_unknown_turn_analysis(turn_analysis, state.get("student_message", ""))
+    turn_analysis = _merge_turn_analysis_with_keyword_intents(turn_analysis, keyword_intents)
     return {
         "keyword_intent": keyword_intent,
-        "current_intent": str(turn_analysis["current_intent"]),
+        "keyword_intents": keyword_intents,
+        "current_intents": list(turn_analysis.get("current_intents") or []),
         "turn_analysis": turn_analysis,
     }
 
 
 def _keyword_intent_for_message(message: str) -> str:
+    keyword_intents = _keyword_intents_for_message(message)
+    return keyword_intents[0] if keyword_intents else "unknown_history_intent"
+
+
+def _keyword_intents_for_message(message: str) -> list[str]:
     normalized = message.lower()
     intent_keywords = [
         ("ask_patient_gender", ["男的女的", "男还是女", "性别", "男生", "女生", "男孩", "女孩"]),
@@ -149,10 +159,11 @@ def _keyword_intent_for_message(message: str) -> str:
         ("ask_severity", ["多痛", "多疼", "痛不痛", "疼不疼"]),
         ("ask_past_medical_history", ["既往", "以前", "手术史"]),
     ]
+    matched_intents: list[str] = []
     for intent, keywords in intent_keywords:
-        if any(keyword in normalized for keyword in keywords):
-            return intent
-    return "unknown_history_intent"
+        if intent not in matched_intents and any(keyword in normalized for keyword in keywords):
+            matched_intents.append(intent)
+    return matched_intents
 
 
 def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
@@ -167,7 +178,7 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
         )
     return {
         "stage": "history_taking",
-        "current_intent": "unknown_history_intent",
+        "current_intents": [],
         "reply": UNKNOWN_HISTORY_REDIRECT_REPLY,
         "messages": messages,
         "asked_questions": list(state.get("asked_questions", [])),
@@ -178,31 +189,41 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
 
 def patient_response_node(state: OsceGraphState, patient_responder: PatientResponder, coach_agent: CoachAgent) -> dict[str, Any]:
     case = _load_case(state["case_id"])
-    intent = state.get("current_intent", "")
+    current_intents = _current_intents_from_state(state)
+    primary_intent = _primary_intent_from_current_intents(current_intents)
     turn_analysis = state.get("turn_analysis", {})
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
-    revealed_facts = list(state.get("revealed_facts", []))
+    previously_revealed_facts = list(state.get("revealed_facts", []))
+    revealed_facts = [*previously_revealed_facts]
     canonical_answer = _unknown_patient_context_answer(case, unknown_kind)
     revealed_fact_id: str | None = None
-    answerable_hidden_facts = _answerable_hidden_facts_for_intent(case, intent)
-    answerable_profile_fact = _answerable_patient_profile_fact_for_intent(case, intent)
+    answerable_hidden_facts = _answerable_hidden_facts_for_intents(case, current_intents)
+    answerable_profile_facts = _answerable_patient_profile_facts_for_intents(case, current_intents)
     if answerable_hidden_facts:
         revealed_fact_id = answerable_hidden_facts[0].fact_id
         for hidden_fact in answerable_hidden_facts:
             if hidden_fact.fact_id not in revealed_facts:
                 revealed_facts.append(hidden_fact.fact_id)
-        canonical_answer = "；".join(hidden_fact.canonical_answer for hidden_fact in answerable_hidden_facts)
-    elif answerable_profile_fact is not None:
-        canonical_answer = str(answerable_profile_fact["canonical_answer"])
-    answerable_fact_candidates = (
-        [_serialize_answerable_fact_candidate(case.case_id, hidden_fact) for hidden_fact in answerable_hidden_facts]
-        if answerable_hidden_facts
-        else [answerable_profile_fact] if answerable_profile_fact is not None else []
-    )
+    revealed_fact_ids = [hidden_fact.fact_id for hidden_fact in answerable_hidden_facts]
+    answer_parts = [
+        *[hidden_fact.canonical_answer for hidden_fact in answerable_hidden_facts],
+        *[str(profile_fact["canonical_answer"]) for profile_fact in answerable_profile_facts],
+    ]
+    if answer_parts:
+        canonical_answer = "；".join(answer_parts)
+    answerable_fact_candidates = [
+        *[_serialize_answerable_fact_candidate(case.case_id, hidden_fact) for hidden_fact in answerable_hidden_facts],
+        *answerable_profile_facts,
+    ]
+    answerable_fact_ids = [
+        str(candidate["fact_id"])
+        for candidate in answerable_fact_candidates
+        if isinstance(candidate, dict) and candidate.get("fact_id")
+    ]
     turn_policy = (
         "patient_profile_disclosure"
-        if answerable_profile_fact is not None and not answerable_hidden_facts
-        else _turn_policy_for_patient_response(intent, revealed_fact_id, unknown_kind=unknown_kind)
+        if answerable_profile_facts and not answerable_hidden_facts
+        else _turn_policy_for_patient_response(primary_intent, revealed_fact_id, unknown_kind=unknown_kind)
     )
 
     student_message = state.get("student_message", "")
@@ -212,24 +233,31 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             case_title=case.case_title,
             chief_complaint=case.chief_complaint,
             student_message=student_message,
-            current_intent=intent,
+            current_intents=current_intents,
             canonical_answer=canonical_answer,
             revealed_fact_id=revealed_fact_id,
+            revealed_fact_ids=revealed_facts,
             patient_private_context=_build_patient_private_context(case),
             answerable_fact_candidates=answerable_fact_candidates,
             forbidden_terms=_patient_forbidden_terms(case),
             forbidden_context=_build_patient_forbidden_context(case),
             prior_messages=state.get("messages", []),
+            dialogue_context=_build_patient_dialogue_context(
+                state,
+                student_message=student_message,
+                current_intents=current_intents,
+                answerable_fact_ids=answerable_fact_ids,
+                revealed_fact_ids=revealed_facts,
+            ),
             turn_policy=turn_policy,
             deterministic_hints=_deterministic_turn_hints(
                 state,
-                keyword_intent=state.get("keyword_intent", intent),
+                keyword_intent=state.get("keyword_intent", primary_intent),
+                keyword_intents=list(state.get("keyword_intents", [])),
+                current_intents=current_intents,
                 revealed_fact_id=revealed_fact_id,
-                answerable_fact_ids=[
-                    str(candidate["fact_id"])
-                    for candidate in answerable_fact_candidates
-                    if isinstance(candidate, dict) and candidate.get("fact_id")
-                ],
+                revealed_fact_ids=revealed_fact_ids,
+                answerable_fact_ids=answerable_fact_ids,
                 turn_policy=turn_policy,
             ),
         )
@@ -248,11 +276,12 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         student_message=student_message,
         reply=reply,
         reply_role="patient",
-        current_intent=intent,
+        current_intents=current_intents,
         turn_policy=turn_policy,
         turn_analysis=turn_analysis,
         agent_path=["input_router_node", "patient_response_node"],
         revealed_fact_id=revealed_fact_id,
+        revealed_fact_ids=revealed_fact_ids,
         safety_flags=list(state.get("safety_flags", [])),
     )
     messages, agent_turn_memory = _apply_passive_coach_review(
@@ -261,7 +290,8 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         coach_agent=coach_agent,
         student_message=student_message,
         patient_reply=reply,
-        current_intent=intent,
+        primary_intent=primary_intent,
+        current_intents=current_intents,
         revealed_fact_id=revealed_fact_id,
         messages=messages,
         agent_turn_memory=agent_turn_memory,
@@ -270,11 +300,11 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
 
     return {
         "stage": "history_taking",
-        "current_intent": intent,
+        "current_intents": current_intents,
         "reply": reply,
         "messages": messages,
         "asked_questions": _asked_questions_after_patient_turn(state, student_message, revealed_fact_id),
-        "intent_history": [*state.get("intent_history", []), intent],
+        "intent_history": [*state.get("intent_history", []), *(current_intents or [primary_intent])],
         "revealed_facts": revealed_facts,
         "agent_turn_memory": agent_turn_memory,
     }
@@ -403,27 +433,40 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         query=base_hint,
         forbidden_terms=forbidden_terms,
     )
-    hint = sanitize_coach_hint(
-        normalize_coach_response(
-            coach_agent(
-                CoachRequest(
-                    case_id=case.case_id,
-                    case_title=case.case_title,
-                    chief_complaint=case.chief_complaint,
-                    stage=state.get("stage", "case_intro"),
-                    prompt_kind="socratic_hint",
-                    base_hint=base_hint,
-                    prior_messages=state.get("messages", []),
-                    pedagogy_state=pedagogy_state,
-                    clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                    skill_context=selected_skill_context,
-                    retrieved_knowledge_context=retrieved_knowledge_context,
-                    forbidden_terms=[],
+    turn_analysis = _boundary_turn_analysis("socratic_hint", "学生请求教学提示。")
+    turn_policy = "teaching_hint"
+    agent_path = ["socratic_hint_node", "coach_agent"]
+    try:
+        hint = sanitize_coach_hint(
+            normalize_coach_response(
+                coach_agent(
+                    CoachRequest(
+                        case_id=case.case_id,
+                        case_title=case.case_title,
+                        chief_complaint=case.chief_complaint,
+                        stage=state.get("stage", "case_intro"),
+                        prompt_kind="socratic_hint",
+                        base_hint=base_hint,
+                        prior_messages=state.get("messages", []),
+                        pedagogy_state=pedagogy_state,
+                        clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
+                        skill_context=selected_skill_context,
+                        retrieved_knowledge_context=retrieved_knowledge_context,
+                        forbidden_terms=[],
+                    )
                 )
-            )
-        ).hint,
-        forbidden_terms,
-    )
+            ).hint,
+            forbidden_terms,
+        )
+    except Exception as exc:
+        hint = sanitize_coach_hint(base_hint, forbidden_terms)
+        turn_policy = "teaching_hint_unavailable"
+        agent_path = ["socratic_hint_node", "coach_agent_unavailable"]
+        turn_analysis = {
+            **turn_analysis,
+            "coach_unavailable": True,
+            "coach_error_type": exc.__class__.__name__,
+        }
     return {
         "stage": state.get("stage", "case_intro"),
         "hint": hint,
@@ -433,10 +476,10 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             student_message="请求提示",
             reply=hint,
             reply_role="coach",
-            current_intent="socratic_hint",
-            turn_policy="teaching_hint",
-            turn_analysis=_boundary_turn_analysis("socratic_hint", "学生请求教学提示。"),
-            agent_path=["socratic_hint_node", "coach_agent"],
+            current_intents=["socratic_hint"],
+            turn_policy=turn_policy,
+            turn_analysis=turn_analysis,
+            agent_path=agent_path,
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
             source_references=[item["reference"] for item in retrieved_knowledge_context],
@@ -453,7 +496,7 @@ def answer_request_redirect_node(state: OsceGraphState, coach_agent: CoachAgent)
     reply = _coach_reply_from_agent(
         state,
         coach_agent,
-        current_intent="answer_request_redirect",
+        primary_intent="answer_request_redirect",
         base_hint=ANSWER_REQUEST_REDIRECT_REPLY,
         turn_policy="answer_boundary_redirect",
         turn_analysis=turn_analysis,
@@ -469,7 +512,7 @@ def answer_request_redirect_node(state: OsceGraphState, coach_agent: CoachAgent)
         )
     return {
         "stage": state.get("stage") or "case_intro",
-        "current_intent": "answer_request_redirect",
+        "current_intents": ["answer_request_redirect"],
         "reply": reply,
         "messages": messages,
         "agent_turn_memory": _append_agent_turn_memory(
@@ -477,7 +520,7 @@ def answer_request_redirect_node(state: OsceGraphState, coach_agent: CoachAgent)
             student_message=student_message,
             reply=reply,
             reply_role="coach",
-            current_intent="answer_request_redirect",
+            current_intents=["answer_request_redirect"],
             turn_policy="answer_boundary_redirect",
             turn_analysis=turn_analysis,
             agent_path=["answer_request_redirect_node"],
@@ -493,7 +536,7 @@ def safety_guardrail_node(state: OsceGraphState, coach_agent: CoachAgent) -> dic
     reply = _coach_reply_from_agent(
         state,
         coach_agent,
-        current_intent="safety_boundary",
+        primary_intent="safety_boundary",
         base_hint=SAFETY_GUARDRAIL_REPLY,
         turn_policy="safety_boundary_redirect",
         turn_analysis=turn_analysis,
@@ -512,7 +555,7 @@ def safety_guardrail_node(state: OsceGraphState, coach_agent: CoachAgent) -> dic
         safety_flags.append(SAFETY_BOUNDARY_FLAG)
     return {
         "stage": state.get("stage") or "case_intro",
-        "current_intent": "safety_boundary",
+        "current_intents": ["safety_boundary"],
         "reply": reply,
         "messages": messages,
         "safety_flags": safety_flags,
@@ -521,7 +564,7 @@ def safety_guardrail_node(state: OsceGraphState, coach_agent: CoachAgent) -> dic
             student_message=student_message,
             reply=reply,
             reply_role="coach",
-            current_intent="safety_boundary",
+            current_intents=["safety_boundary"],
             turn_policy="safety_boundary_redirect",
             turn_analysis=turn_analysis,
             agent_path=["safety_guardrail_node"],
@@ -1075,6 +1118,17 @@ def _answerable_hidden_facts_for_intent(case: Case, intent: str) -> list[HiddenF
     return [hidden_fact for hidden_fact in case.history.hidden_facts if intent in hidden_fact.trigger_intents]
 
 
+def _answerable_hidden_facts_for_intents(case: Case, intents: list[str]) -> list[HiddenFact]:
+    intent_set = {intent for intent in intents if intent and intent != "unknown_history_intent"}
+    if not intent_set:
+        return []
+    return [
+        hidden_fact
+        for hidden_fact in case.history.hidden_facts
+        if any(intent in intent_set for intent in hidden_fact.trigger_intents)
+    ]
+
+
 def _answerable_patient_profile_fact_for_intent(case: Case, intent: str) -> dict[str, Any] | None:
     patient_profile = case.patient_profile
     profile_fact_specs = {
@@ -1107,6 +1161,17 @@ def _answerable_patient_profile_fact_for_intent(case: Case, intent: str) -> dict
         "trigger_intents": [intent],
         "source_reference": f"case:{case.case_id}.patient_profile.{slot}",
     }
+
+
+def _answerable_patient_profile_facts_for_intents(case: Case, intents: list[str]) -> list[dict[str, Any]]:
+    profile_facts: list[dict[str, Any]] = []
+    for intent in intents:
+        profile_fact = _answerable_patient_profile_fact_for_intent(case, intent)
+        if profile_fact is None:
+            continue
+        if all(existing.get("fact_id") != profile_fact["fact_id"] for existing in profile_facts):
+            profile_facts.append(profile_fact)
+    return profile_facts
 
 
 def _serialize_answerable_fact_candidate(case_id: str, hidden_fact: HiddenFact) -> dict[str, Any]:
@@ -1186,7 +1251,7 @@ def _patient_forbidden_terms(case: Case) -> list[str]:
 
 
 def _complete_unknown_turn_analysis(turn_analysis: dict[str, Any], student_message: str) -> dict[str, Any]:
-    if turn_analysis.get("current_intent") != "unknown_history_intent":
+    if turn_analysis.get("current_intents"):
         return turn_analysis
     unknown_analysis = classify_unknown_history_message(student_message)
     if turn_analysis.get("unknown_kind") and turn_analysis.get("possible_intents") is not None:
@@ -1198,6 +1263,41 @@ def _complete_unknown_turn_analysis(turn_analysis: dict[str, Any], student_messa
         "possible_intents": list(turn_analysis.get("possible_intents") or unknown_analysis["possible_intents"]),
         "rationale": turn_analysis.get("rationale") or unknown_analysis["rationale"],
     }
+
+
+def _merge_turn_analysis_with_keyword_intents(
+    turn_analysis: dict[str, Any],
+    keyword_intents: list[str],
+) -> dict[str, Any]:
+    deterministic_intents = _dedupe_intents(
+        [intent for intent in keyword_intents if intent and intent != "unknown_history_intent"]
+    )
+    if not deterministic_intents:
+        return turn_analysis
+
+    raw_current_intents = turn_analysis.get("current_intents")
+    model_intents = [str(intent) for intent in raw_current_intents] if isinstance(raw_current_intents, list) else []
+    if model_intents:
+        merged_intents = _dedupe_intents([*model_intents, *deterministic_intents])
+        return {
+            **turn_analysis,
+            "current_intents": merged_intents,
+        }
+
+    return {
+        "current_intents": deterministic_intents,
+        "confidence": max(float(turn_analysis.get("confidence") or 0), 0.75),
+        "is_off_topic": False,
+        "rationale": "模型未稳定识别，后端关键词命中明确问诊意图。",
+    }
+
+
+def _dedupe_intents(intents: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for intent in intents:
+        if intent and intent not in deduped:
+            deduped.append(intent)
+    return deduped
 
 
 def _unknown_kind_from_turn_analysis(turn_analysis: Any) -> str:
@@ -1214,6 +1314,27 @@ def _possible_intents_from_turn_analysis(turn_analysis: Any) -> list[str]:
     if not isinstance(possible_intents, list):
         return []
     return [str(intent) for intent in possible_intents if intent]
+
+
+def _current_intents_from_state(state: OsceGraphState) -> list[str]:
+    raw_current_intents: Any = state.get("current_intents")
+    if not raw_current_intents and isinstance(state.get("turn_analysis"), dict):
+        raw_current_intents = state["turn_analysis"].get("current_intents")
+    legacy_current_intent = str(state.get("current_intent", "") or "")
+    candidates: list[str] = []
+    if isinstance(raw_current_intents, list):
+        candidates.extend(str(intent) for intent in raw_current_intents if intent)
+    if not candidates and legacy_current_intent and legacy_current_intent != "unknown_history_intent":
+        candidates.append(legacy_current_intent)
+    deduped: list[str] = []
+    for intent in candidates:
+        if intent != "unknown_history_intent" and intent not in deduped:
+            deduped.append(intent)
+    return deduped
+
+
+def _primary_intent_from_current_intents(current_intents: list[str]) -> str:
+    return current_intents[0] if current_intents else "unknown_history_intent"
 
 
 def _patient_context_short_complaint(case: Any) -> str:
@@ -1277,18 +1398,24 @@ def _deterministic_turn_hints(
     state: OsceGraphState,
     *,
     keyword_intent: str,
+    keyword_intents: list[str] | None = None,
+    current_intents: list[str] | None = None,
     revealed_fact_id: str | None,
+    revealed_fact_ids: list[str] | None = None,
     turn_policy: str,
     answerable_fact_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     turn_analysis = state.get("turn_analysis", {})
     return {
         "keyword_intent": keyword_intent,
+        "keyword_intents": list(keyword_intents or []),
+        "current_intents": list(current_intents or []),
         "turn_analysis": turn_analysis,
         "unknown_kind": _unknown_kind_from_turn_analysis(turn_analysis),
         "possible_intents": _possible_intents_from_turn_analysis(turn_analysis),
         "turn_policy": turn_policy,
         "revealed_fact_id": revealed_fact_id,
+        "revealed_fact_ids": list(revealed_fact_ids or []),
         "answerable_fact_ids": list(answerable_fact_ids or []),
         "patient_context_mode": "private_context_with_answerable_fact_candidates",
         "stage": state.get("stage") or "case_intro",
@@ -1297,16 +1424,56 @@ def _deterministic_turn_hints(
     }
 
 
+def _build_patient_dialogue_context(
+    state: OsceGraphState,
+    *,
+    student_message: str,
+    current_intents: list[str],
+    answerable_fact_ids: list[str],
+    revealed_fact_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "student_message": student_message,
+        "recent_messages": _recent_dialogue_messages(state.get("messages", []), limit=8),
+        "asked_questions": _recent_string_items(state.get("asked_questions", []), limit=8),
+        "intent_history": _recent_string_items(state.get("intent_history", []), limit=8),
+        "current_intents": list(current_intents),
+        "answerable_fact_ids": list(answerable_fact_ids),
+        "revealed_fact_ids": list(revealed_fact_ids),
+    }
+
+
+def _recent_dialogue_messages(messages: Any, *, limit: int) -> list[dict[str, str]]:
+    if not isinstance(messages, list):
+        return []
+    recent_messages: list[dict[str, str]] = []
+    for message in messages[-limit:]:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", ""))
+        content = str(message.get("content", ""))
+        if role not in {"student", "patient", "coach"} or not content:
+            continue
+        recent_messages.append({"role": role, "content": content})
+    return recent_messages
+
+
+def _recent_string_items(items: Any, *, limit: int) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    return [str(item) for item in items[-limit:] if item]
+
+
 def _build_passive_coach_hint(
     state: OsceGraphState,
     *,
-    current_intent: str,
+    primary_intent: str,
     revealed_fact_id: str | None,
 ) -> str:
     turn_analysis = state.get("turn_analysis", {})
     is_off_topic = isinstance(turn_analysis, dict) and bool(turn_analysis.get("is_off_topic"))
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
-    if current_intent == "unknown_history_intent":
+    if primary_intent == "unknown_history_intent":
         if unknown_kind in {"social_greeting", "patient_identity_unclear"}:
             return ""
         if unknown_kind == "possible_missed_medical_intent":
@@ -1332,7 +1499,8 @@ def _apply_passive_coach_review(
     coach_agent: CoachAgent,
     student_message: str,
     patient_reply: str,
-    current_intent: str,
+    primary_intent: str,
+    current_intents: list[str],
     revealed_fact_id: str | None,
     messages: list[dict[str, str]],
     agent_turn_memory: list[dict[str, Any]],
@@ -1343,7 +1511,7 @@ def _apply_passive_coach_review(
     forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
     base_hint = _build_passive_coach_hint(
         state,
-        current_intent=current_intent,
+        primary_intent=primary_intent,
         revealed_fact_id=revealed_fact_id,
     )
     retrieved_knowledge_context = _retrieve_coach_knowledge_context(
@@ -1357,7 +1525,7 @@ def _apply_passive_coach_review(
     pedagogy_state = build_pedagogy_state(
         {
             **dict(state),
-            "current_intent": current_intent,
+            "current_intents": current_intents,
             "turn_analysis": turn_analysis,
             "messages": messages,
         }
@@ -1396,7 +1564,7 @@ def _apply_passive_coach_review(
             student_message=student_message,
             reply="",
             reply_role="coach",
-            current_intent=current_intent,
+            current_intents=current_intents,
             turn_policy="passive_review_unavailable",
             turn_analysis=unavailable_turn_analysis,
             agent_path=["input_router_node", "patient_response_node", "coach_agent_unavailable"],
@@ -1410,7 +1578,7 @@ def _apply_passive_coach_review(
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
     should_suppress_unforced_hint = (
         revealed_fact_id is not None
-        or (current_intent == "unknown_history_intent" and unknown_kind in {"social_greeting", "patient_identity_unclear"})
+        or (primary_intent == "unknown_history_intent" and unknown_kind in {"social_greeting", "patient_identity_unclear"})
     )
     should_emit = bool(
         forced_hint or (not should_suppress_unforced_hint and coach_response.should_emit and response_hint)
@@ -1424,7 +1592,7 @@ def _apply_passive_coach_review(
         student_message=student_message,
         reply=coach_hint,
         reply_role="coach",
-        current_intent=current_intent,
+        current_intents=current_intents,
         turn_policy="passive_review_hint" if should_emit else "passive_review_silent",
         turn_analysis=turn_analysis,
         agent_path=["input_router_node", "patient_response_node", "coach_agent"],
@@ -1442,7 +1610,7 @@ def _coach_reply_from_agent(
     state: OsceGraphState,
     coach_agent: CoachAgent,
     *,
-    current_intent: str,
+    primary_intent: str,
     base_hint: str,
     turn_policy: str,
     turn_analysis: dict[str, Any],
@@ -1467,7 +1635,9 @@ def _coach_reply_from_agent(
                 prior_messages=state.get("messages", []),
                 pedagogy_state={
                     **(
-                        pedagogy_state := build_pedagogy_state({**dict(state), "turn_analysis": turn_analysis})
+                        pedagogy_state := build_pedagogy_state(
+                            {**dict(state), "current_intents": [primary_intent], "turn_analysis": turn_analysis}
+                        )
                     ),
                     "turn_analysis": turn_analysis,
                 },
@@ -1487,19 +1657,21 @@ def _append_agent_turn_memory(
     student_message: str,
     reply: str,
     reply_role: str,
-    current_intent: str,
+    current_intents: list[str],
     turn_policy: str,
     turn_analysis: dict[str, Any],
     agent_path: list[str],
     revealed_fact_id: str | None,
     safety_flags: list[str],
+    revealed_fact_ids: list[str] | None = None,
     source_references: list[str] | None = None,
     retrieved_knowledge_context: list[dict[str, Any]] | None = None,
     selected_skill_ids: list[str] | None = None,
     skill_context: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
-    turn_source_references = [f"case:{state['case_id']}.history.{revealed_fact_id}"] if revealed_fact_id else []
+    history_fact_ids = list(revealed_fact_ids or ([revealed_fact_id] if revealed_fact_id else []))
+    turn_source_references = [f"case:{state['case_id']}.history.{fact_id}" for fact_id in history_fact_ids if fact_id]
     for reference in source_references or []:
         if reference and reference not in turn_source_references:
             turn_source_references.append(reference)
@@ -1509,7 +1681,7 @@ def _append_agent_turn_memory(
         "student_message": student_message,
         "reply": reply,
         "reply_role": reply_role,
-        "current_intent": current_intent,
+        "current_intents": list(current_intents),
         "turn_policy": turn_policy,
         "turn_analysis": dict(turn_analysis),
         "agent_path": list(agent_path),
@@ -1517,6 +1689,8 @@ def _append_agent_turn_memory(
         "source_references": turn_source_references,
         "safety_flags": list(safety_flags),
     }
+    if revealed_fact_ids:
+        turn_payload["revealed_fact_ids"] = list(revealed_fact_ids)
     if turn_knowledge_context:
         turn_payload["knowledge_references"] = [item["reference"] for item in turn_knowledge_context]
         turn_payload["retrieved_knowledge_context"] = turn_knowledge_context
@@ -1545,9 +1719,9 @@ def _turn_knowledge_context(
     ]
 
 
-def _boundary_turn_analysis(current_intent: str, rationale: str) -> dict[str, Any]:
+def _boundary_turn_analysis(intent: str, rationale: str) -> dict[str, Any]:
     return {
-        "current_intent": current_intent,
+        "current_intents": [intent],
         "confidence": 1.0,
         "is_off_topic": False,
         "rationale": rationale,

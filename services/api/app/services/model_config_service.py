@@ -9,6 +9,7 @@ from app.services.chroma_retriever import (
     resolve_chroma_persist_directory,
 )
 from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
+from app.services.local_embedding_retriever import DEFAULT_LOCAL_EMBEDDING_MODEL
 from app.services.retrieval_index import ROOT_DIR, get_chroma_source_documents
 from app.services.vertex_embedding_retriever import DEFAULT_VERTEX_EMBEDDING_MODEL
 
@@ -31,6 +32,7 @@ def build_admin_model_config() -> dict[str, Any]:
             _vertex_rubric_scorer_config(),
             _vertex_skill_candidate_config(),
             _vertex_embedding_retrieval_config(),
+            _local_embedding_retrieval_config(),
             _chroma_retrieval_config(),
             _openai_compatible_config(),
         ],
@@ -192,7 +194,7 @@ def _vertex_embedding_retrieval_config() -> dict[str, Any]:
 
 
 def _chroma_retrieval_config() -> dict[str, Any]:
-    embedding_configured = _vertex_embedding_retrieval_available()
+    embedding_configured = _embedding_retrieval_available()
     enabled = _chroma_enabled(embedding_configured=embedding_configured)
     persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
     collection = _env("OSCE_CHROMA_COLLECTION", "clinical_osce_retrieval")
@@ -216,7 +218,7 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
             [
-                ("Vertex embedding 配置", "configured" if embedding_configured else ""),
+                ("向量模型配置", "configured" if embedding_configured else ""),
                 ("CHROMA_PERSIST_DIRECTORY", persist_directory),
                 ("OSCE_CHROMA_COLLECTION", collection),
             ],
@@ -232,6 +234,38 @@ def _vertex_embedding_retrieval_available() -> bool:
     return bool(_env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT") or _env("OSCE_VERTEX_EMBEDDING_API_KEY") or _env("OSCE_VERTEX_API_KEY"))
 
 
+def _local_embedding_retrieval_config() -> dict[str, Any]:
+    enabled = _truthy_env("OSCE_LOCAL_EMBEDDING_ENABLED")
+    model = _env("OSCE_LOCAL_EMBEDDING_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL)
+    device = _env("OSCE_LOCAL_EMBEDDING_DEVICE", "cpu")
+    cache_folder = _env("OSCE_LOCAL_EMBEDDING_CACHE_FOLDER")
+    configured = enabled and bool(model)
+    return _provider_config(
+        provider_id="local_embedding_retrieval",
+        label="本地开源 RAG 向量模型",
+        capability="用本地 fastembed / ONNX 模型为 RAG 来源片段和查询生成向量",
+        enabled=enabled,
+        configured=configured,
+        secret_configured=False,
+        auth_mode="local_fastembed",
+        model=model,
+        device=device,
+        cache_folder=cache_folder,
+        required_env=["OSCE_LOCAL_EMBEDDING_ENABLED=true", "OSCE_LOCAL_EMBEDDING_MODEL"],
+        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_LOCAL_EMBEDDING_MODEL", model)]),
+        integration_status="wired_optional",
+        notes="本地 CPU 推理，不依赖 Google/Vertex；只用于 RAG 相似度召回，不参与诊断或评分裁判。",
+    )
+
+
+def _local_embedding_retrieval_available() -> bool:
+    return _truthy_env("OSCE_LOCAL_EMBEDDING_ENABLED") and bool(_env("OSCE_LOCAL_EMBEDDING_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL))
+
+
+def _embedding_retrieval_available() -> bool:
+    return _vertex_embedding_retrieval_available() or _local_embedding_retrieval_available()
+
+
 def _chroma_enabled(*, embedding_configured: bool) -> bool:
     raw_enabled = _env("OSCE_CHROMA_ENABLED")
     if raw_enabled:
@@ -243,9 +277,17 @@ def _chroma_index_manifest_status(*, persist_directory: str, collection: str) ->
     settings = ChromaRetrievalSettings(
         persist_directory=resolve_chroma_persist_directory(persist_directory, root_dir=ROOT_DIR),
         collection_name=collection,
-        embedding_model=_env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL),
+        embedding_model=_configured_embedding_model_name(),
     )
     return build_chroma_manifest_status(settings=settings, documents=get_chroma_source_documents())
+
+
+def _configured_embedding_model_name() -> str:
+    if _vertex_embedding_retrieval_available():
+        return _env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL)
+    if _local_embedding_retrieval_available():
+        return _env("OSCE_LOCAL_EMBEDDING_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL)
+    return _env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL)
 
 
 def _openai_compatible_config() -> dict[str, Any]:
@@ -287,6 +329,8 @@ def _provider_config(**kwargs: Any) -> dict[str, Any]:
         "project": kwargs.get("project", ""),
         "location": kwargs.get("location", ""),
         "proxy_url": kwargs.get("proxy_url", ""),
+        "device": kwargs.get("device", ""),
+        "cache_folder": kwargs.get("cache_folder", ""),
         "persist_directory": kwargs.get("persist_directory", ""),
         "collection": kwargs.get("collection", ""),
         "index_manifest": kwargs.get("index_manifest", {}),

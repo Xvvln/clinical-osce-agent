@@ -197,8 +197,9 @@ def _chunk_with_unstructured(
     temp_name = f"{hashlib.sha1(content_bytes).hexdigest()[:16]}{suffix}"
     temp_path = TEMP_UPLOAD_DIR / temp_name
     temp_path.write_bytes(content_bytes)
+    partition_kwargs = {"strategy": "fast"} if suffix == ".pdf" else {}
     try:
-        raw_elements = partition(filename=str(temp_path))
+        raw_elements = partition(filename=str(temp_path), **partition_kwargs)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -336,8 +337,9 @@ def _parse_with_unstructured(*, file_name: str, content_bytes: bytes) -> list[Pa
     temp_name = f"{hashlib.sha1(content_bytes).hexdigest()[:16]}{suffix}"
     temp_path = TEMP_UPLOAD_DIR / temp_name
     temp_path.write_bytes(content_bytes)
+    partition_kwargs = {"strategy": "fast"} if suffix == ".pdf" else {}
     try:
-        raw_elements = partition(filename=str(temp_path))
+        raw_elements = partition(filename=str(temp_path), **partition_kwargs)
     finally:
         temp_path.unlink(missing_ok=True)
 

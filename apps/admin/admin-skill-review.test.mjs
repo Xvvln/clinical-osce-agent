@@ -130,12 +130,15 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_labels/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_labels/);
   assert.doesNotMatch(adminPageSource, />\{selectedTeachingFocusPattern\.scope\}<\/p>/);
+  assert.doesNotMatch(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_ids\.join\("、"\)/);
   assert.match(adminPageSource, /常见漏项/);
   assert.match(adminPageSource, /训练话轮模式/);
   assert.match(adminPageSource, /insights\.frequent_turn_patterns/);
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /recommendation\.reference_label/);
   assert.match(adminPageSource, /结构化证据覆盖/);
+  assert.doesNotMatch(adminPageSource, /类型：\{getSourceReferenceLabel\(sourceReference\.reference\)\}/);
+  assert.match(adminPageSource, /sourceReference\.reference_label \?\? getSourceReferenceLabel\(sourceReference\.reference\)/);
   assert.match(adminPageSource, /结构化追溯链/);
   assert.match(adminPageSource, /结构化评分依据/);
   assert.match(adminPageSource, /getReportExplanationSourceItems\(selectedReport\)/);
@@ -152,7 +155,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /agentTurnEvents/);
   assert.match(adminPageSource, /event\.payload\.agent_turn/);
   assert.match(adminPageSource, /function getAgentTurnPayload/);
-  assert.match(adminPageSource, /turnPayload\.current_intent/);
+  assert.match(adminPageSource, /turnPayload\.current_intents/);
+  assert.doesNotMatch(adminPageSource, /turnPayload\.current_intent(?!s)/);
   assert.match(adminPageSource, /turnPayload\.turn_policy/);
   assert.match(adminPageSource, /turnPayload\.turn_analysis/);
   assert.match(adminPageSource, /turnPayload\.agent_path/);
@@ -198,6 +202,8 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /selectedCandidate\.source_report_ids/);
   assert.match(adminPageSource, /selectedCandidate\.source_turn_patterns/);
   assert.match(adminPageSource, /历史数据未记录/);
+  assert.doesNotMatch(adminPageSource, /<p className="mt-1 break-all font-mono">\{pattern\.pattern_id\}<\/p>/);
+  assert.doesNotMatch(adminPageSource, /action\.trigger_item_ids\.join\("、"\)/);
   assert.match(adminPageSource, /id="model-config"/);
   assert.match(adminPageSource, /服务端模型/);
   assert.match(adminPageSource, /部署模式/);
@@ -576,6 +582,15 @@ test("admin skill candidates prefer readable display labels over raw ids", () =>
   assert.match(adminPageSource, /getAdminDisplayList\(selectedCandidate\.related_recommendation_labels, selectedCandidate\.related_recommendations/);
   assert.match(adminPageSource, /getAdminDisplayList\(pattern\.trigger_item_labels, pattern\.trigger_item_ids/);
   assert.match(adminPageSource, /展开候选来源模式技术 ID/);
+});
+
+test("admin audit events hide raw candidate ids behind readable labels", () => {
+  assert.match(adminPageSource, /function getAdminAuditEventSubjectLabel/);
+  assert.match(adminPageSource, /getAdminAuditEventSubjectLabel\(event, selectedCandidate\)/);
+  assert.match(adminPageSource, /对象：\{getAdminAuditEventSubjectLabel\(event\)\}/);
+  assert.match(adminPageSource, /对象：\{getAdminAuditEventSubjectLabel\(event, selectedCandidate\)\}/);
+  assert.doesNotMatch(adminPageSource, /候选：\{event\.session_id\}/);
+  assert.doesNotMatch(adminPageSource, /触发项：\{event\.case_id\}/);
 });
 
 test("admin skill candidate details open in a modal instead of expanding under the list", () => {

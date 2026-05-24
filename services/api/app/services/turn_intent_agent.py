@@ -6,7 +6,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.gemini_patient_responder import GeminiPatientSettings, _apply_process_proxy
@@ -50,12 +50,16 @@ KNOWN_UNKNOWN_KINDS = [
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控意图识别 Agent，只负责理解学生本轮输入属于哪类问诊意图。
 
 硬性规则：
-- 只能从 allowed_intents 中选择 current_intent。
+- 只能从 allowed_intents 中选择 current_intents 的元素。
+- current_intents 是本轮问诊意图列表；如果学生一句话包含多个明确问诊点，按判断顺序列出 1-4 个 allowed_intents。
+- 不需要输出 current_intent；后端内部需要单个分支判断时会从 current_intents[0] 临时派生 primary intent。
 - keyword_intent 只是后端关键词提示，不能直接当作最终结论；需要结合 student_message、stage 和 prior_messages 判断。
+- keyword_intents 是后端识别到的多个关键词提示，只能作为辅助线索，不能输出 allowed_intents 之外的值。
 - 不得推断或输出诊断、治疗方案、用药剂量、标准答案、rubric 或病例隐藏事实。
 - 如果学生询问患者年龄、性别或职业，可选择对应患者公开画像意图。
 - 如果没有提出可映射的问诊问题，输出 unknown_history_intent，并同时输出 unknown_kind：
   social_greeting=问候；patient_identity_unclear=笼统问身份；unsupported_case_question=病例脚本未提供的信息；off_topic=明显偏题；possible_missed_medical_intent=疑似医学问诊但表达太宽泛或未命中意图；unclassified_input=无法稳定归入医学问诊、病例缺失信息或偏题类别的含混输入。
+- unknown_history_intent 时 current_intents 必须为空数组。
 - possible_missed_medical_intent 可在 possible_intents 中给出 1-4 个可能的 allowed_intents，但不能替学生决定最终事实披露。
 - rationale 用一句中文说明判断依据，不超过 40 个汉字。
 - 只输出 JSON。
@@ -69,12 +73,15 @@ class TurnIntentRequest(BaseModel):
     stage: str
     student_message: str
     keyword_intent: str
+    keyword_intents: list[str] = Field(default_factory=list)
     prior_messages: list[dict[str, str]] = Field(default_factory=list)
     allowed_intents: list[str] = Field(default_factory=lambda: list(KNOWN_HISTORY_INTENTS))
 
 
 class TurnIntentResponse(BaseModel):
-    current_intent: str
+    model_config = ConfigDict(extra="allow")
+
+    current_intents: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0, le=1)
     is_off_topic: bool = False
     rationale: str = ""
@@ -86,6 +93,11 @@ class TurnIntentResponse(BaseModel):
     def _coerce_unknown_kind(cls, value: Any) -> str:
         return "" if value is None else value
 
+    @field_validator("current_intents", mode="before")
+    @classmethod
+    def _coerce_current_intents(cls, value: Any) -> list[str]:
+        return [] if value is None else value
+
     @field_validator("possible_intents", mode="before")
     @classmethod
     def _coerce_possible_intents(cls, value: Any) -> list[str]:
@@ -94,17 +106,22 @@ class TurnIntentResponse(BaseModel):
 
 class DeterministicTurnIntentAgent:
     def __call__(self, request: TurnIntentRequest) -> TurnIntentResponse:
-        keyword_intent = request.keyword_intent
-        if keyword_intent in request.allowed_intents and keyword_intent != "unknown_history_intent":
+        keyword_intents = _dedupe_intents([*request.keyword_intents, request.keyword_intent])
+        allowed_keyword_intents = [
+            intent
+            for intent in keyword_intents
+            if intent in request.allowed_intents and intent != "unknown_history_intent"
+        ]
+        if allowed_keyword_intents:
             return TurnIntentResponse(
-                current_intent=keyword_intent,
+                current_intents=allowed_keyword_intents,
                 confidence=0.9,
                 is_off_topic=False,
                 rationale="命中后端确定性问诊意图提示。",
             )
         unknown_analysis = classify_unknown_history_message(request.student_message)
         return TurnIntentResponse(
-            current_intent="unknown_history_intent",
+            current_intents=[],
             confidence=0.35,
             is_off_topic=bool(unknown_analysis["is_off_topic"]),
             rationale=str(unknown_analysis["rationale"]),
@@ -193,12 +210,29 @@ class LazyTurnIntentAgent:
 def normalize_turn_intent_response(response: TurnIntentResponse | dict[str, Any]) -> dict[str, Any]:
     if isinstance(response, TurnIntentResponse):
         normalized = response
+        legacy_intent = str((response.model_extra or {}).get("current_intent", "") or "")
     else:
         normalized = TurnIntentResponse.model_validate(response)
-    if normalized.current_intent not in KNOWN_HISTORY_INTENTS:
-        normalized = normalized.model_copy(update={"current_intent": "unknown_history_intent", "is_off_topic": True})
-    if normalized.current_intent == "unknown_history_intent":
+        legacy_intent = str(response.get("current_intent", "") or "")
+
+    authoritative_intents = _valid_current_intents(normalized.current_intents)
+    if not authoritative_intents and legacy_intent in KNOWN_HISTORY_INTENTS and legacy_intent != "unknown_history_intent":
+        authoritative_intents = [legacy_intent]
+
+    if authoritative_intents:
+        normalized = normalized.model_copy(
+            update={
+                "current_intents": authoritative_intents,
+                "unknown_kind": "",
+                "possible_intents": [],
+            }
+        )
+    else:
+        invalid_legacy_intent = bool(legacy_intent and legacy_intent not in KNOWN_HISTORY_INTENTS)
         update_payload: dict[str, Any] = {}
+        update_payload["current_intents"] = []
+        if invalid_legacy_intent:
+            update_payload["is_off_topic"] = True
         if normalized.unknown_kind not in KNOWN_UNKNOWN_KINDS:
             update_payload["unknown_kind"] = ""
         update_payload["possible_intents"] = [
@@ -206,15 +240,29 @@ def normalize_turn_intent_response(response: TurnIntentResponse | dict[str, Any]
             for intent in normalized.possible_intents
             if intent in KNOWN_HISTORY_INTENTS and intent != "unknown_history_intent"
         ]
-        if update_payload:
-            normalized = normalized.model_copy(update=update_payload)
-    elif normalized.unknown_kind or normalized.possible_intents:
-        normalized = normalized.model_copy(update={"unknown_kind": "", "possible_intents": []})
+        normalized = normalized.model_copy(update=update_payload)
     result = normalized.model_dump(mode="json")
-    if result["current_intent"] != "unknown_history_intent":
+    result.pop("current_intent", None)
+    if result["current_intents"]:
         result.pop("unknown_kind", None)
         result.pop("possible_intents", None)
     return result
+
+
+def _dedupe_intents(intents: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for intent in intents:
+        if intent and intent not in deduped:
+            deduped.append(intent)
+    return deduped
+
+
+def _valid_current_intents(intents: list[str]) -> list[str]:
+    return [
+        intent
+        for intent in _dedupe_intents([str(intent) for intent in intents if intent])
+        if intent in KNOWN_HISTORY_INTENTS and intent != "unknown_history_intent"
+    ]
 
 
 def classify_unknown_history_message(message: str) -> dict[str, Any]:

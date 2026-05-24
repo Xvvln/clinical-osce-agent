@@ -63,6 +63,42 @@ class TrainingEventStore:
             for row in rows
         ]
 
+    def list_events_for_sessions(self, session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        self._initialize()
+        unique_session_ids = list(dict.fromkeys(str(session_id) for session_id in session_ids if str(session_id)))
+        events_by_session: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in unique_session_ids}
+        if not unique_session_ids:
+            return events_by_session
+
+        rows: list[tuple[str, str, str, str, str, str]] = []
+        with sqlite3.connect(self.database_path) as connection:
+            for start in range(0, len(unique_session_ids), 900):
+                chunk = unique_session_ids[start:start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT session_id, case_id, student_id, event_type, payload_json, created_at
+                        FROM training_events
+                        WHERE session_id IN ({placeholders})
+                        ORDER BY id
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
+        for row in rows:
+            events_by_session.setdefault(row[0], []).append(
+                {
+                    "session_id": row[0],
+                    "case_id": row[1],
+                    "student_id": row[2],
+                    "event_type": row[3],
+                    "payload": json.loads(row[4]),
+                    "created_at": row[5],
+                }
+            )
+        return events_by_session
+
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:

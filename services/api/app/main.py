@@ -12,6 +12,16 @@ import yaml
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+try:
+    from google.auth import exceptions as google_auth_exceptions
+except Exception:  # pragma: no cover - optional provider package guard.
+    google_auth_exceptions = None
+
+try:
+    from google.genai import errors as google_genai_errors
+except Exception:  # pragma: no cover - optional provider package guard.
+    google_genai_errors = None
+
 from app.graph.osce_graph import build_osce_graph
 from app.services import retrieval_index, source_retriever
 from app.services.admin_display_resolver import (
@@ -33,6 +43,7 @@ from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.deployment_config import (
     get_deployment_mode,
+    is_account_registration_supported,
     is_demo_admin_effectively_enabled,
     is_runtime_model_config_write_supported,
 )
@@ -47,6 +58,8 @@ from app.services.rag_document_ingestion_service import (
 )
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
+from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.startup_config_service import build_startup_config_self_check
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
@@ -104,6 +117,11 @@ RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["coach", "reflection", "skill_generation"
 RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
+MODEL_PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (httpx.HTTPError,)
+if google_auth_exceptions is not None:
+    MODEL_PROVIDER_EXCEPTION_TYPES = MODEL_PROVIDER_EXCEPTION_TYPES + (google_auth_exceptions.GoogleAuthError,)
+if google_genai_errors is not None:
+    MODEL_PROVIDER_EXCEPTION_TYPES = MODEL_PROVIDER_EXCEPTION_TYPES + (google_genai_errors.APIError,)
 LEARNING_TASK_TYPE_LABELS = {
     "start_first_case": "开始首例训练",
     "redo_same_case": "复训当前病例",
@@ -379,6 +397,10 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
     saved_config = user_model_config_store.get_runtime_config(user_id)
     if saved_config is None:
         runtime_model_config_store.clear()
+        if not is_runtime_model_config_write_supported():
+            environment_payload = _environment_runtime_model_config_public_payload()
+            if environment_payload is not None:
+                return environment_payload
         return {
             "active": False,
             "provider": "",
@@ -393,6 +415,86 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
     payload = runtime_config.public_payload()
     payload["api_key_saved"] = bool(runtime_config.api_key)
     return payload
+
+
+def _environment_runtime_model_config_public_payload() -> dict[str, object] | None:
+    openai_settings = OpenAICompatibleSettings()
+    if openai_settings.is_configured:
+        return {
+            "active": True,
+            "provider": "openai_compatible",
+            "model": openai_settings.model,
+            "base_url": openai_settings.base_url,
+            "proxy_url": openai_settings.proxy_url,
+            "integration_targets": [
+                "patient_responder",
+                "turn_intent_agent",
+                "coach_agent",
+                "llm_rubric_scorer",
+                "skill_candidate_generator",
+            ],
+            "api_key_saved": False,
+            "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
+        }
+
+    anthropic_settings = AnthropicSettings()
+    if anthropic_settings.is_configured:
+        return {
+            "active": True,
+            "provider": "anthropic",
+            "model": anthropic_settings.model,
+            "base_url": anthropic_settings.base_url,
+            "proxy_url": anthropic_settings.proxy_url,
+            "integration_targets": [
+                "patient_responder",
+                "turn_intent_agent",
+                "coach_agent",
+                "llm_rubric_scorer",
+                "skill_candidate_generator",
+            ],
+            "api_key_saved": False,
+            "message": "服务端已统一配置模型；前端不可修改 API Key。",
+        }
+
+    if _environment_gemini_or_vertex_model_configured():
+        return {
+            "active": True,
+            "provider": "vertex_gemini_adc" if _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX") else "gemini",
+            "model": _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL") or "gemini-3.1-pro-preview",
+            "base_url": _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT"),
+            "proxy_url": _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL") or "http://127.0.0.1:7897",
+            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent"],
+            "api_key_saved": False,
+            "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
+        }
+    return None
+
+
+def _environment_training_model_configured() -> bool:
+    return (
+        OpenAICompatibleSettings().is_configured
+        or AnthropicSettings().is_configured
+        or _environment_gemini_or_vertex_model_configured()
+    )
+
+
+def _environment_gemini_or_vertex_model_configured() -> bool:
+    if _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX"):
+        return bool(
+            _env("OSCE_GEMINI_PATIENT_PROJECT")
+            or _env("OSCE_VERTEX_PROJECT")
+            or _env("OSCE_GEMINI_PATIENT_API_KEY")
+            or _env("OSCE_VERTEX_API_KEY")
+        )
+    return bool(_env("OSCE_GEMINI_PATIENT_API_KEY") or _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"))
+
+
+def _truthy_env(name: str) -> bool:
+    return _env(name).lower() in {"1", "true", "yes", "on"}
+
+
+def _env(name: str) -> str:
+    return os.getenv(name, "").strip()
 
 
 def _build_user_runtime_model_config_request(user_id: str, request: "StudentModelConfigTestRequest") -> dict[str, str]:
@@ -411,16 +513,37 @@ def _build_user_runtime_model_config_request(user_id: str, request: "StudentMode
 
 def _require_runtime_model_config_for_training(user_id: str) -> None:
     has_user_config = _activate_user_runtime_model_config(user_id)
-    if _is_training_model_config_required() and not has_user_config:
+    has_environment_config = not is_runtime_model_config_write_supported() and _environment_training_model_configured()
+    if _is_training_model_config_required() and not has_user_config and not has_environment_config:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE)
 
 
-def _model_provider_gateway_error(exc: httpx.HTTPError) -> HTTPException:
+def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
     if isinstance(exc, httpx.HTTPStatusError):
         detail = _model_provider_response_error_detail(exc.response)
         message = f"模型服务调用失败：HTTP {exc.response.status_code}"
         if detail:
             message = f"{message}：{detail}"
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
+    if google_auth_exceptions is not None and isinstance(exc, google_auth_exceptions.DefaultCredentialsError):
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="模型服务鉴权失败：Google ADC 未配置或不可用，请在 API 配置中切换为可用服务端，或在服务器配置 ADC。",
+        )
+    if google_auth_exceptions is not None and isinstance(exc, google_auth_exceptions.GoogleAuthError):
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"模型服务鉴权失败：{exc.__class__.__name__}",
+        )
+    if google_genai_errors is not None and isinstance(exc, google_genai_errors.APIError):
+        code = getattr(exc, "code", None)
+        status_label = str(getattr(exc, "status", "") or "").strip()
+        detail = str(getattr(exc, "message", "") or "").strip()
+        parts = [part for part in (detail, status_label) if part]
+        compact_detail = "；".join(dict.fromkeys(" ".join(part.split())[:240] for part in parts if part.strip()))
+        message = f"模型服务调用失败：HTTP {code}" if code else "模型服务调用失败"
+        if compact_detail:
+            message = f"{message}：{compact_detail}"
         return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"模型服务调用失败：{exc.__class__.__name__}")
 
@@ -991,6 +1114,11 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
 
 @app.post("/api/auth/register")
 def register(request: AuthRegisterRequest, response: Response) -> dict[str, object]:
+    if not is_account_registration_supported():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="服务器演示模式不允许创建新账号，请使用预置学生或管理员账号登录。",
+        )
     _validate_auth_request(request.email, request.password)
     user = auth_store.create_user(
         email=request.email,
@@ -1051,6 +1179,11 @@ def test_model_config(
     request: StudentModelConfigTestRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
+    if not is_runtime_model_config_write_supported():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="runtime model config is disabled in production deployment mode",
+        )
     user = _get_optional_current_user(auth_token)
     config_request = (
         _build_user_runtime_model_config_request(user["user_id"], request)
@@ -1976,7 +2109,10 @@ def get_current_user_session_report(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_owned_session(session_id, auth_token)
-    report = osce_session_service.get_report(session_id)
+    try:
+        report = osce_session_service.get_report(session_id)
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
     return report
@@ -2013,7 +2149,7 @@ def send_message(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.handle_message(session_id, request.message)
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2030,7 +2166,7 @@ def request_physical_exam(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_physical_exam(session_id, request.exam_code)
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2047,7 +2183,7 @@ def request_auxiliary_test(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2064,7 +2200,7 @@ def record_hypothesis(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2080,7 +2216,7 @@ def request_hint(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_hint(session_id)
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2113,7 +2249,7 @@ def submit_diagnosis(
             diagnosis=request.diagnosis,
             reasoning=request.reasoning,
         )
-    except httpx.HTTPError as exc:
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -2126,7 +2262,10 @@ def get_session_report(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_owned_session(session_id, auth_token)
-    report = osce_session_service.get_report(session_id)
+    try:
+        report = osce_session_service.get_report(session_id)
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+        raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
     return report

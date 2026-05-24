@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 type PersistedSessionSummary = Readonly<{
   session_id: string;
   case_id: string;
+  case_title: string;
   stage: string;
   created_at: string;
   updated_at: string;
@@ -157,7 +158,7 @@ export default function HistoryPage() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
-                    <h2 className="mt-2 text-base font-semibold tracking-tight">病例：{session.case_id}</h2>
+                    <h2 className="mt-2 text-base font-semibold tracking-tight">病例：{session.case_title ?? session.case_id}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">当前阶段：{session.stage}</p>
                   </div>
                   <span className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${getTrainingSessionStatusClass(session)}`}>

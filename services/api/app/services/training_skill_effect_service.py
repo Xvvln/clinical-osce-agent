@@ -34,8 +34,9 @@ class TrainingSkillEffectService:
             "with_skill": _empty_group(),
             "without_skill": _empty_group(),
         }
+        events_by_session = _list_events_by_session(self.event_store, session_ids)
         for session_id in session_ids:
-            events = self.event_store.list_session_events(session_id)
+            events = events_by_session.get(session_id, [])
             skill_ids = [
                 event["payload"]["skill_id"]
                 for event in events
@@ -79,3 +80,9 @@ def _serialize_group(group: dict[str, Any]) -> dict[str, Any]:
 
 
 training_skill_effect_service = TrainingSkillEffectService()
+
+
+def _list_events_by_session(event_store: TrainingEventStore, session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    if hasattr(event_store, "list_events_for_sessions"):
+        return event_store.list_events_for_sessions(session_ids)
+    return {session_id: event_store.list_session_events(session_id) for session_id in session_ids}

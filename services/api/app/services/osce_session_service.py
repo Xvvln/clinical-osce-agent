@@ -170,8 +170,9 @@ class OsceSessionService:
         self._save_session(session)
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
-        payload["current_intent"] = graph_state["current_intent"]
-        if graph_state["current_intent"] == "safety_boundary":
+        payload["current_intents"] = list(graph_state.get("current_intents", []))
+        primary_intent = _primary_intent_from_graph_state(graph_state)
+        if primary_intent == "safety_boundary":
             self._append_event(
                 session,
                 "safety_boundary_triggered",
@@ -184,7 +185,7 @@ class OsceSessionService:
             )
             self._append_agent_update_event(session, agent_update)
             return payload
-        if graph_state["current_intent"] == "answer_request_redirect":
+        if primary_intent == "answer_request_redirect":
             self._append_event(
                 session,
                 "answer_request_redirected",
@@ -201,7 +202,7 @@ class OsceSessionService:
             "history_message",
             {
                 "message": message,
-                "current_intent": graph_state["current_intent"],
+                "current_intents": list(graph_state.get("current_intents", [])),
                 "reply": graph_state["reply"],
                 "agent_turn": _latest_agent_turn(graph_state),
             },
@@ -333,6 +334,9 @@ class OsceSessionService:
         if stored_report is not None:
             report = _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
             if session is None:
+                if _ai_reflection_review_uses_legacy_generic_text(report.get("ai_reflection_review")):
+                    report = _rehydrate_orphan_teacher_reflection(report)
+                    self.report_store.save_report(report)
                 return report
             case = load_case_node(session.case_id)
             report = _ensure_report_training_progress_snapshot(report, session, case)
@@ -543,7 +547,8 @@ def _graph_state_from_session(
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
         "student_message": student_message,
-        "current_intent": "",
+        "keyword_intents": [],
+        "current_intents": [],
         "reply": "",
         "report_requested": report_requested,
         "hint_requested": hint_requested,
@@ -617,21 +622,29 @@ def _personal_skill_payload_for_report(
     session: OsceSession,
     case: Case,
 ) -> dict[str, Any]:
-    from app.services.personal_training_skill_service import build_not_ready_personal_skill_payload, personal_training_skill_service
+    from app.services.personal_training_skill_service import (
+        build_generation_failed_personal_skill_payload,
+        build_not_ready_personal_skill_payload,
+        personal_training_skill_service,
+    )
+    from app.services.training_skill_candidate_service import TrainingSkillCandidateGenerationError
 
     if session.final_submission is None:
         return build_not_ready_personal_skill_payload()
     if session.feedback_report is None:
         return build_not_ready_personal_skill_payload()
     active_personal_skill_service = service.personal_skill_service or personal_training_skill_service
-    return active_personal_skill_service.generate_for_completed_session(
-        session=session,
-        case=case,
-        report=session.feedback_report,
-        candidate_store=service.training_skill_candidate_store,
-        skill_store=service.training_skill_store,
-        event_store=service.training_event_store,
-    )
+    try:
+        return active_personal_skill_service.generate_for_completed_session(
+            session=session,
+            case=case,
+            report=session.feedback_report,
+            candidate_store=service.training_skill_candidate_store,
+            skill_store=service.training_skill_store,
+            event_store=service.training_event_store,
+        )
+    except TrainingSkillCandidateGenerationError:
+        return build_generation_failed_personal_skill_payload(report=session.feedback_report, case=case)
 
 
 def _ensure_report_training_progress_snapshot(
@@ -652,7 +665,42 @@ def _report_needs_completed_session_hydration(report: dict[str, Any]) -> bool:
     personal_skill_candidate = report.get("personal_skill_candidate")
     ai_status = ai_reflection_review.get("status") if isinstance(ai_reflection_review, dict) else None
     skill_status = personal_skill_candidate.get("status") if isinstance(personal_skill_candidate, dict) else None
-    return ai_status != "generated" or skill_status in {None, "legacy_report", "not_complete"}
+    return (
+        ai_status != "generated"
+        or _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review)
+        or skill_status in {None, "legacy_report", "not_complete"}
+    )
+
+
+def _rehydrate_orphan_teacher_reflection(report: dict[str, Any]) -> dict[str, Any]:
+    from app.services.personal_training_skill_service import build_teacher_reflection_review_payload
+
+    case: Case | None = None
+    case_id = str(report.get("case_id") or "")
+    if case_id:
+        try:
+            case = load_case_node(case_id)
+        except Exception:
+            case = None
+    return {
+        **report,
+        "ai_reflection_review": build_teacher_reflection_review_payload(report, case),
+    }
+
+
+def _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review: Any) -> bool:
+    if not isinstance(ai_reflection_review, dict):
+        return True
+    summary = str(ai_reflection_review.get("summary", ""))
+    teacher_feedback = str(ai_reflection_review.get("teacher_feedback", ""))
+    next_focus = str(ai_reflection_review.get("next_focus", ""))
+    safety_note = str(ai_reflection_review.get("safety_note", ""))
+    return (
+        "本轮主要问题集中在" in summary
+        or "建议下一轮先说明为什么要问、查或检验" in teacher_feedback
+        or "下一轮 Coach" in next_focus
+        or "AI 复盘" in safety_note
+    )
 
 
 def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
@@ -704,7 +752,7 @@ def _ensure_personal_skill_report_defaults(
         or {
             "status": "legacy_report",
             "reason": "ai_reflection_not_recorded",
-            "summary": "该历史报告生成时尚未记录 AI 复盘回顾。",
+            "summary": "该历史报告生成时尚未记录教师复盘。",
         }
     )
     ai_reflection_review.setdefault("mistake_patterns", [])
@@ -729,6 +777,14 @@ def _latest_agent_turn(graph_state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(latest_turn, dict):
             return latest_turn
     return {}
+
+
+def _primary_intent_from_graph_state(graph_state: dict[str, Any]) -> str:
+    current_intents = graph_state.get("current_intents", [])
+    if isinstance(current_intents, list) and current_intents:
+        return str(current_intents[0])
+    legacy_intent = str(graph_state.get("current_intent", "") or "")
+    return legacy_intent or "unknown_history_intent"
 
 
 def _initial_graph_state(case_id: str) -> dict[str, Any]:
@@ -955,13 +1011,18 @@ def _serialize_training_progress(session: OsceSession, case: Case) -> dict[str, 
     }
 
 
-def _serialize_coverage_map(session: OsceSession, case: Case, reasoning_evidence: list[str]) -> dict[str, list[dict[str, str]]]:
+def _serialize_coverage_map(session: OsceSession, case: Case, reasoning_evidence: list[str]) -> dict[str, list[dict[str, Any]]]:
     return {
         "history": [
             _coverage_map_item(
                 _student_safe_evidence_id(case, fact.fact_id),
                 fact.canonical_answer,
                 fact.fact_id in session.revealed_facts,
+                extra={
+                    "topic": fact.topic,
+                    "slot": fact.slot,
+                    "linked_rubric_items": list(fact.linked_rubric_items),
+                },
             )
             for fact in case.history.hidden_facts
         ],
@@ -984,8 +1045,11 @@ def _serialize_coverage_map(session: OsceSession, case: Case, reasoning_evidence
     }
 
 
-def _coverage_map_item(item_id: str, label: str, is_covered: bool) -> dict[str, str]:
-    return {"id": item_id, "label": label, "status": "covered" if is_covered else "pending"}
+def _coverage_map_item(item_id: str, label: str, is_covered: bool, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    item: dict[str, Any] = {"id": item_id, "label": label, "status": "covered" if is_covered else "pending"}
+    if extra:
+        item.update(extra)
+    return item
 
 
 def _coverage_map_label_by_evidence(case: Case, evidence: str) -> str:

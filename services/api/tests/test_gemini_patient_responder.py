@@ -38,6 +38,10 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "不要主动引导学生下一步该问什么" in module.SYSTEM_PROMPT_TEMPLATE
     assert "patient_private_context" in module.SYSTEM_PROMPT_TEMPLATE
     assert "answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "revealed_fact_ids" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "dialogue_context" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "is_repeated_fact_question" not in module.SYSTEM_PROMPT_TEMPLATE
+    assert "repeated_fact_ids" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "fact_ids_used" in module.SYSTEM_PROMPT_TEMPLATE
 
 
@@ -69,7 +73,7 @@ def test_create_configured_patient_responder_falls_back_to_deterministic_without
             case_title="急性腹痛问诊",
             chief_complaint="腹痛 1 天",
             student_message="哪里疼？",
-            current_intent="ask_location",
+            current_intents=["ask_location"],
             canonical_answer="右下腹疼痛明显。",
             forbidden_terms=["急性阑尾炎"],
         )
@@ -77,6 +81,38 @@ def test_create_configured_patient_responder_falls_back_to_deterministic_without
 
     assert isinstance(responder, module.DeterministicPatientResponder)
     assert reply == "右下腹疼痛明显。"
+
+
+def test_deterministic_patient_responder_keeps_context_without_repeat_branching() -> None:
+    responder = module.DeterministicPatientResponder()
+
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="有对什么过敏吗？",
+            current_intents=["ask_allergy"],
+            canonical_answer="没有药物过敏，吃东西也没发现过敏。",
+            revealed_fact_id="appendicitis_001.hf_07",
+            revealed_fact_ids=["appendicitis_001.hf_07"],
+            dialogue_context={
+                "recent_messages": [
+                    {"role": "student", "content": "有对什么过敏吗？"},
+                    {"role": "patient", "content": "没有药物过敏，吃东西也没发现过敏。"},
+                ],
+            },
+            answerable_fact_candidates=[
+                {
+                    "fact_id": "appendicitis_001.hf_07",
+                    "canonical_answer": "没有药物过敏，吃东西也没发现过敏。",
+                }
+            ],
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert reply == "没有药物过敏，吃东西也没发现过敏。"
 
 
 class FakePatientFactIdClient:
@@ -117,7 +153,7 @@ def test_patient_responder_rejects_unapproved_fact_ids_from_model() -> None:
         case_title="急性腹痛问诊",
         chief_complaint="腹痛 1 天",
         student_message="什么时候开始疼？",
-        current_intent="ask_onset",
+        current_intents=["ask_onset"],
         canonical_answer="24 小时前开始，最初是上腹部隐痛。",
         revealed_fact_id="appendicitis_001.hf_01",
         answerable_fact_candidates=[
@@ -132,6 +168,36 @@ def test_patient_responder_rejects_unapproved_fact_ids_from_model() -> None:
 
     with pytest.raises(RuntimeError, match="未授权病例事实"):
         responder(request)
+
+
+def test_lazy_patient_responder_uses_canonical_answer_when_model_output_fails_fact_gate(monkeypatch) -> None:
+    class UnsafeModelResponder:
+        def __call__(self, request: module.PatientResponderRequest) -> str:
+            raise RuntimeError("标准化病人回答声明使用了未授权病例事实：['appendicitis_001.hf_99']")
+
+    monkeypatch.setattr(module, "_create_configured_responder", lambda: UnsafeModelResponder())
+
+    responder = module.LazyGeminiPatientResponder()
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="什么时候开始疼？",
+            current_intents=["ask_onset"],
+            canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+            revealed_fact_id="appendicitis_001.hf_01",
+            answerable_fact_candidates=[
+                {
+                    "fact_id": "appendicitis_001.hf_01",
+                    "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+                }
+            ],
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert reply == "24 小时前开始，最初是上腹部隐痛。"
 
 
 def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
@@ -149,7 +215,7 @@ def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
             case_title="急性腹痛问诊",
             chief_complaint="腹痛 1 天",
             student_message="什么时候开始疼？",
-            current_intent="ask_onset",
+            current_intents=["ask_onset"],
             canonical_answer="24 小时前开始，最初是上腹部隐痛。",
             revealed_fact_id="appendicitis_001.hf_01",
             answerable_fact_candidates=[
@@ -373,7 +439,7 @@ def test_create_configured_patient_responder_uses_runtime_openai_compatible_conf
                 case_title="急性腹痛问诊",
                 chief_complaint="腹痛 1 天",
                 student_message="哪里疼？",
-                current_intent="ask_location",
+                current_intents=["ask_location"],
                 canonical_answer="右下腹疼痛明显。",
                 forbidden_terms=["急性阑尾炎"],
             )
@@ -412,7 +478,7 @@ def test_openai_compatible_patient_responder_accepts_patient_reply_key(monkeypat
                 case_title="急性腹痛问诊",
                 chief_complaint="腹痛 1 天",
                 student_message="右下腹部有多痛？怎么个痛法？",
-                current_intent="ask_character",
+                current_intents=["ask_character"],
                 canonical_answer="现在是持续性胀痛，走路或咳嗽时疼痛加重。",
                 forbidden_terms=["急性阑尾炎"],
             )
@@ -449,7 +515,7 @@ def test_openai_compatible_patient_responder_accepts_plain_text_reply_for_single
                 case_title="急性腹痛问诊",
                 chief_complaint="腹痛 1 天",
                 student_message="哪里最疼？",
-                current_intent="ask_location",
+                current_intents=["ask_location"],
                 canonical_answer="现在右下腹疼痛明显。",
                 forbidden_terms=["急性阑尾炎"],
             )
@@ -486,7 +552,7 @@ def test_create_configured_patient_responder_uses_runtime_anthropic_config(monke
                 case_title="急性腹痛问诊",
                 chief_complaint="腹痛 1 天",
                 student_message="哪里疼？",
-                current_intent="ask_location",
+                current_intents=["ask_location"],
                 canonical_answer="右下腹疼痛明显。",
                 forbidden_terms=["急性阑尾炎"],
             )
@@ -526,7 +592,7 @@ def test_anthropic_patient_responder_accepts_plain_text_reply_for_single_field_s
                 case_title="急性腹痛问诊",
                 chief_complaint="腹痛 1 天",
                 student_message="哪里最疼？",
-                current_intent="ask_location",
+                current_intents=["ask_location"],
                 canonical_answer="现在右下腹疼痛明显。",
                 forbidden_terms=["急性阑尾炎"],
             )

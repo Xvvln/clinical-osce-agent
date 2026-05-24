@@ -15,7 +15,8 @@ COPY services/api/app ./services/api/app
 COPY data ./data
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir ./services/api
+    && pip install --no-cache-dir uv \
+    && UV_INDEX_URL=${PIP_INDEX_URL} uv pip install --system --no-cache ./services/api
 
 WORKDIR /app/services/api
 EXPOSE 8000

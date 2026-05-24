@@ -28,6 +28,22 @@
 - **管理端答辩与教学复盘**：教师可查看病例与来源台账、训练 Session、评分报告、RAG 引用、错误模式统计、候选 Skill、审核审计事件、enabled Skill 应用痕迹和效果统计。
 - **安全与评测回归**：自动化测试持续验证 RAG 来源覆盖、旧报告兼容、Skill 审核闭环、后续训练注入、训练日志记录和管理端结构稳定性；系统明确拒绝真实诊疗建议。
 
+## 当前实现快照
+
+截至 2026-05-22，仓库已具备可本地演示的学生端、管理端和后端闭环：
+
+- 学生端支持病例选择、标准化病人问诊、查体 / 检查申请、诊断假设记录、最终诊断提交、评分报告、训练记录、学习画像、账号级模型配置和 OSCE 悬浮入口。
+- 标准化病人回复采用受控两层上下文：模型可看到患者私有事实和本轮可回答候选事实，但后端会校验本轮 `fact_ids_used`，避免泄露标准诊断、rubric、治疗方案或未触发隐藏事实。
+- Coach Agent 同时支持被动审查和主动请求提示，会结合训练进度、已披露线索、当前阶段、学生画像、enabled Skill 和知识库检索结果给出教学提示；偏题、寒暄、身份不清和病例脚本未覆盖问题会进入不同受控路径。
+- 右侧“已收集线索”会随新命中事实自动定位到最新线索，并以边缘呼吸光效提示；诊断假设作为紧凑常驻卡片展示，不再撑高工作台。
+- 独立报告页按总览、教师复盘、个人训练 Skill、维度图表、本轮结论、原始对话、推荐训练病例和评分依据组织；教师复盘由后端结合当前病例、已覆盖 / 未覆盖线索和 rubric 中文训练点生成“老师讲评”式结构化内容，覆盖总体判断、保留做法、主要问题、为什么重要、正确做法、下一轮具体练法和推理链点评；结构化来源默认折叠，避免把 RAG 包装成评分裁判。
+- 管理端支持病例 / rubric / 来源台账、训练 Session、报告、日志、Agent 轨迹、错误模式、教学重点、系统评测、候选 Skill 审核、Skill 自动应用、审批 Agent 记录和 RAG 文档知识库管理。
+- RAG 知识库支持全局或病例绑定文档上传，`.md` / `.txt` 使用本地轻量解析，PDF / DOCX / HTML 等格式优先通过 Unstructured 做结构化解析与按标题分块；启用后的 chunk 可供 Coach、训练后复盘、Skill 生成和 Skill 审批 Agent 检索。
+- ChromaDB 已作为本地持久向量库接入，配合 Vertex Gemini embedding 生成 query 与文档向量；RAG 用于知识召回、复盘解释、学习材料和 Agent grounding，不参与标准诊断裁判或 rubric 评分。
+- Skill 编排已从“全量注入”升级为基于学生画像、近期漏项、病例、阶段、触发项和 Top-K 选择的编排链路；训练后会刷新学生画像，Skill 可进入 active、cooldown、retired、reactivated 等状态，效果不足时如实显示“样本不足”。
+
+当前仍需如实说明的边界：项目尚未完成生产级 HTTPS / 反向代理 / RBAC / 监控部署，尚未接入 Langfuse 等正式可观测平台，病例数量有限，医学内容仍需真实医学教师审核；Skill 效果统计没有大样本因果证明，不能伪造成已稳定提升。
+
 ## 技术栈
 
 ### 后端
@@ -37,6 +53,8 @@
 - Pydantic（数据校验库）：定义病例和评分量表的数据契约。
 - SQLite（轻量级关系数据库）：保存本地训练事件、报告和训练 Skill 运行时数据。
 - Google Gen AI SDK（Google Gemini/Vertex AI 调用库）：可选接入标准化病人表达层和 LLM（大语言模型）评分能力。
+- ChromaDB（本地向量数据库）：可选持久化知识库 chunk、病例、rubric 和来源条目的 embedding，用于 RAG 检索。
+- Unstructured（文档解析与分块库）：用于 PDF、DOCX、HTML 等教师上传资料的结构化解析和 chunk 切分。
 
 ### 前端
 
@@ -87,6 +105,8 @@ clinical-osce-agent/
 - `data/cases/` 和 `data/rubrics/` 是运行时直接读取的教学数据。
 - `data/schemas/` 约束病例和评分量表结构。
 - `data/attribution/source_registry/sources.json` 是数据来源登记清单。
+- 管理端上传的知识库文档会被切分为 chunk，并携带 scope、case_id、document_id、source_location、visibility、allowed_agents、enabled、chunking_strategy、quality_warnings 等元数据。
+- 启用 ChromaDB 时，向量索引默认写入 `data/processed/chroma`，该目录属于本地生成物，不应提交到 Git。
 - `data/raw/`、`references/`、`data/runtime/*.sqlite3` 和受限数据默认不提交到 Git。
 - 需要额外许可的数据，例如 UMLS canonicalized dataset，不自动下载，也不应直接提交。
 
@@ -199,6 +219,8 @@ curl http://127.0.0.1:8000/health
 
 ### 4. 启动前端
 
+学生端：
+
 ```bash
 corepack pnpm --dir apps/web install
 corepack pnpm --dir apps/web dev
@@ -211,6 +233,21 @@ http://localhost:3000
 ```
 
 前端开发服务会把 `/api/*` 请求转发到 `http://127.0.0.1:8000/api/*`。
+
+管理端：
+
+```bash
+corepack pnpm --dir apps/admin install
+corepack pnpm --dir apps/admin dev
+```
+
+访问：
+
+```text
+http://localhost:3001
+```
+
+管理端本地演示账号默认预填 `admin-demo@example.test / safe-admin-password`。正式部署前应关闭演示管理员并改用真实管理员白名单。
 
 ## 测试与验证
 
@@ -225,12 +262,14 @@ uv --directory services/api run pytest tests -q
 ```bash
 node apps/web/home-navigation-layout.test.mjs
 node apps/web/next-config.test.mjs
+corepack pnpm --dir apps/admin exec node --test admin-skill-review.test.mjs
 ```
 
 前端类型检查：
 
 ```bash
 corepack pnpm --dir apps/web typecheck
+corepack pnpm --dir apps/admin typecheck
 ```
 
 前端生产构建：

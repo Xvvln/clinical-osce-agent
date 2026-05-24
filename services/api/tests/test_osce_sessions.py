@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import httpx
 from fastapi.testclient import TestClient
@@ -37,6 +39,27 @@ def failing_openai_patient_responder(request: object) -> str:
         },
     )
     raise httpx.HTTPStatusError("401 Invalid API Key", request=http_request, response=http_response)
+
+
+def failing_google_turn_intent_agent(request: object) -> object:
+    from google.genai import errors as google_genai_errors
+
+    raise google_genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+
+def failing_google_adc_turn_intent_agent(request: object) -> object:
+    from google.auth import exceptions as google_auth_exceptions
+
+    raise google_auth_exceptions.DefaultCredentialsError("Your default credentials were not found.")
 
 
 def assert_training_progress_hides_diagnosis(progress: dict[str, object]) -> None:
@@ -127,6 +150,101 @@ def test_message_provider_auth_error_returns_readable_gateway_error() -> None:
     assert create_response.status_code == 200
     assert response.status_code == 502
     assert response.json()["detail"] == "模型服务调用失败：HTTP 401：Invalid API Key；invalid_key"
+
+
+def test_message_google_provider_quota_error_returns_readable_gateway_error() -> None:
+    osce_session_service.osce_graph = build_osce_graph(
+        patient_responder=canonical_patient_responder,
+        turn_intent_agent=failing_google_turn_intent_agent,
+    )
+    create_response = client.post("/api/sessions", json={"case_id": "hyperthyroid_001"})
+    session_id = create_response.json()["session_id"]
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.post(
+            f"/api/sessions/{session_id}/message",
+            json={"message": "心慌什么时候开始？有没有手抖、怕热、多汗、体重下降？"},
+        )
+
+    assert create_response.status_code == 200
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "模型服务调用失败：HTTP 429：Resource has been exhausted (e.g. check quota).；RESOURCE_EXHAUSTED"
+    )
+
+
+def test_message_google_adc_missing_error_returns_readable_gateway_error() -> None:
+    osce_session_service.osce_graph = build_osce_graph(
+        patient_responder=canonical_patient_responder,
+        turn_intent_agent=failing_google_adc_turn_intent_agent,
+    )
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.post(
+            f"/api/sessions/{session_id}/message",
+            json={"message": "什么时候开始疼的？"},
+        )
+
+    assert create_response.status_code == 200
+    assert response.status_code == 502
+    assert "Google ADC" in response.json()["detail"]
+
+
+def test_report_google_provider_quota_error_returns_readable_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.genai import errors as google_genai_errors
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    def failing_report(_: str) -> dict[str, object]:
+        raise google_genai_errors.ClientError(
+            429,
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Resource has been exhausted (e.g. check quota).",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+
+    monkeypatch.setattr(main.osce_session_service, "get_report", failing_report)
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.get(f"/api/sessions/{session_id}/report")
+
+    assert create_response.status_code == 200
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "模型服务调用失败：HTTP 429：Resource has been exhausted (e.g. check quota).；RESOURCE_EXHAUSTED"
+    )
+
+
+def test_current_user_report_google_adc_missing_error_returns_readable_gateway_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.auth import exceptions as google_auth_exceptions
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    def failing_report(_: str) -> dict[str, object]:
+        raise google_auth_exceptions.DefaultCredentialsError("Your default credentials were not found.")
+
+    monkeypatch.setattr(main.osce_session_service, "get_report", failing_report)
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.get(f"/api/me/sessions/{session_id}/report")
+
+    assert create_response.status_code == 200
+    assert response.status_code == 502
+    assert "Google ADC" in response.json()["detail"]
 
 
 def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str, str]) -> None:
@@ -285,6 +403,7 @@ def test_current_user_sessions_list_only_owned_sessions(tmp_path, authenticated_
         for key in [
             "session_id",
             "case_id",
+            "case_title",
             "stage",
             "is_completed",
             "can_continue",
@@ -294,6 +413,7 @@ def test_current_user_sessions_list_only_owned_sessions(tmp_path, authenticated_
     } == {
         "session_id": current_response.json()["session_id"],
         "case_id": "appendicitis_001",
+        "case_title": "右下腹痛教学病例",
         "stage": "case_intro",
         "is_completed": False,
         "can_continue": True,
@@ -872,7 +992,8 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["current_intent"] == "safety_boundary"
+    assert "current_intent" not in payload
+    assert payload["current_intents"] == ["safety_boundary"]
     assert payload["reply"] == "本系统仅用于 OSCE 教学模拟训练，不能提供真实诊断、具体用药或急救处置建议；如有真实健康问题，请咨询合格医疗专业人员或及时就医。"
     assert payload["messages"] == [
         {"role": "student", "content": message},
@@ -884,6 +1005,8 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
     assert [event["event_type"] for event in business_events(events)] == ["session_created", "safety_boundary_triggered"]
+    assert "current_intent" not in payload["agent_turn_memory"][0]
+    assert payload["agent_turn_memory"][0]["current_intents"] == ["safety_boundary"]
     assert find_event(events, "safety_boundary_triggered")["payload"] == {
         "message": message,
         "safety_flag": "real_medical_advice_request",
@@ -908,7 +1031,8 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["current_intent"] == "answer_request_redirect"
+    assert "current_intent" not in payload
+    assert payload["current_intents"] == ["answer_request_redirect"]
     assert payload["reply"] == "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
     assert payload["messages"] == [
         {"role": "student", "content": message},
@@ -920,6 +1044,8 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
     assert [event["event_type"] for event in business_events(events)] == ["session_created", "answer_request_redirected"]
+    assert "current_intent" not in payload["agent_turn_memory"][0]
+    assert payload["agent_turn_memory"][0]["current_intents"] == ["answer_request_redirect"]
     assert find_event(events, "answer_request_redirected")["payload"] == {
         "message": message,
         "reply": payload["reply"],
@@ -1241,6 +1367,9 @@ def test_osce_session_returns_training_progress_map() -> None:
         "id": "hf_01",
         "label": "24 小时前开始，最初是上腹部隐痛。",
         "status": "pending",
+        "topic": "现病史",
+        "slot": "onset",
+        "linked_rubric_items": ["ht_onset"],
     }
     assert progress["coverage_map"]["physical_exam"][2] == {
         "id": "abd.palpation.tenderness",
@@ -1669,7 +1798,8 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
         "hint": payload["hint"],
         "agent_turn": payload["agent_turn_memory"][-1],
     }
-    assert hint_event_payload["agent_turn"]["current_intent"] == "socratic_hint"
+    assert "current_intent" not in hint_event_payload["agent_turn"]
+    assert hint_event_payload["agent_turn"]["current_intents"] == ["socratic_hint"]
     assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
     assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
 
@@ -1721,7 +1851,8 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         "hint": payload["hint"],
         "agent_turn": payload["agent_turn_memory"][-1],
     }
-    assert hint_event_payload["agent_turn"]["current_intent"] == "socratic_hint"
+    assert "current_intent" not in hint_event_payload["agent_turn"]
+    assert hint_event_payload["agent_turn"]["current_intents"] == ["socratic_hint"]
     assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
     assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
 
@@ -1781,6 +1912,35 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert report_response.status_code == 200
     assert report["ai_reflection_review"]["status"] == "generated"
     assert report["ai_reflection_review"]["source_references"]
+    reflection = report["ai_reflection_review"]
+    assert reflection["generated_by"] == "teacher_reflection_agent"
+    assert reflection["teaching_prompt_version"] == "teacher_reflection_v2"
+    assert "证据链" in reflection["overall_comment"]
+    assert reflection["strengths_review"]
+    assert reflection["reasoning_chain_review"]
+    assert reflection["next_practice_plan"]
+    assert 1 <= len(reflection["major_issues"]) <= 4
+    first_issue = reflection["major_issues"][0]
+    assert first_issue["title"]
+    assert first_issue["observed_behavior"]
+    assert first_issue["why_it_matters"]
+    assert first_issue["correct_approach"]
+    assert first_issue["next_action"]
+    assert first_issue["linked_items"]
+    assert "ht_" not in first_issue["title"]
+    assert "rubric" not in first_issue["observed_behavior"]
+    reflection_text = json.dumps(reflection, ensure_ascii=False)
+    assert "37.8" not in reflection_text
+    assert "CRP 48" not in reflection_text
+    assert "管状低回声" not in reflection_text
+    assert "测量体温、体温" not in reflection_text
+    assert "右下腹痛教学病例" in reflection["summary"]
+    assert "老师视角" in reflection["teacher_feedback"]
+    assert "为什么" in reflection["teacher_feedback"]
+    assert "病例评估链条" in reflection["teacher_feedback"]
+    assert "病史补全" in reflection["next_focus"]
+    assert "下一轮 Coach" not in reflection["next_focus"]
+    assert "AI 复盘" not in reflection["safety_note"]
     assert personal_candidate["scope"] == "personal"
     assert personal_candidate["owner_student_id"] == authenticated_user["user_id"]
     assert personal_candidate["source_session_id"] == session_id
@@ -1889,7 +2049,7 @@ def test_completed_training_hydrates_legacy_stored_report_with_ai_reflection_and
             "ai_reflection_review": {
                 "status": "not_ready",
                 "reason": "final_submission_required",
-                "summary": "提交诊断并生成完整评分报告后，系统会生成 AI 复盘和下一轮个人训练 Skill。",
+                "summary": "提交诊断并生成完整评分报告后，系统会生成教师复盘和下一轮个人训练 Skill。",
                 "mistake_patterns": [],
                 "teacher_feedback": "",
                 "next_focus": "",
@@ -1915,6 +2075,137 @@ def test_completed_training_hydrates_legacy_stored_report_with_ai_reflection_and
     assert stored_report is not None
     assert stored_report["ai_reflection_review"]["status"] == "generated"
     assert stored_report["training_progress_snapshot"]["coverage_map"]["auxiliary_test"]
+
+
+def test_completed_training_report_survives_personal_skill_generation_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.training_skill_candidate_service import TrainingSkillCandidateGenerationError
+
+    class FailingPersonalSkillService:
+        def generate_for_completed_session(self, **_: object) -> dict[str, object]:
+            raise TrainingSkillCandidateGenerationError("Skill candidate generation failed")
+
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+    monkeypatch.setattr(osce_session_service, "personal_skill_service", FailingPersonalSkillService())
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断，但病史补充不足。"},
+    )
+
+    response = client.get(f"/api/sessions/{session_id}/report")
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["personal_skill_candidate"]["status"] == "generation_failed"
+    assert report["personal_skill_candidate"]["reason"] == "skill_candidate_generation_failed"
+    assert report["ai_reflection_review"]["status"] == "generated"
+
+
+def test_completed_training_rehydrates_legacy_generic_ai_reflection_text(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
+    client.post(f"/api/sessions/{session_id}/auxiliary-test", json={"test_code": "lab.cbc"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断，但病史补充不足。"},
+    )
+    generated_report = client.get(f"/api/sessions/{session_id}/report").json()
+    osce_session_service.report_store.save_report(
+        {
+            **generated_report,
+            "ai_reflection_review": {
+                "status": "generated",
+                "summary": "本轮主要问题集中在 6 个训练点：证据采集、鉴别诊断或推理表达仍有缺口。",
+                "mistake_patterns": ["ht_onset"],
+                "teacher_feedback": "建议下一轮先说明为什么要问、查或检验，再把证据串成支持与排除依据。",
+                "next_focus": "下一轮 Coach 会优先围绕本轮个人 Skill 给出针对性提示。",
+                "source_references": [],
+                "source_reference_items": [],
+                "safety_note": "AI 复盘仅用于 OSCE 教学训练，不改变病例事实、rubric、标准诊断或评分规则。",
+            },
+        }
+    )
+
+    report = client.get(f"/api/sessions/{session_id}/report").json()
+
+    assert "右下腹痛教学病例" in report["ai_reflection_review"]["summary"]
+    assert "老师视角" in report["ai_reflection_review"]["teacher_feedback"]
+    assert "下一轮 Coach" not in report["ai_reflection_review"]["next_focus"]
+    assert "AI 复盘" not in report["ai_reflection_review"]["safety_note"]
+
+
+def test_orphan_legacy_report_rehydrates_generic_ai_reflection_from_report_fields(tmp_path) -> None:
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+    session_id = "orphan-legacy-report"
+    osce_session_service.report_store.save_report(
+        {
+            "report_id": f"{session_id}_report",
+            "session_id": session_id,
+            "case_id": "appendicitis_001",
+            "total_score": 62,
+            "max_score": 100,
+            "missed_items": ["ht_onset", "ax_ua"],
+            "knowledge_recommendations": [],
+            "source_references": ["rubric:appendicitis_001_rubric.item.ht_onset"],
+            "source_reference_items": [
+                {
+                    "reference": "rubric:appendicitis_001_rubric.item.ht_onset",
+                    "source_type": "rubric",
+                    "title": "追问起病时间",
+                    "metadata": {},
+                }
+            ],
+            "ai_reflection_review": {
+                "status": "generated",
+                "summary": "本轮主要问题集中在 2 个训练点：证据采集、鉴别诊断或推理表达仍有缺口。",
+                "mistake_patterns": ["ht_onset", "ax_ua"],
+                "teacher_feedback": "建议下一轮先说明为什么要问、查或检验，再把证据串成支持与排除依据。",
+                "next_focus": "下一轮 Coach 会优先围绕本轮个人 Skill 给出针对性提示。",
+                "source_references": [],
+                "source_reference_items": [],
+                "safety_note": "AI 复盘仅用于 OSCE 教学训练，不改变病例事实、rubric、标准诊断或评分规则。",
+            },
+        }
+    )
+
+    report = osce_session_service.get_report(session_id)
+
+    assert report is not None
+    assert "右下腹痛教学病例" in report["ai_reflection_review"]["summary"]
+    assert "老师视角" in report["ai_reflection_review"]["teacher_feedback"]
+    assert "AI 复盘" not in report["ai_reflection_review"]["safety_note"]
 
 
 def test_incomplete_training_report_does_not_generate_personal_skill(tmp_path) -> None:
@@ -2025,7 +2316,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
     }
     assert filtered_business_events[2]["payload"] == {
         "message": "什么时候开始疼的？",
-        "current_intent": "ask_onset",
+        "current_intents": ["ask_onset"],
         "reply": "24 小时前开始，最初是上腹部隐痛。",
         "agent_turn": state_payload["agent_turn_memory"][0],
     }

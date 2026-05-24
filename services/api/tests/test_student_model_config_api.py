@@ -150,6 +150,25 @@ def test_student_model_config_test_rejects_remote_provider_without_api_key() -> 
     assert response.json() == {"detail": "api_key is required for gemini"}
 
 
+def test_student_model_config_test_is_disabled_in_production_deployment_mode(monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/model-config/test",
+            json={
+                "provider": "openai_compatible",
+                "api_key": "student-openai-secret",
+                "model": "gemini-via-proxy",
+                "base_url": "https://api.proxy.example/v1",
+                "proxy_url": "direct",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "runtime model config is disabled in production deployment mode"}
+
+
 def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(monkeypatch) -> None:
     _FakeOpenAICompatibleProbeClient.requested_urls = []
     _FakeOpenAICompatibleProbeClient.requested_headers = []
@@ -474,6 +493,55 @@ def test_runtime_model_config_persists_per_authenticated_user(tmp_path, monkeypa
 
     assert second_user_response.status_code == 200
     assert second_user_response.json()["active"] is False
+
+
+def test_production_runtime_config_status_exposes_environment_default_without_user_secret(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "http://20.89.192.82:8317/v1")
+    monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
+    client = _authenticated_client(tmp_path, monkeypatch, "student-prod@example.test")
+
+    status_response = client.get("/api/model-config/runtime")
+
+    assert status_response.status_code == 200
+    assert status_response.json() == {
+        "active": True,
+        "provider": "openai_compatible",
+        "model": "gemini-3.5-flash",
+        "base_url": "http://20.89.192.82:8317/v1",
+        "proxy_url": "direct",
+        "integration_targets": [
+            "patient_responder",
+            "turn_intent_agent",
+            "coach_agent",
+            "llm_rubric_scorer",
+            "skill_candidate_generator",
+        ],
+        "api_key_saved": False,
+        "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
+        "runtime_write_supported": False,
+        "deployment_mode": "single-node-prod",
+    }
+    assert "server-gemini-secret" not in status_response.text
+
+
+def test_production_training_uses_environment_default_when_runtime_write_is_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "http://20.89.192.82:8317/v1")
+    monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
+    client = _authenticated_client(tmp_path, monkeypatch, "student-prod-session@example.test")
+
+    response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+
+    assert response.status_code == 200
+    assert response.json()["case_id"] == "appendicitis_001"
 
 
 def test_runtime_model_config_can_reuse_saved_secret_without_echoing_it(tmp_path, monkeypatch) -> None:

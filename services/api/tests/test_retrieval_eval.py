@@ -1,7 +1,13 @@
 import pytest
 
 from app.graph.osce_graph import evaluation_node
-from app.services.retrieval_eval_service import RetrievalGoldQuery, compute_retrieval_metrics, load_retrieval_gold_queries
+from app.services.retrieval_eval_service import (
+    RetrievalGoldQuery,
+    compute_retrieval_metrics,
+    load_retrieval_gold_queries,
+    run_retrieval_eval,
+)
+from app.services.retrieval_index import RetrievalDocument
 
 
 def test_retrieval_eval_metrics_compute_correctly() -> None:
@@ -63,6 +69,53 @@ def test_default_gold_queries_deepen_appendicitis_flagship_case() -> None:
         not reference.startswith(("case:acs_", "rubric:acs_", "knowledge:acs_"))
         for reference in expected_references
     )
+
+
+def test_retrieval_eval_uses_batch_search_once_for_gold_queries(tmp_path) -> None:
+    gold_path = tmp_path / "gold_queries.json"
+    gold_path.write_text(
+        """[
+  {"query_id":"q1","query":"腹痛迁移","expected_references":["case:appendicitis_001"]},
+  {"query_id":"q2","query":"反跳痛","expected_references":["rubric:appendicitis_001_rubric.item.pe_rebound"]}
+]""",
+        encoding="utf-8",
+    )
+    calls: list[tuple[list[str], int]] = []
+
+    def batch_search(queries: list[str], limit: int) -> list[list[RetrievalDocument]]:
+        calls.append((queries, limit))
+        return [
+            [
+                RetrievalDocument(
+                    reference="case:appendicitis_001",
+                    source_type="case",
+                    title="右下腹痛教学病例",
+                    snippet="转移性右下腹痛。",
+                    score=0.9,
+                )
+            ],
+            [
+                RetrievalDocument(
+                    reference="rubric:appendicitis_001_rubric.item.pe_rebound",
+                    source_type="rubric",
+                    title="检查反跳痛",
+                    snippet="腹膜刺激征。",
+                    score=0.8,
+                )
+            ],
+        ]
+
+    def search_should_not_run(query: str, limit: int) -> list[RetrievalDocument]:
+        raise AssertionError(f"retrieval eval should batch search gold queries, got {query}")
+
+    result = run_retrieval_eval(
+        gold_path=gold_path,
+        search_fn=search_should_not_run,
+        batch_search_fn=batch_search,
+    )
+
+    assert calls == [(["腹痛迁移", "反跳痛"], 5)]
+    assert result["metrics"]["recall_at_5"] == 1.0
 
 
 def test_rag_never_enters_scoring_judgement(monkeypatch: pytest.MonkeyPatch) -> None:

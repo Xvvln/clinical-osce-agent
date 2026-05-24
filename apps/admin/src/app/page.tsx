@@ -447,7 +447,7 @@ type AgentTurnPayload = Readonly<{
   student_message: string;
   reply: string;
   reply_role: string;
-  current_intent: string;
+  current_intents: readonly string[];
   turn_policy: string;
   turn_analysis: Record<string, unknown> | null;
   agent_path: readonly string[];
@@ -455,6 +455,7 @@ type AgentTurnPayload = Readonly<{
   selected_skill_reasons: readonly AdminSkillSelectionReason[];
   skill_context: readonly string[];
   revealed_fact_id: string | null;
+  revealed_fact_ids: readonly string[];
   source_references: readonly string[];
   safety_flags: readonly string[];
 }>;
@@ -576,6 +577,8 @@ type AdminModelProviderConfig = Readonly<{
   project: string;
   location: string;
   proxy_url: string;
+  device: string;
+  cache_folder: string;
   persist_directory: string;
   collection: string;
   index_manifest?: ChromaIndexManifestStatus;
@@ -1203,6 +1206,10 @@ function formatAgentDecisionValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function formatIntentList(currentIntents: readonly string[]): string {
+  return currentIntents.length > 0 ? currentIntents.join("、") : "暂无";
+}
+
 function getAgentDecisionPayload(event: TrainingEventRecord): AgentDecisionPayload {
   return {
     latestDecision: getRecordValue(event.payload.latest_decision),
@@ -1215,12 +1222,13 @@ function getAgentTurnPayload(event: TrainingEventRecord): AgentTurnPayload | nul
   if (!turnPayload) {
     return null;
   }
+  const currentIntents = getStringArrayValue(turnPayload, "current_intents");
   return {
     turn_id: getStringValue(turnPayload, "turn_id"),
     student_message: getStringValue(turnPayload, "student_message"),
     reply: getStringValue(turnPayload, "reply"),
     reply_role: getStringValue(turnPayload, "reply_role"),
-    current_intent: getStringValue(turnPayload, "current_intent"),
+    current_intents: currentIntents,
     turn_policy: getStringValue(turnPayload, "turn_policy"),
     turn_analysis: getRecordValue(turnPayload.turn_analysis),
     agent_path: getStringArrayValue(turnPayload, "agent_path"),
@@ -1228,6 +1236,7 @@ function getAgentTurnPayload(event: TrainingEventRecord): AgentTurnPayload | nul
     selected_skill_reasons: getSkillSelectionReasonsValue(turnPayload),
     skill_context: getStringArrayValue(turnPayload, "skill_context"),
     revealed_fact_id: getNullableStringValue(turnPayload, "revealed_fact_id"),
+    revealed_fact_ids: getStringArrayValue(turnPayload, "revealed_fact_ids"),
     source_references: getStringArrayValue(turnPayload, "source_references"),
     safety_flags: getStringArrayValue(turnPayload, "safety_flags"),
   };
@@ -1330,6 +1339,28 @@ function getAdminCaseDisplayTitle(caseId: string | undefined, caseTitle: string 
     return "全局通用";
   }
   return getAdminDisplayText(caseTitle, caseId);
+}
+
+function getAdminAuditEventSubjectLabel(event: TrainingEventRecord, selectedCandidate?: TrainingSkillCandidateDetail | null): string {
+  const payloadCandidateId = typeof event.payload.candidate_id === "string" ? event.payload.candidate_id : "";
+  const candidateIds = [payloadCandidateId, event.session_id, event.case_id].filter(Boolean);
+  const isSelectedCandidateEvent = selectedCandidate
+    ? candidateIds.some((candidateId) => candidateId === selectedCandidate.candidate_id)
+    : false;
+  if (isSelectedCandidateEvent && selectedCandidate?.title) {
+    return selectedCandidate.title;
+  }
+  if (
+    candidateIds.some(
+      (candidateId) =>
+        candidateId.startsWith("skill_candidate") ||
+        candidateId.startsWith("personal_skill_candidate") ||
+        candidateId.includes("training_pattern"),
+    )
+  ) {
+    return "候选 Skill";
+  }
+  return getAdminCaseDisplayTitle(event.case_id, undefined);
 }
 
 function getAdminSourceDisplayTitle(sourceId: string | undefined, sourceTitle: string | undefined): string {
@@ -3173,6 +3204,8 @@ export default function AdminDashboardPage() {
                         {provider.project ? <p className="break-words">项目：{provider.project}</p> : null}
                         {provider.location ? <p>区域：{provider.location}</p> : null}
                         {provider.proxy_url ? <p className="break-words">代理：{provider.proxy_url}</p> : null}
+                        {provider.device ? <p>设备：{provider.device}</p> : null}
+                        {provider.cache_folder ? <p className="break-words">缓存目录：{provider.cache_folder}</p> : null}
                         {provider.persist_directory ? <p className="break-words">持久化目录：{provider.persist_directory}</p> : null}
                         {provider.collection ? <p className="break-words">集合：{provider.collection}</p> : null}
                       </div>
@@ -4479,13 +4512,16 @@ export default function AdminDashboardPage() {
                           </div>
                           <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
                             <p className="text-xs font-semibold text-[#AE5630]">意图分析</p>
-                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">意图：{turnPayload.current_intent || "暂无"}</p>
+                            <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">本轮意图：{formatIntentList(turnPayload.current_intents)}</p>
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">策略：{turnPayload.turn_policy || "暂无"}</p>
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">分析：{formatAgentDecisionValue(turnPayload.turn_analysis)}</p>
                           </div>
                           <div className="rounded-md border border-[#E6DFD2] bg-white p-2">
                             <p className="text-xs font-semibold text-[#AE5630]">事实门禁</p>
                             <p className="mt-1 break-words text-[11px] leading-5 text-[#6F6257]">披露事实：{turnPayload.revealed_fact_id ?? "本轮未披露隐藏事实"}</p>
+                            {turnPayload.revealed_fact_ids.length > 1 ? (
+                              <p className="break-words text-[11px] leading-5 text-[#6F6257]">本轮事实：{turnPayload.revealed_fact_ids.join("、")}</p>
+                            ) : null}
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">Agent 路径：{turnPayload.agent_path.join(" → ") || "暂无"}</p>
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">来源：{turnPayload.source_references.join("、") || "暂无"}</p>
                             <p className="break-words text-[11px] leading-5 text-[#6F6257]">安全标记：{turnPayload.safety_flags.join("、") || "无"}</p>
@@ -4657,7 +4693,8 @@ export default function AdminDashboardPage() {
                             <p className="mt-1 text-xs text-[#8A7D6F]">涉及病例：{getAdminDisplayList(pattern.case_titles, pattern.case_ids)}</p>
                             <details className="mt-2 text-xs leading-5 text-[#8A7D6F]">
                               <summary className="cursor-pointer font-medium text-[#6F6257]">展开话轮模式技术 ID</summary>
-                              <p className="mt-1 break-all font-mono">{pattern.pattern_id}</p>
+                              <p className="mt-1 break-words">内部模式标识仅用于导出与排障，默认列表优先展示中文标题和触发项。</p>
+                              <p className="mt-1 break-all font-mono">模式：{pattern.pattern_id}</p>
                             </details>
                           </article>
                         ))
@@ -4701,7 +4738,7 @@ export default function AdminDashboardPage() {
                                 </div>
                                 <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-xs text-[#AE5630]">{sourceReference.count} 次</span>
                               </div>
-                              <p className="mt-2 text-xs text-[#8A7D6F]">类型：{getSourceReferenceLabel(sourceReference.reference)} · 涉及病例：{getAdminDisplayList(sourceReference.case_titles, sourceReference.case_ids)}</p>
+                              <p className="mt-2 text-xs text-[#8A7D6F]">类型：{sourceReference.reference_label ?? getSourceReferenceLabel(sourceReference.reference)} · 涉及病例：{getAdminDisplayList(sourceReference.case_titles, sourceReference.case_ids)}</p>
                               {metadataText ? <p className="mt-1 text-xs text-[#8A7D6F]">{metadataText}</p> : null}
                             </article>
                           );
@@ -4764,8 +4801,8 @@ export default function AdminDashboardPage() {
                       <summary className="cursor-pointer font-semibold text-[#141413]">展开教学重点技术 ID</summary>
                       <p className="mt-2 break-words">范围：{selectedTeachingFocusPattern.scope}</p>
                       <p className="mt-1 break-words">重点：{selectedTeachingFocusPattern.focus_id}</p>
-                      <p className="mt-1 break-words">触发项：{selectedTeachingFocusPattern.trigger_item_ids.join("、")}</p>
-                      <p className="mt-1 break-words">来源：{selectedTeachingFocusPattern.source_reference_ids.join("、")}</p>
+                      <p className="mt-1 break-words">触发项：{getAdminDisplayList(selectedTeachingFocusPattern.trigger_item_labels, selectedTeachingFocusPattern.trigger_item_ids)}</p>
+                      <p className="mt-1 break-words">来源：{getAdminDisplayList(selectedTeachingFocusPattern.source_reference_labels, selectedTeachingFocusPattern.source_reference_ids)}</p>
                     </details>
                     <p className="mt-3 text-xs leading-5 text-[#8A7D6F]">生成依据：{selectedTeachingFocusPattern.why_now}</p>
                   </article>
@@ -5027,7 +5064,7 @@ export default function AdminDashboardPage() {
                         <p className="text-xs font-semibold text-[#AE5630]">{event.event_type}</p>
                         <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                       </div>
-                      <p className="mt-2 text-xs text-[#6F6257]">候选：{event.session_id} · 审核人：{event.student_id}</p>
+                      <p className="mt-2 text-xs text-[#6F6257]">对象：{getAdminAuditEventSubjectLabel(event)} · 审核人：{event.student_id}</p>
                       <details className="mt-2 rounded-md bg-white p-2 text-[11px] leading-5 text-[#6F6257]">
                         <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
                         <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
@@ -5353,7 +5390,8 @@ export default function AdminDashboardPage() {
                                 <p className="mt-1 break-words">触发项：{getAdminDisplayList(pattern.trigger_item_labels, pattern.trigger_item_ids, "历史数据未记录")}</p>
                                 <details className="mt-2 text-xs leading-5 text-[#8A7D6F]">
                                   <summary className="cursor-pointer font-medium text-[#6F6257]">展开候选来源模式技术 ID</summary>
-                                  <p className="mt-1 break-all font-mono">{pattern.pattern_id}</p>
+                                  <p className="mt-1 break-words">内部模式标识仅用于导出与排障，默认列表优先展示中文标题和触发项。</p>
+                                  <p className="mt-1 break-all font-mono">模式：{pattern.pattern_id}</p>
                                 </details>
                               </article>
                             ))
@@ -5472,7 +5510,7 @@ export default function AdminDashboardPage() {
                                 <summary className="cursor-pointer font-semibold text-[#141413]">展开动作技术 ID</summary>
                                 <p className="mt-1 break-words">动作：{action.action_type}</p>
                                 <p className="mt-1 break-words">阶段：{action.stage_scope.join("、") || "未限定"}</p>
-                                <p className="mt-1 break-words">触发项：{action.trigger_item_ids.join("、") || "未限定"}</p>
+                                <p className="mt-1 break-words">触发项：{getAdminDisplayList(action.trigger_item_labels, action.trigger_item_ids, "未限定")}</p>
                               </details>
                               <p className="mt-1">{action.message_template}</p>
                             </div>
@@ -5507,7 +5545,7 @@ export default function AdminDashboardPage() {
                                 <p className="text-xs font-semibold text-[#AE5630]">{event.event_type}</p>
                                 <p className="text-[11px] text-[#8A7D6F]">{event.created_at}</p>
                               </div>
-                              <p className="mt-1 text-xs text-[#6F6257]">审核人：{event.student_id} · 触发项：{event.case_id}</p>
+                              <p className="mt-1 text-xs text-[#6F6257]">审核人：{event.student_id} · 对象：{getAdminAuditEventSubjectLabel(event, selectedCandidate)}</p>
                               <details className="mt-2 rounded-md bg-[#FAF9F5] p-2 text-[11px] leading-5 text-[#6F6257]">
                                 <summary className="cursor-pointer font-semibold text-[#141413]">展开原始数据</summary>
                                 <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>

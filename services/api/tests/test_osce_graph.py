@@ -6,6 +6,7 @@ from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
+from app.services.turn_intent_agent import DeterministicTurnIntentAgent
 
 
 def canonical_patient_responder(request: object) -> str:
@@ -62,6 +63,18 @@ def base_hint_state(**overrides: object) -> dict[str, object]:
     }
     state.update(overrides)
     return state
+
+
+def test_current_intents_from_state_prefers_authoritative_intent_list() -> None:
+    state = base_hint_state(
+        current_intent="ask_location",
+        current_intents=["ask_character", "ask_severity"],
+        turn_analysis={"current_intents": ["ask_character", "ask_severity"]},
+    )
+
+    current_intents = osce_graph_module._current_intents_from_state(state)
+
+    assert current_intents == ["ask_character", "ask_severity"]
 
 
 def active_skill_context() -> dict[str, list[dict[str, object]]]:
@@ -156,7 +169,8 @@ def test_osce_graph_routes_history_question_and_returns_patient_reply() -> None:
     )
 
     assert result["stage"] == "history_taking"
-    assert result["current_intent"] == "ask_onset"
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["ask_onset"]
     assert result["reply"] == "24 小时前开始，最初是上腹部隐痛。"
     assert "急性阑尾炎" not in result["reply"]
     assert result["revealed_facts"] == ["appendicitis_001.hf_01"]
@@ -165,6 +179,150 @@ def test_osce_graph_routes_history_question_and_returns_patient_reply() -> None:
     assert result["messages"] == [
         {"role": "student", "content": "什么时候开始疼的？"},
         {"role": "patient", "content": "24 小时前开始，最初是上腹部隐痛。"},
+    ]
+
+
+def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() -> None:
+    captured_patient_requests: list[object] = []
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        coach_agent=silent_coach_agent,
+        turn_intent_agent=DeterministicTurnIntentAgent(),
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "怎么个痛法？有多痛？哪里痛？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
+    assert result["reply"] == (
+        "开始在上腹部，大约 8 小时前转移并固定到右下腹。；"
+        "现在是持续性胀痛，行走时加重。；"
+        "大约 VAS 6/10，属于中等偏重的疼痛。"
+    )
+    assert result["revealed_facts"] == [
+        "appendicitis_001.hf_02",
+        "appendicitis_001.hf_03",
+        "appendicitis_001.hf_04",
+    ]
+    assert result["asked_questions"] == ["怎么个痛法？有多痛？哪里痛？"]
+    assert result["intent_history"] == ["ask_location", "ask_character", "ask_severity"]
+    patient_request = captured_patient_requests[0]
+    assert [item["fact_id"] for item in getattr(patient_request, "answerable_fact_candidates")] == [
+        "appendicitis_001.hf_02",
+        "appendicitis_001.hf_03",
+        "appendicitis_001.hf_04",
+    ]
+    assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == [
+        "appendicitis_001.hf_02",
+        "appendicitis_001.hf_03",
+        "appendicitis_001.hf_04",
+    ]
+    assert result["agent_turn_memory"][0]["revealed_fact_id"] == "appendicitis_001.hf_02"
+    assert result["agent_turn_memory"][0]["revealed_fact_ids"] == [
+        "appendicitis_001.hf_02",
+        "appendicitis_001.hf_03",
+        "appendicitis_001.hf_04",
+    ]
+    assert result["agent_turn_memory"][0]["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
+
+
+def test_osce_graph_keeps_keyword_intents_when_model_returns_unknown_for_multi_question() -> None:
+    captured_patient_requests: list[object] = []
+
+    def overly_cautious_turn_intent_agent(request: object) -> dict[str, object]:
+        return {
+            "current_intent": "unknown_history_intent",
+            "confidence": 0.36,
+            "is_off_topic": False,
+            "unknown_kind": "possible_missed_medical_intent",
+            "possible_intents": ["ask_location", "ask_character", "ask_severity"],
+            "rationale": "模型认为问题还不够具体。",
+        }
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        coach_agent=silent_coach_agent,
+        turn_intent_agent=overly_cautious_turn_intent_agent,
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "怎么个痛法？有多痛？哪里痛？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
+    assert result["reply"] == (
+        "开始在上腹部，大约 8 小时前转移并固定到右下腹。；"
+        "现在是持续性胀痛，行走时加重。；"
+        "大约 VAS 6/10，属于中等偏重的疼痛。"
+    )
+    assert result["revealed_facts"] == [
+        "appendicitis_001.hf_02",
+        "appendicitis_001.hf_03",
+        "appendicitis_001.hf_04",
+    ]
+    patient_request = captured_patient_requests[0]
+    assert getattr(patient_request, "deterministic_hints")["current_intents"] == [
+        "ask_location",
+        "ask_character",
+        "ask_severity",
     ]
 
 
@@ -214,7 +372,8 @@ def test_osce_graph_routes_patient_identity_unknown_kind_without_forced_coach_hi
     )
 
     assert result["stage"] == "history_taking"
-    assert result["current_intent"] == "unknown_history_intent"
+    assert "current_intent" not in result
+    assert result["current_intents"] == []
     assert result["reply"] == "我是这次来看肚子疼的病人。"
     assert "转移性右下腹痛" not in result["reply"]
     assert "低热" not in result["reply"]
@@ -229,7 +388,7 @@ def test_osce_graph_routes_patient_identity_unknown_kind_without_forced_coach_hi
     assert "急性阑尾炎" not in result["reply"]
     assert len(captured_patient_requests) == 1
     assert getattr(captured_patient_requests[0], "turn_policy") == "patient_identity_redirect"
-    assert getattr(captured_patient_requests[0], "current_intent") == "unknown_history_intent"
+    assert getattr(captured_patient_requests[0], "current_intents") == []
     assert getattr(captured_patient_requests[0], "deterministic_hints")["keyword_intent"] == "unknown_history_intent"
     assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "patient_identity_unclear"
     assert len(captured_coach_requests) == 1
@@ -287,7 +446,8 @@ def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint
         }
     )
 
-    assert result["current_intent"] == "unknown_history_intent"
+    assert "current_intent" not in result
+    assert result["current_intents"] == []
     assert result["reply"] == "这个问题有点宽泛，我不太确定你具体想问哪方面。"
     assert result["messages"][-1] == {
         "role": "coach",
@@ -349,7 +509,8 @@ def test_osce_graph_routes_unclassified_unknown_kind_without_claiming_missing_ca
         }
     )
 
-    assert result["current_intent"] == "unknown_history_intent"
+    assert "current_intent" not in result
+    assert result["current_intents"] == []
     assert result["reply"] == "我没太听明白您具体想问哪方面，可以再问得具体一点吗？"
     assert result["messages"][-1] == {
         "role": "coach",
@@ -402,7 +563,8 @@ def test_osce_graph_answers_patient_profile_gender_without_falling_back_to_unkno
         }
     )
 
-    assert result["current_intent"] == "ask_patient_gender"
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["ask_patient_gender"]
     assert result["reply"] == "我是男的。"
     assert result["revealed_facts"] == []
     assert result["asked_questions"] == []
@@ -472,7 +634,8 @@ def test_osce_graph_routes_answer_boundary_through_coach_agent_and_records_memor
         }
     )
 
-    assert result["current_intent"] == "answer_request_redirect"
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["answer_request_redirect"]
     assert result["messages"] == [
         {"role": "student", "content": "标准答案是什么？"},
         {"role": "coach", "content": result["reply"]},
@@ -484,7 +647,7 @@ def test_osce_graph_routes_answer_boundary_through_coach_agent_and_records_memor
     assert getattr(captured_requests[0], "base_hint") == "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
     assert result["agent_turn_memory"][0]["turn_policy"] == "answer_boundary_redirect"
     assert result["agent_turn_memory"][0]["reply_role"] == "coach"
-    assert result["agent_turn_memory"][0]["turn_analysis"]["current_intent"] == "answer_request_redirect"
+    assert result["agent_turn_memory"][0]["turn_analysis"]["current_intents"] == ["answer_request_redirect"]
 
 
 def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
@@ -563,6 +726,81 @@ def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
     assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == ["appendicitis_001.hf_01"]
 
 
+def test_patient_responder_receives_revealed_facts_and_dialogue_context() -> None:
+    captured_requests: list[object] = []
+
+    def fake_turn_intent_agent(request: object) -> dict[str, object]:
+        return {
+            "current_intent": "ask_allergy",
+            "current_intents": ["ask_allergy"],
+            "confidence": 0.93,
+            "is_off_topic": False,
+            "rationale": "学生追问过敏史。",
+        }
+
+    def fake_patient_responder(request: object) -> str:
+        captured_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        turn_intent_agent=fake_turn_intent_agent,
+        coach_agent=silent_coach_agent,
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "有对什么过敏吗？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [
+                {"role": "student", "content": "有对什么过敏吗？"},
+                {"role": "patient", "content": "没有药物过敏，吃东西也没发现过敏。"},
+            ],
+            "asked_questions": ["有对什么过敏吗？"],
+            "intent_history": ["ask_allergy"],
+            "agent_turn_memory": [],
+            "revealed_facts": ["appendicitis_001.hf_07"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+            "active_skill_context": {"skill_index": [], "selected_skills": [], "skipped_reasons": []},
+        }
+    )
+
+    assert result["revealed_facts"] == ["appendicitis_001.hf_07"]
+    assert len(captured_requests) == 1
+    patient_request = captured_requests[0]
+    assert getattr(patient_request, "canonical_answer") == "否认药物和食物过敏。"
+    assert getattr(patient_request, "revealed_fact_ids") == ["appendicitis_001.hf_07"]
+    assert not hasattr(patient_request, "repeated_fact_ids")
+    assert getattr(patient_request, "turn_policy") == "history_fact_disclosure"
+
+    dialogue_context = getattr(patient_request, "dialogue_context")
+    assert "is_repeated_fact_question" not in dialogue_context
+    assert dialogue_context["current_intents"] == ["ask_allergy"]
+    assert dialogue_context["answerable_fact_ids"] == ["appendicitis_001.hf_07"]
+    assert dialogue_context["revealed_fact_ids"] == ["appendicitis_001.hf_07"]
+    assert "repeated_fact_ids" not in dialogue_context
+    assert dialogue_context["asked_questions"] == ["有对什么过敏吗？"]
+    assert dialogue_context["intent_history"] == ["ask_allergy"]
+    assert dialogue_context["recent_messages"] == [
+        {"role": "student", "content": "有对什么过敏吗？"},
+        {"role": "patient", "content": "没有药物过敏，吃东西也没发现过敏。"},
+    ]
+
+
 def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> None:
     captured_intent_requests: list[object] = []
     captured_patient_requests: list[object] = []
@@ -612,7 +850,8 @@ def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> No
         }
     )
 
-    assert result["current_intent"] == "ask_onset"
+    assert "current_intent" not in result
+    assert result["current_intents"] == ["ask_onset"]
     assert result["reply"] == "24 小时前开始，最初是上腹部隐痛。"
     assert result["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert len(captured_intent_requests) == 1
@@ -621,12 +860,13 @@ def test_osce_graph_uses_injected_turn_intent_agent_before_patient_reply() -> No
     assert len(captured_patient_requests) == 1
     patient_hints = getattr(captured_patient_requests[0], "deterministic_hints")
     assert patient_hints["turn_analysis"] == {
-        "current_intent": "ask_onset",
+        "current_intents": ["ask_onset"],
         "confidence": 0.93,
         "is_off_topic": False,
         "rationale": "学生在询问腹痛持续时间。",
     }
-    assert result["agent_turn_memory"][0]["current_intent"] == "ask_onset"
+    assert "current_intent" not in result["agent_turn_memory"][0]
+    assert result["agent_turn_memory"][0]["current_intents"] == ["ask_onset"]
     assert result["agent_turn_memory"][0]["turn_analysis"] == patient_hints["turn_analysis"]
 
 
@@ -877,7 +1117,8 @@ def test_osce_graph_routes_expanded_appendicitis_history_intents() -> None:
             }
         )
 
-        assert result["current_intent"] == expected_intent
+        assert "current_intent" not in result
+        assert expected_intent in result["current_intents"]
         assert result["revealed_facts"] == [expected_fact_id]
         assert expected_reply_fragment in result["reply"]
 
@@ -918,7 +1159,8 @@ def test_osce_graph_routes_natural_student_history_wording_to_patient_replies() 
             }
         )
 
-        assert result["current_intent"] == expected_intent
+        assert "current_intent" not in result
+        assert result["current_intents"] == [expected_intent]
         assert result["messages"][-1]["role"] == "patient"
         assert result["revealed_facts"] == [expected_fact_id]
         assert expected_reply_fragment in result["reply"]
@@ -1335,7 +1577,7 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
         "student_message": agent_turn["student_message"],
         "reply": agent_turn["reply"],
         "reply_role": agent_turn["reply_role"],
-        "current_intent": agent_turn["current_intent"],
+        "current_intents": agent_turn["current_intents"],
         "turn_policy": agent_turn["turn_policy"],
         "turn_analysis": agent_turn["turn_analysis"],
         "agent_path": agent_turn["agent_path"],
@@ -1346,10 +1588,10 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
         "student_message": "请求提示",
         "reply": result["hint"],
         "reply_role": "coach",
-        "current_intent": "socratic_hint",
+        "current_intents": ["socratic_hint"],
         "turn_policy": "teaching_hint",
         "turn_analysis": {
-            "current_intent": "socratic_hint",
+            "current_intents": ["socratic_hint"],
             "confidence": 1.0,
             "is_off_topic": False,
             "rationale": "学生请求教学提示。",
@@ -1363,6 +1605,23 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
     ]
     assert agent_turn["knowledge_references"] == agent_turn["source_references"]
     assert agent_turn["retrieved_knowledge_context"]
+
+
+def test_osce_graph_socratic_hint_falls_back_to_base_hint_when_coach_agent_fails() -> None:
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise RuntimeError("coach model returned invalid json")
+
+    graph = build_osce_graph(coach_agent=failing_coach_agent)
+
+    result = graph.invoke(base_hint_state())
+
+    assert result["hint"] == "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
+    assert result["messages"][-1] == {"role": "coach", "content": result["hint"]}
+    agent_turn = result["agent_turn_memory"][-1]
+    assert agent_turn["turn_policy"] == "teaching_hint_unavailable"
+    assert agent_turn["agent_path"] == ["socratic_hint_node", "coach_agent_unavailable"]
+    assert agent_turn["turn_analysis"]["coach_unavailable"] is True
+    assert agent_turn["turn_analysis"]["coach_error_type"] == "RuntimeError"
 
 
 def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:

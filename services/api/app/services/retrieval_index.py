@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -12,8 +13,15 @@ from typing import Any, Protocol
 import yaml
 
 from app.services.chroma_retriever import ChromaSourceDocument, build_chroma_retrieval_index_from_environment
+from app.services.local_embedding_retriever import (
+    build_local_embedding_client_from_environment,
+    get_local_embedding_model_name_from_environment,
+)
 from app.services.rag_knowledge_store import rag_knowledge_store
-from app.services.vertex_embedding_retriever import build_vertex_embedding_client_from_environment
+from app.services.vertex_embedding_retriever import (
+    DEFAULT_VERTEX_EMBEDDING_MODEL,
+    build_vertex_embedding_client_from_environment,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
@@ -38,40 +46,75 @@ class RetrievalDocument:
 
 
 def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocument]:
-    normalized_query = query.strip().lower()
-    if not normalized_query or limit <= 0:
-        return []
+    results_by_query = search_retrieval_documents_batch([query], limit=limit)
+    return results_by_query[0] if results_by_query else []
 
-    embedding_client = build_vertex_embedding_client_from_environment()
+
+def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> list[list[RetrievalDocument]]:
+    normalized_queries = [str(query).strip() for query in queries]
+    results_by_query: list[list[RetrievalDocument]] = [[] for _ in normalized_queries]
+    active_queries = [
+        (index, query)
+        for index, query in enumerate(normalized_queries)
+        if query
+    ]
+    if limit <= 0 or not active_queries:
+        return results_by_query
+
+    embedding_client, embedding_model = _build_embedding_client_from_environment()
     if embedding_client is None:
         LOGGER.warning("RAG vector retrieval skipped because no embedding client is configured")
-        return []
+        return results_by_query
 
     try:
         chroma_index = build_chroma_retrieval_index_from_environment(
             embedding_client=embedding_client,
             documents=get_chroma_source_documents(),
             root_dir=ROOT_DIR,
+            embedding_model=embedding_model,
         )
         if chroma_index is not None:
-            return [
-                RetrievalDocument(
-                    reference=result.reference,
-                    source_type=result.source_type,
-                    title=result.title,
-                    snippet=result.snippet,
-                    score=result.score,
-                )
-                for result in chroma_index.search(query, limit=limit)
-            ]
+            chroma_results_by_query = chroma_index.search_batch(
+                [query for _, query in active_queries],
+                limit=limit,
+            )
+            for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
+                results_by_query[original_index] = [
+                    RetrievalDocument(
+                        reference=result.reference,
+                        source_type=result.source_type,
+                        title=result.title,
+                        snippet=result.snippet,
+                        score=result.score,
+                    )
+                    for result in chroma_results
+                ]
+            return results_by_query
     except Exception as exc:
         LOGGER.warning("ChromaDB retrieval failed; falling back to in-memory vector search: %s", exc)
 
     try:
-        return search_retrieval_documents_with_embeddings(query, embedding_client=embedding_client, limit=limit)
+        embedding_results_by_query = search_retrieval_documents_with_embeddings_batch(
+            [query for _, query in active_queries],
+            embedding_client=embedding_client,
+            limit=limit,
+        )
+        for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
+            results_by_query[original_index] = embedding_results
+        return results_by_query
     except Exception as exc:
-        LOGGER.warning("Vertex embedding retrieval failed; returning no RAG retrieval results: %s", exc)
-        return []
+        LOGGER.warning("RAG vector retrieval failed; returning no RAG retrieval results: %s", exc)
+        return results_by_query
+
+
+def _build_embedding_client_from_environment() -> tuple[EmbeddingClient | None, str]:
+    vertex_embedding_client = build_vertex_embedding_client_from_environment()
+    if vertex_embedding_client is not None:
+        return vertex_embedding_client, _env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL)
+    local_embedding_client = build_local_embedding_client_from_environment()
+    if local_embedding_client is not None:
+        return local_embedding_client, get_local_embedding_model_name_from_environment()
+    return None, ""
 
 
 def search_retrieval_documents_with_embeddings(
@@ -80,14 +123,37 @@ def search_retrieval_documents_with_embeddings(
     embedding_client: EmbeddingClient,
     limit: int = 5,
 ) -> list[RetrievalDocument]:
-    normalized_query = query.strip()
-    if not normalized_query or limit <= 0:
-        return []
+    results_by_query = search_retrieval_documents_with_embeddings_batch(
+        [query],
+        embedding_client=embedding_client,
+        limit=limit,
+    )
+    return results_by_query[0] if results_by_query else []
+
+
+def search_retrieval_documents_with_embeddings_batch(
+    queries: Sequence[str],
+    *,
+    embedding_client: EmbeddingClient,
+    limit: int = 5,
+) -> list[list[RetrievalDocument]]:
+    normalized_queries = [str(query).strip() for query in queries]
+    results_by_query: list[list[RetrievalDocument]] = [[] for _ in normalized_queries]
+    active_queries = [
+        (index, query)
+        for index, query in enumerate(normalized_queries)
+        if query
+    ]
+    if limit <= 0 or not active_queries:
+        return results_by_query
 
     documents = list(_retrieval_documents())
-    query_vectors = embedding_client.embed_texts([normalized_query], task_type="RETRIEVAL_QUERY")
-    if len(query_vectors) != 1:
-        raise ValueError("embedding client must return one query vector")
+    query_vectors = embedding_client.embed_texts(
+        [query for _, query in active_queries],
+        task_type="RETRIEVAL_QUERY",
+    )
+    if len(query_vectors) != len(active_queries):
+        raise ValueError("embedding client must return one vector for each query")
 
     document_vectors = embedding_client.embed_texts(
         [_document_embedding_text(document) for document in documents],
@@ -96,21 +162,23 @@ def search_retrieval_documents_with_embeddings(
     if len(document_vectors) != len(documents):
         raise ValueError("embedding client must return one vector for each retrieval document")
 
-    scored_documents = [
-        RetrievalDocument(
-            reference=document.reference,
-            source_type=document.source_type,
-            title=document.title,
-            snippet=document.snippet,
-            score=_cosine_similarity(query_vectors[0], document_vector),
-        )
-        for document, document_vector in zip(documents, document_vectors)
-    ]
-    return [
-        document
-        for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
-        if document.score > 0
-    ][:limit]
+    for (original_index, _), query_vector in zip(active_queries, query_vectors):
+        scored_documents = [
+            RetrievalDocument(
+                reference=document.reference,
+                source_type=document.source_type,
+                title=document.title,
+                snippet=document.snippet,
+                score=_cosine_similarity(query_vector, document_vector),
+            )
+            for document, document_vector in zip(documents, document_vectors)
+        ]
+        results_by_query[original_index] = [
+            document
+            for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
+            if document.score > 0
+        ][:limit]
+    return results_by_query
 
 
 def get_chroma_source_documents() -> tuple[ChromaSourceDocument, ...]:
@@ -286,3 +354,7 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
         return 0.0
     dot_product = sum(left_value * right_value for left_value, right_value in zip(left, right))
     return dot_product / (left_norm * right_norm)
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()

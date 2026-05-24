@@ -13,7 +13,12 @@ def test_document_parser_stack_is_a_default_backend_dependency() -> None:
     dependencies = pyproject["project"]["dependencies"]
     optional_dependencies = pyproject["project"].get("optional-dependencies", {})
 
-    assert any(dependency.startswith("unstructured[all-docs]") for dependency in dependencies)
+    assert "unstructured>=0.18.0,<1.0.0" in dependencies
+    assert "python-docx>=1.2.0,<2.0.0" in dependencies
+    assert "python-pptx>=1.0.0,<2.0.0" in dependencies
+    assert "pdfminer-six>=20251230,<20270000" in dependencies
+    assert "pypdf>=6.6.0,<7.0.0" in dependencies
+    assert not any(dependency.startswith("unstructured[all-docs]") for dependency in dependencies)
     assert "documents" not in optional_dependencies
 
 
@@ -90,8 +95,9 @@ def test_unstructured_document_chunking_uses_title_strategy_and_adds_chunk_metad
     references = FakeElement("References", category="Title", page_number=12)
     reference_body = FakeElement("Smith J. Example article. 2024.", category="NarrativeText", page_number=12)
 
-    def fake_partition(*, filename: str):
+    def fake_partition(*, filename: str, **kwargs):
         captured_partition["filename"] = filename
+        captured_partition["strategy"] = kwargs.get("strategy", "")
         return [title, body, references, reference_body]
 
     def fake_chunk_by_title(elements, **kwargs):
@@ -121,6 +127,7 @@ def test_unstructured_document_chunking_uses_title_strategy_and_adds_chunk_metad
     )
 
     assert captured_partition["filename"].endswith(".pdf")
+    assert captured_partition["strategy"] == "fast"
     assert captured_chunk_kwargs["max_characters"] == 900
     assert captured_chunk_kwargs["overlap"] == 120
     assert captured_chunk_kwargs["include_orig_elements"] is True
