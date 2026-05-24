@@ -168,7 +168,7 @@ def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_
         "https://primary.example/v1/chat/completions",
         "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
     ]
-    assert [call["json"]["model"] for call in FakeFallbackHttpxClient.calls] == ["gemini-primary", "MiMo-V2.5-Pro"]
+    assert [call["json"]["model"] for call in FakeFallbackHttpxClient.calls] == ["gemini-primary", "mimo-v2.5-pro"]
     assert FakeFallbackHttpxClient.calls[0]["headers"]["Authorization"] == "Bearer primary-secret-value"
     assert FakeFallbackHttpxClient.calls[1]["headers"]["Authorization"] == "Bearer mimo-secret-value"
     assert "proxy" not in FakeFallbackHttpxClient.calls[1]["kwargs"]

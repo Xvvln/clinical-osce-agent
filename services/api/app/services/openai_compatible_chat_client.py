@@ -77,7 +77,7 @@ class OpenAICompatibleChatClient:
         temperature: float | None = None,
     ) -> ResponseModelT:
         request_payload = {
-            "model": self._settings.model,
+            "model": _model_name_for_base_url(self._settings.model, self._settings.base_url),
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -97,7 +97,7 @@ class OpenAICompatibleChatClient:
             fallback_settings = self._fallback_settings.to_openai_settings()
             fallback_payload = {
                 **request_payload,
-                "model": fallback_settings.model,
+                "model": _model_name_for_base_url(fallback_settings.model, fallback_settings.base_url),
                 "temperature": fallback_settings.temperature if temperature is None else temperature,
             }
             return self._complete_json_with_settings(
@@ -141,6 +141,13 @@ def _chat_completions_url(base_url: str) -> str:
     if normalized.endswith("/chat/completions"):
         return normalized
     return f"{normalized}/chat/completions"
+
+
+def _model_name_for_base_url(model: str, base_url: str) -> str:
+    normalized_model = model.strip()
+    if "xiaomimimo.com" in base_url.lower() and normalized_model.lower().startswith("mimo-"):
+        return normalized_model.lower()
+    return normalized_model
 
 
 def _should_use_proxy(proxy_url: str) -> bool:
