@@ -15,14 +15,14 @@ class _FakeConnectivityResponse:
 class _FakeConnectivityErrorResponse:
     is_success = False
     status_code = 400
-    text = '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model MiMo-V2.5-Pro"}}'
+    text = '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model unsupported-model"}}'
 
     def json(self) -> dict[str, object]:
         return {
             "error": {
                 "code": "400",
                 "message": "Param Incorrect",
-                "param": "Not supported model MiMo-V2.5-Pro",
+                "param": "Not supported model unsupported-model",
             },
         }
 
@@ -213,7 +213,7 @@ def test_student_model_config_test_includes_sanitized_provider_error_detail(monk
             json={
                 "provider": "openai_compatible",
                 "api_key": "student-openai-secret",
-                "model": "MiMo-V2.5-Pro",
+                "model": "unsupported-model",
                 "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
                 "proxy_url": "direct",
             },
@@ -222,7 +222,7 @@ def test_student_model_config_test_includes_sanitized_provider_error_detail(monk
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is False
-    assert payload["message"] == "连通性测试失败：HTTP 400：Param Incorrect；Not supported model MiMo-V2.5-Pro"
+    assert payload["message"] == "连通性测试失败：HTTP 400：Param Incorrect；Not supported model unsupported-model"
     assert "student-openai-secret" not in response.text
     assert "student-openai-secret" not in response.text
 

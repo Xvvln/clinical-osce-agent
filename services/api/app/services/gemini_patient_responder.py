@@ -24,6 +24,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 - revealed_fact_ids 是此前或本轮已经披露给学生的事实编号；dialogue_context 是最近对话、已问问题和本轮意图摘要，只用于保持上下文连贯。
 - 可以参考 dialogue_context 判断学生是否在延续前文、追问同一主题或切换主题，但仍只能表达 canonical_answer 和 answerable_fact_candidates。
 - 输出 JSON 必须包含 reply 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
+- 如果 current_intents 或 answerable_fact_candidates 显示学生一次问了多个明确问诊点，必须逐一覆盖所有 answerable_fact_candidates，不要只回答第一个；这种多事实回答可用 2-3 个短句。
 - forbidden_context 中的诊断、rubric、治疗、剂量、处置边界均不得泄露。
 - 不得主动说出 forbidden_terms 中的任何词。
 - 语气要像真实来就诊的患者，不要像病历摘要、教科书或医生交班。
@@ -32,7 +33,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 - 如果 canonical_answer 表示病例未提供信息，就只表达“不清楚/没被告知/不太确定”的患者口吻。
 - 不要主动引导学生下一步该问什么，不说“你可以继续问”“建议你”“应该先问”。
 - 如果 turn_policy 是 answer_boundary_redirect 或 safety_boundary_redirect，用教学边界口吻提醒继续按 OSCE 流程训练，不要扮演真实医生给建议。
-- 回答必须是第一人称患者语气，中文，简短，不超过 80 个汉字。
+- 回答必须是第一人称患者语气，中文，简短；单事实不超过 80 个汉字，多事实不超过 140 个汉字。
 - 不输出用药剂量、治疗方案、手术方案或处置建议。
 """
 
@@ -57,7 +58,7 @@ class PatientResponderRequest(BaseModel):
 
 
 class PatientResponderResponse(BaseModel):
-    reply: str = Field(..., min_length=1, max_length=120)
+    reply: str = Field(..., min_length=1, max_length=180)
     fact_ids_used: list[str] = Field(default_factory=list)
 
 
@@ -146,8 +147,8 @@ class DeterministicPatientResponder:
         for term in request.forbidden_terms:
             if term:
                 reply = reply.replace(term, "相关诊断")
-        if len(reply) > 120:
-            reply = f"{reply[:117]}..."
+        if len(reply) > 180:
+            reply = f"{reply[:177]}..."
         _assert_no_forbidden_terms(reply, request.forbidden_terms)
         return reply
 
@@ -259,6 +260,7 @@ def _validated_patient_reply(response: PatientResponderResponse, request: Patien
     reply = response.reply.strip()
     _assert_no_forbidden_terms(reply, request.forbidden_terms)
     _assert_used_fact_ids_are_answerable(response.fact_ids_used, request.answerable_fact_candidates)
+    _assert_multi_intent_fact_coverage(response.fact_ids_used, request)
     return reply
 
 
@@ -276,6 +278,21 @@ def _assert_used_fact_ids_are_answerable(
     unauthorized_fact_ids = [fact_id for fact_id in fact_ids_used if fact_id not in allowed_fact_ids]
     if unauthorized_fact_ids:
         raise RuntimeError(f"标准化病人回答声明使用了未授权病例事实：{unauthorized_fact_ids}")
+
+
+def _assert_multi_intent_fact_coverage(fact_ids_used: list[str], request: PatientResponderRequest) -> None:
+    if len(request.current_intents) <= 1:
+        return
+    expected_fact_ids = [
+        str(candidate.get("fact_id"))
+        for candidate in request.answerable_fact_candidates
+        if isinstance(candidate, dict) and candidate.get("fact_id")
+    ]
+    if len(expected_fact_ids) <= 1:
+        return
+    missing_fact_ids = [fact_id for fact_id in expected_fact_ids if fact_id not in set(fact_ids_used)]
+    if missing_fact_ids:
+        raise RuntimeError(f"标准化病人回答未覆盖本轮多个问诊事实：{missing_fact_ids}")
 
 
 def _apply_process_proxy(proxy_url: str) -> None:

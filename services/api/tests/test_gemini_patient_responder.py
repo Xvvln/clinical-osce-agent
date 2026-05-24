@@ -43,6 +43,7 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "is_repeated_fact_question" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "repeated_fact_ids" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "fact_ids_used" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "必须逐一覆盖所有 answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
 
 
 def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
@@ -167,6 +168,51 @@ def test_patient_responder_rejects_unapproved_fact_ids_from_model() -> None:
     )
 
     with pytest.raises(RuntimeError, match="未授权病例事实"):
+        responder(request)
+
+
+def test_patient_responder_rejects_partial_fact_coverage_for_multi_intent_question() -> None:
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(
+            reply="今天上午活动完之后开始胸口疼，到现在大概两个小时了。",
+            fact_ids_used=["acs_001.hf_01"],
+        )
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    request = module.PatientResponderRequest(
+        case_id="acs_001",
+        case_title="胸痛伴出汗教学病例",
+        chief_complaint="胸骨后压榨性胸痛 2 小时，伴大汗。",
+        student_message="胸痛什么时候开始的？在哪里痛？什么性质？有没有出汗、气短或放射痛？",
+        current_intents=["ask_onset", "ask_location", "ask_character", "ask_migration"],
+        canonical_answer=(
+            "今天上午活动后开始胸口痛，到现在 2 个小时了。；"
+            "胸口像被压着一样闷痛，不是针扎样疼。；"
+            "疼痛会往左肩和左上臂放射。"
+        ),
+        revealed_fact_id="acs_001.hf_01",
+        answerable_fact_candidates=[
+            {
+                "fact_id": "acs_001.hf_01",
+                "canonical_answer": "今天上午活动后开始胸口痛，到现在 2 个小时了。",
+            },
+            {
+                "fact_id": "acs_001.hf_02",
+                "canonical_answer": "胸口像被压着一样闷痛，不是针扎样疼。",
+            },
+            {
+                "fact_id": "acs_001.hf_03",
+                "canonical_answer": "疼痛会往左肩和左上臂放射。",
+            },
+        ],
+        forbidden_terms=["急性心肌梗死", "急性冠脉综合征"],
+    )
+
+    with pytest.raises(RuntimeError, match="未覆盖本轮多个问诊事实"):
         responder(request)
 
 

@@ -144,7 +144,7 @@ def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "mimo-secret-value")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
-    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "MiMo-V2.5-Pro")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
 
     client = OpenAICompatibleChatClient(
