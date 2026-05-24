@@ -139,7 +139,16 @@ def _keyword_intents_for_message(message: str) -> list[str]:
         ("ask_patient_age", ["多大", "几岁", "年龄"]),
         ("ask_patient_occupation", ["职业", "工作", "做什么", "上班", "学生吗"]),
         ("ask_migration", ["转移", "换地方", "跑到"]),
+        ("ask_radiation", ["放射", "牵扯", "左肩", "左臂", "左上臂", "胳膊", "手臂"]),
+        ("ask_progression", ["加重", "越来越", "活动后", "活动时", "走路", "走快"]),
+        ("ask_orthopnea", ["憋醒", "平卧", "躺下", "躺着", "垫高", "夜间", "夜里", "晚上"]),
+        ("ask_edema", ["水肿", "浮肿", "脚肿", "腿肿", "下肢肿"]),
+        ("ask_sputum", ["咳痰", "痰", "黄痰", "咯血"]),
+        ("ask_heat_intolerance", ["怕热", "多汗", "出汗", "体重下降", "消瘦", "吃得多"]),
+        ("ask_bowel_change", ["大便次数", "排便", "便次"]),
+        ("ask_menstrual_history", ["月经"]),
         ("ask_character", ["性质", "什么样", "胀痛", "绞痛", "刺痛"]),
+        ("ask_chest_pain_character", ["胸痛性质", "胸口疼性质", "深呼吸", "咳嗽疼", "咳嗽时疼"]),
         ("ask_severity", ["几分", "多疼", "疼痛程度", "严重", "vas"]),
         ("ask_fever", ["发热", "发烧", "体温", "低热"]),
         ("ask_urinary", ["尿频", "尿急", "尿痛", "血尿", "小便"]),
@@ -1119,7 +1128,7 @@ def _answerable_hidden_facts_for_intent(case: Case, intent: str) -> list[HiddenF
 
 
 def _answerable_hidden_facts_for_intents(case: Case, intents: list[str]) -> list[HiddenFact]:
-    intent_set = {intent for intent in intents if intent and intent != "unknown_history_intent"}
+    intent_set = _expanded_history_intent_set(intents)
     if not intent_set:
         return []
     return [
@@ -1127,6 +1136,22 @@ def _answerable_hidden_facts_for_intents(case: Case, intents: list[str]) -> list
         for hidden_fact in case.history.hidden_facts
         if any(intent in intent_set for intent in hidden_fact.trigger_intents)
     ]
+
+
+def _expanded_history_intent_set(intents: list[str]) -> set[str]:
+    alias_map = {
+        "ask_character": ["ask_pain_character", "ask_chest_pain_character", "ask_quality_of_pain"],
+        "ask_past_medical": ["ask_past_medical_history"],
+        "ask_family": ["ask_family_history"],
+        "ask_stool": ["ask_bowel_change"],
+    }
+    intent_set: set[str] = set()
+    for intent in intents:
+        if not intent or intent == "unknown_history_intent":
+            continue
+        intent_set.add(intent)
+        intent_set.update(alias_map.get(intent, []))
+    return intent_set
 
 
 def _answerable_patient_profile_fact_for_intent(case: Case, intent: str) -> dict[str, Any] | None:

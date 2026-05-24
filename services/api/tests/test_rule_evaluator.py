@@ -224,6 +224,57 @@ def test_evaluate_session_rules_records_llm_rubric_trace() -> None:
     }
 
 
+def test_llm_rubric_invalid_structured_response_degrades_to_zero_score() -> None:
+    session = OsceSession(
+        session_id="session_demo",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        revealed_facts=["appendicitis_001.hf_02"],
+        final_submission={
+            "diagnosis": "急性阑尾炎",
+            "reasoning": "转移性右下腹痛支持急性阑尾炎。",
+        },
+    )
+    item = {
+        "item_id": "rs_exclude",
+        "description": "推理表达覆盖关键排除依据",
+        "max_score": 5,
+        "match_rule": {
+            "kind": "llm_rubric",
+            "spec": {"prompt_id": "reasoning_exclude_v1", "max_score": 5},
+        },
+        "evidence_expected": [
+            "appendicitis_001.rp_05",
+            "appendicitis_001.rp_06",
+        ],
+    }
+
+    def invalid_scorer(request: LlmRubricRequest) -> LlmRubricResponse:
+        return LlmRubricResponse.model_validate(
+            {
+                "score": 0,
+                "rationale": "缺少排除诊断证据。",
+            }
+        )
+
+    report = evaluate_session_rules(session, llm_scorer=invalid_scorer)
+
+    assert report["rubric_scores"]["rs_exclude"] == {
+        "score": 0,
+        "max_score": 5,
+        "dimension_id": "reasoning",
+        "description": "推理表达覆盖关键排除依据",
+        "covered_evidence": [],
+        "missing_evidence": [
+            "appendicitis_001.rp_05",
+            "appendicitis_001.rp_06",
+        ],
+        "rationale": "模型评分输出结构不完整，已按未覆盖处理。",
+    }
+    assert report["dimension_traces"]["reasoning"][1]["fallback_reason"] == "llm_rubric_invalid_response"
+
+
 def test_llm_rubric_without_final_submission_returns_zero_trace() -> None:
     session = OsceSession(
         session_id="session_demo",

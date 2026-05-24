@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import yaml
+from pydantic import ValidationError
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse, ScoreTrace
 
@@ -152,6 +153,7 @@ def _build_score_trace(
     awarded_score: int,
     matched_evidence: list[str],
     llm_rationale: str | None = None,
+    fallback_reason: str | None = None,
 ) -> ScoreTrace:
     return ScoreTrace(
         rubric_item_id=item["item_id"],
@@ -160,6 +162,7 @@ def _build_score_trace(
         match_kind=item["match_rule"]["kind"],
         matched_evidence=matched_evidence,
         llm_rationale=llm_rationale,
+        fallback_reason=fallback_reason,
     )
 
 
@@ -189,16 +192,31 @@ def _evaluate_llm_rubric(
 ) -> dict[str, Any]:
     if not session.final_submission:
         return {"trace": _build_score_trace(item, 0, [])}
-    response = llm_scorer(
-        LlmRubricRequest(
-            rubric_item_id=item["item_id"],
-            description=item["description"],
-            max_score=int(item["max_score"]),
-            student_final_reasoning=session.final_submission["reasoning"],
-            relevant_facts_revealed=session.revealed_facts,
-            required_evidence=item.get("evidence_expected", []),
-        )
+    request = LlmRubricRequest(
+        rubric_item_id=item["item_id"],
+        description=item["description"],
+        max_score=int(item["max_score"]),
+        student_final_reasoning=session.final_submission["reasoning"],
+        relevant_facts_revealed=session.revealed_facts,
+        required_evidence=item.get("evidence_expected", []),
     )
+    try:
+        response = llm_scorer(request)
+    except ValidationError:
+        missing_evidence = list(request.required_evidence)
+        rationale = "模型评分输出结构不完整，已按未覆盖处理。"
+        return {
+            "trace": _build_score_trace(
+                item,
+                0,
+                [],
+                rationale,
+                fallback_reason="llm_rubric_invalid_response",
+            ),
+            "covered_evidence": [],
+            "missing_evidence": missing_evidence,
+            "rationale": rationale,
+        }
     score = min(response.score, int(item["max_score"]))
     return {
         "trace": _build_score_trace(item, score, response.covered_evidence, response.rationale),

@@ -256,6 +256,56 @@ def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() ->
     assert result["agent_turn_memory"][0]["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
 
 
+def test_osce_graph_reveals_case_specific_multi_intent_history_facts() -> None:
+    def fake_patient_responder(request: object) -> str:
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        coach_agent=silent_coach_agent,
+        turn_intent_agent=DeterministicTurnIntentAgent(),
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "acs_001",
+            "stage": "case_intro",
+            "case_title": "胸痛伴出汗教学病例",
+            "chief_complaint": "胸骨后压榨性胸痛 2 小时，伴大汗。",
+            "student_message": "胸痛什么时候开始的？什么性质？有没有放射痛？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert set(result["current_intents"]) == {"ask_onset", "ask_character", "ask_radiation"}
+    assert result["reply"] == (
+        "今天上午活动后开始胸口痛，到现在 2 个小时了。；"
+        "胸口像被压着一样闷痛，不是针扎样疼。；"
+        "疼痛会往左肩和左上臂放射。"
+    )
+    assert result["revealed_facts"] == [
+        "acs_001.hf_01",
+        "acs_001.hf_02",
+        "acs_001.hf_03",
+    ]
+
+
 def test_osce_graph_keeps_keyword_intents_when_model_returns_unknown_for_multi_question() -> None:
     captured_patient_requests: list[object] = []
 
