@@ -37,6 +37,43 @@ export type TeacherReflectionMajorIssue = Readonly<{
   linked_items: readonly string[];
 }>;
 
+export type TeacherReasoningSequenceFlag = Readonly<{
+  flag_id: string;
+  label: string;
+  severity: string;
+  evidence: string;
+}>;
+
+export type TeacherActionOrderSummary = Readonly<{
+  first_history_turn_index: number | null;
+  first_physical_exam_turn_index: number | null;
+  first_auxiliary_test_turn_index: number | null;
+  first_diagnosis_hypothesis_turn_index: number | null;
+  diagnosis_submission_turn_index: number | null;
+}>;
+
+export type TeacherEvidenceChainBreakpoint = Readonly<{
+  breakpoint_id: string;
+  statement: string;
+  kind: string;
+  status: string;
+  missing_evidence: readonly string[];
+  missing_evidence_labels: readonly string[];
+  teacher_action: string;
+}>;
+
+export type TeacherReasoningTraceSummary = Readonly<{
+  trace_version: string;
+  dominant_patterns: readonly Readonly<Record<string, string>>[];
+  problem_representation_status: string;
+  illness_script_status: string;
+  evidence_synthesis_status: string;
+  sequence_flags: readonly TeacherReasoningSequenceFlag[];
+  action_order_summary: TeacherActionOrderSummary;
+  evidence_chain_breakpoints: readonly TeacherEvidenceChainBreakpoint[];
+  evidence_chain_focus: readonly Readonly<Record<string, unknown>>[];
+}>;
+
 export type AiReflectionReview = Readonly<{
   status: string;
   reason?: string;
@@ -50,6 +87,7 @@ export type AiReflectionReview = Readonly<{
   mistake_patterns: readonly string[];
   teacher_feedback: string;
   next_focus: string;
+  reasoning_trace_summary: TeacherReasoningTraceSummary;
   source_references: readonly string[];
   source_reference_items: readonly SourceReferenceItem[];
   generated_by?: string;
@@ -91,6 +129,24 @@ export type PersonalTrainingSkillCandidate = Readonly<{
   external_evidence_checks: readonly unknown[];
 }>;
 
+export const DEFAULT_REASONING_TRACE_SUMMARY: TeacherReasoningTraceSummary = {
+  trace_version: "",
+  dominant_patterns: [],
+  problem_representation_status: "",
+  illness_script_status: "",
+  evidence_synthesis_status: "",
+  sequence_flags: [],
+  action_order_summary: {
+    first_history_turn_index: null,
+    first_physical_exam_turn_index: null,
+    first_auxiliary_test_turn_index: null,
+    first_diagnosis_hypothesis_turn_index: null,
+    diagnosis_submission_turn_index: null,
+  },
+  evidence_chain_breakpoints: [],
+  evidence_chain_focus: [],
+};
+
 export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
   status: "legacy_report",
   reason: "ai_reflection_not_recorded",
@@ -104,6 +160,7 @@ export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
   mistake_patterns: [],
   teacher_feedback: "",
   next_focus: "",
+  reasoning_trace_summary: DEFAULT_REASONING_TRACE_SUMMARY,
   source_references: [],
   source_reference_items: [],
 };
@@ -228,8 +285,24 @@ function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiRe
     major_issues: review?.major_issues ?? [],
     next_practice_plan: review?.next_practice_plan ?? [],
     mistake_patterns: review?.mistake_patterns ?? [],
+    reasoning_trace_summary: normalizeTeacherReasoningTraceSummary(review?.reasoning_trace_summary),
     source_references: review?.source_references ?? [],
     source_reference_items: review?.source_reference_items ?? [],
+  };
+}
+
+function normalizeTeacherReasoningTraceSummary(summary?: Partial<TeacherReasoningTraceSummary>): TeacherReasoningTraceSummary {
+  return {
+    ...DEFAULT_REASONING_TRACE_SUMMARY,
+    ...summary,
+    dominant_patterns: summary?.dominant_patterns ?? [],
+    sequence_flags: summary?.sequence_flags ?? [],
+    action_order_summary: {
+      ...DEFAULT_REASONING_TRACE_SUMMARY.action_order_summary,
+      ...(summary?.action_order_summary ?? {}),
+    },
+    evidence_chain_breakpoints: summary?.evidence_chain_breakpoints ?? [],
+    evidence_chain_focus: summary?.evidence_chain_focus ?? [],
   };
 }
 

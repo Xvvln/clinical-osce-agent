@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from app import main
+from app.graph.osce_graph import build_osce_graph
 from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
@@ -64,6 +65,10 @@ def load_case_and_rubric_payload(case_id: str = "appendicitis_001") -> tuple[dic
     case_payload = json.loads((repo_root / "data" / "cases" / f"{case_id}.json").read_text(encoding="utf-8"))
     rubric_payload = yaml.safe_load((repo_root / "data" / "rubrics" / f"{case_id}_rubric.yaml").read_text(encoding="utf-8"))
     return case_payload, rubric_payload
+
+
+def canonical_patient_responder(request: object) -> str:
+    return str(getattr(request, "canonical_answer"))
 
 
 def configure_case_import_directories(tmp_path, monkeypatch) -> tuple[Path, Path]:
@@ -245,6 +250,7 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
     osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
     osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.osce_graph = build_osce_graph(patient_responder=canonical_patient_responder, llm_scorer=None)
     osce_session_service._sessions.clear()
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)

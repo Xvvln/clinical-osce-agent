@@ -43,6 +43,42 @@ type SkillProfileItem = Readonly<{
   label: string;
 }>;
 
+type SkillProfileReasoningPattern = Readonly<{
+  pattern_id: string;
+  label: string;
+  category?: string;
+  severity?: string;
+  count?: number;
+}>;
+
+type SkillProfileSequenceIssue = Readonly<{
+  flag_id: string;
+  label: string;
+  severity: string;
+  count: number;
+  evidence_examples: readonly string[];
+}>;
+
+type SkillProfileEvidenceChainFocus = Readonly<{
+  breakpoint_id: string;
+  statement: string;
+  kind: string;
+  status: string;
+  missing_evidence: readonly string[];
+  missing_evidence_labels: readonly string[];
+  teacher_action: string;
+  count: number;
+}>;
+
+type SkillProfileReasoningSummary = Readonly<{
+  recent_pattern_ids: readonly string[];
+  recent_patterns: readonly SkillProfileReasoningPattern[];
+  dominant_patterns: readonly SkillProfileReasoningPattern[];
+  current_reasoning_focus: readonly SkillProfileReasoningPattern[];
+  sequence_issue_counts: readonly SkillProfileSequenceIssue[];
+  evidence_chain_focus: readonly SkillProfileEvidenceChainFocus[];
+}>;
+
 type SkillProfileSkillState = Readonly<{
   state: string;
   state_label: string;
@@ -51,6 +87,7 @@ type SkillProfileSkillState = Readonly<{
   trigger_item_labels: readonly string[];
   matched_recent_error_item_ids: readonly string[];
   matched_recent_error_items: readonly SkillProfileItem[];
+  matched_recent_reasoning_patterns: readonly SkillProfileReasoningPattern[];
   effect_status: string;
   effect_status_label: string;
   selection_reason: string;
@@ -61,6 +98,7 @@ type SkillProfileSummary = Readonly<{
   recent_error_items: readonly SkillProfileItem[];
   current_focus_item_ids: readonly string[];
   current_focus_items: readonly SkillProfileItem[];
+  reasoning_profile_summary: SkillProfileReasoningSummary;
   skill_states: Readonly<Record<string, SkillProfileSkillState>>;
   last_updated_from_report_count: number;
 }>;
@@ -119,11 +157,21 @@ type LearningProfile = Readonly<{
   skillProfileSummary: SkillProfileSummary;
 }>;
 
+const EMPTY_SKILL_PROFILE_REASONING_SUMMARY: SkillProfileReasoningSummary = {
+  recent_pattern_ids: [],
+  recent_patterns: [],
+  dominant_patterns: [],
+  current_reasoning_focus: [],
+  sequence_issue_counts: [],
+  evidence_chain_focus: [],
+};
+
 const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = {
   recent_error_item_ids: [],
   recent_error_items: [],
   current_focus_item_ids: [],
   current_focus_items: [],
+  reasoning_profile_summary: EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
   skill_states: {},
   last_updated_from_report_count: 0,
 };
@@ -172,7 +220,30 @@ function toLearningProfile(payload: CurrentUserProfilePayload): LearningProfile 
     learningPath: payload.learning_path,
     recentSessions: payload.recent_sessions,
     skillAccumulation: payload.skill_accumulation,
-    skillProfileSummary: payload.skill_profile_summary ?? EMPTY_SKILL_PROFILE_SUMMARY,
+    skillProfileSummary: normalizeSkillProfileSummary(payload.skill_profile_summary),
+  };
+}
+
+function normalizeSkillProfileSummary(summary?: Partial<SkillProfileSummary>): SkillProfileSummary {
+  const skillStates = Object.fromEntries(
+    Object.entries(summary?.skill_states ?? {}).map(([skillId, state]) => [
+      skillId,
+      {
+        ...state,
+        matched_recent_error_items: state.matched_recent_error_items ?? [],
+        matched_recent_reasoning_patterns: state.matched_recent_reasoning_patterns ?? [],
+      },
+    ]),
+  );
+
+  return {
+    ...EMPTY_SKILL_PROFILE_SUMMARY,
+    ...summary,
+    reasoning_profile_summary: {
+      ...EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
+      ...(summary?.reasoning_profile_summary ?? {}),
+    },
+    skill_states: skillStates,
   };
 }
 
@@ -226,6 +297,7 @@ function formatSkillEffectSummary(skill: EnabledSkillSummary): string {
 
 function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfileSummary }>) {
   const skillStateEntries = Object.entries(summary.skill_states);
+  const reasoningSummary = summary.reasoning_profile_summary;
 
   return (
     <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
@@ -234,7 +306,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
           <p className="text-xs font-medium text-brand">Skill 编排依据</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">当前训练问题</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-            由最近评分报告中的未覆盖训练点派生，Coach 会优先参考这些问题选择少量相关 Skill。
+            由最近评分报告中的未覆盖训练点、顺序问题和证据链断点派生，Coach 会优先参考这些问题选择少量相关 Skill。
           </p>
         </div>
         <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
@@ -242,7 +314,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
         </span>
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="rounded-xl border border-border bg-muted/30 p-4">
           <h3 className="text-sm font-semibold">近期漏项</h3>
           {summary.current_focus_items.length > 0 ? (
@@ -256,6 +328,76 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
           ) : (
             <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
               暂无近期漏项。完成训练报告后，这里会显示当前最需要补的训练点。
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-muted/30 p-4">
+          <h3 className="text-sm font-semibold">近期思维模式</h3>
+          {reasoningSummary.current_reasoning_focus.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {reasoningSummary.current_reasoning_focus.map((pattern) => (
+                <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand" key={pattern.pattern_id}>
+                  {pattern.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+              暂无近期思维模式。完成带复盘的训练报告后，这里会显示问题表征、顺序和证据链趋势。
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-muted/30 p-4">
+          <h3 className="text-sm font-semibold">顺序问题</h3>
+          {reasoningSummary.sequence_issue_counts.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {reasoningSummary.sequence_issue_counts.map((issue) => (
+                <article className="rounded-lg border border-border bg-background p-3" key={issue.flag_id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-semibold">{issue.label}</p>
+                    <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
+                      {issue.count} 次
+                    </span>
+                  </div>
+                  {issue.evidence_examples.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{issue.evidence_examples[0]}</p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+              暂无明显顺序问题。
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-muted/30 p-4">
+          <h3 className="text-sm font-semibold">证据链焦点</h3>
+          {reasoningSummary.evidence_chain_focus.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {reasoningSummary.evidence_chain_focus.map((focus) => (
+                <article className="rounded-lg border border-border bg-background p-3" key={focus.breakpoint_id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-semibold">{focus.statement}</p>
+                    <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
+                      {focus.count} 次
+                    </span>
+                  </div>
+                  {focus.missing_evidence_labels.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      缺少证据：{focus.missing_evidence_labels.join("、")}
+                    </p>
+                  ) : null}
+                  {focus.teacher_action ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{focus.teacher_action}</p> : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+              暂无证据链焦点。
             </p>
           )}
         </div>
@@ -275,6 +417,10 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
                   {state.matched_recent_error_items.length > 0 ? (
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
                       命中训练点：{state.matched_recent_error_items.map((item) => item.label).join("、")}
+                    </p>
+                  ) : state.matched_recent_reasoning_patterns.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      命中思维模式：{state.matched_recent_reasoning_patterns.map((item) => item.label).join("、")}
                     </p>
                   ) : (
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">

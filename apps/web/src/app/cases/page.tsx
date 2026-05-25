@@ -40,6 +40,13 @@ type AuxiliaryTestQuickOption = Readonly<{
   category: string;
 }>;
 
+type CaseContentStats = Readonly<{
+  history_clue_count: number;
+  physical_exam_count: number;
+  auxiliary_test_count: number;
+  total_training_items: number;
+}>;
+
 type CaseSummary = Readonly<{
   case_id: string;
   case_title: string;
@@ -47,6 +54,7 @@ type CaseSummary = Readonly<{
   difficulty: string;
   chief_complaint: string;
   enabled: boolean;
+  content_stats: CaseContentStats;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
   teaching_focus: CaseTeachingFocus;
@@ -57,6 +65,8 @@ type CaseSummary = Readonly<{
 type CaseListResponse = Readonly<{
   cases: readonly CaseSummary[];
 }>;
+
+const RECOMMENDED_CASE_ID = "appendicitis_001";
 
 async function getCases(): Promise<readonly CaseSummary[]> {
   const response = await fetch("/api/cases", {
@@ -70,6 +80,20 @@ async function getCases(): Promise<readonly CaseSummary[]> {
 
   const result = (await response.json()) as CaseListResponse;
   return result.cases;
+}
+
+function getCaseTrainingItemTotal(caseSummary: CaseSummary): number {
+  return caseSummary.content_stats.total_training_items;
+}
+
+function sortCasesByTrainingContent(nextCases: readonly CaseSummary[]): readonly CaseSummary[] {
+  return [...nextCases].sort((leftCase, rightCase) => {
+    const totalDifference = getCaseTrainingItemTotal(rightCase) - getCaseTrainingItemTotal(leftCase);
+    if (totalDifference !== 0) {
+      return totalDifference;
+    }
+    return leftCase.case_title.localeCompare(rightCase.case_title, "zh-Hans-CN");
+  });
 }
 
 function getDifficultyLabel(difficulty: string): string {
@@ -99,7 +123,7 @@ export default function CasesPage() {
           return;
         }
 
-        setCases(nextCases);
+        setCases(sortCasesByTrainingContent(nextCases));
         setErrorText(null);
       } catch (error) {
         if (!isMounted) {
@@ -144,23 +168,6 @@ export default function CasesPage() {
           </div>
         </header>
 
-        <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-brand">训练病例库</p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">
-                {isLoading ? "正在读取病例列表。" : `当前开放 ${cases.length} 个结构化病例。`}
-              </h2>
-            </div>
-            <span className="w-fit rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
-              /api/cases
-            </span>
-          </div>
-          <p className="mt-4 max-w-3xl text-sm leading-6 text-muted-foreground">
-            本页只展示学生可见的教学病例摘要、主诉和训练入口；完整病例事实、标准答案、查体/检查结果和 Rubric 详情仅在管理端台账中查看。
-          </p>
-        </section>
-
         {errorText ? (
           <section className="rounded-2xl border border-destructive/20 bg-destructive/5 p-5 text-sm text-destructive shadow-xs">
             {errorText}
@@ -170,12 +177,19 @@ export default function CasesPage() {
         {isLoading ? (
           <section className="rounded-2xl border border-border bg-background p-8 text-center shadow-xs">
             <h2 className="text-base font-semibold">正在加载病例</h2>
-            <p className="mt-2 text-sm text-muted-foreground">请确认本地 FastAPI 服务已启动并开放 `/api/cases`。</p>
+            <p className="mt-2 text-sm text-muted-foreground">正在读取当前可训练病例。</p>
           </section>
         ) : (
           <section className="grid gap-3 md:grid-cols-2">
-            {cases.map((caseSummary) => (
-              <article className="rounded-2xl border border-border bg-background p-5 shadow-xs" key={caseSummary.case_id}>
+            {cases.map((caseSummary) => {
+              const isRecommendedCase = caseSummary.case_id === RECOMMENDED_CASE_ID;
+              return (
+                <article
+                  className={`rounded-2xl border p-5 shadow-xs ${
+                    isRecommendedCase ? "border-brand/35 bg-brand/10" : "border-border bg-background"
+                  }`}
+                  key={caseSummary.case_id}
+                >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="font-mono text-[11px] text-muted-foreground">{caseSummary.case_id}</p>
@@ -184,9 +198,16 @@ export default function CasesPage() {
                       主诉：{caseSummary.chief_complaint}
                     </p>
                   </div>
-                  <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-                    {caseSummary.enabled ? "可训练" : "待接入"}
-                  </span>
+                  <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+                    {isRecommendedCase ? (
+                      <span className="w-fit rounded-full border border-brand/25 bg-brand px-3 py-1 text-xs font-semibold text-white">
+                        推荐
+                      </span>
+                    ) : null}
+                    <span className="w-fit rounded-full border border-brand/20 bg-brand/5 px-3 py-1 text-xs font-medium text-brand">
+                      {caseSummary.enabled ? "可训练" : "待接入"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2 text-xs">
@@ -195,6 +216,18 @@ export default function CasesPage() {
                   </span>
                   <span className="rounded-full border border-border bg-muted px-3 py-1 font-medium text-muted-foreground">
                     {getDifficultyLabel(caseSummary.difficulty)}
+                  </span>
+                  <span className="rounded-full border border-border bg-background px-3 py-1 font-medium text-foreground">
+                    {caseSummary.content_stats.history_clue_count} 条线索
+                  </span>
+                  <span className="rounded-full border border-border bg-background px-3 py-1 font-medium text-muted-foreground">
+                    {caseSummary.content_stats.physical_exam_count} 项查体
+                  </span>
+                  <span className="rounded-full border border-border bg-background px-3 py-1 font-medium text-muted-foreground">
+                    {caseSummary.content_stats.auxiliary_test_count} 项检查
+                  </span>
+                  <span className="rounded-full border border-border bg-background px-3 py-1 font-medium text-muted-foreground">
+                    共 {caseSummary.content_stats.total_training_items} 项训练素材
                   </span>
                 </div>
 
@@ -216,8 +249,9 @@ export default function CasesPage() {
                     </button>
                   )}
                 </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </section>
         )}
       </div>

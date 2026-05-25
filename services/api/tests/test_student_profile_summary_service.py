@@ -123,3 +123,155 @@ def test_profile_summary_reactivates_skill_when_retired_gap_reappears() -> None:
     assert state["state_label"] == "重新激活"
     assert state["priority"] > 0
     assert state["selection_reason"] == "近期又出现该 Skill 相关缺口：追问疼痛部位及转移特征。"
+
+
+def test_profile_summary_aggregates_reasoning_patterns_beyond_missed_items() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["ht_migration"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                            "source_signal_ids": ["ht_migration", "ht_character"],
+                        },
+                        {
+                            "pattern_id": "thin_differential_reasoning",
+                            "label": "鉴别诊断过窄",
+                            "category": "differential_reasoning",
+                            "severity": "medium",
+                            "source_signal_ids": ["dxd_urolith"],
+                        },
+                    ],
+                },
+            }
+        ],
+        enabled_skills=[
+            {
+                "skill_id": "skill_reasoning_trace",
+                "case_ids": ["appendicitis_001"],
+                "trigger_item_ids": ["ht_migration"],
+                "reasoning_pattern_ids": ["weak_problem_representation"],
+                "reasoning_pattern_labels": ["问题表征薄弱"],
+                "support_count": 2,
+            }
+        ],
+    )
+
+    reasoning_summary = summary["reasoning_profile_summary"]
+    assert reasoning_summary["recent_pattern_ids"][:2] == [
+        "weak_problem_representation",
+        "thin_differential_reasoning",
+    ]
+    assert reasoning_summary["current_reasoning_focus"][0]["label"] == "问题表征薄弱"
+    assert reasoning_summary["profile_axes"]["problem_representation"]["count"] == 1
+
+    state = summary["skill_states"]["skill_reasoning_trace"]
+    assert state["reasoning_pattern_ids"] == ["weak_problem_representation"]
+    assert state["matched_recent_reasoning_patterns"] == [
+        {"pattern_id": "weak_problem_representation", "label": "问题表征薄弱"}
+    ]
+    assert "思维模式" in state["selection_reason"]
+
+
+def test_profile_summary_aggregates_sequence_and_evidence_chain_breakpoints() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["ht_migration"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "premature_testing_before_exam",
+                            "label": "检查顺序前置",
+                            "category": "hypothesis_testing",
+                            "severity": "medium",
+                            "source_signal_ids": ["sequence:auxiliary_before_physical_exam"],
+                        }
+                    ],
+                    "hypothesis_testing": {
+                        "sequence_flags": [
+                            {
+                                "flag_id": "premature_testing_before_exam",
+                                "label": "辅助检查早于关键查体",
+                                "severity": "medium",
+                                "evidence": "先申请血常规，再补做右下腹压痛。",
+                            }
+                        ]
+                    },
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_migration_support",
+                            "statement": "迁移痛推理点",
+                            "kind": "support",
+                            "status": "broken",
+                            "missing_evidence": ["appendicitis_001.hf_02"],
+                            "missing_evidence_labels": ["追问疼痛部位及转移特征"],
+                            "teacher_action": "先补齐疼痛部位和转移过程，再决定查体与检查。",
+                        }
+                    ],
+                },
+            },
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["pe_tenderness"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "hypothesis_testing": {
+                        "sequence_flags": [
+                            {
+                                "flag_id": "premature_testing_before_exam",
+                                "label": "辅助检查早于关键查体",
+                                "severity": "medium",
+                                "evidence": "检查申请早于腹部重点查体。",
+                            }
+                        ]
+                    },
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_migration_support",
+                            "statement": "迁移痛推理点",
+                            "kind": "support",
+                            "status": "broken",
+                            "missing_evidence": ["appendicitis_001.hf_02"],
+                            "missing_evidence_labels": ["追问疼痛部位及转移特征"],
+                            "teacher_action": "先补齐疼痛部位和转移过程，再决定查体与检查。",
+                        }
+                    ],
+                },
+            },
+        ],
+        enabled_skills=[
+            {
+                "skill_id": "skill_evidence_chain_bridge",
+                "case_ids": ["appendicitis_001"],
+                "trigger_item_ids": [],
+                "reasoning_pattern_ids": ["evidence_chain_rp_migration_support"],
+                "reasoning_pattern_labels": ["迁移痛推理点"],
+                "support_count": 2,
+            }
+        ],
+    )
+
+    reasoning_summary = summary["reasoning_profile_summary"]
+
+    assert reasoning_summary["sequence_issue_counts"][0]["flag_id"] == "premature_testing_before_exam"
+    assert reasoning_summary["sequence_issue_counts"][0]["count"] == 2
+    assert reasoning_summary["evidence_chain_focus"][0]["breakpoint_id"] == "rp_migration_support"
+    assert reasoning_summary["evidence_chain_focus"][0]["count"] == 2
+    assert reasoning_summary["evidence_chain_focus"][0]["missing_evidence_labels"] == ["追问疼痛部位及转移特征"]
+    assert "evidence_chain_rp_migration_support" in reasoning_summary["recent_pattern_ids"]
+
+    state = summary["skill_states"]["skill_evidence_chain_bridge"]
+    assert state["state"] == "active"
+    assert state["matched_recent_reasoning_patterns"] == [
+        {"pattern_id": "evidence_chain_rp_migration_support", "label": "迁移痛推理点"}
+    ]

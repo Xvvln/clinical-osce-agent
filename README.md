@@ -225,6 +225,14 @@ Copy-Item '.env.example' '.env'
 
 - 本地演示时，学生端可以测试 Gemini、Vertex Gemini、OpenAI-compatible 和 Anthropic 的连通性。
 - 训练运行时写入当前支持 OpenAI-compatible、Anthropic、Vertex Gemini ADC/API Key。
+- 当前 Gemini / Vertex 默认模型保持一致：
+
+```env
+OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-pro-preview
+OSCE_VERTEX_MODEL=gemini-3.1-pro-preview
+OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-pro-preview
+```
+
 - 生产环境不建议把 API Key 写入本地 SQLite，应使用环境变量、密钥服务或云平台身份。
 
 RAG 配置说明：

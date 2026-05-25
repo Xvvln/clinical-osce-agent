@@ -309,6 +309,73 @@ def test_agent_decision_trace_is_persisted(tmp_path, authenticated_user: dict[st
     assert after_reload["agent_decision_trace"][0]["node"] == "training_strategy_node"
 
 
+def test_history_message_returns_backend_processing_trace_with_timestamps() -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/message",
+        json={"message": "什么时候开始疼的？现在具体哪里疼？"},
+    )
+
+    assert create_response.status_code == 200
+    assert response.status_code == 200
+    payload = response.json()
+    patient_turn = next(
+        turn
+        for turn in reversed(payload["agent_turn_memory"])
+        if turn["reply_role"] == "patient" and turn["reply"] == payload["reply"]
+    )
+    assert isinstance(patient_turn["processing_duration_ms"], int)
+    assert patient_turn["processing_duration_ms"] >= 0
+    trace = patient_turn["processing_trace"]
+    assert [step["step_id"] for step in trace] == [
+        "intent",
+        "case_context",
+        "patient_reply",
+        "skill",
+        "rag",
+        "coach",
+        "response",
+    ]
+    for step in trace:
+        assert step["label"]
+        assert step["status"] in {"completed", "skipped", "error"}
+        assert isinstance(step["duration_ms"], int)
+        assert step["duration_ms"] >= 0
+        assert step["started_at"].endswith("+00:00")
+        assert step["completed_at"].endswith("+00:00")
+
+
+def test_session_processing_status_exposes_current_backend_step() -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    osce_session_service.begin_message_processing_status(session_id)
+    osce_session_service.update_message_processing_status(
+        session_id,
+        step_id="intent",
+        label="解析问诊意图",
+        status="active",
+    )
+
+    response = client.get(f"/api/sessions/{session_id}/processing-status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "running"
+    assert payload["current_step_id"] == "intent"
+    assert payload["current_label"] == "解析问诊意图"
+    assert payload["summary"] == "当前：解析问诊意图。"
+    assert payload["steps"] == [
+        {
+            "step_id": "intent",
+            "label": "解析问诊意图",
+            "status": "active",
+        }
+    ]
+
+
 def test_agent_state_recovers_with_session(tmp_path, authenticated_user: dict[str, str]) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     osce_session_service._sessions.clear()
@@ -580,10 +647,9 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         "item_id": "ht_migration",
         "label": "追问疼痛部位及转移特征",
     }
-    assert (
-        profile["skill_profile_summary"]["skill_states"][personal_skill_id]["selection_reason"]
-        == "近期画像命中：追问疼痛部位及转移特征、追问疼痛性质、追问疼痛程度。"
-    )
+    assert "近期画像命中思维模式" in profile["skill_profile_summary"]["skill_states"][personal_skill_id][
+        "selection_reason"
+    ]
     assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["matched_recent_error_item_ids"] == [
         "ht_migration",
         "ht_character",
@@ -1613,6 +1679,32 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     assert state_payload["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert state_payload["requested_exams"] == ["abd.palpation.rebound"]
     assert state_payload["requested_tests"] == ["lab.cbc"]
+    assert state_payload["action_timeline"] == [
+        {
+            "turn_index": 1,
+            "action_type": "history_fact_revealed",
+            "source_id": "appendicitis_001.hf_01",
+            "label": "追问起病时间",
+        },
+        {
+            "turn_index": 2,
+            "action_type": "physical_exam_requested",
+            "source_id": "abd.palpation.rebound",
+            "label": "反跳痛（Blumberg 征）",
+        },
+        {
+            "turn_index": 3,
+            "action_type": "auxiliary_test_requested",
+            "source_id": "lab.cbc",
+            "label": "血常规",
+        },
+        {
+            "turn_index": 4,
+            "action_type": "diagnosis_submitted",
+            "source_id": "final_submission",
+            "label": "提交诊断",
+        },
+    ]
 
     report_response = client.get(f"/api/sessions/{session_id}/report")
 
@@ -1914,7 +2006,8 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert report["ai_reflection_review"]["source_references"]
     reflection = report["ai_reflection_review"]
     assert reflection["generated_by"] == "teacher_reflection_agent"
-    assert reflection["teaching_prompt_version"] == "teacher_reflection_v2"
+    assert reflection["teaching_prompt_version"] == "teacher_reflection_v3"
+    assert reflection["reasoning_trace_summary"]["dominant_patterns"]
     assert "证据链" in reflection["overall_comment"]
     assert reflection["strengths_review"]
     assert reflection["reasoning_chain_review"]

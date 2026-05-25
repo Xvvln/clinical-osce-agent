@@ -48,6 +48,8 @@ def build_active_skill_context(
         for item_id in profile.get("recent_error_item_ids", [])
         if str(item_id)
     }
+    reasoning_pattern_labels = _reasoning_pattern_labels(profile)
+    recent_reasoning_pattern_ids = set(reasoning_pattern_labels.keys())
 
     candidates: list[dict[str, Any]] = []
     skipped_reasons: list[dict[str, str]] = []
@@ -62,6 +64,7 @@ def build_active_skill_context(
             stage=stage,
             rubric_item_ids=rubric_item_set,
             current_missing_evidence=missing_item_set,
+            recent_reasoning_pattern_ids=recent_reasoning_pattern_ids,
             patient_profile=patient_profile or {},
         )
         if skip_reason:
@@ -72,11 +75,17 @@ def build_active_skill_context(
             skipped_reasons.append({"skill_id": skill_id, "reason": f"profile_state_{profile_state}"})
             continue
         trigger_item_ids = _trigger_item_ids(skill)
+        reasoning_pattern_ids = _skill_reasoning_pattern_ids(skill)
+        reasoning_pattern_hits = [
+            pattern_id for pattern_id in reasoning_pattern_ids if pattern_id in recent_reasoning_pattern_ids
+        ]
         priority = _skill_priority(
             skill_id=skill_id,
             trigger_item_ids=trigger_item_ids,
+            reasoning_pattern_ids=reasoning_pattern_ids,
             current_missing_evidence=missing_item_set,
             recent_error_item_ids=recent_error_item_ids,
+            recent_reasoning_pattern_ids=recent_reasoning_pattern_ids,
             skill_states=skill_states,
         )
         candidates.append(
@@ -84,11 +93,24 @@ def build_active_skill_context(
                 "skill": dict(skill),
                 "priority": priority,
                 "trigger_item_ids": trigger_item_ids,
-                "why_candidate": _why_candidate(trigger_item_ids, missing_item_set, recent_error_item_ids),
+                "reasoning_pattern_ids": reasoning_pattern_ids,
+                "reasoning_pattern_hits": reasoning_pattern_hits,
+                "reasoning_pattern_labels": [
+                    reasoning_pattern_labels.get(pattern_id, pattern_id) for pattern_id in reasoning_pattern_hits
+                ],
+                "why_candidate": _why_candidate(
+                    trigger_item_ids,
+                    missing_item_set,
+                    recent_error_item_ids,
+                    reasoning_pattern_hits=reasoning_pattern_hits,
+                    reasoning_pattern_labels=reasoning_pattern_labels,
+                ),
                 "why_selected_label": _why_selected_label(
                     trigger_item_ids,
                     current_missing_evidence=missing_item_set,
                     recent_error_item_ids=recent_error_item_ids,
+                    reasoning_pattern_hits=reasoning_pattern_hits,
+                    reasoning_pattern_labels=reasoning_pattern_labels,
                     case_id=case_id,
                 ),
             }
@@ -120,6 +142,7 @@ def _skip_reason(
     stage: str,
     rubric_item_ids: set[str],
     current_missing_evidence: set[str],
+    recent_reasoning_pattern_ids: set[str],
     patient_profile: Mapping[str, Any],
 ) -> str:
     if not _applies_to_case(skill, case_id, rubric_item_ids):
@@ -128,9 +151,14 @@ def _skip_reason(
         return "student_mismatch"
     if not _applies_to_stage(skill, stage):
         return "stage_mismatch"
-    if not _trigger_item_ids(skill):
+    if not _trigger_item_ids(skill) and not _skill_reasoning_pattern_ids(skill):
         return "trigger_items_missing"
-    if not _matches_missing_evidence(skill, rubric_item_ids, current_missing_evidence):
+    if not _matches_missing_evidence(
+        skill,
+        rubric_item_ids,
+        current_missing_evidence,
+        recent_reasoning_pattern_ids,
+    ):
         return "missing_evidence_mismatch"
     if _context_safety_mismatch(skill, patient_profile):
         return "context_safety_mismatch"
@@ -168,7 +196,10 @@ def _matches_missing_evidence(
     skill: Mapping[str, Any],
     rubric_item_ids: set[str],
     current_missing_evidence: set[str],
+    recent_reasoning_pattern_ids: set[str],
 ) -> bool:
+    if set(_skill_reasoning_pattern_ids(skill)) & recent_reasoning_pattern_ids:
+        return True
     if not current_missing_evidence:
         return True
     trigger_item_ids = _trigger_item_ids(skill)
@@ -189,8 +220,10 @@ def _skill_priority(
     *,
     skill_id: str,
     trigger_item_ids: list[str],
+    reasoning_pattern_ids: list[str],
     current_missing_evidence: set[str],
     recent_error_item_ids: set[str],
+    recent_reasoning_pattern_ids: set[str],
     skill_states: Mapping[str, Any],
 ) -> int:
     priority = 0
@@ -198,6 +231,8 @@ def _skill_priority(
         priority += 4
     if set(trigger_item_ids) & recent_error_item_ids:
         priority += 4
+    if set(reasoning_pattern_ids) & recent_reasoning_pattern_ids:
+        priority += 8
     state = skill_states.get(skill_id, {})
     if isinstance(state, Mapping):
         raw_priority = state.get("priority", 0)
@@ -220,7 +255,7 @@ def _profile_skill_state(skill_id: str, skill_states: Mapping[str, Any]) -> str:
 def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
     trigger_items = list(candidate["trigger_item_ids"])
-    return {
+    payload = {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
         "scope": str(skill.get("scope", "global")),
@@ -231,12 +266,17 @@ def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why_candidate": str(candidate["why_candidate"]),
         "why_selected_label": str(candidate["why_selected_label"]),
     }
+    reasoning_pattern_ids = list(candidate.get("reasoning_pattern_ids", []))
+    if reasoning_pattern_ids:
+        payload["reasoning_pattern_ids"] = reasoning_pattern_ids
+        payload["reasoning_pattern_labels"] = list(candidate.get("reasoning_pattern_labels", []))
+    return payload
 
 
 def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
     trigger_items = list(candidate["trigger_item_ids"])
-    return {
+    payload = {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
         "suggested_strategy": str(skill.get("suggested_strategy", "")),
@@ -249,6 +289,11 @@ def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why_selected_label": str(candidate["why_selected_label"]),
         "effect_status": str(skill.get("effect_status", "insufficient_samples")),
     }
+    reasoning_pattern_ids = list(candidate.get("reasoning_pattern_ids", []))
+    if reasoning_pattern_ids:
+        payload["reasoning_pattern_ids"] = reasoning_pattern_ids
+        payload["reasoning_pattern_labels"] = list(candidate.get("reasoning_pattern_labels", []))
+    return payload
 
 
 def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:
@@ -259,6 +304,10 @@ def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:
     if not _is_concrete_trigger_item_id(trigger_item_id):
         return []
     return [trigger_item_id] if trigger_item_id else []
+
+
+def _skill_reasoning_pattern_ids(skill: Mapping[str, Any]) -> list[str]:
+    return _normalized_string_list(skill.get("reasoning_pattern_ids"))
 
 
 def _stage_scope(skill: Mapping[str, Any]) -> list[str]:
@@ -294,7 +343,14 @@ def _why_candidate(
     trigger_item_ids: list[str],
     current_missing_evidence: set[str],
     recent_error_item_ids: set[str],
+    *,
+    reasoning_pattern_hits: list[str] | None = None,
+    reasoning_pattern_labels: Mapping[str, str] | None = None,
 ) -> str:
+    pattern_hits = list(reasoning_pattern_hits or [])
+    if pattern_hits:
+        labels = _labels_for_reasoning_patterns(pattern_hits, reasoning_pattern_labels or {})
+        return f"近期思维模式命中 {', '.join(labels)}"
     missing_hits = [item_id for item_id in trigger_item_ids if item_id in current_missing_evidence]
     if missing_hits:
         return f"当前缺口命中 {', '.join(missing_hits)}"
@@ -311,8 +367,14 @@ def _why_selected_label(
     *,
     current_missing_evidence: set[str],
     recent_error_item_ids: set[str],
+    reasoning_pattern_hits: list[str] | None = None,
+    reasoning_pattern_labels: Mapping[str, str] | None = None,
     case_id: str,
 ) -> str:
+    pattern_hits = list(reasoning_pattern_hits or [])
+    if pattern_hits:
+        labels = _labels_for_reasoning_patterns(pattern_hits, reasoning_pattern_labels or {})
+        return f"近期思维模式命中：{'、'.join(labels)}。"
     missing_hits = [item_id for item_id in trigger_item_ids if item_id in current_missing_evidence]
     if missing_hits:
         return f"当前缺口命中：{'、'.join(trigger_item_labels(missing_hits, [case_id]))}。"
@@ -322,3 +384,28 @@ def _why_selected_label(
     if trigger_item_ids:
         return f"适用训练点：{'、'.join(trigger_item_labels(trigger_item_ids, [case_id]))}。"
     return "通用教学策略。"
+
+
+def _reasoning_pattern_labels(profile: Mapping[str, Any]) -> dict[str, str]:
+    summary = profile.get("reasoning_profile_summary")
+    if not isinstance(summary, Mapping):
+        return {}
+    labels: dict[str, str] = {}
+    for pattern_id in _normalized_string_list(summary.get("recent_pattern_ids")):
+        labels[pattern_id] = pattern_id
+    for key in ("recent_patterns", "dominant_patterns"):
+        patterns = summary.get(key, [])
+        if not isinstance(patterns, list):
+            continue
+        for pattern in patterns:
+            if not isinstance(pattern, Mapping):
+                continue
+            pattern_id = str(pattern.get("pattern_id") or "").strip()
+            if not pattern_id:
+                continue
+            labels[pattern_id] = str(pattern.get("label") or pattern_id).strip()
+    return labels
+
+
+def _labels_for_reasoning_patterns(pattern_ids: list[str], labels_by_pattern_id: Mapping[str, str]) -> list[str]:
+    return [str(labels_by_pattern_id.get(pattern_id) or pattern_id) for pattern_id in pattern_ids]

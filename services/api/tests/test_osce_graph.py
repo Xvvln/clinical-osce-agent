@@ -254,6 +254,26 @@ def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() ->
         "appendicitis_001.hf_04",
     ]
     assert result["agent_turn_memory"][0]["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
+    assert result["action_timeline"] == [
+        {
+            "turn_index": 1,
+            "action_type": "history_fact_revealed",
+            "source_id": "appendicitis_001.hf_02",
+            "label": "追问疼痛部位及转移特征",
+        },
+        {
+            "turn_index": 2,
+            "action_type": "history_fact_revealed",
+            "source_id": "appendicitis_001.hf_03",
+            "label": "追问疼痛性质",
+        },
+        {
+            "turn_index": 3,
+            "action_type": "history_fact_revealed",
+            "source_id": "appendicitis_001.hf_04",
+            "label": "追问疼痛程度",
+        },
+    ]
 
 
 def test_osce_graph_reveals_case_specific_multi_intent_history_facts() -> None:
@@ -1433,6 +1453,11 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
     assert feedback_report["source_reference_items"][1]["reference"] == "source:fareez_osce_2022"
     assert feedback_report["source_reference_items"][1]["source_type"] == "source"
     assert feedback_report["source_reference_items"][1]["metadata"]["license"] == "CC BY 4.0"
+    assert feedback_report["clinical_reasoning_trace"]["trace_version"] == "clinical_reasoning_trace_v1"
+    assert {
+        "weak_problem_representation",
+        "thin_differential_reasoning",
+    } <= {pattern["pattern_id"] for pattern in feedback_report["clinical_reasoning_trace"]["cognitive_patterns"]}
     assert {
         "reference": "rubric:appendicitis_001_rubric.item.ht_migration",
         "source_type": "rubric",

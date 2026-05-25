@@ -17,6 +17,7 @@ import {
   type ReportCoverageMapPayload,
   type RubricScoreItem,
   type SourceReferenceItem,
+  type TeacherReasoningTraceSummary,
 } from "./report-model";
 
 type DimensionInsight = Readonly<{
@@ -1374,6 +1375,7 @@ function AiReflectionReviewSection({
           </div>
         </div>
       ) : null}
+      <TeacherReasoningTraceSummarySection summary={review.reasoning_trace_summary} />
       {review.mistake_patterns.length > 0 ? (
         <div className="mt-3">
           <h3 className="text-xs font-semibold">相关训练点</h3>
@@ -1417,6 +1419,67 @@ function AiReflectionReviewSection({
       </details>
       {review.safety_note ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{review.safety_note}</p> : null}
     </section>
+  );
+}
+
+function TeacherReasoningTraceSummarySection({ summary }: Readonly<{ summary: TeacherReasoningTraceSummary }>) {
+  const hasSequenceFlags = summary.sequence_flags.length > 0;
+  const hasEvidenceBreakpoints = summary.evidence_chain_breakpoints.length > 0;
+  if (!hasSequenceFlags && !hasEvidenceBreakpoints) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-muted/20 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">临床思维轨迹</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            来自本轮训练动作顺序和证据链断点，只用于复盘，不参与评分。
+          </p>
+        </div>
+        {summary.trace_version ? (
+          <span className="w-fit rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+            {summary.trace_version}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-border bg-background p-3">
+          <h4 className="text-xs font-semibold text-foreground">顺序问题</h4>
+          {hasSequenceFlags ? (
+            <ul className="mt-2 grid gap-2">
+              {summary.sequence_flags.map((flag) => (
+                <li className="rounded-lg bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground" key={flag.flag_id}>
+                  <span className="font-medium text-foreground">{flag.label}</span>
+                  {flag.evidence ? <span className="mt-1 block">{flag.evidence}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">未识别到明显顺序跳步。</p>
+          )}
+        </div>
+        <div className="rounded-lg border border-border bg-background p-3">
+          <h4 className="text-xs font-semibold text-foreground">证据链断点</h4>
+          {hasEvidenceBreakpoints ? (
+            <ul className="mt-2 grid gap-2">
+              {summary.evidence_chain_breakpoints.map((breakpoint) => (
+                <li className="rounded-lg bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground" key={breakpoint.breakpoint_id}>
+                  <span className="font-medium text-foreground">{breakpoint.statement}</span>
+                  {breakpoint.missing_evidence_labels.length > 0 ? (
+                    <span className="mt-1 block">缺少证据：{breakpoint.missing_evidence_labels.join("、")}</span>
+                  ) : null}
+                  {breakpoint.teacher_action ? <span className="mt-1 block">{breakpoint.teacher_action}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">暂无证据链断点。</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

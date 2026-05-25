@@ -278,3 +278,91 @@ def test_skill_orchestrator_adds_readable_selection_reason_and_trigger_labels() 
     assert selected["why_selected_label"] == "当前缺口命中：追问疼痛部位及转移特征。"
     assert context["skill_index"][0]["trigger_item_labels"] == ["追问疼痛部位及转移特征"]
     assert context["skill_index"][0]["why_selected_label"] == "当前缺口命中：追问疼痛部位及转移特征。"
+
+
+def test_skill_orchestrator_selects_skill_by_recent_reasoning_pattern() -> None:
+    context = build_active_skill_context(
+        [
+            {
+                "skill_id": "skill_reasoning_pattern",
+                "title": "先形成问题表征再推进检查",
+                "suggested_strategy": "提示学生先用一句话整理起病、部位、性质、程度和伴随症状。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["ht_onset"],
+                "reasoning_pattern_ids": ["weak_problem_representation"],
+                "support_count": 1,
+            },
+            {
+                "skill_id": "skill_regular_gap",
+                "title": "反跳痛查体训练",
+                "suggested_strategy": "提示学生补充腹膜刺激征查体。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": ["pe_rebound"],
+                "support_count": 9,
+            },
+        ],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="case_intro",
+        rubric_item_ids=["ht_onset", "pe_rebound"],
+        current_missing_evidence=["pe_rebound"],
+        student_profile={
+            "reasoning_profile_summary": {
+                "recent_pattern_ids": ["weak_problem_representation"],
+                "dominant_patterns": [
+                    {
+                        "pattern_id": "weak_problem_representation",
+                        "label": "问题表征薄弱",
+                        "count": 3,
+                    }
+                ],
+            }
+        },
+        limit=1,
+    )
+
+    assert [skill["skill_id"] for skill in context["selected_skills"]] == ["skill_reasoning_pattern"]
+    selected = context["selected_skills"][0]
+    assert selected["reasoning_pattern_ids"] == ["weak_problem_representation"]
+    assert selected["why_selected_label"] == "近期思维模式命中：问题表征薄弱。"
+
+
+def test_skill_orchestrator_reads_reasoning_labels_from_recent_patterns() -> None:
+    context = build_active_skill_context(
+        [
+            {
+                "skill_id": "skill_evidence_chain",
+                "title": "迁移痛证据链训练",
+                "suggested_strategy": "提示学生说明缺少的证据如何支持当前假设。",
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["case_intro"],
+                "trigger_item_ids": [],
+                "reasoning_pattern_ids": ["evidence_chain_rp_migration_support"],
+                "support_count": 1,
+            }
+        ],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="case_intro",
+        rubric_item_ids=["ht_migration"],
+        current_missing_evidence=[],
+        student_profile={
+            "reasoning_profile_summary": {
+                "recent_pattern_ids": ["evidence_chain_rp_migration_support"],
+                "recent_patterns": [
+                    {
+                        "pattern_id": "evidence_chain_rp_migration_support",
+                        "label": "迁移痛推理点",
+                        "count": 2,
+                    }
+                ],
+            }
+        },
+        limit=1,
+    )
+
+    selected = context["selected_skills"][0]
+    assert selected["why_selected_label"] == "近期思维模式命中：迁移痛推理点。"
+    assert selected["reasoning_pattern_labels"] == ["迁移痛推理点"]

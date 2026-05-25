@@ -6,12 +6,18 @@ from typing import Any
 
 from app.models.case import Case
 from app.services.admin_display_resolver import rubric_item_labels
+from app.services.clinical_reasoning_trace_service import (
+    action_order_summary_from_report,
+    evidence_chain_breakpoints_from_report,
+    sequence_flags_from_report,
+)
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_auto_approval_service import AUTO_APPROVAL_AGENT_ID, TrainingSkillApprovalAgent
 from app.services.training_skill_candidate_service import (
     TrainingSkillCandidateContext,
     TrainingSkillCandidateGenerator,
     TrainingSkillCandidateMissedItem,
+    TrainingSkillCandidateTurnPattern,
     create_default_training_skill_candidate_generator,
 )
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
@@ -19,7 +25,7 @@ from app.services.training_skill_regression_gate import TrainingSkillRegressionG
 from app.services.training_skill_store import TrainingSkillStore
 
 MAX_APPROVAL_AGENT_ROUNDS = 3
-TEACHER_REFLECTION_PROMPT_VERSION = "teacher_reflection_v2"
+TEACHER_REFLECTION_PROMPT_VERSION = "teacher_reflection_v3"
 
 TEACHER_REFLECTION_PROMPT_CONTRACT = """你是 OSCE 训练报告里的教师复盘 Agent。
 
@@ -31,6 +37,7 @@ TEACHER_REFLECTION_PROMPT_CONTRACT = """你是 OSCE 训练报告里的教师复�
 - 不得新增病例事实、修改标准诊断、改写 rubric 或泄露隐藏材料。
 - 不得输出真实诊疗建议、治疗方案、用药剂量或处置指令。
 - 不要机械罗列每个 missed_item；必须把漏项归纳成 2-4 个临床思维问题组。
+- 如果输入包含 clinical_reasoning_trace，必须优先围绕其中的 cognitive_patterns 讲评；missed_items 只作为具体证据例子。
 - 每个问题组必须包含：学生本轮表现、为什么重要、正确做法、下一轮具体练习动作。
 - 用老师对学生说话的语气，明确、具体、可执行，避免“加强学习”这类空话。
 - 如果学生已经覆盖较完整，重点转为证据表达、支持/排除依据和迁移训练。
@@ -183,6 +190,15 @@ class PersonalTrainingSkillService:
         session_id = str(session.session_id)
         report_id = str(report.get("report_id") or f"{session_id}_report")
         missed_items = _missed_items_from_report(report, case.case_id)
+        reasoning_turn_patterns = _reasoning_turn_patterns_from_report(
+            report,
+            case_id=case.case_id,
+            session_id=session_id,
+            report_id=report_id,
+        )
+        reasoning_pattern_ids = [pattern.pattern_id for pattern in reasoning_turn_patterns]
+        reasoning_pattern_labels = [pattern.title for pattern in reasoning_turn_patterns]
+        trace_version = _trace_version_from_report(report)
         context = TrainingSkillCandidateContext(
             pattern_id=f"personal_{session_id}",
             missed_items=missed_items,
@@ -190,6 +206,7 @@ class PersonalTrainingSkillService:
             case_ids=[case.case_id],
             source_report_count=1,
             related_recommendations=_related_recommendations(report),
+            turn_patterns=reasoning_turn_patterns,
         )
         candidate = self._generator.generate_candidate(context)
         trigger_item_ids = [item.item_id for item in missed_items] or ["reflection:structured_expression"]
@@ -214,10 +231,14 @@ class PersonalTrainingSkillService:
                     "stage_scope": stage_scope,
                     "trigger_item_ids": trigger_item_ids,
                     "current_missing_evidence": trigger_item_ids,
+                    "reasoning_pattern_ids": reasoning_pattern_ids,
                     "min_support_count": 1,
                     "owner_student_id": str(session.student_id),
                     "source_session_id": session_id,
                 },
+                "reasoning_pattern_ids": reasoning_pattern_ids,
+                "reasoning_pattern_labels": reasoning_pattern_labels,
+                "source_trace_version": trace_version,
                 "rag_evidence_items": _rag_evidence_items(report),
                 "web_check_status": "not_configured",
                 "external_evidence_checks": [],
@@ -322,6 +343,147 @@ def _rag_evidence_items(report: dict[str, Any]) -> list[dict[str, Any]]:
     ][:12]
 
 
+def _trace_version_from_report(report: dict[str, Any]) -> str:
+    trace = report.get("clinical_reasoning_trace")
+    if not isinstance(trace, dict):
+        return ""
+    return str(trace.get("trace_version") or "")
+
+
+def _reasoning_patterns_from_report(report: dict[str, Any]) -> list[dict[str, Any]]:
+    trace = report.get("clinical_reasoning_trace")
+    if not isinstance(trace, dict):
+        return []
+    patterns = trace.get("cognitive_patterns", [])
+    if not isinstance(patterns, list):
+        return []
+    normalized_patterns: list[dict[str, Any]] = []
+    for pattern in patterns:
+        if not isinstance(pattern, dict):
+            continue
+        pattern_id = str(pattern.get("pattern_id") or "").strip()
+        if not pattern_id:
+            continue
+        normalized_patterns.append(
+            {
+                **pattern,
+                "pattern_id": pattern_id,
+                "label": str(pattern.get("label") or pattern_id),
+                "category": str(pattern.get("category") or "clinical_reasoning"),
+                "severity": str(pattern.get("severity") or "medium"),
+                "source_signal_ids": _normalized_string_list(pattern.get("source_signal_ids")),
+                "trigger_item_ids": _normalized_string_list(pattern.get("trigger_item_ids")),
+            }
+        )
+    return normalized_patterns
+
+
+def _reasoning_turn_patterns_from_report(
+    report: dict[str, Any],
+    *,
+    case_id: str,
+    session_id: str,
+    report_id: str,
+) -> list[TrainingSkillCandidateTurnPattern]:
+    result: list[TrainingSkillCandidateTurnPattern] = []
+    seen_pattern_ids: set[str] = set()
+    for pattern in _reasoning_patterns_from_report(report)[:4]:
+        trigger_item_ids = _reasoning_pattern_trigger_item_ids(pattern, report)
+        pattern_id = str(pattern["pattern_id"])
+        seen_pattern_ids.add(pattern_id)
+        result.append(
+            TrainingSkillCandidateTurnPattern(
+                pattern_id=pattern_id,
+                pattern_type=str(pattern.get("category") or "clinical_reasoning"),
+                title=str(pattern.get("label") or pattern["pattern_id"]),
+                count=1,
+                trigger_item_ids=trigger_item_ids,
+                case_ids=[case_id],
+                session_ids=[session_id],
+                source_report_ids=[report_id],
+                source_report_count=1,
+            )
+        )
+    for flag in sequence_flags_from_report(report)[:2]:
+        pattern_id = str(flag.get("flag_id") or "").strip()
+        if not pattern_id or pattern_id in seen_pattern_ids:
+            continue
+        seen_pattern_ids.add(pattern_id)
+        result.append(
+            TrainingSkillCandidateTurnPattern(
+                pattern_id=pattern_id,
+                pattern_type="sequence_issue",
+                title=str(flag.get("label") or pattern_id),
+                count=1,
+                trigger_item_ids=_trace_signal_trigger_item_ids(
+                    _normalized_string_list(flag.get("source_signal_ids")),
+                    report,
+                ),
+                case_ids=[case_id],
+                session_ids=[session_id],
+                source_report_ids=[report_id],
+                source_report_count=1,
+            )
+        )
+    for breakpoint in evidence_chain_breakpoints_from_report(report)[:4]:
+        breakpoint_id = str(breakpoint.get("breakpoint_id") or breakpoint.get("statement") or "").strip()
+        if not breakpoint_id:
+            continue
+        pattern_id = f"evidence_chain_{_safe_pattern_id_fragment(breakpoint_id)}"
+        if pattern_id in seen_pattern_ids:
+            continue
+        seen_pattern_ids.add(pattern_id)
+        result.append(
+            TrainingSkillCandidateTurnPattern(
+                pattern_id=pattern_id,
+                pattern_type="evidence_chain_breakpoint",
+                title=str(breakpoint.get("statement") or breakpoint_id),
+                count=1,
+                trigger_item_ids=_trace_signal_trigger_item_ids(
+                    _normalized_string_list(breakpoint.get("missing_evidence")),
+                    report,
+                ),
+                case_ids=[case_id],
+                session_ids=[session_id],
+                source_report_ids=[report_id],
+                source_report_count=1,
+            )
+        )
+    return result
+
+
+def _reasoning_pattern_trigger_item_ids(pattern: dict[str, Any], report: dict[str, Any]) -> list[str]:
+    trigger_item_ids = _normalized_string_list(pattern.get("trigger_item_ids"))
+    if trigger_item_ids:
+        return trigger_item_ids[:12]
+    source_signal_ids = _normalized_string_list(pattern.get("source_signal_ids"))
+    concrete_signals = [
+        signal
+        for signal in source_signal_ids
+        if signal and ":" not in signal and "." not in signal
+    ]
+    if concrete_signals:
+        return concrete_signals[:12]
+    return [str(item_id) for item_id in report.get("missed_items", []) if str(item_id)][:8]
+
+
+def _trace_signal_trigger_item_ids(signal_ids: list[str], report: dict[str, Any]) -> list[str]:
+    concrete_signals = [
+        signal
+        for signal in signal_ids
+        if signal and ":" not in signal and "." not in signal
+    ]
+    if concrete_signals:
+        return concrete_signals[:12]
+    return [str(item_id) for item_id in report.get("missed_items", []) if str(item_id)][:8]
+
+
+def _safe_pattern_id_fragment(value: str) -> str:
+    normalized = "".join(character if character.isalnum() or character == "_" else "_" for character in value)
+    normalized = "_".join(part for part in normalized.split("_") if part)
+    return normalized[:96] or "unknown"
+
+
 def build_teacher_reflection_review_payload(report: dict[str, Any], case: Case | None = None) -> dict[str, Any]:
     return _build_ai_reflection_review(report, case)
 
@@ -333,6 +495,8 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
     missed_labels = rubric_item_labels(missed_items[:8], [case_id]) if missed_items else []
     covered_labels = _coverage_map_labels(report, "covered", limit=4, case=case)
     pending_labels = _coverage_map_labels(report, "pending", limit=4, case=case)
+    reasoning_patterns = _reasoning_patterns_from_report(report)
+    reasoning_trace_summary = _teacher_reasoning_trace_summary(report)
     source_reference_items = _rag_evidence_items(report)
     source_references = [item["reference"] for item in source_reference_items]
     score_text = _score_text(report)
@@ -344,6 +508,7 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         missed_items=missed_items,
         missed_labels=missed_labels,
         pending_labels=pending_labels,
+        reasoning_patterns=reasoning_patterns,
     )
     overall_comment = _build_overall_teacher_comment(
         case_title=case_title,
@@ -351,7 +516,11 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         missed_items=missed_items,
         major_issues=major_issues,
     )
-    reasoning_chain_review = _build_reasoning_chain_review(case_title=case_title, major_issues=major_issues)
+    reasoning_chain_review = _build_reasoning_chain_review(
+        case_title=case_title,
+        major_issues=major_issues,
+        reasoning_trace_summary=reasoning_trace_summary,
+    )
     next_practice_plan = _build_next_practice_plan(major_issues, pending_labels)
     teacher_note = (
         "复盘时先看问题背后的推理顺序：先把病史问完整，再用查体和检查验证假设，最后用证据说明支持与排除。"
@@ -391,7 +560,8 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         "reasoning_chain_review": reasoning_chain_review,
         "next_practice_plan": next_practice_plan,
         "teacher_note": teacher_note,
-        "mistake_patterns": missed_items[:8],
+        "mistake_patterns": [pattern["pattern_id"] for pattern in reasoning_patterns[:8]] or missed_items[:8],
+        "reasoning_trace_summary": reasoning_trace_summary,
         "teacher_feedback": teacher_feedback,
         "next_focus": next_focus,
         "source_references": source_references,
@@ -439,7 +609,16 @@ def _build_teacher_major_issues(
     missed_items: list[str],
     missed_labels: list[str],
     pending_labels: list[str],
+    reasoning_patterns: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    reasoning_issues = _teacher_major_issues_from_reasoning_patterns(
+        reasoning_patterns or [],
+        case=case,
+        case_id=case_id,
+    )
+    if reasoning_issues:
+        return reasoning_issues[:4]
+
     grouped_items = _group_teacher_issue_items(missed_items, missed_labels, case_id)
     pending_by_group = _coverage_map_labels_by_group(report, "pending", limit_per_group=4, case=case)
     issues: list[dict[str, Any]] = []
@@ -473,6 +652,56 @@ def _build_teacher_major_issues(
             "linked_items": [],
         }
     ]
+
+
+def _teacher_major_issues_from_reasoning_patterns(
+    reasoning_patterns: list[dict[str, Any]],
+    *,
+    case: Case | None,
+    case_id: str,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for pattern in reasoning_patterns[:4]:
+        label = str(pattern.get("label") or pattern.get("pattern_id") or "").strip()
+        if not label:
+            continue
+        linked_items = _reasoning_pattern_linked_labels(pattern, case=case, case_id=case_id)
+        evidence = str(pattern.get("evidence") or "").strip()
+        why = str(pattern.get("why_it_matters") or "").strip()
+        remediation = str(pattern.get("remediation") or "").strip()
+        issues.append(
+            {
+                "title": label,
+                "observed_behavior": evidence or f"本轮训练暴露出“{label}”这一临床思维问题。",
+                "why_it_matters": why or "该问题会影响病史、查体、检查和诊断表达之间的证据链闭合。",
+                "correct_approach": remediation or "先形成结构化问题表征，再用查体、检查和鉴别排除逐步验证诊断假设。",
+                "next_action": remediation or "下一轮提交诊断前，先整理支持依据、排除依据和仍需验证的问题。",
+                "linked_items": linked_items,
+            }
+        )
+    return issues
+
+
+def _reasoning_pattern_linked_labels(
+    pattern: dict[str, Any],
+    *,
+    case: Case | None,
+    case_id: str,
+) -> list[str]:
+    item_ids = [
+        *(_normalized_string_list(pattern.get("trigger_item_ids"))),
+        *(_normalized_string_list(pattern.get("source_signal_ids"))),
+    ]
+    labels: list[str] = []
+    for item_id in item_ids:
+        if not item_id or item_id.startswith("event:") or item_id.startswith("sequence:"):
+            continue
+        label = _case_training_point_label(case, item_id) if case is not None else ""
+        if not label and "." not in item_id and ":" not in item_id:
+            label = rubric_item_labels([item_id], [case_id])[0] if case_id else item_id
+        if label and label not in labels:
+            labels.append(label)
+    return labels[:6]
 
 
 def _group_teacher_issue_items(missed_items: list[str], missed_labels: list[str], case_id: str) -> dict[str, list[str]]:
@@ -538,13 +767,54 @@ def _coverage_map_labels_by_group(
     return result
 
 
-def _build_reasoning_chain_review(*, case_title: str, major_issues: list[dict[str, Any]]) -> str:
+def _build_reasoning_chain_review(
+    *,
+    case_title: str,
+    major_issues: list[dict[str, Any]],
+    reasoning_trace_summary: dict[str, Any] | None = None,
+) -> str:
+    reasoning_trace_summary = reasoning_trace_summary or {}
     issue_titles = [str(issue.get("title", "")) for issue in major_issues[:3] if issue.get("title")]
+    sequence_flags = [
+        flag for flag in reasoning_trace_summary.get("sequence_flags", []) if isinstance(flag, dict)
+    ][:2]
+    breakpoints = [
+        breakpoint
+        for breakpoint in reasoning_trace_summary.get("evidence_chain_breakpoints", [])
+        if isinstance(breakpoint, dict)
+    ][:3]
+    sequence_text = ""
+    if sequence_flags:
+        sequence_labels = _compact_list_text(
+            [str(flag.get("label") or flag.get("flag_id") or "") for flag in sequence_flags],
+            limit=2,
+            fallback="推理顺序问题",
+        )
+        sequence_text = f"本轮还要先修正流程顺序：{sequence_labels}。"
+    breakpoint_text = ""
+    if breakpoints:
+        breakpoint_reviews: list[str] = []
+        for breakpoint in breakpoints:
+            statement = str(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "证据链").strip()
+            missing_labels = _normalized_string_list(breakpoint.get("missing_evidence_labels"))
+            missing_text = _compact_list_text(missing_labels, limit=3, fallback="关键证据")
+            teacher_action = str(breakpoint.get("teacher_action") or "").strip()
+            if teacher_action:
+                breakpoint_reviews.append(f"{statement}缺少{missing_text}，{teacher_action}")
+            else:
+                breakpoint_reviews.append(f"{statement}缺少{missing_text}。")
+        breakpoint_text = f"具体证据链断点在：{'；'.join(breakpoint_reviews)}。"
     if issue_titles:
         return (
             f"围绕「{case_title}」，更合理的训练路径是：先补全病史时间线，再用查体验证局部体征，"
             "随后选择必要检查支持或排除诊断，最后把阳性依据和阴性依据组织成诊断推理。"
+            f"{sequence_text}{breakpoint_text}"
             f"本轮需要优先修正的是{_compact_list_text(issue_titles, limit=3, fallback='证据链闭合')}。"
+        )
+    if sequence_text or breakpoint_text:
+        return (
+            f"围绕「{case_title}」，下一轮要把每一步都连接到诊断假设：先问清病史，再查体验证，"
+            f"最后用检查补强或排除。{sequence_text}{breakpoint_text}"
         )
     return (
         f"围绕「{case_title}」，你已经完成主要证据链。下一步要练习把证据按支持、反证和未确定问题三类表达出来。"
@@ -561,6 +831,65 @@ def _build_next_practice_plan(major_issues: list[dict[str, Any]], pending_labels
     return plan[:5]
 
 
+def _teacher_reasoning_trace_summary(report: dict[str, Any]) -> dict[str, Any]:
+    trace = report.get("clinical_reasoning_trace")
+    if not isinstance(trace, dict):
+        return {
+            "trace_version": "",
+            "dominant_patterns": [],
+            "problem_representation_status": "",
+            "illness_script_status": "",
+            "evidence_synthesis_status": "",
+            "sequence_flags": [],
+            "action_order_summary": {},
+            "evidence_chain_breakpoints": [],
+            "evidence_chain_focus": [],
+        }
+    patterns = _reasoning_patterns_from_report(report)
+    sequence_flags = sequence_flags_from_report(report)
+    action_order_summary = action_order_summary_from_report(report)
+    evidence_chain_breakpoints = evidence_chain_breakpoints_from_report(report)
+    return {
+        "trace_version": str(trace.get("trace_version") or ""),
+        "dominant_patterns": [
+            {
+                "pattern_id": str(pattern.get("pattern_id") or ""),
+                "label": str(pattern.get("label") or ""),
+                "category": str(pattern.get("category") or ""),
+                "severity": str(pattern.get("severity") or ""),
+            }
+            for pattern in patterns[:5]
+        ],
+        "problem_representation_status": str(
+            (trace.get("problem_representation") or {}).get("status")
+            if isinstance(trace.get("problem_representation"), dict)
+            else ""
+        ),
+        "illness_script_status": str(
+            (trace.get("illness_script_alignment") or {}).get("status")
+            if isinstance(trace.get("illness_script_alignment"), dict)
+            else ""
+        ),
+        "evidence_synthesis_status": str(
+            (trace.get("evidence_synthesis") or {}).get("status")
+            if isinstance(trace.get("evidence_synthesis"), dict)
+            else ""
+        ),
+        "sequence_flags": sequence_flags,
+        "action_order_summary": action_order_summary,
+        "evidence_chain_breakpoints": evidence_chain_breakpoints[:5],
+        "evidence_chain_focus": [
+            {
+                "breakpoint_id": str(breakpoint.get("breakpoint_id") or ""),
+                "statement": str(breakpoint.get("statement") or ""),
+                "missing_evidence_labels": _normalized_string_list(breakpoint.get("missing_evidence_labels"))[:6],
+                "teacher_action": str(breakpoint.get("teacher_action") or ""),
+            }
+            for breakpoint in evidence_chain_breakpoints[:3]
+        ],
+    }
+
+
 def _dedupe_texts(items: list[str]) -> list[str]:
     result: list[str] = []
     for item in items:
@@ -568,6 +897,12 @@ def _dedupe_texts(items: list[str]) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
+
+
+def _normalized_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (str(raw_item).strip() for raw_item in value) if item]
 
 
 def _coverage_map_labels(report: dict[str, Any], status: str, *, limit: int, case: Case | None = None) -> list[str]:
@@ -751,6 +1086,9 @@ def _report_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
         "source_session_id": candidate.get("source_session_id", ""),
         "source_report_ids": list(candidate.get("source_report_ids", [])),
         "trigger_item_ids": list(candidate.get("trigger_item_ids", [])),
+        "reasoning_pattern_ids": list(candidate.get("reasoning_pattern_ids", [])),
+        "reasoning_pattern_labels": list(candidate.get("reasoning_pattern_labels", [])),
+        "source_trace_version": candidate.get("source_trace_version", ""),
         "review": review,
         "approval_agent_review": candidate.get("approval_agent_review", {}),
         "approval_dialogue": list(candidate.get("approval_dialogue", [])),

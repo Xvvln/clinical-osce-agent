@@ -172,23 +172,21 @@
     background-clip: content-box;
   }
 
-  @keyframes clinical-osce-thinking-dot {
+  @keyframes clinical-osce-agent-process-pulse {
     0%,
-    80%,
     100% {
-      opacity: 0.24;
-      transform: translateY(0);
+      box-shadow: 0 0 0 0 rgb(214 165 79 / 0.35);
+      transform: scale(1);
     }
 
-    40% {
-      opacity: 1;
-      transform: translateY(-2px);
+    50% {
+      box-shadow: 0 0 0 7px rgb(214 165 79 / 0);
+      transform: scale(1.08);
     }
   }
 
-  .clinical-osce-thinking-dot {
-    display: inline-block;
-    animation: clinical-osce-thinking-dot 1.05s ease-in-out infinite;
+  .clinical-osce-agent-process-dot-active {
+    animation: clinical-osce-agent-process-pulse 1.15s ease-in-out infinite;
   }
 
   @keyframes clinical-osce-evidence-glow {

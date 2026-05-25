@@ -511,6 +511,11 @@ def _candidate_description(context: TrainingSkillCandidateContext) -> str:
 
 def _suggested_strategy(context: TrainingSkillCandidateContext) -> str:
     if context.turn_patterns:
+        pattern_types = [pattern.pattern_type for pattern in context.turn_patterns]
+        if any(pattern_type == "evidence_chain_breakpoint" for pattern_type in pattern_types):
+            return "在不透露标准答案的前提下，围绕本轮证据链断点追问学生：缺少哪些病史、查体或检查证据，以及这些证据如何支持或排除诊断假设。"
+        if any(pattern_type == "sequence_issue" for pattern_type in pattern_types):
+            return "在不透露标准答案的前提下，先指出本轮训练中的顺序跳步，再用问题引导学生回到病史、查体、检查和诊断表达的合理验证链。"
         return "在不透露标准答案的前提下，先识别本轮训练中的偏题、跳步或过早索要答案模式，再用苏格拉底式问题把学生带回当前 OSCE 阶段的证据采集目标。"
     return "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。"
 
@@ -518,6 +523,10 @@ def _suggested_strategy(context: TrainingSkillCandidateContext) -> str:
 def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:
     if context.turn_patterns:
         pattern_types = [pattern.pattern_type for pattern in context.turn_patterns]
+        if any(pattern_type == "evidence_chain_breakpoint" for pattern_type in pattern_types):
+            return "reasoning_bridge"
+        if any(pattern_type == "sequence_issue" for pattern_type in pattern_types):
+            return "workflow_sequencing"
         if any(pattern_type in {"off_topic_redirect"} for pattern_type in pattern_types):
             return "conversation_repair"
         if any("answer" in pattern_type or "safety" in pattern_type for pattern_type in pattern_types):

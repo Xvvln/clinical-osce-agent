@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -49,6 +50,7 @@ class OsceSession:
     evolution_candidates: list[str] = field(default_factory=list)
     active_skill_context: dict[str, Any] = field(default_factory=dict)
     agent_turn_memory: list[dict[str, Any]] = field(default_factory=list)
+    action_timeline: list[dict[str, Any]] = field(default_factory=list)
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
@@ -79,6 +81,8 @@ class OsceSessionService:
         self.session_store = session_store
         self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
+        self._message_processing_statuses: dict[str, dict[str, Any]] = {}
+        self._message_processing_status_lock = Lock()
 
     def list_cases(self) -> list[dict[str, Any]]:
         return [_serialize_case_summary(load_case_node(case_path.stem)) for case_path in sorted(CASES_DIR.glob("*.json"))]
@@ -158,16 +162,131 @@ class OsceSessionService:
             return None
         return _serialize_session(session, load_case_node(session.case_id))
 
+    def begin_message_processing_status(self, session_id: str) -> None:
+        with self._message_processing_status_lock:
+            self._message_processing_statuses[session_id] = {
+                "state": "running",
+                "current_step_id": "backend_connect",
+                "current_label": "建立后端流程连接",
+                "summary": "当前：建立后端流程连接。",
+                "steps": [],
+            }
+
+    def update_message_processing_status(
+        self,
+        session_id: str,
+        *,
+        step_id: str,
+        label: str,
+        status: str = "active",
+    ) -> None:
+        step = {
+            "step_id": step_id,
+            "label": label,
+            "status": status,
+        }
+        with self._message_processing_status_lock:
+            payload = self._message_processing_statuses.setdefault(
+                session_id,
+                {
+                    "state": "running",
+                    "current_step_id": step_id,
+                    "current_label": label,
+                    "summary": f"当前：{label}。",
+                    "steps": [],
+                },
+            )
+            next_steps = [
+                {**existing_step, "status": "completed"}
+                if existing_step.get("status") == "active" and existing_step.get("step_id") != step_id
+                else existing_step
+                for existing_step in payload.get("steps", [])
+                if isinstance(existing_step, dict)
+            ]
+            matching_index = next(
+                (index for index, existing_step in enumerate(next_steps) if existing_step.get("step_id") == step_id),
+                None,
+            )
+            if matching_index is None:
+                next_steps.append(step)
+            else:
+                next_steps[matching_index] = step
+            payload.update(
+                {
+                    "state": "running",
+                    "current_step_id": step_id,
+                    "current_label": label,
+                    "summary": f"当前：{label}。",
+                    "steps": next_steps,
+                }
+            )
+
+    def complete_message_processing_status(self, session_id: str, *, errored: bool = False) -> None:
+        with self._message_processing_status_lock:
+            payload = self._message_processing_statuses.get(session_id)
+            if payload is None:
+                return
+            final_state = "error" if errored else "completed"
+            final_steps = [
+                {**step, "status": final_state if step.get("status") == "active" and errored else "completed"}
+                if isinstance(step, dict)
+                else step
+                for step in payload.get("steps", [])
+            ]
+            payload.update(
+                {
+                    "state": final_state,
+                    "summary": "处理失败。" if errored else "已完成本轮智能体流程。",
+                    "steps": final_steps,
+                }
+            )
+
+    def get_message_processing_status(self, session_id: str) -> dict[str, Any]:
+        with self._message_processing_status_lock:
+            payload = self._message_processing_statuses.get(session_id)
+            if payload is None:
+                return {
+                    "state": "idle",
+                    "current_step_id": "",
+                    "current_label": "",
+                    "summary": "当前没有正在处理的问诊。",
+                    "steps": [],
+                }
+            return {
+                "state": payload.get("state", "idle"),
+                "current_step_id": payload.get("current_step_id", ""),
+                "current_label": payload.get("current_label", ""),
+                "summary": payload.get("summary", ""),
+                "steps": list(payload.get("steps", [])),
+            }
+
     def handle_message(self, session_id: str, message: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
-        self._refresh_active_skill_context(session)
-        graph_state = self.osce_graph.invoke(_graph_state_from_session(session, message))
-        _apply_graph_state(session, graph_state)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        self.begin_message_processing_status(session_id)
+        try:
+            self._refresh_active_skill_context(session)
+            graph_state = self.osce_graph.invoke(
+                _graph_state_from_session(
+                    session,
+                    message,
+                    processing_progress_callback=lambda event: self.update_message_processing_status(
+                        session_id,
+                        step_id=str(event.get("step_id") or ""),
+                        label=str(event.get("label") or event.get("step_id") or ""),
+                        status=str(event.get("status") or "active"),
+                    ),
+                )
+            )
+            _apply_graph_state(session, graph_state)
+            self._refresh_active_skill_context(session)
+            agent_update = _refresh_agent_state(session)
+            self._save_session(session)
+            self.complete_message_processing_status(session_id)
+        except Exception:
+            self.complete_message_processing_status(session_id, errored=True)
+            raise
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
         payload["current_intents"] = list(graph_state.get("current_intents", []))
@@ -537,6 +656,7 @@ def _graph_state_from_session(
     submitted_reasoning: str = "",
     report_requested: bool = False,
     hint_requested: bool = False,
+    processing_progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     case = load_case_node(session.case_id)
     training_progress = _serialize_training_progress(session, case)
@@ -579,9 +699,11 @@ def _graph_state_from_session(
         "evolution_candidates": session.evolution_candidates,
         "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
+        "action_timeline": session.action_timeline,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,
+        "processing_progress_callback": processing_progress_callback,
     }
 
 
@@ -602,6 +724,7 @@ def _apply_graph_state(session: OsceSession, graph_state: dict[str, Any]) -> Non
     session.safety_flags = graph_state["safety_flags"]
     session.evolution_candidates = graph_state["evolution_candidates"]
     session.agent_turn_memory = graph_state.get("agent_turn_memory", session.agent_turn_memory)
+    session.action_timeline = graph_state.get("action_timeline", session.action_timeline)
     session.pedagogy_state = graph_state.get("pedagogy_state", session.pedagogy_state)
     session.agent_decision_trace = graph_state.get("agent_decision_trace", session.agent_decision_trace)
     session.reflection_summary = graph_state.get("reflection_summary", session.reflection_summary)
@@ -809,6 +932,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "evolution_candidates": [],
         "active_skill_context": _empty_active_skill_context(),
         "agent_turn_memory": [],
+        "action_timeline": [],
         "pedagogy_state": {},
         "agent_decision_trace": [],
         "reflection_summary": None,
@@ -824,6 +948,7 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
         "chief_complaint": case.chief_complaint,
         "patient_opening_utterance": build_patient_opening_utterance(case.chief_complaint),
         "enabled": True,
+        "content_stats": _serialize_case_content_stats(case),
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
         "teaching_focus": _serialize_teaching_focus(case),
@@ -835,6 +960,18 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
             _serialize_auxiliary_test_quick_option(test)
             for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
         ],
+    }
+
+
+def _serialize_case_content_stats(case: Case) -> dict[str, int]:
+    history_clue_count = len(case.history.hidden_facts)
+    physical_exam_count = len(case.physical_exam.must_items) + len(case.physical_exam.optional_items)
+    auxiliary_test_count = len(case.auxiliary_tests.must_items) + len(case.auxiliary_tests.optional_items)
+    return {
+        "history_clue_count": history_clue_count,
+        "physical_exam_count": physical_exam_count,
+        "auxiliary_test_count": auxiliary_test_count,
+        "total_training_items": history_clue_count + physical_exam_count + auxiliary_test_count,
     }
 
 
@@ -1311,6 +1448,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "evolution_candidates": session.evolution_candidates,
         "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
+        "action_timeline": session.action_timeline,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,

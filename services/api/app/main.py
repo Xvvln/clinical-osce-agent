@@ -2139,6 +2139,15 @@ def get_session(
     return _require_owned_session(session_id, auth_token)
 
 
+@app.get("/api/sessions/{session_id}/processing-status")
+def get_session_processing_status(
+    session_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_owned_session(session_id, auth_token)
+    return osce_session_service.get_message_processing_status(session_id)
+
+
 @app.post("/api/sessions/{session_id}/message")
 def send_message(
     session_id: str,

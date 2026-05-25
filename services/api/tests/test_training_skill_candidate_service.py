@@ -1023,3 +1023,38 @@ def test_template_training_skill_candidate_generator_maps_auxiliary_test_before_
         "sequence:before_physical_exam",
     ]
     assert candidate["source_turn_patterns"][0]["pattern_type"] == "auxiliary_test_before_physical_exam"
+
+
+def test_template_training_skill_candidate_generator_maps_evidence_chain_breakpoint_to_reasoning_skill(monkeypatch) -> None:
+    monkeypatch.delenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    candidates = TrainingSkillCandidateService().propose_candidates(
+        {
+            "session_count": 2,
+            "report_count": 2,
+            "frequent_missed_items": [],
+            "frequent_learning_recommendations": [],
+            "frequent_turn_patterns": [
+                {
+                    "pattern_id": "evidence_chain_rp_migration_support",
+                    "pattern_type": "evidence_chain_breakpoint",
+                    "title": "迁移痛推理点",
+                    "count": 2,
+                    "trigger_item_ids": ["ht_migration", "pe_tenderness"],
+                    "case_ids": ["appendicitis_001"],
+                    "session_ids": ["session_one", "session_two"],
+                    "source_report_ids": ["session_one_report", "session_two_report"],
+                    "source_report_count": 2,
+                }
+            ],
+        },
+        min_count=2,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["skill_type"] == "reasoning_bridge"
+    assert candidate["stage_scope"] == ["case_intro", "diagnosis_submission"]
+    assert "证据链" in candidate["suggested_strategy"]
+    assert candidate["source_turn_patterns"][0]["title"] == "迁移痛推理点"

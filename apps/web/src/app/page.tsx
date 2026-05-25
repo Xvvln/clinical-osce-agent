@@ -364,6 +364,30 @@ type AgentDecisionTraceItem = Readonly<{
   reflect: AgentTraceReflect;
 }>;
 
+type BackendProcessingTraceItem = Readonly<{
+  step_id: string;
+  label: string;
+  status: "completed" | "skipped" | "error" | string;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  metadata?: Readonly<Record<string, unknown>>;
+}>;
+
+type SessionProcessingStatusStep = Readonly<{
+  step_id: string;
+  label: string;
+  status: "completed" | "skipped" | "error" | "active" | string;
+}>;
+
+type SessionProcessingStatus = Readonly<{
+  state: "idle" | "running" | "completed" | "error" | string;
+  current_step_id: string;
+  current_label: string;
+  summary: string;
+  steps: readonly SessionProcessingStatusStep[];
+}>;
+
 type AgentTurnMemoryItem = Readonly<{
   turn_id: string;
   student_message: string;
@@ -378,6 +402,10 @@ type AgentTurnMemoryItem = Readonly<{
   revealed_fact_id: string | null;
   revealed_fact_ids?: readonly string[];
   source_references: readonly string[];
+  knowledge_references?: readonly string[];
+  retrieved_knowledge_context?: readonly Readonly<Record<string, unknown>>[];
+  processing_trace?: readonly BackendProcessingTraceItem[];
+  processing_duration_ms?: number;
   safety_flags: readonly string[];
 }>;
 
@@ -444,6 +472,24 @@ type OsceSession = Readonly<{
   current_intents?: readonly string[];
 }>;
 
+type AgentProcessingStepStatus = "pending" | "active" | "completed" | "skipped" | "error";
+
+type AgentProcessingStep = Readonly<{
+  id: string;
+  label: string;
+  status: AgentProcessingStepStatus;
+  durationMs?: number;
+}>;
+
+type AgentProcessingTimeline = Readonly<{
+  state: "pending" | "completed";
+  isOpen: boolean;
+  title: string;
+  summary: string;
+  elapsedMs?: number;
+  steps: readonly AgentProcessingStep[];
+}>;
+
 type ChatMessage = {
   readonly id: string;
   readonly speaker: "student" | "patient" | "coach";
@@ -453,6 +499,7 @@ type ChatMessage = {
   readonly finalText?: string;
   readonly isPending?: boolean;
   readonly skillSelectionReasons?: readonly SkillSelectionReason[];
+  readonly processingTimeline?: AgentProcessingTimeline;
 };
 
 type EvidenceItem = {
@@ -692,6 +739,17 @@ const OSCE_DOCK_BUTTON_SIZE = 56;
 const OSCE_DOCK_DRAG_THRESHOLD = 4;
 const PATIENT_REPLY_TYPEWRITER_DELAY_MS = 14;
 const BACKEND_HEALTH_CHECK_INTERVAL_MS = 30000;
+const AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS = 600;
+
+const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: string }>[] = [
+  { id: "intent", label: "正在解析问诊意图" },
+  { id: "case_context", label: "正在匹配病例事实" },
+  { id: "skill", label: "正在检查个性化 Skill" },
+  { id: "rag", label: "正在检索教学知识库" },
+  { id: "patient_reply", label: "正在组织标准化病人回复" },
+  { id: "coach", label: "Coach 正在复核边界" },
+  { id: "response", label: "正在生成可见回复" },
+];
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1042,7 +1100,11 @@ function getDiagnosticRoleLabel(role: string): string {
   return labels[role] ?? "教学证据";
 }
 
-function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession): ChatMessage {
+function mapApiMessage(
+  message: ApiMessage,
+  index: number,
+  session?: OsceSession,
+): ChatMessage {
   const id = `${message.role}-${index}-${message.content}`;
 
   if (message.role === "student") {
@@ -1072,6 +1134,7 @@ function mapApiMessage(message: ApiMessage, index: number, session?: OsceSession
     label: "标准化病人",
     text: message.content,
     apiMessageIndex: index,
+    processingTimeline: session ? buildCompletedAgentProcessingTimeline(session, message.content) : undefined,
   };
 }
 
@@ -1086,6 +1149,191 @@ function getSkillSelectionReasonsForReply(
     (turn) => turn.reply === replyText && turn.reply_role === "coach",
   );
   return matchingTurn?.selected_skill_reasons ?? [];
+}
+
+function formatAgentProcessingElapsed(elapsedMs: number | undefined): string {
+  if (elapsedMs === undefined) {
+    return "流程记录";
+  }
+  const safeElapsedMs = Math.max(0, Math.round(elapsedMs));
+  if (safeElapsedMs === 0) {
+    return "瞬时";
+  }
+  if (safeElapsedMs < 1000) {
+    return `${safeElapsedMs} ms`;
+  }
+  const elapsedSeconds = safeElapsedMs / 1000;
+  return elapsedSeconds < 10 ? `${elapsedSeconds.toFixed(1)} 秒` : `${Math.round(elapsedSeconds)} 秒`;
+}
+
+function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessingStatus | null): AgentProcessingTimeline {
+  const statusSteps = processingStatus?.steps.map((step) => ({
+    id: step.step_id,
+    label: step.label,
+    status: normalizeAgentProcessingStepStatus(step.status),
+  })) ?? [];
+  const currentStepLabel = processingStatus?.current_label || "建立后端流程连接";
+  return {
+    state: "pending",
+    isOpen: false,
+    title: "智能体处理中",
+    summary: processingStatus?.summary ?? "当前：正在建立后端流程连接。",
+    steps: statusSteps.length > 0 ? statusSteps : [
+      {
+        id: processingStatus?.current_step_id || "backend_connect",
+        label: currentStepLabel,
+        status: "active",
+      },
+    ],
+  };
+}
+
+function getBackendProcessingTraceElapsedMs(turn: AgentTurnMemoryItem | undefined): number | undefined {
+  if (!turn) {
+    return undefined;
+  }
+  if (typeof turn.processing_duration_ms === "number") {
+    return turn.processing_duration_ms;
+  }
+  const trace = turn.processing_trace ?? [];
+  if (trace.length === 0) {
+    return undefined;
+  }
+  return trace.reduce((totalDuration, step) => totalDuration + Math.max(0, step.duration_ms || 0), 0);
+}
+
+function getTimelineStepsFromBackendProcessingTrace(trace: readonly BackendProcessingTraceItem[] | undefined): readonly AgentProcessingStep[] {
+  if (!trace || trace.length === 0) {
+    return [];
+  }
+  return trace.map((step) => ({
+    id: step.step_id,
+    label: step.label || AGENT_PROCESSING_STEP_DEFINITIONS.find((definition) => definition.id === step.step_id)?.label || step.step_id,
+    status: normalizeAgentProcessingStepStatus(step.status),
+    durationMs: step.duration_ms,
+  }));
+}
+
+function normalizeAgentProcessingStepStatus(status: string): AgentProcessingStepStatus {
+  if (status === "completed" || status === "skipped" || status === "error" || status === "active") {
+    return status;
+  }
+  return "completed";
+}
+
+function buildCompletedAgentProcessingTimeline(session: OsceSession, replyText: string): AgentProcessingTimeline {
+  const patientTurn = getLatestAgentTurnForReply(session, replyText, "patient");
+  const coachTurn = getLatestPassiveCoachReviewTurn(session, patientTurn?.student_message ?? "");
+  const backendTraceSteps = getTimelineStepsFromBackendProcessingTrace(patientTurn?.processing_trace);
+  const elapsedMs = getBackendProcessingTraceElapsedMs(patientTurn);
+  const hasCurrentIntents = Boolean(session.current_intents?.length || (patientTurn?.current_intents?.length ?? 0) > 0);
+  const hasCaseReferences = Boolean(
+    patientTurn?.revealed_fact_id
+    || patientTurn?.revealed_fact_ids?.length
+    || (patientTurn?.source_references ?? []).some((reference) => reference.startsWith("case:")),
+  );
+  const selectedSkillCount = patientTurn?.selected_skill_ids?.length
+    ?? patientTurn?.selected_skill_reasons?.length
+    ?? coachTurn?.selected_skill_ids?.length
+    ?? coachTurn?.selected_skill_reasons?.length
+    ?? 0;
+  const knowledgeReferenceCount = (patientTurn?.knowledge_references?.length ?? 0) + (coachTurn?.knowledge_references?.length ?? 0);
+  const coachReviewed = Boolean(coachTurn);
+  const completedParts = [
+    hasCurrentIntents ? "意图解析" : "",
+    hasCaseReferences ? "病例事实" : "",
+    selectedSkillCount > 0 ? `Skill ${selectedSkillCount} 条` : "",
+    knowledgeReferenceCount > 0 ? "知识库检索" : "",
+    coachReviewed ? "Coach 复核" : "",
+  ].filter(Boolean);
+
+  return {
+    state: "completed",
+    isOpen: false,
+    title: "智能体处理了",
+    summary: completedParts.length > 0 ? `已完成：${completedParts.join(" · ")}` : "已完成本轮安全生成流程",
+    elapsedMs,
+    steps: backendTraceSteps.length > 0 ? backendTraceSteps : AGENT_PROCESSING_STEP_DEFINITIONS.map((stepDefinition) => {
+      const statusByStepId: Readonly<Record<string, AgentProcessingStepStatus>> = {
+        intent: hasCurrentIntents ? "completed" : "skipped",
+        case_context: hasCaseReferences ? "completed" : "skipped",
+        skill: selectedSkillCount > 0 ? "completed" : "skipped",
+        rag: knowledgeReferenceCount > 0 ? "completed" : "skipped",
+        patient_reply: replyText ? "completed" : "error",
+        coach: coachReviewed ? "completed" : "skipped",
+        response: "completed",
+      };
+      return {
+        ...stepDefinition,
+        status: statusByStepId[stepDefinition.id] ?? "skipped",
+      };
+    }),
+  };
+}
+
+function getLatestAgentTurnForReply(
+  session: OsceSession | undefined,
+  replyText: string,
+  replyRole: "patient" | "coach",
+): AgentTurnMemoryItem | undefined {
+  if (!session || !replyText) {
+    return undefined;
+  }
+  return [...session.agent_turn_memory].reverse().find(
+    (turn) => turn.reply === replyText && turn.reply_role === replyRole,
+  );
+}
+
+function getLatestPassiveCoachReviewTurn(
+  session: OsceSession | undefined,
+  studentMessage: string,
+): AgentTurnMemoryItem | undefined {
+  if (!session) {
+    return undefined;
+  }
+  return [...session.agent_turn_memory].reverse().find((turn) => {
+    const isPassiveCoachTurn = turn.reply_role === "coach" && turn.turn_policy.startsWith("passive_review");
+    if (!studentMessage) {
+      return isPassiveCoachTurn;
+    }
+    return isPassiveCoachTurn && turn.student_message === studentMessage;
+  });
+}
+
+function getAgentProcessingStepLabel(step: AgentProcessingStep): string {
+  const completedLabels: Readonly<Record<string, string>> = {
+    intent: "已解析问诊意图",
+    case_context: "已匹配病例事实",
+    skill: "已检查个性化 Skill",
+    rag: "已检索教学知识库",
+    patient_reply: "已组织标准化病人回复",
+    coach: "Coach 已复核边界",
+    response: "已生成可见回复",
+  };
+  const skippedLabels: Readonly<Record<string, string>> = {
+    intent: "未识别具体问诊意图",
+    case_context: "未命中新增病例事实",
+    skill: "本轮无匹配 Skill",
+    rag: "本轮未使用知识库",
+    patient_reply: "本轮未生成病人回复",
+    coach: "本轮未触发 Coach 复核",
+    response: "本轮无可见回复",
+  };
+  const errorLabels: Readonly<Record<string, string>> = {
+    patient_reply: "标准化病人回复生成失败",
+    response: "可见回复生成失败",
+  };
+
+  if (step.status === "completed") {
+    return completedLabels[step.id] ?? step.label;
+  }
+  if (step.status === "skipped") {
+    return skippedLabels[step.id] ?? `本轮未触发：${step.label.replace(/^正在/, "")}`;
+  }
+  if (step.status === "error") {
+    return errorLabels[step.id] ?? `流程异常：${step.label.replace(/^正在/, "")}`;
+  }
+  return step.label;
 }
 
 function getReplyMessageMetadata(session: OsceSession, replyText: string): Pick<ChatMessage, "speaker" | "label" | "apiMessageIndex"> {
@@ -1616,6 +1864,12 @@ function sendHistoryMessage(sessionId: string, message: string): Promise<OsceSes
   });
 }
 
+function fetchSessionProcessingStatus(sessionId: string): Promise<SessionProcessingStatus> {
+  return requestJson<SessionProcessingStatus>(`/api/sessions/${sessionId}/processing-status`, {
+    method: "GET",
+  });
+}
+
 function requestPhysicalExam(sessionId: string, examCode: string): Promise<PhysicalExamResponse> {
   return requestJson<PhysicalExamResponse>(`/api/sessions/${sessionId}/physical-exam`, {
     method: "POST",
@@ -1758,18 +2012,72 @@ function handleStudentRailScroll(event: UIEvent<HTMLElement>): void {
   studentRailScrollbarTimers.set(scrollElement, nextTimer);
 }
 
-function PendingThinkingIndicator() {
+function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentProcessingTimeline }>) {
+  const thoughtLine = timeline.state === "pending"
+    ? `${timeline.title} · ${timeline.summary}`
+    : timeline.elapsedMs === undefined
+      ? "智能体流程"
+      : `智能体处理了 ${formatAgentProcessingElapsed(timeline.elapsedMs)}`;
   return (
-    <span aria-label="标准化病人思考中" className="inline-flex items-center gap-1">
-      <span>思考中</span>
-      <span aria-hidden="true" className="inline-flex gap-0.5">
-        {[0, 1, 2].map((dotIndex) => (
-          <span className="clinical-osce-thinking-dot" key={dotIndex} style={{ animationDelay: `${dotIndex * 140}ms` }}>
-            .
-          </span>
-        ))}
-      </span>
-    </span>
+    <details
+      className="group mt-3 text-sm"
+      key={`${timeline.state}-${timeline.elapsedMs ?? "no-duration"}`}
+      open={timeline.isOpen}
+    >
+      <summary className="inline-flex cursor-pointer list-none items-center gap-2 text-muted-foreground transition hover:text-foreground">
+        <span
+          aria-hidden="true"
+          className={`size-1.5 rounded-full ${timeline.state === "pending" ? "clinical-osce-agent-process-dot-active bg-[#B85A32]" : "bg-[#9A9186]"}`}
+        />
+        <span>{thoughtLine}</span>
+        <span aria-hidden="true" className="text-lg leading-none transition-transform group-open:rotate-90">
+          ›
+        </span>
+      </summary>
+      <p className="mt-2 text-xs leading-5 text-[#8A7E72]">{timeline.summary}</p>
+      <ol className="ml-1 mt-2 border-l border-[#DDD4C6] pl-4 text-xs leading-5 text-[#6F6257]">
+        {timeline.steps.map((step, stepIndex) => {
+          const isLastStep = stepIndex === timeline.steps.length - 1;
+          const dotClassName = [
+            "absolute -left-[1.42rem] top-0.5 z-10 flex size-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none transition-colors",
+            step.status === "completed"
+              ? "border-brand bg-brand text-white"
+              : step.status === "active"
+                ? "clinical-osce-agent-process-dot-active border-[#D6A54F] bg-[#FFF8E8] text-[#8A5A00]"
+              : step.status === "error"
+                  ? "border-red-300 bg-red-50 text-red-600"
+                  : step.status === "skipped"
+                    ? "border-[#DDD4C6] bg-white text-[#B0A497]"
+                    : "border-[#D8D1C5] bg-[#FAF9F5] text-transparent",
+          ].join(" ");
+          return (
+            <li className={`relative ${isLastStep ? "" : "pb-2"}`} key={step.id}>
+              <span className={dotClassName} aria-hidden="true">
+                {step.status === "completed" ? "✓" : step.status === "error" ? "!" : step.status === "skipped" ? "·" : ""}
+              </span>
+              <span
+                className={
+                  step.status === "completed"
+                    ? "text-[#4F463D]"
+                    : step.status === "active"
+                      ? "font-medium text-[#8A5A00]"
+                      : step.status === "error"
+                        ? "text-red-600"
+                        : "text-muted-foreground"
+                }
+              >
+                {getAgentProcessingStepLabel(step)}
+                {step.durationMs !== undefined ? (
+                  <span className="ml-1 text-[11px] text-[#9A9186]">
+                    · {formatAgentProcessingElapsed(step.durationMs)}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </details>
   );
 }
 
@@ -2898,6 +3206,38 @@ function HomeContent() {
     setPendingPatientMessage((currentMessage) => currentMessage?.id === messageId ? null : currentMessage);
   }
 
+  function refreshPendingProcessingTimeline(sessionId: string, messageId: string): () => void {
+    let isStopped = false;
+    const pollProcessingStatus = async () => {
+      try {
+        const processingStatus = await fetchSessionProcessingStatus(sessionId);
+        if (processingStatus.state !== "running") {
+          return;
+        }
+        if (isStopped) {
+          return;
+        }
+        setPendingPatientMessage((currentMessage) =>
+          currentMessage?.id === messageId && currentMessage.isPending
+            ? {
+                ...currentMessage,
+                processingTimeline: buildPendingAgentProcessingTimeline(processingStatus),
+              }
+            : currentMessage,
+        );
+      } catch {
+        // Keep the current pending message if the transient polling request fails.
+      }
+    };
+
+    void pollProcessingStatus();
+    const intervalId = window.setInterval(pollProcessingStatus, AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS);
+    return () => {
+      isStopped = true;
+      window.clearInterval(intervalId);
+    };
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = inputValue.trim();
@@ -2914,6 +3254,7 @@ function HomeContent() {
     setIsSending(true);
     setErrorText(null);
     let pendingPatientReplyId: string | null = null;
+    let stopProcessingTimelinePolling: (() => void) | null = null;
 
     try {
       const activeSession = await ensureActiveSession();
@@ -2941,10 +3282,15 @@ function HomeContent() {
         label: "标准化病人",
         text: "",
         isPending: true,
+        processingTimeline: buildPendingAgentProcessingTimeline(),
       });
       setStatusText("正在处理问诊");
 
-      const updatedSession = await sendHistoryMessage(activeSession.session_id, message);
+      const pendingHistoryMessage = sendHistoryMessage(activeSession.session_id, message);
+      stopProcessingTimelinePolling = refreshPendingProcessingTimeline(activeSession.session_id, pendingPatientReplyId);
+      const updatedSession = await pendingHistoryMessage;
+      stopProcessingTimelinePolling();
+      stopProcessingTimelinePolling = null;
       const replyText = updatedSession.reply ?? "";
       const replyMessageMetadata = getReplyMessageMetadata(updatedSession, replyText);
       const replyStatusLabel = replyMessageMetadata.speaker === "coach" ? replyMessageMetadata.label : "标准化病人回复";
@@ -2961,6 +3307,7 @@ function HomeContent() {
               ...currentMessage,
               ...replyMessageMetadata,
               finalText: replyText,
+              processingTimeline: buildCompletedAgentProcessingTimeline(updatedSession, replyText),
             }
           : currentMessage,
       );
@@ -2970,12 +3317,14 @@ function HomeContent() {
       await animatePendingPatientReply(pendingPatientReplyId, updatedSession.reply ?? "");
       setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
     } catch (error) {
+      stopProcessingTimelinePolling?.();
       if (pendingPatientReplyId) {
         setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
       }
       setErrorText(error instanceof Error ? error.message : "发送问诊失败。");
       setStatusText("问诊处理失败，请查看错误详情。");
     } finally {
+      stopProcessingTimelinePolling?.();
       setIsSending(false);
     }
   }
@@ -3331,6 +3680,8 @@ function HomeContent() {
               {chatMessages.map((message) => {
                 const isStudent = message.speaker === "student";
                 const isCoach = message.speaker === "coach";
+                const processingTimeline = message.processingTimeline;
+                const isPendingProcessingTimeline = message.processingTimeline?.state === "pending";
                 const messageRowClass = isStudent ? "justify-end" : isCoach ? "justify-center" : "justify-start";
                 const messageBubbleClass = isStudent
                   ? "max-w-[76%] rounded-xl border border-brand bg-brand px-4 py-3 text-sm leading-6 text-white shadow-xs"
@@ -3343,7 +3694,14 @@ function HomeContent() {
                       <p className={isStudent ? "text-white/80" : isCoach ? "text-[#8A5A00]" : "text-muted-foreground"}>
                         {message.label}
                       </p>
-                      <p className="mt-1">{message.isPending && !message.finalText ? <PendingThinkingIndicator /> : message.text}</p>
+                      {message.isPending && !message.finalText && isPendingProcessingTimeline ? (
+                        <AgentProcessingTimelineView timeline={processingTimeline ?? buildPendingAgentProcessingTimeline()} />
+                      ) : (
+                        <p className="mt-1">{message.text}</p>
+                      )}
+                      {processingTimeline && !(message.isPending && !message.finalText) ? (
+                        <AgentProcessingTimelineView timeline={processingTimeline} />
+                      ) : null}
                       {isCoach && message.skillSelectionReasons && message.skillSelectionReasons.length > 0 ? (
                         <details className="mt-3 rounded-lg border border-[#E7C98B] bg-white/70 p-3 text-xs leading-5 text-[#6F6257]">
                           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold text-[#8A5A00]">

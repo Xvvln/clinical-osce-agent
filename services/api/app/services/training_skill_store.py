@@ -174,6 +174,22 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "support_count": candidate["support_count"],
         "related_recommendations": list(candidate.get("related_recommendations", [])),
     }
+    reasoning_pattern_ids = _normalized_string_list(candidate.get("reasoning_pattern_ids"))
+    reasoning_pattern_labels = _normalized_string_list(candidate.get("reasoning_pattern_labels"))
+    source_trace_version = _non_empty_string(candidate.get("source_trace_version"))
+    if reasoning_pattern_ids:
+        skill["reasoning_pattern_ids"] = reasoning_pattern_ids
+        skill["applies_when"] = {
+            **skill["applies_when"],
+            "reasoning_pattern_ids": _normalized_string_list(
+                skill["applies_when"].get("reasoning_pattern_ids")
+            )
+            or reasoning_pattern_ids,
+        }
+    if reasoning_pattern_labels:
+        skill["reasoning_pattern_labels"] = reasoning_pattern_labels
+    if source_trace_version:
+        skill["source_trace_version"] = source_trace_version
     scope = str(candidate.get("scope", "global"))
     if scope != "global":
         skill["scope"] = scope
@@ -256,7 +272,7 @@ def _normalize_skill_core_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     skill["trigger_item_ids"] = trigger_item_ids
     skill["case_ids"] = case_ids
     skill["stage_scope"] = stage_scope
-    skill["applies_when"] = {
+    normalized_applies_when = {
         **applies_when,
         "case_ids": _normalized_string_list(applies_when.get("case_ids")) or case_ids,
         "stage_scope": _normalized_string_list(applies_when.get("stage_scope")) or stage_scope,
@@ -264,6 +280,22 @@ def _normalize_skill_core_metadata(skill: dict[str, Any]) -> dict[str, Any]:
         "current_missing_evidence": _normalized_string_list(applies_when.get("current_missing_evidence")),
         "min_support_count": _safe_int(applies_when.get("min_support_count") or skill.get("support_count")),
     }
+    reasoning_pattern_ids = _normalized_string_list(skill.get("reasoning_pattern_ids"))
+    if reasoning_pattern_ids:
+        normalized_applies_when["reasoning_pattern_ids"] = _normalized_string_list(
+            applies_when.get("reasoning_pattern_ids")
+        ) or reasoning_pattern_ids
+        skill["reasoning_pattern_ids"] = reasoning_pattern_ids
+    elif "reasoning_pattern_ids" in skill:
+        skill.pop("reasoning_pattern_ids", None)
+    reasoning_pattern_labels = _normalized_string_list(skill.get("reasoning_pattern_labels"))
+    if reasoning_pattern_labels:
+        skill["reasoning_pattern_labels"] = reasoning_pattern_labels
+    elif "reasoning_pattern_labels" in skill:
+        skill.pop("reasoning_pattern_labels", None)
+    if not _non_empty_string(skill.get("source_trace_version")):
+        skill.pop("source_trace_version", None)
+    skill["applies_when"] = normalized_applies_when
     return skill
 
 

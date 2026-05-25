@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, TypedDict
 
@@ -10,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.agent_state_service import append_decision_trace, build_pedagogy_state, build_reflection_summary
+from app.services.clinical_reasoning_trace_service import build_clinical_reasoning_trace
 from app.services.coach_agent import CoachRequest, create_default_coach_agent, normalize_coach_response, sanitize_coach_hint
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
@@ -41,6 +44,15 @@ SAFETY_BOUNDARY_FLAG = "real_medical_advice_request"
 SAFETY_GUARDRAIL_REPLY = "本系统仅用于 OSCE 教学模拟训练，不能提供真实诊断、具体用药或急救处置建议；如有真实健康问题，请咨询合格医疗专业人员或及时就医。"
 ANSWER_REQUEST_REDIRECT_REPLY = "不能直接告诉你标准答案。请继续通过问诊、查体和辅助检查收集证据，或在准备好后提交诊断。"
 UNKNOWN_HISTORY_REDIRECT_REPLY = "病例脚本没有提供这方面信息。请回到本次腹痛训练目标，优先追问起病时间、部位变化、疼痛性质、疼痛程度和伴随症状。"
+PROCESSING_STEP_LABELS = {
+    "intent": "解析问诊意图",
+    "case_context": "匹配病例事实",
+    "patient_reply": "组织标准化病人回复",
+    "skill": "检查个性化 Skill",
+    "rag": "检索教学知识库",
+    "coach": "Coach 复核边界",
+    "response": "生成可见回复",
+}
 
 
 class OsceGraphState(TypedDict, total=False):
@@ -84,6 +96,9 @@ class OsceGraphState(TypedDict, total=False):
     evolution_candidates: list[str]
     active_skill_context: dict[str, Any]
     agent_turn_memory: list[dict[str, Any]]
+    action_timeline: list[dict[str, Any]]
+    processing_trace: list[dict[str, Any]]
+    processing_progress_callback: Callable[[dict[str, Any]], None] | None
     pedagogy_state: dict[str, Any]
     agent_decision_trace: list[dict[str, Any]]
     reflection_summary: dict[str, Any] | None
@@ -103,6 +118,8 @@ def input_router_node(state: OsceGraphState, turn_intent_agent: TurnIntentAgent)
     case = _load_case(state["case_id"])
     keyword_intents = _keyword_intents_for_message(state.get("student_message", ""))
     keyword_intent = keyword_intents[0] if keyword_intents else "unknown_history_intent"
+    _emit_processing_progress(state, "intent", status="active")
+    step_started_at, step_started_perf = _start_processing_step()
     turn_analysis = normalize_turn_intent_response(
         turn_intent_agent(
             TurnIntentRequest(
@@ -119,11 +136,24 @@ def input_router_node(state: OsceGraphState, turn_intent_agent: TurnIntentAgent)
     )
     turn_analysis = _complete_unknown_turn_analysis(turn_analysis, state.get("student_message", ""))
     turn_analysis = _merge_turn_analysis_with_keyword_intents(turn_analysis, keyword_intents)
+    current_intents = list(turn_analysis.get("current_intents") or [])
+    processing_trace = _append_processing_trace_step(
+        state.get("processing_trace", []),
+        "intent",
+        "completed",
+        step_started_at,
+        step_started_perf,
+        metadata={
+            "current_intents": current_intents,
+            "keyword_intents": keyword_intents,
+        },
+    )
     return {
         "keyword_intent": keyword_intent,
         "keyword_intents": keyword_intents,
-        "current_intents": list(turn_analysis.get("current_intents") or []),
+        "current_intents": current_intents,
         "turn_analysis": turn_analysis,
+        "processing_trace": processing_trace,
     }
 
 
@@ -206,6 +236,9 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     revealed_facts = [*previously_revealed_facts]
     canonical_answer = _unknown_patient_context_answer(case, unknown_kind)
     revealed_fact_id: str | None = None
+    processing_trace = list(state.get("processing_trace", []))
+    _emit_processing_progress(state, "case_context", status="active")
+    case_context_started_at, case_context_started_perf = _start_processing_step()
     answerable_hidden_facts = _answerable_hidden_facts_for_intents(case, current_intents)
     answerable_profile_facts = _answerable_patient_profile_facts_for_intents(case, current_intents)
     if answerable_hidden_facts:
@@ -229,6 +262,17 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         for candidate in answerable_fact_candidates
         if isinstance(candidate, dict) and candidate.get("fact_id")
     ]
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "case_context",
+        "completed" if answerable_fact_candidates else "skipped",
+        case_context_started_at,
+        case_context_started_perf,
+        metadata={
+            "revealed_fact_ids": revealed_fact_ids,
+            "answerable_fact_ids": answerable_fact_ids,
+        },
+    )
     turn_policy = (
         "patient_profile_disclosure"
         if answerable_profile_facts and not answerable_hidden_facts
@@ -236,6 +280,8 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     )
 
     student_message = state.get("student_message", "")
+    _emit_processing_progress(state, "patient_reply", status="active")
+    patient_reply_started_at, patient_reply_started_perf = _start_processing_step()
     reply = patient_responder(
         PatientResponderRequest(
             case_id=case.case_id,
@@ -271,6 +317,14 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             ),
         )
     )
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "patient_reply",
+        "completed",
+        patient_reply_started_at,
+        patient_reply_started_perf,
+        metadata={"turn_policy": turn_policy},
+    )
     messages = [*state.get("messages", [])]
     if student_message:
         messages.extend(
@@ -292,8 +346,9 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         revealed_fact_id=revealed_fact_id,
         revealed_fact_ids=revealed_fact_ids,
         safety_flags=list(state.get("safety_flags", [])),
+        processing_trace=processing_trace,
     )
-    messages, agent_turn_memory = _apply_passive_coach_review(
+    messages, agent_turn_memory, processing_trace = _apply_passive_coach_review(
         state,
         case=case,
         coach_agent=coach_agent,
@@ -305,6 +360,30 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         messages=messages,
         agent_turn_memory=agent_turn_memory,
         turn_analysis=turn_analysis,
+        processing_trace=processing_trace,
+    )
+    _emit_processing_progress(state, "response", status="active")
+    response_started_at, response_started_perf = _start_processing_step()
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "response",
+        "completed",
+        response_started_at,
+        response_started_perf,
+    )
+    agent_turn_memory = _attach_processing_trace_to_latest_turn(
+        agent_turn_memory,
+        student_message=student_message,
+        reply=reply,
+        reply_role="patient",
+        processing_trace=processing_trace,
+    )
+    new_revealed_fact_ids = [fact_id for fact_id in revealed_fact_ids if fact_id not in previously_revealed_facts]
+    action_timeline = _append_action_timeline_events(
+        state,
+        action_type="history_fact_revealed",
+        source_ids=new_revealed_fact_ids,
+        label_by_source={fact.fact_id: _history_fact_label(case, fact) for fact in answerable_hidden_facts},
     )
 
     return {
@@ -316,6 +395,8 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         "intent_history": [*state.get("intent_history", []), *(current_intents or [primary_intent])],
         "revealed_facts": revealed_facts,
         "agent_turn_memory": agent_turn_memory,
+        "action_timeline": action_timeline,
+        "processing_trace": processing_trace,
     }
 
 
@@ -333,6 +414,12 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
                 "exam_name_cn": exam.exam_name_cn,
                 "exam_result": exam.result,
                 "requested_exams": requested_exams,
+                "action_timeline": _append_action_timeline_events(
+                    state,
+                    action_type="physical_exam_requested",
+                    source_ids=[exam.exam_code],
+                    label_by_source={exam.exam_code: exam.exam_name_cn},
+                ),
             }
     return {
         "stage": "physical_exam",
@@ -340,6 +427,12 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
         "exam_name_cn": "未提供查体",
         "exam_result": "本病例未提供该查体结果。",
         "requested_exams": requested_exams,
+        "action_timeline": _append_action_timeline_events(
+            state,
+            action_type="physical_exam_requested",
+            source_ids=[exam_code] if exam_code else [],
+            label_by_source={exam_code: "未提供查体"} if exam_code else {},
+        ),
     }
 
 
@@ -357,6 +450,12 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
                 "test_name_cn": test.test_name_cn,
                 "test_result": test.result,
                 "requested_tests": requested_tests,
+                "action_timeline": _append_action_timeline_events(
+                    state,
+                    action_type="auxiliary_test_requested",
+                    source_ids=[test.test_code],
+                    label_by_source={test.test_code: test.test_name_cn},
+                ),
             }
     return {
         "stage": "auxiliary_test",
@@ -364,6 +463,12 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
         "test_name_cn": "未提供检查",
         "test_result": "本病例未提供该辅助检查结果。",
         "requested_tests": requested_tests,
+        "action_timeline": _append_action_timeline_events(
+            state,
+            action_type="auxiliary_test_requested",
+            source_ids=[test_code] if test_code else [],
+            label_by_source={test_code: "未提供检查"} if test_code else {},
+        ),
     }
 
 
@@ -374,6 +479,12 @@ def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
         "stage": "diagnosis_submission",
         "final_submission": {"diagnosis": diagnosis, "reasoning": reasoning},
         "student_hypotheses": [*state.get("student_hypotheses", []), diagnosis],
+        "action_timeline": _append_action_timeline_events(
+            state,
+            action_type="diagnosis_submitted",
+            source_ids=["final_submission"],
+            label_by_source={"final_submission": "提交诊断"},
+        ),
     }
 
 
@@ -643,6 +754,12 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         state.get("requested_exams", []),
         state.get("requested_tests", []),
     )
+    case = _load_case(report.get("case_id", state.get("case_id", "")))
+    clinical_reasoning_trace = build_clinical_reasoning_trace(
+        session=state,
+        case=case,
+        report=report,
+    )
 
     feedback_report = {
         **report,
@@ -654,6 +771,7 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "llm_reasoning_feedback": llm_reasoning_feedback,
         "explanation_source_items": explanation_source_items,
         "evidence_graph_summary": evidence_graph_summary,
+        "clinical_reasoning_trace": clinical_reasoning_trace,
         "source_references": source_references,
         "source_reference_items": [_serialize_feedback_source_item(item) for item in source_items],
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
@@ -1530,23 +1648,44 @@ def _apply_passive_coach_review(
     messages: list[dict[str, str]],
     agent_turn_memory: list[dict[str, Any]],
     turn_analysis: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    processing_trace: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
     if not student_message:
-        return messages, agent_turn_memory
+        return messages, agent_turn_memory, processing_trace
     forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
     base_hint = _build_passive_coach_hint(
         state,
         primary_intent=primary_intent,
         revealed_fact_id=revealed_fact_id,
     )
+    _emit_processing_progress(state, "skill", status="active")
+    skill_started_at, skill_started_perf = _start_processing_step()
+    selected_skill_context = _selected_skill_context_strings(state)
+    selected_skill_ids = _selected_skill_ids(state)
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "skill",
+        "completed" if selected_skill_ids or selected_skill_context else "skipped",
+        skill_started_at,
+        skill_started_perf,
+        metadata={"selected_skill_ids": selected_skill_ids},
+    )
+    _emit_processing_progress(state, "rag", status="active")
+    rag_started_at, rag_started_perf = _start_processing_step()
     retrieved_knowledge_context = _retrieve_coach_knowledge_context(
         state,
         case=case,
         query=" ".join([base_hint, student_message, patient_reply]),
         forbidden_terms=forbidden_terms,
     )
-    selected_skill_context = _selected_skill_context_strings(state)
-    selected_skill_ids = _selected_skill_ids(state)
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "rag",
+        "completed" if retrieved_knowledge_context else "skipped",
+        rag_started_at,
+        rag_started_perf,
+        metadata={"knowledge_references": [item["reference"] for item in retrieved_knowledge_context]},
+    )
     pedagogy_state = build_pedagogy_state(
         {
             **dict(state),
@@ -1555,6 +1694,8 @@ def _apply_passive_coach_review(
             "messages": messages,
         }
     )
+    _emit_processing_progress(state, "coach", status="active")
+    coach_started_at, coach_started_perf = _start_processing_step()
     try:
         coach_response = normalize_coach_response(
             coach_agent(
@@ -1578,7 +1719,23 @@ def _apply_passive_coach_review(
                 )
             )
         )
+        processing_trace = _append_processing_trace_step(
+            processing_trace,
+            "coach",
+            "completed",
+            coach_started_at,
+            coach_started_perf,
+            metadata={"prompt_kind": "passive_turn_review"},
+        )
     except Exception as exc:
+        processing_trace = _append_processing_trace_step(
+            processing_trace,
+            "coach",
+            "error",
+            coach_started_at,
+            coach_started_perf,
+            metadata={"error_type": exc.__class__.__name__},
+        )
         unavailable_turn_analysis = {
             **turn_analysis,
             "coach_unavailable": True,
@@ -1597,7 +1754,8 @@ def _apply_passive_coach_review(
             safety_flags=list(state.get("safety_flags", [])),
             selected_skill_ids=selected_skill_ids,
             skill_context=selected_skill_context,
-        )
+            processing_trace=processing_trace,
+        ), processing_trace
     forced_hint = base_hint.strip()
     response_hint = coach_response.hint.strip()
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
@@ -1627,8 +1785,9 @@ def _apply_passive_coach_review(
         retrieved_knowledge_context=retrieved_knowledge_context if should_emit else [],
         selected_skill_ids=selected_skill_ids,
         skill_context=selected_skill_context,
+        processing_trace=processing_trace,
     )
-    return next_messages, next_agent_turn_memory
+    return next_messages, next_agent_turn_memory, processing_trace
 
 
 def _coach_reply_from_agent(
@@ -1693,6 +1852,7 @@ def _append_agent_turn_memory(
     retrieved_knowledge_context: list[dict[str, Any]] | None = None,
     selected_skill_ids: list[str] | None = None,
     skill_context: list[str] | None = None,
+    processing_trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
     history_fact_ids = list(revealed_fact_ids or ([revealed_fact_id] if revealed_fact_id else []))
@@ -1726,8 +1886,151 @@ def _append_agent_turn_memory(
         turn_payload["selected_skill_reasons"] = selected_skill_reasons
     if skill_context:
         turn_payload["skill_context"] = list(skill_context)
+    if processing_trace is not None:
+        normalized_processing_trace = _normalize_processing_trace(processing_trace)
+        turn_payload["processing_trace"] = normalized_processing_trace
+        turn_payload["processing_duration_ms"] = _processing_trace_duration_ms(normalized_processing_trace)
     turn_memory.append(turn_payload)
     return turn_memory
+
+
+def _append_action_timeline_events(
+    state: OsceGraphState,
+    *,
+    action_type: str,
+    source_ids: list[str],
+    label_by_source: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    timeline = [dict(item) for item in state.get("action_timeline", []) if isinstance(item, dict)]
+    labels = label_by_source or {}
+    next_index = len(timeline) + 1
+    for source_id in source_ids:
+        normalized_source_id = str(source_id or "").strip()
+        if not normalized_source_id:
+            continue
+        timeline.append(
+            {
+                "turn_index": next_index,
+                "action_type": action_type,
+                "source_id": normalized_source_id,
+                "label": labels.get(normalized_source_id, normalized_source_id),
+            }
+        )
+        next_index += 1
+    return timeline
+
+
+def _history_fact_label(case: Case, fact: HiddenFact) -> str:
+    if fact.linked_rubric_items:
+        from app.services.admin_display_resolver import rubric_item_labels
+
+        labels = rubric_item_labels(fact.linked_rubric_items[:1], [case.case_id])
+        if labels:
+            return labels[0]
+    return fact.canonical_answer
+
+
+def _start_processing_step() -> tuple[datetime, float]:
+    return datetime.now(UTC), perf_counter()
+
+
+def _emit_processing_progress(state: OsceGraphState, step_id: str, *, status: str = "active") -> None:
+    callback = state.get("processing_progress_callback")
+    if not callable(callback):
+        return
+    callback(
+        {
+            "step_id": step_id,
+            "label": PROCESSING_STEP_LABELS.get(step_id, step_id),
+            "status": status,
+        }
+    )
+
+
+def _append_processing_trace_step(
+    processing_trace: list[dict[str, Any]],
+    step_id: str,
+    status: str,
+    started_at: datetime,
+    started_perf: float,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    completed_at = datetime.now(UTC)
+    step = {
+        "step_id": step_id,
+        "label": PROCESSING_STEP_LABELS.get(step_id, step_id),
+        "status": status,
+        "started_at": started_at.isoformat(),
+        "completed_at": completed_at.isoformat(),
+        "duration_ms": max(0, int(round((perf_counter() - started_perf) * 1000))),
+    }
+    clean_metadata = {
+        key: value
+        for key, value in (metadata or {}).items()
+        if value not in (None, "", [], {})
+    }
+    if clean_metadata:
+        step["metadata"] = clean_metadata
+    return [*_normalize_processing_trace(processing_trace), step]
+
+
+def _normalize_processing_trace(processing_trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_trace: list[dict[str, Any]] = []
+    for item in processing_trace:
+        if not isinstance(item, dict):
+            continue
+        step_id = str(item.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        duration_ms = item.get("duration_ms", 0)
+        normalized_trace.append(
+            {
+                **item,
+                "step_id": step_id,
+                "label": str(item.get("label") or PROCESSING_STEP_LABELS.get(step_id, step_id)),
+                "status": str(item.get("status") or "completed"),
+                "duration_ms": max(0, int(duration_ms if isinstance(duration_ms, int) else 0)),
+                "started_at": str(item.get("started_at") or ""),
+                "completed_at": str(item.get("completed_at") or ""),
+            }
+        )
+    return normalized_trace
+
+
+def _processing_trace_duration_ms(processing_trace: list[dict[str, Any]]) -> int:
+    return sum(
+        int(item.get("duration_ms", 0))
+        for item in processing_trace
+        if isinstance(item.get("duration_ms", 0), int)
+    )
+
+
+def _attach_processing_trace_to_latest_turn(
+    turn_memory: list[dict[str, Any]],
+    *,
+    student_message: str,
+    reply: str,
+    reply_role: str,
+    processing_trace: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    next_turn_memory = list(turn_memory)
+    normalized_processing_trace = _normalize_processing_trace(processing_trace)
+    processing_duration_ms = _processing_trace_duration_ms(normalized_processing_trace)
+    for index in range(len(next_turn_memory) - 1, -1, -1):
+        turn = next_turn_memory[index]
+        if (
+            turn.get("student_message") == student_message
+            and turn.get("reply") == reply
+            and turn.get("reply_role") == reply_role
+        ):
+            next_turn_memory[index] = {
+                **turn,
+                "processing_trace": normalized_processing_trace,
+                "processing_duration_ms": processing_duration_ms,
+            }
+            break
+    return next_turn_memory
 
 
 def _turn_knowledge_context(

@@ -90,6 +90,12 @@ def test_list_cases_returns_valid_case_summaries() -> None:
         "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
         "patient_opening_utterance": "医生您好，我这次主要是肚子疼，后来右下腹更明显，有点想吐，也有点发热。",
         "enabled": True,
+        "content_stats": {
+            "history_clue_count": 10,
+            "physical_exam_count": 7,
+            "auxiliary_test_count": 5,
+            "total_training_items": 22,
+        },
         "patient_profile": {
             "age": "22岁",
             "gender": "男",
