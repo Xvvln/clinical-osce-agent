@@ -39,6 +39,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /case_title\?: string;/);
   assert.match(adminPageSource, /stage_label\?: string;/);
   assert.match(adminPageSource, /type AdminSessionReport = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminReasoningTraceSummary = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminReasoningSequenceFlag = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminEvidenceChainBreakpoint = Readonly<\{/);
+  assert.match(adminPageSource, /reasoning_trace_summary\?: AdminReasoningTraceSummary \| null;/);
   assert.match(adminPageSource, /missed_item_labels\?: readonly string\[];/);
   assert.match(adminPageSource, /type AdminExplanationSourceItem = Readonly<\{/);
   assert.match(adminPageSource, /explanation_source_items\?: readonly AdminExplanationSourceItem\[];/);
@@ -137,6 +141,13 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /学习建议/);
   assert.match(adminPageSource, /recommendation\.reference_label/);
   assert.match(adminPageSource, /结构化证据覆盖/);
+  assert.match(adminPageSource, /临床思维轨迹/);
+  assert.match(adminPageSource, /顺序问题/);
+  assert.match(adminPageSource, /证据链断点/);
+  assert.match(adminPageSource, /selectedReport\.reasoning_trace_summary/);
+  assert.match(adminPageSource, /sequence_flags\.map/);
+  assert.match(adminPageSource, /evidence_chain_breakpoints\.map/);
+  assert.match(adminPageSource, /missing_evidence_labels\.join\("、"\)/);
   assert.doesNotMatch(adminPageSource, /类型：\{getSourceReferenceLabel\(sourceReference\.reference\)\}/);
   assert.match(adminPageSource, /sourceReference\.reference_label \?\? getSourceReferenceLabel\(sourceReference\.reference\)/);
   assert.match(adminPageSource, /结构化追溯链/);

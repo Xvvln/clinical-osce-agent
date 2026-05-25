@@ -74,6 +74,29 @@ type AdminEvidenceGraphSummary = Readonly<{
   scoring_boundary: string;
 }>;
 
+type AdminReasoningSequenceFlag = Readonly<{
+  flag_id: string;
+  label: string;
+  severity: string;
+  evidence: string;
+}>;
+
+type AdminEvidenceChainBreakpoint = Readonly<{
+  breakpoint_id: string;
+  statement: string;
+  kind: string;
+  status: string;
+  missing_evidence: readonly string[];
+  missing_evidence_labels: readonly string[];
+  teacher_action: string;
+}>;
+
+type AdminReasoningTraceSummary = Readonly<{
+  trace_version?: string;
+  sequence_flags: readonly AdminReasoningSequenceFlag[];
+  evidence_chain_breakpoints: readonly AdminEvidenceChainBreakpoint[];
+}>;
+
 type AdminSessionReport = Readonly<{
   report_id: string;
   session_id: string;
@@ -88,6 +111,7 @@ type AdminSessionReport = Readonly<{
   source_reference_items?: readonly AdminSourceReferenceItem[];
   explanation_source_items?: readonly AdminExplanationSourceItem[];
   evidence_graph_summary?: AdminEvidenceGraphSummary | null;
+  reasoning_trace_summary?: AdminReasoningTraceSummary | null;
   knowledge_recommendations: readonly ReportRecommendation[];
 }>;
 
@@ -1892,6 +1916,58 @@ function getReportSourceReferenceItems(report: AdminSessionReport): readonly Adm
 
 function getReportExplanationSourceItems(report: AdminSessionReport): readonly AdminExplanationSourceItem[] {
   return report.explanation_source_items ?? [];
+}
+
+function AdminReasoningTraceSummaryPanel({ summary }: Readonly<{ summary: AdminReasoningTraceSummary }>) {
+  const hasSequenceFlags = summary.sequence_flags.length > 0;
+  const hasEvidenceBreakpoints = summary.evidence_chain_breakpoints.length > 0;
+  if (!hasSequenceFlags && !hasEvidenceBreakpoints) {
+    return null;
+  }
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">临床思维轨迹</h3>
+      <div className="mt-2 grid gap-3 lg:grid-cols-2">
+        <section className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-[#141413]">顺序问题</p>
+            {summary.trace_version ? <span className="rounded-full bg-[#AE5630]/10 px-2 py-1 text-[11px] text-[#AE5630]">{summary.trace_version}</span> : null}
+          </div>
+          <div className="mt-2 grid gap-2">
+            {hasSequenceFlags ? (
+              summary.sequence_flags.map((flag) => (
+                <article className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]" key={flag.flag_id}>
+                  <p className="font-semibold text-[#141413]">{flag.label}</p>
+                  <p className="mt-1">{flag.evidence || "暂无顺序证据说明。"}</p>
+                </article>
+              ))
+            ) : (
+              <p className="rounded-md border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs text-[#6F6257]">未识别到明显顺序跳步。</p>
+            )}
+          </div>
+        </section>
+        <section className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+          <p className="text-xs font-semibold text-[#141413]">证据链断点</p>
+          <div className="mt-2 grid gap-2">
+            {hasEvidenceBreakpoints ? (
+              summary.evidence_chain_breakpoints.map((breakpoint) => (
+                <article className="rounded-md border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]" key={breakpoint.breakpoint_id}>
+                  <p className="font-semibold text-[#141413]">{breakpoint.statement}</p>
+                  {breakpoint.missing_evidence_labels.length > 0 ? (
+                    <p className="mt-1">缺少证据：{breakpoint.missing_evidence_labels.join("、")}</p>
+                  ) : null}
+                  {breakpoint.teacher_action ? <p className="mt-1">{breakpoint.teacher_action}</p> : null}
+                </article>
+              ))
+            ) : (
+              <p className="rounded-md border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs text-[#6F6257]">暂无证据链断点。</p>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
 }
 
 function getAdminCaseImportStatusLabel(result: AdminCaseImportStatus): string {
@@ -4392,6 +4468,9 @@ export default function AdminDashboardPage() {
                       </p>
                     )}
                   </div>
+                  {selectedReport.reasoning_trace_summary ? (
+                    <AdminReasoningTraceSummaryPanel summary={selectedReport.reasoning_trace_summary} />
+                  ) : null}
                   <div>
                     <h3 className="text-sm font-semibold">结构化来源引用</h3>
                     <div className="mt-2 rounded-lg border border-[#E6DFD2] bg-white p-3">

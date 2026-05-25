@@ -2873,6 +2873,30 @@ def test_admin_can_read_session_report(tmp_path, monkeypatch) -> None:
             "total_score": 82,
             "dimension_scores": {"history_taking": 18, "reasoning": 14},
             "missed_items": ["reasoning_core"],
+            "ai_reflection_review": {
+                "reasoning_trace_summary": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "sequence_flags": [
+                        {
+                            "flag_id": "auxiliary_before_exam",
+                            "label": "辅助检查早于关键查体",
+                            "severity": "medium",
+                            "evidence": "学生先申请腹部超声，再补查体。",
+                        }
+                    ],
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_exclude",
+                            "statement": "排除性证据链不完整",
+                            "kind": "missing_required_evidence",
+                            "status": "missing",
+                            "missing_evidence": ["appendicitis_001.rp_05"],
+                            "missing_evidence_labels": ["输尿管结石排除证据"],
+                            "teacher_action": "先让学生补足鉴别诊断需要的排除依据。",
+                        }
+                    ],
+                }
+            },
             "knowledge_recommendations": [
                 {"title": "补充鉴别诊断证据链", "reference": "rubric:appendicitis_001_rubric.item.reasoning_core"}
             ],
@@ -2895,6 +2919,52 @@ def test_admin_can_read_session_report(tmp_path, monkeypatch) -> None:
             "dimension_scores": {"history_taking": 18, "reasoning": 14},
             "missed_items": ["reasoning_core"],
             "missed_item_labels": ["reasoning_core"],
+            "ai_reflection_review": {
+                "reasoning_trace_summary": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "sequence_flags": [
+                        {
+                            "flag_id": "auxiliary_before_exam",
+                            "label": "辅助检查早于关键查体",
+                            "severity": "medium",
+                            "evidence": "学生先申请腹部超声，再补查体。",
+                        }
+                    ],
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_exclude",
+                            "statement": "排除性证据链不完整",
+                            "kind": "missing_required_evidence",
+                            "status": "missing",
+                            "missing_evidence": ["appendicitis_001.rp_05"],
+                            "missing_evidence_labels": ["输尿管结石排除证据"],
+                            "teacher_action": "先让学生补足鉴别诊断需要的排除依据。",
+                        }
+                    ],
+                }
+            },
+            "reasoning_trace_summary": {
+                "trace_version": "clinical_reasoning_trace_v1",
+                "sequence_flags": [
+                    {
+                        "flag_id": "auxiliary_before_exam",
+                        "label": "辅助检查早于关键查体",
+                        "severity": "medium",
+                        "evidence": "学生先申请腹部超声，再补查体。",
+                    }
+                ],
+                "evidence_chain_breakpoints": [
+                    {
+                        "breakpoint_id": "rp_exclude",
+                        "statement": "排除性证据链不完整",
+                        "kind": "missing_required_evidence",
+                        "status": "missing",
+                        "missing_evidence": ["appendicitis_001.rp_05"],
+                        "missing_evidence_labels": ["输尿管结石排除证据"],
+                        "teacher_action": "先让学生补足鉴别诊断需要的排除依据。",
+                    }
+                ],
+            },
             "knowledge_recommendations": [
                 {"title": "补充鉴别诊断证据链", "reference": "rubric:appendicitis_001_rubric.item.reasoning_core"}
             ],

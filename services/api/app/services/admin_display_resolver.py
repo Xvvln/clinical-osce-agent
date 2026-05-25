@@ -442,11 +442,18 @@ def enrich_active_skill_skipped_reason(item: dict[str, Any]) -> dict[str, Any]:
 def enrich_report(report: dict[str, Any]) -> dict[str, Any]:
     case_id = str(report.get("case_id", ""))
     missed_items = [str(item_id) for item_id in report.get("missed_items", [])]
-    return {
+    enriched_report = {
         **report,
         "case_title": case_title(case_id),
         "missed_item_labels": rubric_item_labels(missed_items, [case_id]),
     }
+    if "reasoning_trace_summary" not in enriched_report:
+        ai_reflection_review = report.get("ai_reflection_review")
+        if isinstance(ai_reflection_review, dict):
+            reasoning_trace_summary = ai_reflection_review.get("reasoning_trace_summary")
+            if isinstance(reasoning_trace_summary, dict):
+                enriched_report["reasoning_trace_summary"] = reasoning_trace_summary
+    return enriched_report
 
 
 def enrich_rag_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
