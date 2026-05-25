@@ -40,6 +40,9 @@ TEACHER_REFLECTION_PROMPT_CONTRACT = """你是 OSCE 训练报告里的教师复�
 - 如果输入包含 clinical_reasoning_trace，必须优先围绕其中的 cognitive_patterns 讲评；missed_items 只作为具体证据例子。
 - 每个问题组必须包含：学生本轮表现、为什么重要、正确做法、下一轮具体练习动作。
 - 额外输出 teacher_coaching_review，用 6 个小节带学生重走本轮临床思路：病例表征、假设路径、验证路径、鉴别诊断、证据整合、下一轮演练脚本。
+- teacher_coaching_review 面向学生主阅读区：每个小节 2-3 句以内，只讲一个核心判断，不堆砌全部证据链。
+- 证据链断点只摘要最关键的 2-3 个中文训练点；不要把多个已带句号的片段硬拼成“。、”“。。”或超长段落。
+- 语言要像老师当面讲评：先指出本轮问题，再说明为什么影响推理，最后给下一轮动作；避免机械列字段、技术 ID 或泛泛口号。
 - 用老师对学生说话的语气，明确、具体、可执行，避免“加强学习”这类空话。
 - 如果学生已经覆盖较完整，重点转为证据表达、支持/排除依据和迁移训练。
 - 输出结构化 JSON：overall_comment、strengths_review、major_issues、teacher_coaching_review、reasoning_chain_review、next_practice_plan、teacher_note。
@@ -795,31 +798,31 @@ def _build_reasoning_chain_review(
     ][:3]
     sequence_text = ""
     if sequence_flags:
-        sequence_labels = _compact_list_text(
+        sequence_labels = _compact_sentence_list_text(
             [str(flag.get("label") or flag.get("flag_id") or "") for flag in sequence_flags],
             limit=2,
             fallback="推理顺序问题",
         )
-        sequence_text = f"本轮还要先修正流程顺序：{sequence_labels}。"
+        sequence_text = f"顺序上先修正：{sequence_labels}。"
     breakpoint_text = ""
     if breakpoints:
-        breakpoint_reviews: list[str] = []
+        breakpoint_statements: list[str] = []
+        missing_focus: list[str] = []
         for breakpoint in breakpoints:
-            statement = str(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "证据链").strip()
-            missing_labels = _normalized_string_list(breakpoint.get("missing_evidence_labels"))
-            missing_text = _compact_list_text(missing_labels, limit=3, fallback="关键证据")
-            teacher_action = str(breakpoint.get("teacher_action") or "").strip()
-            if teacher_action:
-                breakpoint_reviews.append(f"{statement}缺少{missing_text}，{teacher_action}")
-            else:
-                breakpoint_reviews.append(f"{statement}缺少{missing_text}。")
-        breakpoint_text = f"具体证据链断点在：{'；'.join(breakpoint_reviews)}。"
+            statement = _sentence_fragment(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "证据链")
+            if statement:
+                breakpoint_statements.append(statement)
+            missing_focus.extend(_normalized_string_list(breakpoint.get("missing_evidence_labels")))
+        breakpoint_text = (
+            f"证据链先补：{_compact_sentence_list_text(missing_focus, limit=4, fallback='关键证据')}；"
+            f"断点包括：{_compact_sentence_list_text(breakpoint_statements, limit=2, fallback='关键推理点')}。"
+        )
     if issue_titles:
         return (
-            f"围绕「{case_title}」，更合理的训练路径是：先补全病史时间线，再用查体验证局部体征，"
-            "随后选择必要检查支持或排除诊断，最后把阳性依据和阴性依据组织成诊断推理。"
+            f"围绕「{case_title}」，更合理的路径是先补全病史时间线，再用查体验证局部体征，"
+            "最后用检查支持或排除诊断。"
             f"{sequence_text}{breakpoint_text}"
-            f"本轮需要优先修正的是{_compact_list_text(issue_titles, limit=3, fallback='证据链闭合')}。"
+            f"本轮优先修正：{_compact_sentence_list_text(issue_titles, limit=3, fallback='证据链闭合')}。"
         )
     if sequence_text or breakpoint_text:
         return (
@@ -863,9 +866,9 @@ def _build_teacher_coaching_review(
         flag for flag in reasoning_trace_summary.get("sequence_flags", []) if isinstance(flag, dict)
     ]
     sequence_labels = _dedupe_texts(
-        [str(flag.get("label") or flag.get("flag_id") or "").strip() for flag in sequence_flags]
+        [_sentence_fragment(flag.get("label") or flag.get("flag_id") or "") for flag in sequence_flags]
     )
-    sequence_evidence = _compact_list_text(
+    sequence_evidence = _compact_sentence_list_text(
         [str(flag.get("evidence") or "").strip() for flag in sequence_flags],
         limit=2,
         fallback="本轮没有记录明显顺序跳步",
@@ -883,12 +886,27 @@ def _build_teacher_coaching_review(
         ]
     )
     breakpoint_statements = _dedupe_texts(
-        [str(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "").strip() for breakpoint in breakpoints]
+        [_sentence_fragment(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "") for breakpoint in breakpoints]
     )
     breakpoint_actions = _dedupe_texts(
-        [str(breakpoint.get("teacher_action") or "").strip() for breakpoint in breakpoints]
+        [_sentence_fragment(breakpoint.get("teacher_action") or "") for breakpoint in breakpoints]
     )
     next_moves = next_practice_plan or ["下一轮按病史、查体、检查、鉴别和证据表达的顺序完整演练一次。"]
+    next_move_fragments = _dedupe_texts([_next_round_action_fragment(move) for move in next_moves])
+    first_sequence_evidence = sequence_evidence if sequence_flags else "本轮没有记录明显顺序跳步"
+    first_breakpoint_action = (
+        f"证据链先补：{_compact_sentence_list_text(breakpoint_labels, limit=3, fallback=pending_focus)}，再说明它们支持或排除哪个假设。"
+        if breakpoint_labels
+        else f"下一轮优先补{pending_focus}，再进入最终诊断表达。"
+    )
+    concise_reasoning_chain_review = _short_teacher_text(
+        reasoning_chain_review,
+        fallback=(
+            f"本轮要把已收集线索分成支持依据、排除依据和仍需验证的问题。"
+            f"优先处理{_compact_sentence_list_text(issue_titles, limit=2, fallback='证据链闭合')}。"
+        ),
+        max_chars=210,
+    )
 
     return [
         {
@@ -906,8 +924,9 @@ def _build_teacher_coaching_review(
             "section_id": "hypothesis_path",
             "title": "假设形成路径",
             "teacher_comment": (
-                f"形成假设前先看顺序。"
-                f"{_compact_list_text(sequence_labels, limit=2, fallback='本轮未见明显顺序跳步')}；{sequence_evidence}。"
+                f"形成假设前先看顺序。本轮顺序问题："
+                f"{_compact_sentence_list_text(sequence_labels, limit=2, fallback='未见明显顺序跳步')}。"
+                f"依据：{first_sequence_evidence}。"
             ),
             "why_it_matters": "临床思维不是先列检查单，而是用病史形成初步假设，再让查体和检查服务于验证或排除。",
             "next_move": "下一轮先提出可验证的诊断假设，再说明你准备通过哪一个查体或检查去验证它。",
@@ -917,11 +936,11 @@ def _build_teacher_coaching_review(
             "section_id": "verification_path",
             "title": "验证路径",
             "teacher_comment": (
-                f"本轮证据链断点集中在{_compact_list_text(breakpoint_statements, limit=3, fallback='关键推理点')}；"
-                f"还缺{_compact_list_text(breakpoint_labels, limit=4, fallback=pending_focus)}。"
+                f"本轮证据链断点：{_compact_sentence_list_text(breakpoint_statements, limit=2, fallback='关键推理点')}。"
+                f"还缺：{_compact_sentence_list_text(breakpoint_labels, limit=4, fallback=pending_focus)}。"
             ),
             "why_it_matters": "验证路径要回答“这个证据支持什么、缺了它会让哪个判断不稳”，这样诊断推理才不是凭印象跳跃。",
-            "next_move": breakpoint_actions[0] if breakpoint_actions else f"下一轮优先补{pending_focus}，再进入最终诊断表达。",
+            "next_move": first_breakpoint_action,
             "evidence_labels": breakpoint_labels[:6],
         },
         {
@@ -938,7 +957,7 @@ def _build_teacher_coaching_review(
         {
             "section_id": "evidence_synthesis",
             "title": "证据整合",
-            "teacher_comment": reasoning_chain_review,
+            "teacher_comment": concise_reasoning_chain_review,
             "why_it_matters": "证据整合要把零散线索组织成支持、反证和未确定三类，让别人能复查你的推理链。",
             "next_move": "下一轮提交前，用“支持依据、排除依据、仍需验证”三栏整理一次。",
             "evidence_labels": linked_labels[:6],
@@ -946,9 +965,9 @@ def _build_teacher_coaching_review(
         {
             "section_id": "next_drill_script",
             "title": "下一轮演练脚本",
-            "teacher_comment": "把复盘落到动作上：下一轮不要只记住漏项名称，而要按固定推理顺序演练。",
+            "teacher_comment": "把复盘落到动作上：下一轮不要只记住漏项名称，而要把每一步都连到诊断假设。",
             "why_it_matters": "可重复的训练脚本能把一次报告里的问题转成下一次会话中的行为变化。",
-            "next_move": "下一轮：" + "；".join(next_moves[:3]),
+            "next_move": "下一轮：" + "；".join(next_move_fragments[:3]) + "。",
             "evidence_labels": _dedupe_texts([*pending_labels[:4], *linked_labels[:4]]),
         },
     ]
@@ -1020,6 +1039,42 @@ def _dedupe_texts(items: list[str]) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
+
+
+def _sentence_fragment(value: Any) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        return ""
+    return normalized.rstrip(" \t\r\n。；;，,、.")
+
+
+def _next_round_action_fragment(value: Any) -> str:
+    normalized = _sentence_fragment(value)
+    if normalized.startswith("下一轮先"):
+        return "先" + normalized.removeprefix("下一轮先")
+    if normalized.startswith("下一轮要"):
+        return "要" + normalized.removeprefix("下一轮要")
+    if normalized.startswith("下一轮请"):
+        return "请" + normalized.removeprefix("下一轮请")
+    if normalized.startswith("下一轮"):
+        return normalized.removeprefix("下一轮").lstrip("：:，, ")
+    return normalized
+
+
+def _compact_sentence_list_text(items: list[str], *, limit: int, fallback: str) -> str:
+    return _compact_list_text([_sentence_fragment(item) for item in items], limit=limit, fallback=fallback)
+
+
+def _short_teacher_text(value: str, *, fallback: str, max_chars: int) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        return fallback
+    if len(normalized) <= max_chars:
+        return normalized
+    first_sentence = normalized.split("。", 1)[0].strip()
+    if 24 <= len(first_sentence) <= max_chars:
+        return f"{first_sentence}。"
+    return f"{normalized[: max_chars - 1].rstrip('，,；;、 ')}。"
 
 
 def _normalized_string_list(value: Any) -> list[str]:

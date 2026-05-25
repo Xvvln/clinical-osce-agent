@@ -196,6 +196,122 @@ def test_teacher_reflection_uses_sequence_flags_and_evidence_chain_breakpoints()
     assert "下一轮" in drill_section["next_move"]
 
 
+def test_teacher_coaching_review_uses_concise_natural_student_facing_language() -> None:
+    case = _load_case()
+    report = {
+        "report_id": "trace-language-quality-report",
+        "case_id": case.case_id,
+        "total_score": 37,
+        "max_score": 60,
+        "missed_items": [
+            "ht_character",
+            "ht_severity",
+            "pe_tenderness",
+            "pe_guarding",
+            "pe_rovsing",
+            "ax_crp",
+            "ax_us",
+            "ax_ua",
+            "dxd_urolith",
+            "rs_exclude",
+        ],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_problem_representation",
+                    "label": "问题表征薄弱",
+                    "category": "problem_representation",
+                    "severity": "medium",
+                    "evidence": "问题表征缺少追问疼痛性质、追问疼痛程度。",
+                    "why_it_matters": "起病、部位、性质、程度和伴随症状不清，后续诊断假设会缺少支点。",
+                    "remediation": "下一轮先补齐疼痛性质和程度，再进入查体。",
+                    "source_signal_ids": ["ht_character", "ht_severity"],
+                },
+                {
+                    "pattern_id": "premature_testing_before_exam",
+                    "label": "检查申请早于关键查体",
+                    "category": "hypothesis_testing",
+                    "severity": "medium",
+                    "evidence": "本轮先申请辅助检查，随后才记录关键查体，验证顺序偏检查驱动。",
+                    "why_it_matters": "跳过关键查体会让检查选择变成列表式申请。",
+                    "remediation": "下一轮先说明当前假设，再选择能验证假设的查体。",
+                    "source_signal_ids": ["event:auxiliary_test_requested"],
+                },
+            ],
+            "hypothesis_testing": {
+                "sequence_flags": [
+                    {
+                        "flag_id": "premature_testing_before_exam",
+                        "label": "检查申请早于关键查体",
+                        "severity": "medium",
+                        "evidence": "本轮先申请辅助检查，随后才记录关键查体，验证顺序偏检查驱动。",
+                    },
+                    {
+                        "flag_id": "delayed_hypothesis_generation",
+                        "label": "诊断假设生成偏晚",
+                        "severity": "medium",
+                        "evidence": "训练记录中未看到提交诊断前形成过明确诊断假设。",
+                    },
+                ]
+            },
+            "evidence_chain_breakpoints": [
+                {
+                    "breakpoint_id": "appendicitis_001.rp_02",
+                    "statement": "McBurney 点压痛、反跳痛、肌紧张和 Rovsing 征提示右下腹腹膜刺激征。",
+                    "kind": "support",
+                    "status": "partial",
+                    "missing_evidence": [
+                        "abd.palpation.tenderness",
+                        "abd.palpation.guarding",
+                        "abd.special.rovsing",
+                    ],
+                    "missing_evidence_labels": ["McBurney 点压痛", "肌紧张", "Rovsing 征"],
+                    "teacher_action": "先补齐 McBurney 点压痛、肌紧张、Rovsing 征，再说明这些证据如何支持当前诊断假设。",
+                },
+                {
+                    "breakpoint_id": "appendicitis_001.rp_03",
+                    "statement": "白细胞升高伴 CRP 升高支持炎症性腹痛。",
+                    "kind": "support",
+                    "status": "partial",
+                    "missing_evidence": ["lab.crp"],
+                    "missing_evidence_labels": ["C 反应蛋白"],
+                    "teacher_action": "先补齐 C 反应蛋白，再说明这些证据如何支持当前诊断假设。",
+                },
+                {
+                    "breakpoint_id": "appendicitis_001.rp_04",
+                    "statement": "腹部超声或腹部 CT 的阑尾异常表现支持阑尾区炎症。",
+                    "kind": "support",
+                    "status": "missing",
+                    "missing_evidence": ["img.abd_us", "img.abd_ct"],
+                    "missing_evidence_labels": ["腹部超声", "腹部 CT"],
+                    "teacher_action": "先补齐腹部超声、腹部 CT，再说明这些证据如何支持当前诊断假设。",
+                },
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    reflection = build_teacher_reflection_review_payload(report, case)
+    sections = reflection["teacher_coaching_review"]
+    section_by_id = {section["section_id"]: section for section in sections}
+
+    all_student_facing_text = "\n".join(
+        str(section.get(field, ""))
+        for section in sections
+        for field in ["teacher_comment", "why_it_matters", "next_move"]
+    )
+    for awkward_fragment in ["。、", "。；", "。。", "；；", "，。", "等 5 项；还缺"]:
+        assert awkward_fragment not in all_student_facing_text
+
+    assert len(section_by_id["evidence_synthesis"]["teacher_comment"]) <= 220
+    assert "本轮顺序问题" in section_by_id["hypothesis_path"]["teacher_comment"]
+    assert "证据链先补" in section_by_id["verification_path"]["next_move"]
+    assert section_by_id["next_drill_script"]["next_move"].count("下一轮") == 1
+    assert "固定顺序" not in section_by_id["next_drill_script"]["teacher_comment"]
+
+
 def test_personal_skill_candidate_context_includes_evidence_chain_breakpoint_pattern(tmp_path) -> None:
     case = _load_case()
     generator = CapturingGenerator()
