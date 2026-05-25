@@ -37,6 +37,15 @@ export type TeacherReflectionMajorIssue = Readonly<{
   linked_items: readonly string[];
 }>;
 
+export type TeacherCoachingReviewSection = Readonly<{
+  section_id: string;
+  title: string;
+  teacher_comment: string;
+  why_it_matters: string;
+  next_move: string;
+  evidence_labels: readonly string[];
+}>;
+
 export type TeacherReasoningSequenceFlag = Readonly<{
   flag_id: string;
   label: string;
@@ -81,6 +90,7 @@ export type AiReflectionReview = Readonly<{
   overall_comment: string;
   strengths_review: readonly string[];
   major_issues: readonly TeacherReflectionMajorIssue[];
+  teacher_coaching_review: readonly TeacherCoachingReviewSection[];
   reasoning_chain_review: string;
   next_practice_plan: readonly string[];
   teacher_note: string;
@@ -154,6 +164,7 @@ export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
   overall_comment: "",
   strengths_review: [],
   major_issues: [],
+  teacher_coaching_review: [],
   reasoning_chain_review: "",
   next_practice_plan: [],
   teacher_note: "",
@@ -283,6 +294,7 @@ function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiRe
     ...review,
     strengths_review: review?.strengths_review ?? [],
     major_issues: review?.major_issues ?? [],
+    teacher_coaching_review: review?.teacher_coaching_review ?? [],
     next_practice_plan: review?.next_practice_plan ?? [],
     mistake_patterns: review?.mistake_patterns ?? [],
     reasoning_trace_summary: normalizeTeacherReasoningTraceSummary(review?.reasoning_trace_summary),

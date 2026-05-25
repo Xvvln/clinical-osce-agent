@@ -716,6 +716,10 @@ test("report page prioritizes student learning over repeated source proof", () =
 test("report page renders AI reflection review and personal training skill status", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
   assert.match(reportModelSource, /export type TeacherReflectionMajorIssue = Readonly<\{/);
+  assert.match(reportModelSource, /export type TeacherCoachingReviewSection = Readonly<\{/);
+  assert.match(reportModelSource, /teacher_coaching_review: readonly TeacherCoachingReviewSection\[];/);
+  assert.match(reportModelSource, /teacher_coaching_review: \[],/);
+  assert.match(reportModelSource, /teacher_coaching_review: review\?\.teacher_coaching_review \?\? \[],/);
   assert.match(reportModelSource, /export type TeacherReasoningTraceSummary = Readonly<\{/);
   assert.match(reportModelSource, /sequence_flags: readonly TeacherReasoningSequenceFlag\[];/);
   assert.match(reportModelSource, /evidence_chain_breakpoints: readonly TeacherEvidenceChainBreakpoint\[];/);
@@ -733,6 +737,11 @@ test("report page renders AI reflection review and personal training skill statu
   assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
   assert.match(reportSource, /教师复盘/);
   assert.match(reportSource, /总体判断/);
+  assert.match(reportSource, /老师带你重走一遍临床思路/);
+  assert.match(reportSource, /review\.teacher_coaching_review\.map/);
+  assert.match(reportSource, /section\.teacher_comment/);
+  assert.match(reportSource, /section\.why_it_matters/);
+  assert.match(reportSource, /section\.next_move/);
   assert.match(reportSource, /老师指出的问题/);
   assert.match(reportSource, /为什么重要/);
   assert.match(reportSource, /正确做法/);

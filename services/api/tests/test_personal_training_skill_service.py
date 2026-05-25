@@ -178,6 +178,22 @@ def test_teacher_reflection_uses_sequence_flags_and_evidence_chain_breakpoints()
     assert trace_summary["evidence_chain_breakpoints"][0]["missing_evidence_labels"] == ["追问疼痛部位及转移特征"]
     assert "迁移痛推理点" in reflection["reasoning_chain_review"]
     assert "追问疼痛部位及转移特征" in reflection["reasoning_chain_review"]
+    coaching_sections = reflection["teacher_coaching_review"]
+    assert [section["section_id"] for section in coaching_sections] == [
+        "case_framing",
+        "hypothesis_path",
+        "verification_path",
+        "differential_reasoning",
+        "evidence_synthesis",
+        "next_drill_script",
+    ]
+    hypothesis_section = next(section for section in coaching_sections if section["section_id"] == "hypothesis_path")
+    assert "辅助检查早于关键查体" in hypothesis_section["teacher_comment"]
+    verification_section = next(section for section in coaching_sections if section["section_id"] == "verification_path")
+    assert verification_section["evidence_labels"] == ["追问疼痛部位及转移特征"]
+    assert "迁移痛推理点" in verification_section["teacher_comment"]
+    drill_section = next(section for section in coaching_sections if section["section_id"] == "next_drill_script")
+    assert "下一轮" in drill_section["next_move"]
 
 
 def test_personal_skill_candidate_context_includes_evidence_chain_breakpoint_pattern(tmp_path) -> None:

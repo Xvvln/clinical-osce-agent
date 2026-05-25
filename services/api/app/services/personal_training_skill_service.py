@@ -39,9 +39,10 @@ TEACHER_REFLECTION_PROMPT_CONTRACT = """你是 OSCE 训练报告里的教师复�
 - 不要机械罗列每个 missed_item；必须把漏项归纳成 2-4 个临床思维问题组。
 - 如果输入包含 clinical_reasoning_trace，必须优先围绕其中的 cognitive_patterns 讲评；missed_items 只作为具体证据例子。
 - 每个问题组必须包含：学生本轮表现、为什么重要、正确做法、下一轮具体练习动作。
+- 额外输出 teacher_coaching_review，用 6 个小节带学生重走本轮临床思路：病例表征、假设路径、验证路径、鉴别诊断、证据整合、下一轮演练脚本。
 - 用老师对学生说话的语气，明确、具体、可执行，避免“加强学习”这类空话。
 - 如果学生已经覆盖较完整，重点转为证据表达、支持/排除依据和迁移训练。
-- 输出结构化 JSON：overall_comment、strengths_review、major_issues、reasoning_chain_review、next_practice_plan、teacher_note。
+- 输出结构化 JSON：overall_comment、strengths_review、major_issues、teacher_coaching_review、reasoning_chain_review、next_practice_plan、teacher_note。
 """
 
 ISSUE_GROUP_PRIORITY = ["history", "physical_exam", "auxiliary_test", "reasoning"]
@@ -522,6 +523,14 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         reasoning_trace_summary=reasoning_trace_summary,
     )
     next_practice_plan = _build_next_practice_plan(major_issues, pending_labels)
+    teacher_coaching_review = _build_teacher_coaching_review(
+        case_title=case_title,
+        major_issues=major_issues,
+        reasoning_chain_review=reasoning_chain_review,
+        next_practice_plan=next_practice_plan,
+        reasoning_trace_summary=reasoning_trace_summary,
+        pending_labels=pending_labels,
+    )
     teacher_note = (
         "复盘时先看问题背后的推理顺序：先把病史问完整，再用查体和检查验证假设，最后用证据说明支持与排除。"
     )
@@ -557,6 +566,7 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         "overall_comment": overall_comment,
         "strengths_review": strengths_review,
         "major_issues": major_issues,
+        "teacher_coaching_review": teacher_coaching_review,
         "reasoning_chain_review": reasoning_chain_review,
         "next_practice_plan": next_practice_plan,
         "teacher_note": teacher_note,
@@ -829,6 +839,119 @@ def _build_next_practice_plan(major_issues: list[dict[str, Any]], pending_labels
     if not plan:
         plan = ["下一轮先整理支持依据、排除依据和仍需验证的问题，再提交诊断。"]
     return plan[:5]
+
+
+def _build_teacher_coaching_review(
+    *,
+    case_title: str,
+    major_issues: list[dict[str, Any]],
+    reasoning_chain_review: str,
+    next_practice_plan: list[str],
+    reasoning_trace_summary: dict[str, Any],
+    pending_labels: list[str],
+) -> list[dict[str, Any]]:
+    issue_titles = [str(issue.get("title", "")).strip() for issue in major_issues if str(issue.get("title", "")).strip()]
+    linked_labels = _dedupe_texts(
+        [
+            label
+            for issue in major_issues
+            for label in _normalized_string_list(issue.get("linked_items"))
+        ]
+    )
+    pending_focus = _compact_list_text(pending_labels or linked_labels, limit=3, fallback="本轮未闭合的关键线索")
+    sequence_flags = [
+        flag for flag in reasoning_trace_summary.get("sequence_flags", []) if isinstance(flag, dict)
+    ]
+    sequence_labels = _dedupe_texts(
+        [str(flag.get("label") or flag.get("flag_id") or "").strip() for flag in sequence_flags]
+    )
+    sequence_evidence = _compact_list_text(
+        [str(flag.get("evidence") or "").strip() for flag in sequence_flags],
+        limit=2,
+        fallback="本轮没有记录明显顺序跳步",
+    )
+    breakpoints = [
+        breakpoint
+        for breakpoint in reasoning_trace_summary.get("evidence_chain_breakpoints", [])
+        if isinstance(breakpoint, dict)
+    ]
+    breakpoint_labels = _dedupe_texts(
+        [
+            label
+            for breakpoint in breakpoints
+            for label in _normalized_string_list(breakpoint.get("missing_evidence_labels"))
+        ]
+    )
+    breakpoint_statements = _dedupe_texts(
+        [str(breakpoint.get("statement") or breakpoint.get("breakpoint_id") or "").strip() for breakpoint in breakpoints]
+    )
+    breakpoint_actions = _dedupe_texts(
+        [str(breakpoint.get("teacher_action") or "").strip() for breakpoint in breakpoints]
+    )
+    next_moves = next_practice_plan or ["下一轮按病史、查体、检查、鉴别和证据表达的顺序完整演练一次。"]
+
+    return [
+        {
+            "section_id": "case_framing",
+            "title": "病例表征",
+            "teacher_comment": (
+                f"先把「{case_title}」压缩成一句临床问题，而不是急着跳到答案。"
+                f"本轮最需要抓住的是{_compact_list_text(issue_titles, limit=2, fallback='问题表征和证据链闭合')}。"
+            ),
+            "why_it_matters": "病例表征决定后续问什么、查什么、用什么证据验证；表征不清，后面的检查会变成散点操作。",
+            "next_move": f"下一轮开局先用一句话说清主诉、时间线、关键阳性/阴性信息，再决定下一步。",
+            "evidence_labels": linked_labels[:4],
+        },
+        {
+            "section_id": "hypothesis_path",
+            "title": "假设形成路径",
+            "teacher_comment": (
+                f"形成假设前先看顺序。"
+                f"{_compact_list_text(sequence_labels, limit=2, fallback='本轮未见明显顺序跳步')}；{sequence_evidence}。"
+            ),
+            "why_it_matters": "临床思维不是先列检查单，而是用病史形成初步假设，再让查体和检查服务于验证或排除。",
+            "next_move": "下一轮先提出可验证的诊断假设，再说明你准备通过哪一个查体或检查去验证它。",
+            "evidence_labels": sequence_labels[:4],
+        },
+        {
+            "section_id": "verification_path",
+            "title": "验证路径",
+            "teacher_comment": (
+                f"本轮证据链断点集中在{_compact_list_text(breakpoint_statements, limit=3, fallback='关键推理点')}；"
+                f"还缺{_compact_list_text(breakpoint_labels, limit=4, fallback=pending_focus)}。"
+            ),
+            "why_it_matters": "验证路径要回答“这个证据支持什么、缺了它会让哪个判断不稳”，这样诊断推理才不是凭印象跳跃。",
+            "next_move": breakpoint_actions[0] if breakpoint_actions else f"下一轮优先补{pending_focus}，再进入最终诊断表达。",
+            "evidence_labels": breakpoint_labels[:6],
+        },
+        {
+            "section_id": "differential_reasoning",
+            "title": "鉴别诊断",
+            "teacher_comment": (
+                "提交诊断时不要只写最可能答案，还要说明为什么其他可能暂不支持。"
+                f"本轮可以把{pending_focus}转成支持或排除依据。"
+            ),
+            "why_it_matters": "鉴别诊断训练的是排除路径；没有排除依据，即使主诊断方向正确，也难以说明推理可靠。",
+            "next_move": "下一轮至少写出一个需要排除的诊断，并给出对应的阴性病史、查体或检查证据。",
+            "evidence_labels": pending_labels[:4],
+        },
+        {
+            "section_id": "evidence_synthesis",
+            "title": "证据整合",
+            "teacher_comment": reasoning_chain_review,
+            "why_it_matters": "证据整合要把零散线索组织成支持、反证和未确定三类，让别人能复查你的推理链。",
+            "next_move": "下一轮提交前，用“支持依据、排除依据、仍需验证”三栏整理一次。",
+            "evidence_labels": linked_labels[:6],
+        },
+        {
+            "section_id": "next_drill_script",
+            "title": "下一轮演练脚本",
+            "teacher_comment": "把复盘落到动作上：下一轮不要只记住漏项名称，而要按固定推理顺序演练。",
+            "why_it_matters": "可重复的训练脚本能把一次报告里的问题转成下一次会话中的行为变化。",
+            "next_move": "下一轮：" + "；".join(next_moves[:3]),
+            "evidence_labels": _dedupe_texts([*pending_labels[:4], *linked_labels[:4]]),
+        },
+    ]
 
 
 def _teacher_reasoning_trace_summary(report: dict[str, Any]) -> dict[str, Any]:

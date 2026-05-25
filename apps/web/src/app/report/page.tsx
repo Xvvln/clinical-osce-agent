@@ -1297,6 +1297,43 @@ function AiReflectionReviewSection({
         <h3 className="text-sm font-semibold text-foreground">总体判断</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{overallComment}</p>
       </div>
+      {review.teacher_coaching_review.length > 0 ? (
+        <div className="mt-3 rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">老师带你重走一遍临床思路</h3>
+          <div className="mt-3 grid gap-3">
+            {review.teacher_coaching_review.map((section, index) => (
+              <article className="rounded-lg border border-border bg-background p-3" key={section.section_id}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full border border-brand/20 bg-brand/10 text-xs font-semibold text-brand">
+                    {index + 1}
+                  </span>
+                  <h4 className="text-sm font-semibold text-foreground">{section.title}</h4>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">{section.teacher_comment}</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg bg-muted/30 p-3">
+                    <p className="text-xs font-semibold text-foreground">为什么这样看</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{section.why_it_matters}</p>
+                  </div>
+                  <div className="rounded-lg bg-muted/30 p-3">
+                    <p className="text-xs font-semibold text-foreground">下一步动作</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{section.next_move}</p>
+                  </div>
+                </div>
+                {section.evidence_labels.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {section.evidence_labels.map((label) => (
+                      <span className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground" key={label}>
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {strengthsReview.length > 0 ? (
         <div className="mt-3 rounded-xl border border-border bg-muted/20 p-4">
           <h3 className="text-sm font-semibold text-foreground">本轮可以保留的做法</h3>
