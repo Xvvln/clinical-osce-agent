@@ -10,6 +10,7 @@ from app.main import AUTH_COOKIE_NAME, app
 from app.services.auth_store import AuthStore
 from app.services.osce_session_service import osce_session_service
 from app.services.osce_session_store import OsceSessionStore
+from app.services.procedure_result_simulator import ProcedureResultSimulationResponse
 from app.services.report_store import ReportStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.student_profile_store import StudentProfileStore
@@ -102,6 +103,18 @@ def test_create_session_requires_logged_in_user() -> None:
 
     assert create_response.status_code == 401
     assert create_response.json() == {"detail": "not authenticated"}
+
+
+def test_procedure_catalog_does_not_expose_case_specific_configuration() -> None:
+    catalog_response = client.get("/api/procedure-catalog")
+
+    assert catalog_response.status_code == 200
+    catalog = catalog_response.json()
+    for item in [*catalog["physical_exams"], *catalog["auxiliary_tests"]]:
+        assert "known_case_ids" not in item
+        assert "case_id" not in item
+        assert "result" not in item
+        assert "is_abnormal" not in item
 
 
 def test_create_session_requires_runtime_model_config_when_training_gate_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,7 +246,7 @@ def test_current_user_report_google_adc_missing_error_returns_readable_gateway_e
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
 
-    def failing_report(_: str) -> dict[str, object]:
+    def failing_report(_: str, **__: object) -> dict[str, object]:
         raise google_auth_exceptions.DefaultCredentialsError("Your default credentials were not found.")
 
     monkeypatch.setattr(main.osce_session_service, "get_report", failing_report)
@@ -1495,7 +1508,37 @@ def test_osce_session_returns_training_progress_map() -> None:
     assert test_progress["next_focus"] == "已有病史、查体和辅助检查证据，先记录一个诊断假设，再继续补齐关键证据。"
 
 
-def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) -> None:
+def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeProcedureResultSimulator:
+        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
+            assert getattr(request, "procedure_code") == "ecg.st_segment"
+            assert getattr(request, "procedure_name_cn") == "心电图"
+            return ProcedureResultSimulationResponse(
+                result="窦性心律，未见明确急性 ST 段抬高或压低。",
+                safety_note="训练模拟，不参与评分。",
+            )
+
+    class FakeProcedureResultApprovalAgent:
+        calls: list[object] = []
+
+        def __call__(self, request: object) -> dict[str, object]:
+            self.calls.append(request)
+            assert getattr(request, "procedure_code") == "ecg.st_segment"
+            assert getattr(request, "procedure_name_cn") == "心电图"
+            assert getattr(request, "simulated_result") == "窦性心律，未见明确急性 ST 段抬高或压低。"
+            return {
+                "agent_id": "procedure_result_approval_agent",
+                "decision": "approved",
+                "approval_mode": "llm_review",
+                "rationale": "结果未泄露诊断、治疗或评分答案，可作为高级训练补充结果。",
+                "safety_issues": [],
+                "revised_result": "",
+            }
+
+    fake_approval_agent = FakeProcedureResultApprovalAgent()
+    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
+    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", fake_approval_agent, raising=False)
+
     create_response = client.post(
         "/api/sessions",
         json={"case_id": "appendicitis_001", "student_id": "student_demo"},
@@ -1625,6 +1668,20 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         },
     ]
 
+    procedure_catalog_response = client.get("/api/procedure-catalog")
+    procedure_catalog = procedure_catalog_response.json()
+
+    assert procedure_catalog_response.status_code == 200
+    assert procedure_catalog["mode"] == "intermediate_catalog"
+    rebound_catalog_item = next(
+        item for item in procedure_catalog["physical_exams"] if item["exam_code"] == "abd.palpation.rebound"
+    )
+    assert rebound_catalog_item["exam_name_cn"] == "反跳痛（Blumberg 征）"
+    assert rebound_catalog_item["category"] == "腹部查体"
+    assert "result" not in rebound_catalog_item
+    assert any(item["exam_code"] == "vital.blood_pressure" for item in procedure_catalog["physical_exams"])
+    assert any(item["test_code"] == "ecg.st_segment" for item in procedure_catalog["auxiliary_tests"])
+
     message_response = client.post(
         f"/api/sessions/{session_id}/message",
         json={"message": "什么时候开始疼的？"},
@@ -1658,6 +1715,92 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     assert test_payload["result"] == "白细胞 14.2×10^9/L，中性粒细胞比例 85%。"
     assert "lab.cbc" in test_payload["requested_tests"]
 
+    batch_exam_response = client.post(
+        f"/api/sessions/{session_id}/physical-exams",
+        json={"exam_codes": ["abd.palpation.rebound", "vital.blood_pressure"]},
+    )
+    batch_exam_payload = batch_exam_response.json()
+
+    assert batch_exam_response.status_code == 200
+    assert [item["exam_code"] for item in batch_exam_payload["exam_results"]] == [
+        "abd.palpation.rebound",
+        "vital.blood_pressure",
+    ]
+    assert batch_exam_payload["exam_results"][0]["availability_status"] == "case_configured"
+    assert batch_exam_payload["exam_results"][0]["result"] == "右下腹反跳痛阳性。"
+    assert batch_exam_payload["exam_results"][1]["availability_status"] == "not_available_for_case"
+    assert batch_exam_payload["exam_results"][1]["exam_name_cn"] == "血压"
+    assert batch_exam_payload["exam_results"][1]["result"] == "该项目已记录，但本训练站点未提供该查体结果。"
+    assert "vital.blood_pressure" in batch_exam_payload["requested_exams"]
+
+    batch_test_response = client.post(
+        f"/api/sessions/{session_id}/auxiliary-tests",
+        json={"test_codes": ["lab.cbc", "ecg.st_segment"]},
+    )
+    batch_test_payload = batch_test_response.json()
+
+    assert batch_test_response.status_code == 200
+    assert [item["test_code"] for item in batch_test_payload["test_results"]] == ["lab.cbc", "ecg.st_segment"]
+    assert batch_test_payload["test_results"][0]["availability_status"] == "case_configured"
+    assert batch_test_payload["test_results"][1]["availability_status"] == "not_available_for_case"
+    assert batch_test_payload["test_results"][1]["test_name_cn"] == "心电图"
+    assert batch_test_payload["test_results"][1]["result"] == "该项目已记录，但本训练站点未提供该辅助检查结果。"
+    assert "ecg.st_segment" in batch_test_payload["requested_tests"]
+
+    free_text_procedure_response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查反跳痛和血常规，再看看心电图和胃镜"},
+    )
+    free_text_procedure_payload = free_text_procedure_response.json()
+
+    assert free_text_procedure_response.status_code == 200
+    assert free_text_procedure_payload["standardized_request"]["mode"] == "advanced_free_text_catalog"
+    assert free_text_procedure_payload["standardized_request"]["matched_exam_codes"] == ["abd.palpation.rebound"]
+    assert free_text_procedure_payload["standardized_request"]["matched_test_codes"] == ["lab.cbc", "ecg.st_segment"]
+    assert free_text_procedure_payload["standardized_request"]["unmatched_requests"] == ["胃镜"]
+    assert free_text_procedure_payload["standardized_request"]["generated_result_policy"] == "ai_simulated_not_scoring"
+    assert "不进入标准评分" in free_text_procedure_payload["standardized_request"]["safety_boundary"]
+    assert [
+        item["id"] for item in free_text_procedure_payload["matched_procedure_results"]
+    ] == [
+        "exam:abd.palpation.rebound",
+        "test:lab.cbc",
+        "test:ecg.st_segment",
+    ]
+    assert free_text_procedure_payload["matched_procedure_results"][0]["generated_by_ai"] is False
+    assert free_text_procedure_payload["matched_procedure_results"][0]["scoring_eligible"] is True
+    simulated_result = free_text_procedure_payload["matched_procedure_results"][2]
+    assert simulated_result["availability_status"] == "ai_simulated_for_training"
+    assert simulated_result["generated_by_ai"] is True
+    assert simulated_result["approval_status"] == "approved_by_procedure_result_approval_agent"
+    assert simulated_result["scoring_eligible"] is False
+    assert "AI 模拟" in simulated_result["result"]
+    assert "不进入评分" in simulated_result["result"]
+    assert simulated_result["approval_agent_review"] == {
+        "agent_id": "procedure_result_approval_agent",
+        "decision": "approved",
+        "approval_mode": "llm_review",
+        "rationale": "结果未泄露诊断、治疗或评分答案，可作为高级训练补充结果。",
+        "safety_issues": [],
+        "revised_result": "",
+    }
+    assert "policy:advanced_procedure_simulation.not_for_scoring" in simulated_result["source_context_references"]
+    assert len(fake_approval_agent.calls) == 1
+    assert free_text_procedure_payload["procedure_simulation_audit_items"] == [
+        {
+            "procedure_id": "test:ecg.st_segment",
+            "kind": "test",
+            "code": "ecg.st_segment",
+            "label": "心电图",
+            "result": simulated_result["result"],
+            "approval_status": "approved_by_procedure_result_approval_agent",
+            "approval_agent_review": simulated_result["approval_agent_review"],
+            "source_context_references": simulated_result["source_context_references"],
+            "scoring_eligible": False,
+            "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
+        }
+    ]
+
     submit_response = client.post(
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
@@ -1677,8 +1820,8 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     state_payload = state_response.json()
     assert state_payload["stage"] == "diagnosis_submission"
     assert state_payload["revealed_facts"] == ["appendicitis_001.hf_01"]
-    assert state_payload["requested_exams"] == ["abd.palpation.rebound"]
-    assert state_payload["requested_tests"] == ["lab.cbc"]
+    assert state_payload["requested_exams"] == ["abd.palpation.rebound", "vital.blood_pressure"]
+    assert state_payload["requested_tests"] == ["lab.cbc", "ecg.st_segment"]
     assert state_payload["action_timeline"] == [
         {
             "turn_index": 1,
@@ -1700,6 +1843,18 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         },
         {
             "turn_index": 4,
+            "action_type": "physical_exam_requested",
+            "source_id": "vital.blood_pressure",
+            "label": "血压",
+        },
+        {
+            "turn_index": 5,
+            "action_type": "auxiliary_test_requested",
+            "source_id": "ecg.st_segment",
+            "label": "心电图",
+        },
+        {
+            "turn_index": 6,
             "action_type": "diagnosis_submitted",
             "source_id": "final_submission",
             "label": "提交诊断",
@@ -1728,6 +1883,21 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     assert report_payload["rubric_scores"]["dx_main"]["score"] == 15
     assert report_payload["rubric_scores"]["rs_support"]["score"] == 4
     assert "ht_migration" in report_payload["missed_items"]
+    assert report_payload["procedure_simulation_audit_items"] == [
+        {
+            "procedure_id": "test:ecg.st_segment",
+            "kind": "test",
+            "code": "ecg.st_segment",
+            "label": "心电图",
+            "result": simulated_result["result"],
+            "approval_status": "approved_by_procedure_result_approval_agent",
+            "approval_agent_review": simulated_result["approval_agent_review"],
+            "source_context_references": simulated_result["source_context_references"],
+            "scoring_eligible": False,
+            "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
+        }
+    ]
+    assert "ecg.st_segment" not in report_payload["source_references"]
     assert report_payload["strengths"] == [
         "追问起病时间：已完成。",
         "检查反跳痛：已完成。",
@@ -1821,6 +1991,53 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
     report_text = str(report_payload)
     for forbidden_term in ["用药剂量", "治疗方案", "手术方案", "处置建议"]:
         assert forbidden_term not in report_text
+
+
+def test_advanced_procedure_request_falls_back_when_approval_agent_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeProcedureResultSimulator:
+        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
+            assert getattr(request, "procedure_code") == "ecg.st_segment"
+            return ProcedureResultSimulationResponse(
+                result="窦性心律，未见明确急性 ST 段抬高或压低。",
+                safety_note="训练模拟，不参与评分。",
+            )
+
+    class FailingProcedureResultApprovalAgent:
+        def __call__(self, request: object) -> dict[str, object]:
+            assert getattr(request, "procedure_code") == "ecg.st_segment"
+            raise RuntimeError("approval gateway timeout")
+
+    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
+    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", FailingProcedureResultApprovalAgent())
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session_id"]
+
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        procedure_response = error_client.post(
+            f"/api/sessions/{session_id}/procedure-request",
+            json={"request_text": "我想查心电图"},
+        )
+
+    assert procedure_response.status_code == 200
+    procedure_payload = procedure_response.json()
+    simulated_result = procedure_payload["matched_procedure_results"][0]
+    assert simulated_result["availability_status"] == "ai_simulated_for_training"
+    assert simulated_result["generated_by_ai"] is True
+    assert simulated_result["approval_status"] == "approved_by_procedure_result_approval_agent"
+    assert simulated_result["approval_agent_review"] == {
+        "agent_id": "procedure_result_approval_agent",
+        "decision": "approved",
+        "approval_mode": "approval_agent_error_fallback",
+        "rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
+        "safety_issues": [],
+        "revised_result": "",
+    }
+    assert procedure_payload["procedure_simulation_audit_items"][0]["approval_agent_review"] == (
+        simulated_result["approval_agent_review"]
+    )
 
 
 def test_osce_session_records_diagnosis_hypothesis_before_final_submission(tmp_path) -> None:
@@ -2082,6 +2299,101 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert other_session_response.json()["evolution_candidates"] == []
 
 
+def test_current_user_report_defers_optional_personal_skill_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    calls: dict[str, object] = {}
+
+    def fast_report(session_id_arg: str, *, include_optional_agents: bool = True) -> dict[str, object]:
+        calls["session_id"] = session_id_arg
+        calls["include_optional_agents"] = include_optional_agents
+        return {
+            "report_id": f"{session_id_arg}_report",
+            "session_id": session_id_arg,
+            "case_id": "appendicitis_001",
+            "total_score": 0,
+            "dimension_scores": {},
+            "rubric_scores": {},
+            "missed_items": [],
+            "source_references": [],
+            "source_reference_items": [],
+            "explanation_source_items": [],
+            "feedback_summary": "基础报告。",
+            "personal_skill_candidate": {"status": "generation_pending", "scope": "personal"},
+        }
+
+    def enrich_report(session_id_arg: str) -> None:
+        calls["enriched_session_id"] = session_id_arg
+
+    monkeypatch.setattr(main.osce_session_service, "get_report", fast_report)
+    monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
+
+    response = client.get(f"/api/me/sessions/{session_id}/report")
+
+    assert response.status_code == 200
+    assert calls["session_id"] == session_id
+    assert calls["include_optional_agents"] is False
+    assert calls["enriched_session_id"] == session_id
+
+
+def test_report_can_return_before_personal_skill_agent_finishes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrackingPersonalSkillService:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def generate_for_completed_session(self, **_: object) -> dict[str, object]:
+            self.call_count += 1
+            return {
+                "personal_skill_candidate": {
+                    "status": "approved",
+                    "scope": "personal",
+                    "candidate_id": "personal_candidate_deferred",
+                    "skill_id": "skill_personal_deferred",
+                    "review": {"status": "approved"},
+                    "rag_evidence_items": [],
+                    "web_check_status": "not_configured",
+                    "external_evidence_checks": [],
+                },
+                "ai_reflection_review": {"status": "generated", "summary": "后台增强已完成。"},
+            }
+
+    tracking_service = TrackingPersonalSkillService()
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+    monkeypatch.setattr(osce_session_service, "personal_skill_service", tracking_service)
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "只完成部分问诊，仍希望先生成基础报告。"},
+    )
+
+    initial_report = osce_session_service.get_report(session_id, include_optional_agents=False)
+    assert initial_report is not None
+    assert initial_report["personal_skill_candidate"]["status"] == "generation_pending"
+    assert tracking_service.call_count == 0
+
+    enriched_report = osce_session_service.enrich_report_optional_agents(session_id)
+
+    assert enriched_report is not None
+    assert tracking_service.call_count == 1
+    assert enriched_report["personal_skill_candidate"]["status"] == "approved"
+    assert osce_session_service.report_store.get_report(session_id)["personal_skill_candidate"]["status"] == "approved"
+
+
 def test_completed_training_hydrates_legacy_stored_report_with_ai_reflection_and_coverage_snapshot(
     tmp_path,
     authenticated_user: dict[str, str],
@@ -2206,6 +2518,48 @@ def test_completed_training_report_survives_personal_skill_generation_failure(
     assert report["personal_skill_candidate"]["status"] == "generation_failed"
     assert report["personal_skill_candidate"]["reason"] == "skill_candidate_generation_failed"
     assert report["ai_reflection_review"]["status"] == "generated"
+
+
+def test_completed_training_report_records_warning_when_personal_skill_crashes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CrashingPersonalSkillService:
+        def generate_for_completed_session(self, **_: object) -> dict[str, object]:
+            raise RuntimeError("unexpected personal skill crash")
+
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+    monkeypatch.setattr(osce_session_service, "personal_skill_service", CrashingPersonalSkillService())
+
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "只完成部分问诊，仍希望生成基础报告。"},
+    )
+
+    response = client.get(f"/api/sessions/{session_id}/report")
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["report_id"] == f"{session_id}_report"
+    assert report["personal_skill_candidate"]["status"] == "generation_failed"
+    assert report["ai_reflection_review"]["status"] == "generated"
+    assert report["generation_warnings"] == [
+        {
+            "module": "personal_skill_generation",
+            "error_type": "RuntimeError",
+            "message": "unexpected personal skill crash",
+        }
+    ]
 
 
 def test_completed_training_rehydrates_legacy_generic_ai_reflection_text(

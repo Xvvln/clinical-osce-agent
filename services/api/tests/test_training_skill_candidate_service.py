@@ -566,6 +566,46 @@ def test_training_skill_candidate_service_uses_injected_generator_once_for_train
     ]
 
 
+def test_training_skill_candidate_service_falls_back_to_template_when_llm_generation_fails(monkeypatch) -> None:
+    mock_vector_rag_hits(monkeypatch)
+
+    class FailingTrainingSkillCandidateGenerator:
+        def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
+            raise TrainingSkillCandidateGenerationError("configured model returned invalid candidate JSON")
+
+    insights = {
+        "session_count": 3,
+        "report_count": 3,
+        "frequent_missed_items": [
+            {
+                "item_id": "reasoning_core",
+                "count": 2,
+                "case_ids": ["appendicitis_001", "pneumonia_001"],
+            },
+            {
+                "item_id": "rs_exclude",
+                "count": 3,
+                "case_ids": ["appendicitis_001"],
+            },
+        ],
+        "frequent_learning_recommendations": [],
+    }
+
+    candidates = TrainingSkillCandidateService(
+        generator=FailingTrainingSkillCandidateGenerator(),
+    ).propose_candidates(insights, min_count=2)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["candidate_id"] == "skill_candidate_training_pattern_rs_exclude_reasoning_core"
+    assert candidate["title"] == "OSCE 训练模式纠偏提示"
+    assert candidate["status"] == "draft"
+    assert candidate["generation_mode"] == "template_fallback"
+    assert candidate["generation_warnings"] == [
+        "configured model returned invalid candidate JSON",
+    ]
+
+
 def test_training_skill_candidate_service_injects_filtered_rag_context_for_skill_generation(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(

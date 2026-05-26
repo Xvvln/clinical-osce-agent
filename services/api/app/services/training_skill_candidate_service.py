@@ -265,6 +265,7 @@ def create_default_training_skill_candidate_generator(
 class TrainingSkillCandidateService:
     def __init__(self, generator: TrainingSkillCandidateGenerator | None = None) -> None:
         self._generator = generator or create_default_training_skill_candidate_generator()
+        self._fallback_generator = TemplateTrainingSkillCandidateGenerator()
 
     def propose_candidates(self, insights: dict[str, Any], min_count: int = 2) -> list[dict[str, Any]]:
         source_report_count = int(insights.get("report_count", 0))
@@ -284,7 +285,7 @@ class TrainingSkillCandidateService:
                 related_recommendations=related_recommendations,
             )
             context = _with_skill_generation_knowledge_context(context)
-            candidates.append(self._generator.generate_candidate(context))
+            candidates.append(self._generate_candidate(context))
 
         for turn_pattern in _recurring_turn_patterns(insights, min_count):
             context = TrainingSkillCandidateContext(
@@ -297,8 +298,17 @@ class TrainingSkillCandidateService:
                 turn_patterns=[turn_pattern],
             )
             context = _with_skill_generation_knowledge_context(context)
-            candidates.append(self._generator.generate_candidate(context))
+            candidates.append(self._generate_candidate(context))
         return candidates
+
+    def _generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
+        try:
+            return self._generator.generate_candidate(context)
+        except TrainingSkillCandidateGenerationError as exc:
+            candidate = self._fallback_generator.generate_candidate(context)
+            candidate["generation_mode"] = "template_fallback"
+            candidate["generation_warnings"] = [str(exc)]
+            return candidate
 
 
 def _recurring_missed_items(insights: dict[str, Any], min_count: int) -> list[TrainingSkillCandidateMissedItem]:

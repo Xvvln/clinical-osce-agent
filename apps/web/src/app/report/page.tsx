@@ -13,6 +13,7 @@ import {
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
   type PersonalTrainingSkillCandidate,
+  type ProcedureSimulationAuditItem,
   type ReportCoverageMapItem,
   type ReportCoverageMapPayload,
   type RubricScoreItem,
@@ -235,6 +236,9 @@ function getPersonalSkillStatusLabel(status: string): string {
   }
   if (status === "not_complete") {
     return "待完成训练";
+  }
+  if (status === "generation_pending") {
+    return "后台生成中";
   }
   if (status === "blocked_by_regression") {
     return "回归阻塞";
@@ -971,6 +975,7 @@ export default function ReportPage() {
               <TraceabilityDetailsSection
                 explanationItems={report.explanation_source_items}
                 llmReasoningItems={report.llm_reasoning_feedback}
+                procedureSimulationAuditItems={report.procedure_simulation_audit_items}
                 sourceReferenceItems={report.source_reference_items}
                 evidenceGraphSummary={report.evidence_graph_summary}
                 sourceReferenceGroups={sourceReferenceGroups}
@@ -1812,15 +1817,145 @@ function LlmReasoningAuditSection({ items }: Readonly<{ items: readonly LlmReaso
   );
 }
 
+function ProcedureSimulationAuditSection({ items }: Readonly<{ items: readonly ProcedureSimulationAuditItem[] }>) {
+  return (
+    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+      <details>
+        <summary className="flex cursor-pointer list-none flex-col gap-3 rounded-xl border border-border bg-muted/30 p-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className={sectionHeadingClassName}>AI 模拟检查结果</h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              仅用于高级训练连续性，不进入评分；默认折叠，展开后可查看安全边界和来源上下文。
+            </p>
+          </div>
+          <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+            {items.length} 项
+          </span>
+        </summary>
+        {items.length > 0 ? (
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {items.map((item) => (
+              <article className="rounded-xl border border-border bg-muted/35 p-4" key={item.procedure_id}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">{item.label || item.code}</h3>
+                    <p className="mt-1 break-words font-mono text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+                      {item.procedure_id}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+                    {item.scoring_eligible ? "可进入评分" : "不进入评分"}
+                  </span>
+                </div>
+                <p className="mt-3 rounded-lg bg-background px-3 py-2 text-sm leading-6 text-muted-foreground">
+                  {item.result}
+                </p>
+                <dl className="mt-3 grid gap-3 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                  <div>
+                    <dt className="font-semibold text-foreground">审批状态</dt>
+                    <dd className="mt-1 break-words [overflow-wrap:anywhere]">{item.approval_status || "未记录"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-foreground">安全边界</dt>
+                    <dd className="mt-1">{item.safety_boundary}</dd>
+                  </div>
+                </dl>
+                <div className="mt-3 rounded-xl border border-border bg-background/80 p-3">
+                  <h4 className="text-xs font-semibold text-foreground">审批 Agent 记录</h4>
+                  <dl className="mt-2 grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                    <div>
+                      <dt className="font-medium text-foreground">审核结论</dt>
+                      <dd className="mt-1">{getProcedureApprovalDecisionLabel(getProcedureApprovalText(item.approval_agent_review, "decision"))}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-medium text-foreground">审核方式</dt>
+                      <dd className="mt-1">{getProcedureApprovalText(item.approval_agent_review, "approval_mode")}</dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="font-medium text-foreground">审核理由</dt>
+                      <dd className="mt-1">{getProcedureApprovalText(item.approval_agent_review, "rationale", "未记录审核理由。")}</dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="font-medium text-foreground">安全问题</dt>
+                      <dd className="mt-1">
+                        {getProcedureApprovalSafetyIssues(item.approval_agent_review).length > 0
+                          ? getProcedureApprovalSafetyIssues(item.approval_agent_review).join("；")
+                          : "未发现需要阻断的问题。"}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-xs font-semibold text-foreground">来源上下文</h4>
+                  {item.source_context_references.length > 0 ? (
+                    <ul className="mt-2 space-y-1">
+                      {item.source_context_references.map((reference) => (
+                        <li
+                          className="rounded-md bg-background px-2 py-1 font-mono text-[11px] leading-5 break-words text-muted-foreground [overflow-wrap:anywhere]"
+                          key={`${item.procedure_id}-${reference}`}
+                        >
+                          {reference}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">未记录额外上下文。</p>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
+            本轮没有使用 AI 模拟查体或检查结果。
+          </p>
+        )}
+      </details>
+    </section>
+  );
+}
+
+function getProcedureApprovalText(
+  review: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+  fallback = "未记录",
+): string {
+  const value = review?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function getProcedureApprovalDecisionLabel(decision: string): string {
+  if (decision === "approved") {
+    return "通过";
+  }
+  if (decision === "revise") {
+    return "已改写后通过";
+  }
+  if (decision === "blocked") {
+    return "已阻断";
+  }
+  return decision;
+}
+
+function getProcedureApprovalSafetyIssues(review: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  const issues = review?.safety_issues;
+  if (!Array.isArray(issues)) {
+    return [];
+  }
+  return issues.map((item) => String(item).trim()).filter(Boolean);
+}
+
 function TraceabilityDetailsSection({
   explanationItems,
   llmReasoningItems,
+  procedureSimulationAuditItems,
   sourceReferenceItems,
   evidenceGraphSummary,
   sourceReferenceGroups,
 }: Readonly<{
   explanationItems: readonly ExplanationSourceItem[];
   llmReasoningItems: readonly LlmReasoningFeedbackItem[];
+  procedureSimulationAuditItems: readonly ProcedureSimulationAuditItem[];
   sourceReferenceItems: readonly SourceReferenceItem[];
   evidenceGraphSummary: EvidenceGraphSummary | null;
   sourceReferenceGroups: readonly SourceReferenceGroup[];
@@ -1839,12 +1974,13 @@ function TraceabilityDetailsSection({
             展开查看
           </span>
         </summary>
-        <div className="mt-4 grid gap-4">
-          <DefenseEvidenceChainSection explanationItems={explanationItems} sourceReferenceItems={sourceReferenceItems} />
-          <LlmReasoningAuditSection items={llmReasoningItems} />
-          <EvidenceGraphSummarySection summary={evidenceGraphSummary} />
-          <SourceReferenceGroups groups={sourceReferenceGroups} />
-        </div>
+          <div className="mt-4 grid gap-4">
+            <DefenseEvidenceChainSection explanationItems={explanationItems} sourceReferenceItems={sourceReferenceItems} />
+            <LlmReasoningAuditSection items={llmReasoningItems} />
+            <ProcedureSimulationAuditSection items={procedureSimulationAuditItems} />
+            <EvidenceGraphSummarySection summary={evidenceGraphSummary} />
+            <SourceReferenceGroups groups={sourceReferenceGroups} />
+          </div>
       </details>
     </section>
   );

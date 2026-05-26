@@ -98,6 +98,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/reports\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/report`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/sessions\/\$\{sessionId\}\/events`/);
+  assert.match(adminPageSource, /fetch\(`\/api\/admin\/procedure-simulation-audits\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/insights"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evaluations\?\$\{buildAdminListSearchParams\(query\)\}`/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/evaluations\/\$\{batchId\}`/);
@@ -300,6 +301,25 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /setAuditEvents\(nextAuditPage\.events\)/);
   assert.match(adminPageSource, /getTrainingSkillCandidateEvents\(candidateId\)/);
   assert.match(adminPageSource, /setCandidateAuditEvents\(nextCandidateAuditEvents\)/);
+});
+
+test("admin dashboard exposes procedure simulation audit workspace", () => {
+  assert.match(adminPageSource, /type ProcedureSimulationAuditItem = Readonly<\{/);
+  assert.match(adminPageSource, /type ProcedureSimulationAuditsResponse = Readonly<\{/);
+  assert.match(adminPageSource, /procedure_simulation_audits: readonly ProcedureSimulationAuditItem\[];/);
+  assert.match(adminPageSource, /summary: ProcedureSimulationAuditSummary;/);
+  assert.match(adminPageSource, /"training-procedure-audit"/);
+  assert.match(adminPageSource, /label: "AI 模拟审计"/);
+  assert.match(adminPageSource, /const \[procedureSimulationAudits, setProcedureSimulationAudits\] = useState<readonly ProcedureSimulationAuditItem\[]>\(\[\]\)/);
+  assert.match(adminPageSource, /async function getProcedureSimulationAudits\(query: AdminListQuery\): Promise<ProcedureSimulationAuditsResponse>/);
+  assert.match(adminPageSource, /async function refreshProcedureSimulationAudits\(offset: number\)/);
+  assert.match(adminPageSource, /setProcedureSimulationAudits\(nextProcedureSimulationAuditPage\.procedure_simulation_audits\)/);
+  assert.match(adminPageSource, /procedureSimulationAudits\.map\(\(auditItem\) =>/);
+  assert.match(adminPageSource, /AI 模拟结果审计/);
+  assert.match(adminPageSource, /审批结论/);
+  assert.match(adminPageSource, /不进入评分/);
+  assert.match(adminPageSource, /没有匹配的 AI 模拟结果审计。请调整服务端筛选条件。/);
+  assert.match(adminPageSource, /downloadAdminListJson\("procedure-simulation-audits", procedureSimulationAudits, procedureSimulationAuditPagination\)/);
 });
 
 test("admin dashboard organizes the long workspace with a report-style side navigator", () => {
@@ -655,6 +675,8 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /\{isAdminLoginDialogOpen \? \(/);
   assert.match(adminPageSource, /fixed inset-0 z-50 flex items-center justify-center/);
   assert.match(adminPageSource, /backdrop-blur/);
+  assert.match(adminPageSource, /aria-label="关闭管理员登录弹窗"/);
+  assert.match(adminPageSource, /onClick=\{\(\) => setIsAdminLoginDialogOpen\(false\)\}[\s\S]*?>[\s\S]*关闭/);
   assert.match(adminPageSource, /onSubmit=\{\(event\) => void handleAdminLogin\(event\)\}/);
   assert.match(adminPageSource, /管理员登录/);
   assert.match(adminPageSource, /管理员账号中心/);

@@ -28,6 +28,19 @@ export type ExplanationSourceItem = Readonly<{
   source_references: readonly string[];
 }>;
 
+export type ProcedureSimulationAuditItem = Readonly<{
+  procedure_id: string;
+  kind: string;
+  code: string;
+  label: string;
+  result: string;
+  approval_status: string;
+  approval_agent_review?: Readonly<Record<string, unknown>>;
+  source_context_references: readonly string[];
+  scoring_eligible: boolean;
+  safety_boundary: string;
+}>;
+
 export type TeacherReflectionMajorIssue = Readonly<{
   title: string;
   observed_behavior: string;
@@ -253,6 +266,7 @@ export type FeedbackReportPayload = Readonly<{
   source_references: readonly string[];
   source_reference_items?: readonly SourceReferenceItem[];
   explanation_source_items?: readonly ExplanationSourceItem[];
+  procedure_simulation_audit_items?: readonly ProcedureSimulationAuditItem[];
   knowledge_recommendations?: readonly KnowledgeRecommendationItem[];
   llm_reasoning_feedback?: readonly LlmReasoningFeedbackItem[];
   evidence_graph_summary?: EvidenceGraphSummary | null;
@@ -266,6 +280,7 @@ export type FeedbackReport = FeedbackReportPayload &
   Readonly<{
     source_reference_items: readonly SourceReferenceItem[];
     explanation_source_items: readonly ExplanationSourceItem[];
+    procedure_simulation_audit_items: readonly ProcedureSimulationAuditItem[];
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
     evidence_graph_summary: EvidenceGraphSummary | null;
@@ -279,6 +294,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     ...report,
     source_reference_items: report.source_reference_items ?? [],
     explanation_source_items: report.explanation_source_items ?? [],
+    procedure_simulation_audit_items: report.procedure_simulation_audit_items ?? [],
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,

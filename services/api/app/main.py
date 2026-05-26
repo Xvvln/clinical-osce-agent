@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
+from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -200,6 +200,69 @@ def _build_paginated_admin_payload(
     }
 
 
+def _build_admin_procedure_simulation_audit_items() -> list[dict[str, Any]]:
+    audit_items: list[dict[str, Any]] = []
+    for report in osce_session_service.report_store.list_reports():
+        enriched_report = enrich_report(report)
+        report_audit_items = enriched_report.get("procedure_simulation_audit_items", [])
+        if not isinstance(report_audit_items, list):
+            continue
+        for audit_item in report_audit_items:
+            if not isinstance(audit_item, dict):
+                continue
+            approval_review = audit_item.get("approval_agent_review", {})
+            if not isinstance(approval_review, dict):
+                approval_review = {}
+            source_context_references = [
+                str(reference)
+                for reference in audit_item.get("source_context_references", [])
+                if str(reference).strip()
+            ]
+            safety_issues = [
+                str(issue)
+                for issue in approval_review.get("safety_issues", [])
+                if str(issue).strip()
+            ]
+            audit_items.append(
+                {
+                    "report_id": str(enriched_report.get("report_id") or ""),
+                    "session_id": str(enriched_report.get("session_id") or ""),
+                    "case_id": str(enriched_report.get("case_id") or ""),
+                    "case_title": str(enriched_report.get("case_title") or enriched_report.get("case_id") or ""),
+                    "student_id": str(enriched_report.get("student_id") or ""),
+                    "procedure_id": str(audit_item.get("procedure_id") or ""),
+                    "kind": str(audit_item.get("kind") or ""),
+                    "code": str(audit_item.get("code") or ""),
+                    "label": str(audit_item.get("label") or audit_item.get("code") or ""),
+                    "result": str(audit_item.get("result") or ""),
+                    "approval_status": str(audit_item.get("approval_status") or ""),
+                    "approval_decision": str(approval_review.get("decision") or ""),
+                    "approval_mode": str(approval_review.get("approval_mode") or ""),
+                    "approval_rationale": str(approval_review.get("rationale") or ""),
+                    "safety_issues": safety_issues,
+                    "source_context_references": source_context_references,
+                    "scoring_eligible": audit_item.get("scoring_eligible") is True,
+                    "safety_boundary": str(audit_item.get("safety_boundary") or ""),
+                }
+            )
+    return audit_items
+
+
+def _build_admin_procedure_simulation_summary(items: list[dict[str, Any]]) -> dict[str, object]:
+    by_approval_status: dict[str, int] = {}
+    by_case_title: dict[str, int] = {}
+    for item in items:
+        approval_status = str(item.get("approval_status") or "unknown")
+        case_title = str(item.get("case_title") or item.get("case_id") or "未命名病例")
+        by_approval_status[approval_status] = by_approval_status.get(approval_status, 0) + 1
+        by_case_title[case_title] = by_case_title.get(case_title, 0) + 1
+    return {
+        "total": len(items),
+        "by_approval_status": by_approval_status,
+        "by_case_title": by_case_title,
+    }
+
+
 def _filter_training_skill_candidate_items_by_review_status(
     items: list[dict[str, Any]],
     review_status: str,
@@ -251,8 +314,20 @@ class PhysicalExamRequest(BaseModel):
     exam_code: str
 
 
+class PhysicalExamBatchRequest(BaseModel):
+    exam_codes: list[str] = Field(default_factory=list)
+
+
 class AuxiliaryTestRequest(BaseModel):
     test_code: str
+
+
+class AuxiliaryTestBatchRequest(BaseModel):
+    test_codes: list[str] = Field(default_factory=list)
+
+
+class ProcedureFreeTextRequest(BaseModel):
+    request_text: str
 
 
 class SubmitDiagnosisRequest(BaseModel):
@@ -432,6 +507,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
                 "coach_agent",
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
+                "procedure_result_simulator",
             ],
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
@@ -451,6 +527,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
                 "coach_agent",
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
+                "procedure_result_simulator",
             ],
             "api_key_saved": False,
             "message": "服务端已统一配置模型；前端不可修改 API Key。",
@@ -463,7 +540,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "model": _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL") or "gemini-3.1-pro-preview",
             "base_url": _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT"),
             "proxy_url": _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL") or "http://127.0.0.1:7897",
-            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent"],
+            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent", "procedure_result_simulator"],
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
         }
@@ -799,6 +876,14 @@ def _get_top_missed_profile_items(reports: list[dict[str, Any]], *, limit: int =
             if len(ranked_items) >= limit:
                 return ranked_items
     return ranked_items
+
+
+def _report_has_pending_optional_agent_enrichment(report: dict[str, Any]) -> bool:
+    personal_skill_candidate = report.get("personal_skill_candidate")
+    return (
+        isinstance(personal_skill_candidate, dict)
+        and personal_skill_candidate.get("status") == "generation_pending"
+    )
 
 
 def _build_contrast_learning_task(
@@ -1238,6 +1323,14 @@ def get_model_config_runtime(auth_token: str | None = Cookie(default=None, alias
 @app.get("/api/cases")
 def list_cases() -> dict[str, object]:
     return {"cases": osce_session_service.list_cases()}
+
+
+@app.get("/api/procedure-catalog")
+def get_procedure_catalog(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_current_user(auth_token)
+    return osce_session_service.get_procedure_catalog()
 
 
 def _get_case_detail_response(case_id: str) -> dict[str, object]:
@@ -2048,6 +2141,23 @@ def list_admin_sessions(
     )
 
 
+@app.get("/api/admin/procedure-simulation-audits")
+def list_admin_procedure_simulation_audits(
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default=""),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    filtered_items = _filter_admin_items(_build_admin_procedure_simulation_audit_items(), q)
+    effective_limit = limit if limit is not None else max(len(filtered_items) - offset, 0)
+    return {
+        "procedure_simulation_audits": filtered_items[offset : offset + effective_limit],
+        "summary": _build_admin_procedure_simulation_summary(filtered_items),
+        "pagination": {"limit": effective_limit, "offset": offset, "total": len(filtered_items)},
+    }
+
+
 @app.get("/api/admin/sessions/{session_id}/report")
 def get_admin_session_report(
     session_id: str,
@@ -2106,15 +2216,18 @@ def delete_current_user_session(
 @app.get("/api/me/sessions/{session_id}/report")
 def get_current_user_session_report(
     session_id: str,
+    background_tasks: BackgroundTasks,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_owned_session(session_id, auth_token)
     try:
-        report = osce_session_service.get_report(session_id)
+        report = osce_session_service.get_report(session_id, include_optional_agents=False)
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
+    if _report_has_pending_optional_agent_enrichment(report):
+        background_tasks.add_task(osce_session_service.enrich_report_optional_agents, session_id)
     return report
 
 
@@ -2182,6 +2295,23 @@ def request_physical_exam(
     return session
 
 
+@app.post("/api/sessions/{session_id}/physical-exams")
+def request_physical_exams(
+    session_id: str,
+    request: PhysicalExamBatchRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    session_payload = _require_open_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
+    try:
+        session = osce_session_service.request_physical_exams(session_id, request.exam_codes)
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+        raise _model_provider_gateway_error(exc) from exc
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
 @app.post("/api/sessions/{session_id}/auxiliary-test")
 def request_auxiliary_test(
     session_id: str,
@@ -2192,6 +2322,40 @@ def request_auxiliary_test(
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+        raise _model_provider_gateway_error(exc) from exc
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/auxiliary-tests")
+def request_auxiliary_tests(
+    session_id: str,
+    request: AuxiliaryTestBatchRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    session_payload = _require_open_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
+    try:
+        session = osce_session_service.request_auxiliary_tests(session_id, request.test_codes)
+    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+        raise _model_provider_gateway_error(exc) from exc
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
+@app.post("/api/sessions/{session_id}/procedure-request")
+def request_procedure_text(
+    session_id: str,
+    request: ProcedureFreeTextRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    session_payload = _require_open_owned_session(session_id, auth_token)
+    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
+    try:
+        session = osce_session_service.request_procedure_text(session_id, request.request_text)
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:

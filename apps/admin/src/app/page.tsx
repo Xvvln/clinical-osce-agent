@@ -851,6 +851,39 @@ type AdminReportsResponse = Readonly<{
   pagination: AdminPagination;
 }>;
 
+type ProcedureSimulationAuditItem = Readonly<{
+  report_id: string;
+  session_id: string;
+  case_id: string;
+  case_title: string;
+  student_id: string;
+  procedure_id: string;
+  kind: string;
+  code: string;
+  label: string;
+  result: string;
+  approval_status: string;
+  approval_decision: string;
+  approval_mode: string;
+  approval_rationale: string;
+  safety_issues: readonly string[];
+  source_context_references: readonly string[];
+  scoring_eligible: boolean;
+  safety_boundary: string;
+}>;
+
+type ProcedureSimulationAuditSummary = Readonly<{
+  total: number;
+  by_approval_status: Readonly<Record<string, number>>;
+  by_case_title: Readonly<Record<string, number>>;
+}>;
+
+type ProcedureSimulationAuditsResponse = Readonly<{
+  procedure_simulation_audits: readonly ProcedureSimulationAuditItem[];
+  summary: ProcedureSimulationAuditSummary;
+  pagination: AdminPagination;
+}>;
+
 type EvaluationListResponse = Readonly<{
   evaluations: readonly EvaluationBatchSummary[];
   pagination: AdminPagination;
@@ -946,6 +979,7 @@ type AdminWorkspaceSubsectionId =
   | "training-reports"
   | "training-logs"
   | "training-agent"
+  | "training-procedure-audit"
   | "insights-errors"
   | "insights-focus"
   | "insights-sources"
@@ -1096,6 +1130,7 @@ const adminWorkspaceSubsections: Record<AdminWorkspaceSectionId, readonly AdminW
   training: [
     { id: "training-sessions", sectionId: "training", label: "Session", eyebrow: "会话" },
     { id: "training-reports", sectionId: "training", label: "报告", eyebrow: "评分" },
+    { id: "training-procedure-audit", sectionId: "training", label: "AI 模拟审计", eyebrow: "检查" },
     { id: "training-logs", sectionId: "training", label: "日志", eyebrow: "事件" },
     { id: "training-agent", sectionId: "training", label: "Agent 轨迹", eyebrow: "决策" },
   ],
@@ -1647,6 +1682,13 @@ async function getAdminReports(query: AdminListQuery): Promise<AdminReportsRespo
   const response = await fetch(`/api/admin/reports?${buildAdminListSearchParams(query)}`, { method: "GET" });
   await assertAdminResponseOk(response, "读取跨 Session 报告列表");
   const payload = (await response.json()) as AdminReportsResponse;
+  return payload;
+}
+
+async function getProcedureSimulationAudits(query: AdminListQuery): Promise<ProcedureSimulationAuditsResponse> {
+  const response = await fetch(`/api/admin/procedure-simulation-audits?${buildAdminListSearchParams(query)}`, { method: "GET" });
+  await assertAdminResponseOk(response, "读取 AI 模拟结果审计");
+  const payload = (await response.json()) as ProcedureSimulationAuditsResponse;
   return payload;
 }
 
@@ -2321,6 +2363,9 @@ export default function AdminDashboardPage() {
   const [selectedReport, setSelectedReport] = useState<AdminSessionReport | null>(null);
   const [reports, setReports] = useState<readonly AdminSessionReport[]>([]);
   const [reportPagination, setReportPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
+  const [procedureSimulationAudits, setProcedureSimulationAudits] = useState<readonly ProcedureSimulationAuditItem[]>([]);
+  const [procedureSimulationAuditSummary, setProcedureSimulationAuditSummary] = useState<ProcedureSimulationAuditSummary | null>(null);
+  const [procedureSimulationAuditPagination, setProcedureSimulationAuditPagination] = useState<AdminPagination>(EMPTY_ADMIN_PAGINATION);
   const [insights, setInsights] = useState<AdminTrainingInsights | null>(null);
   const [teachingFocusPatterns, setTeachingFocusPatterns] = useState<readonly AdminTeachingFocusPattern[]>([]);
   const [selectedTeachingFocusPattern, setSelectedTeachingFocusPattern] = useState<AdminTeachingFocusPattern | null>(null);
@@ -2344,6 +2389,7 @@ export default function AdminDashboardPage() {
   const [isCaseImportBusy, setIsCaseImportBusy] = useState(false);
   const [sessionSearchText, setSessionSearchText] = useState("");
   const [reportSearchText, setReportSearchText] = useState("");
+  const [procedureSimulationAuditSearchText, setProcedureSimulationAuditSearchText] = useState("");
   const [evaluationSearchText, setEvaluationSearchText] = useState("");
   const [candidateSearchText, setCandidateSearchText] = useState("");
   const [candidateReviewStatusFilter, setCandidateReviewStatusFilter] = useState<TrainingSkillCandidateStatusFilter>("ready_for_review");
@@ -2398,7 +2444,7 @@ export default function AdminDashboardPage() {
   async function loadDashboard() {
     const initialListQuery: AdminListQuery = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, q: "" };
     const initialCandidateQuery: AdminListQuery = { ...initialListQuery, reviewStatus: candidateReviewStatusFilter };
-    const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextSessionPage, nextReportPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
+    const [nextCases, nextSources, nextRagKnowledgeItems, nextRagDocuments, nextModelConfig, nextSessionPage, nextReportPage, nextProcedureSimulationAuditPage, nextInsights, nextTeachingFocusPatterns, nextSkillEffects, nextEvaluationPage, nextCandidatePage, nextAuditPage, nextAutoApprovalSettings] = await Promise.all([
       getAdminCases(),
       getAdminSources(),
       getAdminRagKnowledgeItems(),
@@ -2406,6 +2452,7 @@ export default function AdminDashboardPage() {
       getAdminModelConfig(),
       getAdminSessions(initialListQuery),
       getAdminReports(initialListQuery),
+      getProcedureSimulationAudits(initialListQuery),
       getAdminInsights(),
       getAdminTeachingFocusPatterns(),
       getTrainingSkillEffects(),
@@ -2423,6 +2470,9 @@ export default function AdminDashboardPage() {
     setSessionPagination(nextSessionPage.pagination);
     setReports(nextReportPage.reports);
     setReportPagination(nextReportPage.pagination);
+    setProcedureSimulationAudits(nextProcedureSimulationAuditPage.procedure_simulation_audits);
+    setProcedureSimulationAuditSummary(nextProcedureSimulationAuditPage.summary);
+    setProcedureSimulationAuditPagination(nextProcedureSimulationAuditPage.pagination);
     setInsights(nextInsights);
     setTeachingFocusPatterns(nextTeachingFocusPatterns);
     setSelectedTeachingFocusPattern(nextTeachingFocusPatterns[0] ?? null);
@@ -2902,6 +2952,27 @@ export default function AdminDashboardPage() {
         handleSelectReport(nextReportPage.reports[0]);
       }
       setStatusText("已按服务端筛选刷新评分报告。");
+    } catch (error: unknown) {
+      const message = getAdminErrorMessage(error);
+      setStatusText(message);
+      if (shouldOpenAdminLoginDialog(error)) {
+        setAdminLoginErrorText(message);
+        setIsAdminLoginDialogOpen(true);
+      }
+    }
+  }
+
+  async function refreshProcedureSimulationAudits(offset: number) {
+    try {
+      const nextProcedureSimulationAuditPage = await getProcedureSimulationAudits({
+        limit: ADMIN_LIST_PAGE_SIZE,
+        offset,
+        q: procedureSimulationAuditSearchText,
+      });
+      setProcedureSimulationAudits(nextProcedureSimulationAuditPage.procedure_simulation_audits);
+      setProcedureSimulationAuditSummary(nextProcedureSimulationAuditPage.summary);
+      setProcedureSimulationAuditPagination(nextProcedureSimulationAuditPage.pagination);
+      setStatusText("已按服务端筛选刷新 AI 模拟结果审计。");
     } catch (error: unknown) {
       const message = getAdminErrorMessage(error);
       setStatusText(message);
@@ -4541,6 +4612,127 @@ export default function AdminDashboardPage() {
               )}
             </section>
 
+            <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-procedure-audit", adminWidePanelCardClassName)}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold">AI 模拟结果审计</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">高级模式生成的查体/检查结果只用于训练反馈，不进入评分裁判。</p>
+                </div>
+                <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">
+                  {procedureSimulationAuditSummary?.total ?? procedureSimulationAuditPagination.total} 条
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">审计总数</p>
+                  <p className="mt-1 text-2xl font-semibold">{procedureSimulationAuditSummary?.total ?? 0}</p>
+                </div>
+                <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">审批状态</p>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">
+                    {procedureSimulationAuditSummary ? Object.entries(procedureSimulationAuditSummary.by_approval_status).map(([status, count]) => `${status} ${count}`).join("、") || "暂无" : "暂无"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-3">
+                  <p className="text-xs text-[#8A7D6F]">涉及病例</p>
+                  <p className="mt-1 text-sm leading-6 text-[#6F6257]">
+                    {procedureSimulationAuditSummary ? Object.keys(procedureSimulationAuditSummary.by_case_title).length : 0} 个病例
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <input
+                  aria-label="筛选 AI 模拟结果审计"
+                  className="min-w-0 flex-1 rounded-md border border-[#E6DFD2] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#AE5630]"
+                  onChange={(event) => setProcedureSimulationAuditSearchText(event.target.value)}
+                  placeholder="筛选病例 / 学员 / 查体检查 / 审批结论"
+                  type="search"
+                  value={procedureSimulationAuditSearchText}
+                />
+                <button
+                  className="rounded-md border border-[#AE5630] bg-[#AE5630] px-3 py-2 text-sm font-medium whitespace-nowrap text-white transition hover:bg-[#C4633A]"
+                  onClick={() => void refreshProcedureSimulationAudits(0)}
+                  type="button"
+                >
+                  审计筛选
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#8A7D6F]">
+                <p>{formatAdminPaginationRange(procedureSimulationAuditPagination, procedureSimulationAudits.length)} 条审计</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={procedureSimulationAuditPagination.offset <= 0}
+                    onClick={() => void refreshProcedureSimulationAudits(getPreviousAdminPageOffset(procedureSimulationAuditPagination))}
+                    type="button"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#E6DFD2] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#6F6257] transition hover:bg-[#F1ECE2] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!hasNextAdminPage(procedureSimulationAuditPagination, procedureSimulationAudits.length)}
+                    onClick={() => void refreshProcedureSimulationAudits(getNextAdminPageOffset(procedureSimulationAuditPagination))}
+                    type="button"
+                  >
+                    下一页
+                  </button>
+                  <button
+                    className="rounded-md border border-[#AE5630] bg-white px-2 py-1 font-medium whitespace-nowrap text-[#AE5630] transition hover:bg-[#AE5630]/10"
+                    onClick={() => downloadAdminListJson("procedure-simulation-audits", procedureSimulationAudits, procedureSimulationAuditPagination)}
+                    type="button"
+                  >
+                    导出当前审计页 JSON
+                  </button>
+                </div>
+              </div>
+              <div className="admin-panel-scrollbar mt-4 grid max-h-[34rem] gap-3 overflow-y-auto pr-1">
+                {procedureSimulationAudits.length > 0 ? (
+                  procedureSimulationAudits.map((auditItem) => (
+                    <article className="rounded-xl border border-[#E6DFD2] bg-[#FAF9F5] p-4" key={`${auditItem.report_id}-${auditItem.procedure_id}`}>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-[#AE5630]">{auditItem.kind || "模拟检查"}</p>
+                          <h3 className="mt-1 text-lg font-semibold">{auditItem.label || auditItem.code}</h3>
+                          <p className="mt-1 text-sm leading-6 text-[#6F6257]">
+                            {getAdminCaseDisplayTitle(auditItem.case_id, auditItem.case_title)} · {auditItem.student_id}
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-[#AE5630]/20 bg-white px-3 py-1 text-xs text-[#AE5630]">
+                          审批结论：{auditItem.approval_decision || auditItem.approval_status || "未记录"}
+                        </span>
+                      </div>
+                      <p className="mt-3 rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#141413]">{auditItem.result || "暂无结果文本"}</p>
+                      <dl className="mt-3 grid gap-2 md:grid-cols-3">
+                        <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                          <dt className="text-xs text-[#8A7D6F]">审批方式</dt>
+                          <dd className="mt-1 break-words text-sm font-medium">{auditItem.approval_mode || "未记录"}</dd>
+                        </div>
+                        <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                          <dt className="text-xs text-[#8A7D6F]">评分边界</dt>
+                          <dd className="mt-1 text-sm font-medium">不进入评分：{auditItem.scoring_eligible ? "否" : "是"}</dd>
+                        </div>
+                        <div className="rounded-lg border border-[#E6DFD2] bg-white p-3">
+                          <dt className="text-xs text-[#8A7D6F]">安全问题</dt>
+                          <dd className="mt-1 break-words text-sm font-medium">{auditItem.safety_issues.join("、") || "未发现"}</dd>
+                        </div>
+                      </dl>
+                      <details className="mt-3 rounded-lg border border-[#E6DFD2] bg-white p-3 text-sm leading-6 text-[#6F6257]">
+                        <summary className="cursor-pointer font-semibold text-[#141413]">展开审计依据</summary>
+                        <p className="mt-2">审批说明：{auditItem.approval_rationale || "暂无说明"}</p>
+                        <p className="mt-1">安全边界：{auditItem.safety_boundary || "仅用于教学模拟，不参与评分。"}</p>
+                        <p className="mt-1 break-all">上下文来源：{auditItem.source_context_references.join("、") || "暂无"}</p>
+                        <p className="mt-1 break-all">报告：{auditItem.report_id} · Session：{auditItem.session_id}</p>
+                      </details>
+                    </article>
+                  ))
+                ) : (
+                  <p className="rounded-xl border border-dashed border-[#E6DFD2] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">
+                    没有匹配的 AI 模拟结果审计。请调整服务端筛选条件。
+                  </p>
+                )}
+              </div>
+            </section>
+
             <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-logs", adminWidePanelCardClassName)}>
               <h2 className="text-xl font-semibold">训练日志</h2>
               <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
@@ -5691,7 +5883,15 @@ export default function AdminDashboardPage() {
       </div>
       {isAdminLoginDialogOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#141413]/35 p-4 backdrop-blur">
-          <section className="w-full max-w-md rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xl">
+          <section className="relative w-full max-w-md rounded-2xl border border-[#E6DFD2] bg-white p-6 shadow-xl">
+            <button
+              aria-label="关闭管理员登录弹窗"
+              className="absolute right-4 top-4 rounded-full border border-[#E6DFD2] bg-white px-3 py-1 text-sm font-semibold whitespace-nowrap text-[#6F6257] transition hover:border-[#AE5630] hover:text-[#AE5630]"
+              onClick={() => setIsAdminLoginDialogOpen(false)}
+              type="button"
+            >
+              关闭
+            </button>
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">管理员登录</h2>

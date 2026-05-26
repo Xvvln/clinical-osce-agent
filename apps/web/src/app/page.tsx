@@ -25,6 +25,8 @@ type OsceDockMenuGroup = "training" | "system";
 
 type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
+type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
+
 type OsceDockSide = "left" | "right";
 
 type BackendConnectionStatus = "checking" | "online" | "offline";
@@ -207,6 +209,29 @@ type AuxiliaryTestQuickOption = Readonly<
     | "overuse_warning"
   >
 >;
+
+type ProcedureAvailabilityStatus = "case_configured" | "not_available_for_case" | "ai_simulated_for_training";
+
+type ProcedureCatalogPhysicalExam = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+  category: string;
+}>;
+
+type ProcedureCatalogAuxiliaryTest = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+  category: string;
+  invasiveness: string;
+  cost_hint: string;
+}>;
+
+type ProcedureCatalog = Readonly<{
+  mode: string;
+  physical_exams: readonly ProcedureCatalogPhysicalExam[];
+  auxiliary_tests: readonly ProcedureCatalogAuxiliaryTest[];
+  safety_boundary: string;
+}>;
 
 type TrainingProgressSection = Readonly<{
   total: number;
@@ -514,11 +539,65 @@ type PhysicalExamResponse = OsceSession &
     result: string;
   }>;
 
+type PhysicalExamBatchResult = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+  result: string;
+  availability_status: ProcedureAvailabilityStatus;
+}>;
+
+type PhysicalExamBatchResponse = OsceSession &
+  Readonly<{
+    exam_results: readonly PhysicalExamBatchResult[];
+  }>;
+
 type AuxiliaryTestResponse = OsceSession &
   Readonly<{
     test_code: string;
     test_name_cn: string;
     result: string;
+  }>;
+
+type AuxiliaryTestBatchResult = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+  result: string;
+  availability_status: ProcedureAvailabilityStatus;
+}>;
+
+type AuxiliaryTestBatchResponse = OsceSession &
+  Readonly<{
+    test_results: readonly AuxiliaryTestBatchResult[];
+  }>;
+
+type StandardizedProcedureRequest = Readonly<{
+  mode: "advanced_free_text_catalog" | string;
+  raw_request: string;
+  matched_exam_codes: readonly string[];
+  matched_test_codes: readonly string[];
+  unmatched_requests: readonly string[];
+  generated_result_policy: string;
+  safety_boundary: string;
+}>;
+
+type MatchedProcedureResult = Readonly<{
+  id: string;
+  kind: "physical_exam" | "auxiliary_test" | string;
+  code: string;
+  name_cn: string;
+  label: string;
+  result: string;
+  availability_status: ProcedureAvailabilityStatus;
+  generated_by_ai: boolean;
+  approval_status: string;
+  source_context_references: readonly string[];
+  scoring_eligible: boolean;
+}>;
+
+type ProcedureFreeTextResponse = OsceSession &
+  Readonly<{
+    standardized_request: StandardizedProcedureRequest;
+    matched_procedure_results: readonly MatchedProcedureResult[];
   }>;
 
 type HintResponse = OsceSession &
@@ -530,6 +609,11 @@ type ProcedureResult = Readonly<{
   id: string;
   label: string;
   result: string;
+  availabilityStatus?: ProcedureAvailabilityStatus;
+  generatedByAi?: boolean;
+  approvalStatus?: string;
+  sourceContextReferences?: readonly string[];
+  scoringEligible?: boolean;
 }>;
 
 type SourceReferenceItem = Readonly<{
@@ -1864,6 +1948,12 @@ function sendHistoryMessage(sessionId: string, message: string): Promise<OsceSes
   });
 }
 
+function fetchProcedureCatalog(): Promise<ProcedureCatalog> {
+  return requestJson<ProcedureCatalog>("/api/procedure-catalog", {
+    method: "GET",
+  });
+}
+
 function fetchSessionProcessingStatus(sessionId: string): Promise<SessionProcessingStatus> {
   return requestJson<SessionProcessingStatus>(`/api/sessions/${sessionId}/processing-status`, {
     method: "GET",
@@ -1877,10 +1967,31 @@ function requestPhysicalExam(sessionId: string, examCode: string): Promise<Physi
   });
 }
 
+function requestPhysicalExamBatch(sessionId: string, examCodes: readonly string[]): Promise<PhysicalExamBatchResponse> {
+  return requestJson<PhysicalExamBatchResponse>(`/api/sessions/${sessionId}/physical-exams`, {
+    method: "POST",
+    body: JSON.stringify({ exam_codes: examCodes }),
+  });
+}
+
 function requestAuxiliaryTest(sessionId: string, testCode: string): Promise<AuxiliaryTestResponse> {
   return requestJson<AuxiliaryTestResponse>(`/api/sessions/${sessionId}/auxiliary-test`, {
     method: "POST",
     body: JSON.stringify({ test_code: testCode }),
+  });
+}
+
+function requestAuxiliaryTestBatch(sessionId: string, testCodes: readonly string[]): Promise<AuxiliaryTestBatchResponse> {
+  return requestJson<AuxiliaryTestBatchResponse>(`/api/sessions/${sessionId}/auxiliary-tests`, {
+    method: "POST",
+    body: JSON.stringify({ test_codes: testCodes }),
+  });
+}
+
+function requestProcedureText(sessionId: string, requestText: string): Promise<ProcedureFreeTextResponse> {
+  return requestJson<ProcedureFreeTextResponse>(`/api/sessions/${sessionId}/procedure-request`, {
+    method: "POST",
+    body: JSON.stringify({ request_text: requestText }),
   });
 }
 
@@ -2214,6 +2325,14 @@ function HomeContent() {
   const [pendingPatientMessage, setPendingPatientMessage] = useState<ChatMessage | null>(null);
   const [isCasePreparationPromptDismissed, setIsCasePreparationPromptDismissed] = useState(false);
   const [openProcedureActionGroup, setOpenProcedureActionGroup] = useState<ProcedureActionGroup | null>(null);
+  const [trainingDifficultyMode, setTrainingDifficultyMode] = useState<TrainingDifficultyMode>("beginner");
+  const [procedureCatalog, setProcedureCatalog] = useState<ProcedureCatalog | null>(null);
+  const [isLoadingProcedureCatalog, setIsLoadingProcedureCatalog] = useState(false);
+  const [selectedIntermediateExamCodes, setSelectedIntermediateExamCodes] = useState<readonly string[]>([]);
+  const [selectedIntermediateTestCodes, setSelectedIntermediateTestCodes] = useState<readonly string[]>([]);
+  const [advancedProcedureRequestText, setAdvancedProcedureRequestText] = useState("");
+  const [advancedProcedureUnmatchedRequests, setAdvancedProcedureUnmatchedRequests] = useState<readonly string[]>([]);
+  const [isRequestingAdvancedProcedure, setIsRequestingAdvancedProcedure] = useState(false);
   const [isRequestingExam, setIsRequestingExam] = useState(false);
   const [isRequestingTest, setIsRequestingTest] = useState(false);
   const [hypothesisValue, setHypothesisValue] = useState("");
@@ -2457,6 +2576,10 @@ function HomeContent() {
       setFeedbackReport(null);
       setProcedureResults([]);
       setSelectedProcedureResult(null);
+      setSelectedIntermediateExamCodes([]);
+      setSelectedIntermediateTestCodes([]);
+      setAdvancedProcedureRequestText("");
+      setAdvancedProcedureUnmatchedRequests([]);
       setIsPatientProfileOpen(false);
       setStatusText(
         selectedCaseId
@@ -2485,6 +2608,10 @@ function HomeContent() {
       setFeedbackReport(null);
       setProcedureResults([]);
       setSelectedProcedureResult(null);
+      setSelectedIntermediateExamCodes([]);
+      setSelectedIntermediateTestCodes([]);
+      setAdvancedProcedureRequestText("");
+      setAdvancedProcedureUnmatchedRequests([]);
       setIsPatientProfileOpen(false);
       setStatusText("正在恢复后端训练会话...");
       setErrorText(null);
@@ -2846,6 +2973,8 @@ function HomeContent() {
   );
   const physicalExamOptions = session?.physical_exam_options ?? selectedCase?.physicalExamOptions ?? [];
   const auxiliaryTestOptions = session?.auxiliary_test_options ?? selectedCase?.auxiliaryTestOptions ?? [];
+  const intermediatePhysicalExamOptions = procedureCatalog?.physical_exams ?? [];
+  const intermediateAuxiliaryTestOptions = procedureCatalog?.auxiliary_tests ?? [];
   const isCurrentSessionCompleted = isCompletedOsceSession(session);
   const requestedExamCodeSet = useMemo(() => new Set(session?.requested_exams ?? []), [session?.requested_exams]);
   const requestedTestCodeSet = useMemo(() => new Set(session?.requested_tests ?? []), [session?.requested_tests]);
@@ -2853,6 +2982,32 @@ function HomeContent() {
   const completedPhysicalExamOptions = physicalExamOptions.filter((examOption) => requestedExamCodeSet.has(examOption.exam_code));
   const pendingAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => !requestedTestCodeSet.has(testOption.test_code));
   const completedAuxiliaryTestOptions = auxiliaryTestOptions.filter((testOption) => requestedTestCodeSet.has(testOption.test_code));
+  const pendingIntermediatePhysicalExamOptions = intermediatePhysicalExamOptions.filter((examOption) => !requestedExamCodeSet.has(examOption.exam_code));
+  const completedIntermediatePhysicalExamOptions = intermediatePhysicalExamOptions.filter((examOption) => requestedExamCodeSet.has(examOption.exam_code));
+  const pendingIntermediateAuxiliaryTestOptions = intermediateAuxiliaryTestOptions.filter((testOption) => !requestedTestCodeSet.has(testOption.test_code));
+  const completedIntermediateAuxiliaryTestOptions = intermediateAuxiliaryTestOptions.filter((testOption) => requestedTestCodeSet.has(testOption.test_code));
+  const isIntermediateTrainingMode = trainingDifficultyMode === "intermediate";
+  const isAdvancedTrainingMode = trainingDifficultyMode === "advanced";
+  const isPhysicalExamActionDisabled = !authUser
+    || !selectedCaseId
+    || !isTrainingModelConfigReady
+    || isCurrentSessionCompleted
+    || isAdvancedTrainingMode
+    || (trainingDifficultyMode === "beginner" && physicalExamOptions.length === 0);
+  const isAuxiliaryTestActionDisabled = !authUser
+    || !selectedCaseId
+    || !isTrainingModelConfigReady
+    || isCurrentSessionCompleted
+    || isAdvancedTrainingMode
+    || (trainingDifficultyMode === "beginner" && auxiliaryTestOptions.length === 0);
+  const catalogPhysicalExamLabelMap = useMemo(
+    () => new Map(intermediatePhysicalExamOptions.map((examOption) => [examOption.exam_code, examOption.exam_name_cn] as const)),
+    [intermediatePhysicalExamOptions],
+  );
+  const catalogAuxiliaryTestLabelMap = useMemo(
+    () => new Map(intermediateAuxiliaryTestOptions.map((testOption) => [testOption.test_code, testOption.test_name_cn] as const)),
+    [intermediateAuxiliaryTestOptions],
+  );
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
   const preparedPatientOpeningUtterance = session?.patient_opening_utterance ?? selectedCase?.patientOpeningUtterance ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
@@ -2946,14 +3101,14 @@ function HomeContent() {
     () => [
       ...(session?.requested_exams.map((exam) => ({
         id: `exam:${exam}`,
-        label: `查体：${physicalExamOptions.find((examOption) => examOption.exam_code === exam)?.exam_name_cn ?? exam}`,
+        label: `查体：${physicalExamOptions.find((examOption) => examOption.exam_code === exam)?.exam_name_cn ?? catalogPhysicalExamLabelMap.get(exam) ?? exam}`,
       })) ?? []),
       ...(session?.requested_tests.map((test) => ({
         id: `test:${test}`,
-        label: `检查：${auxiliaryTestOptions.find((testOption) => testOption.test_code === test)?.test_name_cn ?? test}`,
+        label: `检查：${auxiliaryTestOptions.find((testOption) => testOption.test_code === test)?.test_name_cn ?? catalogAuxiliaryTestLabelMap.get(test) ?? test}`,
       })) ?? []),
     ],
-    [auxiliaryTestOptions, physicalExamOptions, session?.requested_exams, session?.requested_tests],
+    [auxiliaryTestOptions, catalogAuxiliaryTestLabelMap, catalogPhysicalExamLabelMap, physicalExamOptions, session?.requested_exams, session?.requested_tests],
   );
 
   const procedureItems = useMemo(
@@ -3109,6 +3264,10 @@ function HomeContent() {
     setFeedbackReport(null);
     setProcedureResults([]);
     setSelectedProcedureResult(null);
+    setSelectedIntermediateExamCodes([]);
+    setSelectedIntermediateTestCodes([]);
+    setAdvancedProcedureRequestText("");
+    setAdvancedProcedureUnmatchedRequests([]);
     setPendingPatientMessage(null);
     setOptimisticHistoryMessage(null);
     setIsPatientProfileOpen(false);
@@ -3178,6 +3337,28 @@ function HomeContent() {
       return null;
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function ensureProcedureCatalog(): Promise<ProcedureCatalog | null> {
+    if (procedureCatalog) {
+      return procedureCatalog;
+    }
+
+    setIsLoadingProcedureCatalog(true);
+    setErrorText(null);
+
+    try {
+      const nextProcedureCatalog = await fetchProcedureCatalog();
+      setProcedureCatalog(nextProcedureCatalog);
+      return nextProcedureCatalog;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "读取查体检查目录失败。";
+      setErrorText(message);
+      setStatusText("读取查体检查目录失败，请确认后端仍在运行。");
+      return null;
+    } finally {
+      setIsLoadingProcedureCatalog(false);
     }
   }
 
@@ -3372,6 +3553,71 @@ function HomeContent() {
     }
   }
 
+  function toggleIntermediateExamSelection(examCode: string) {
+    setSelectedIntermediateExamCodes((currentCodes) =>
+      currentCodes.includes(examCode)
+        ? currentCodes.filter((currentCode) => currentCode !== examCode)
+        : [...currentCodes, examCode],
+    );
+  }
+
+  function toggleIntermediateTestSelection(testCode: string) {
+    setSelectedIntermediateTestCodes((currentCodes) =>
+      currentCodes.includes(testCode)
+        ? currentCodes.filter((currentCode) => currentCode !== testCode)
+        : [...currentCodes, testCode],
+    );
+  }
+
+  async function handlePhysicalExamBatchRequest() {
+    if (isCreating || isRequestingExam || selectedIntermediateExamCodes.length === 0) {
+      return;
+    }
+
+    setIsRequestingExam(true);
+    setErrorText(null);
+
+    try {
+      const activeSession = await ensureActiveSession();
+      if (!activeSession) {
+        return;
+      }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
+
+      const shouldShowPhysicalExamSequenceReminder = activeSession.training_progress.history.covered === 0;
+      const updatedSession = await requestPhysicalExamBatch(activeSession.session_id, selectedIntermediateExamCodes);
+      const nextProcedureResults = updatedSession.exam_results.map((examResult) => ({
+        id: `exam:${examResult.exam_code}`,
+        label: `查体：${examResult.exam_name_cn}`,
+        result: examResult.result,
+      }));
+      const nextResultIds = new Set(nextProcedureResults.map((result) => result.id));
+      setSession(updatedSession);
+      setProcedureResults((currentResults) => [
+        ...currentResults.filter((result) => !nextResultIds.has(result.id)),
+        ...nextProcedureResults,
+      ]);
+      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      setSelectedIntermediateExamCodes([]);
+      setOpenProcedureActionGroup(null);
+      const unavailableCount = updatedSession.exam_results.filter((examResult) => examResult.availability_status === "not_available_for_case").length;
+      const sequenceReminder = shouldShowPhysicalExamSequenceReminder
+        ? " OSCE 通常建议先完成核心病史采集，再进入查体。"
+        : "";
+      const unavailableReminder = unavailableCount > 0 ? ` 其中 ${unavailableCount} 项当前病例未配置结果。` : "";
+      setStatusText(`已批量返回 ${updatedSession.exam_results.length} 项查体结果。${unavailableReminder}${sequenceReminder}`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "请求查体失败。");
+      setStatusText("查体请求失败，请查看错误详情。");
+    } finally {
+      setIsRequestingExam(false);
+    }
+  }
+
   async function handleAuxiliaryTestRequest(testCode: string) {
     if (isCreating || isRequestingTest) {
       return;
@@ -3412,6 +3658,111 @@ function HomeContent() {
       setStatusText("辅助检查申请失败，请确认后端仍在运行。");
     } finally {
       setIsRequestingTest(false);
+    }
+  }
+
+  async function handleAuxiliaryTestBatchRequest() {
+    if (isCreating || isRequestingTest || selectedIntermediateTestCodes.length === 0) {
+      return;
+    }
+
+    setIsRequestingTest(true);
+    setErrorText(null);
+
+    try {
+      const activeSession = await ensureActiveSession();
+      if (!activeSession) {
+        return;
+      }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
+
+      const shouldShowAuxiliaryTestSequenceReminder = activeSession.training_progress.physical_exam.requested === 0;
+      const updatedSession = await requestAuxiliaryTestBatch(activeSession.session_id, selectedIntermediateTestCodes);
+      const nextProcedureResults = updatedSession.test_results.map((testResult) => ({
+        id: `test:${testResult.test_code}`,
+        label: `检查：${testResult.test_name_cn}`,
+        result: testResult.result,
+      }));
+      const nextResultIds = new Set(nextProcedureResults.map((result) => result.id));
+      setSession(updatedSession);
+      setProcedureResults((currentResults) => [
+        ...currentResults.filter((result) => !nextResultIds.has(result.id)),
+        ...nextProcedureResults,
+      ]);
+      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      setSelectedIntermediateTestCodes([]);
+      setOpenProcedureActionGroup(null);
+      const unavailableCount = updatedSession.test_results.filter((testResult) => testResult.availability_status === "not_available_for_case").length;
+      const sequenceReminder = shouldShowAuxiliaryTestSequenceReminder
+        ? " 现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。"
+        : "";
+      const unavailableReminder = unavailableCount > 0 ? ` 其中 ${unavailableCount} 项当前病例未配置结果。` : "";
+      setStatusText(`已批量返回 ${updatedSession.test_results.length} 项辅助检查结果。${unavailableReminder}${sequenceReminder}`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "申请辅助检查失败。");
+      setStatusText("辅助检查申请失败，请查看错误详情。");
+    } finally {
+      setIsRequestingTest(false);
+    }
+  }
+
+  async function handleAdvancedProcedureRequest() {
+    if (isCreating || isRequestingAdvancedProcedure || !advancedProcedureRequestText.trim()) {
+      return;
+    }
+
+    setIsRequestingAdvancedProcedure(true);
+    setErrorText(null);
+    setAdvancedProcedureUnmatchedRequests([]);
+
+    try {
+      const activeSession = await ensureActiveSession();
+      if (!activeSession) {
+        return;
+      }
+      if (isCompletedOsceSession(activeSession)) {
+        setErrorText("训练已结束，请查看报告。");
+        setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
+        return;
+      }
+
+      const updatedSession = await requestProcedureText(activeSession.session_id, advancedProcedureRequestText.trim());
+      const nextProcedureResults = updatedSession.matched_procedure_results.map((procedureResult) => ({
+        id: procedureResult.id,
+        label: procedureResult.label,
+        result: procedureResult.result,
+        availabilityStatus: procedureResult.availability_status,
+        generatedByAi: procedureResult.generated_by_ai,
+        approvalStatus: procedureResult.approval_status,
+        sourceContextReferences: procedureResult.source_context_references,
+        scoringEligible: procedureResult.scoring_eligible,
+      }));
+      const nextResultIds = new Set(nextProcedureResults.map((result) => result.id));
+      setSession(updatedSession);
+      setProcedureResults((currentResults) => [
+        ...currentResults.filter((result) => !nextResultIds.has(result.id)),
+        ...nextProcedureResults,
+      ]);
+      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      setAdvancedProcedureUnmatchedRequests(updatedSession.standardized_request.unmatched_requests);
+      setAdvancedProcedureRequestText("");
+      const unavailableCount = updatedSession.matched_procedure_results.filter((procedureResult) => procedureResult.availability_status === "not_available_for_case").length;
+      const simulatedCount = updatedSession.matched_procedure_results.filter((procedureResult) => procedureResult.availability_status === "ai_simulated_for_training").length;
+      const unavailableText = unavailableCount > 0 ? ` 其中 ${unavailableCount} 项当前病例未配置结果。` : "";
+      const simulatedText = simulatedCount > 0 ? ` 其中 ${simulatedCount} 项为 AI 模拟补充结果，仅用于训练，不计分。` : "";
+      const unmatchedText = updatedSession.standardized_request.unmatched_requests.length > 0
+        ? ` 未识别项目：${updatedSession.standardized_request.unmatched_requests.join("、")}。`
+        : "";
+      setStatusText(`已解析自由申请并返回 ${updatedSession.matched_procedure_results.length} 项结果。${simulatedText}${unavailableText}${unmatchedText}`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "提交自由申请失败。");
+      setStatusText("自由申请处理失败，请查看错误详情。");
+    } finally {
+      setIsRequestingAdvancedProcedure(false);
     }
   }
 
@@ -3745,28 +4096,96 @@ function HomeContent() {
                 >
                   患者信息
                 </button>
+                <div className="inline-flex rounded-full border border-border bg-background p-0.5 shadow-xs">
+                  <button
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "beginner" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => {
+                      setTrainingDifficultyMode("beginner");
+                      setOpenProcedureActionGroup(null);
+                    }}
+                    type="button"
+                  >初级</button>
+                  <button
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "intermediate" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => {
+                      setTrainingDifficultyMode("intermediate");
+                      setOpenProcedureActionGroup(null);
+                      void ensureProcedureCatalog();
+                    }}
+                    type="button"
+                  >中级</button>
+                  <button
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "advanced" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => {
+                      setTrainingDifficultyMode("advanced");
+                      setOpenProcedureActionGroup(null);
+                    }}
+                    type="button"
+                  >高级</button>
+                </div>
+                {isAdvancedTrainingMode ? (
+                  <div className="flex min-w-[18rem] max-w-xl flex-1 items-center gap-2 rounded-full border border-border bg-background px-2 py-1 shadow-xs">
+                    <input
+                      autoComplete="off"
+                      className="h-8 min-w-0 flex-1 bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground"
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingAdvancedProcedure}
+                      onChange={(event) => setAdvancedProcedureRequestText(event.target.value)}
+                      placeholder="输入想申请的查体或检查"
+                      value={advancedProcedureRequestText}
+                    />
+                    <button
+                      className="rounded-full border border-brand bg-brand px-3 py-1.5 text-xs font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingAdvancedProcedure || !advancedProcedureRequestText.trim()}
+                      onClick={() => void handleAdvancedProcedureRequest()}
+                      type="button"
+                    >{isRequestingAdvancedProcedure ? "解析中" : "提交自由申请"}</button>
+                  </div>
+                ) : null}
+                {advancedProcedureUnmatchedRequests.length > 0 ? (
+                  <span className="rounded-full border border-[#D7A455]/40 bg-[#FFF8E8] px-3 py-1.5 text-xs text-[#8A5A00]">
+                    未识别项目：{advancedProcedureUnmatchedRequests.join("、")}
+                  </span>
+                ) : null}
                 <button
                   aria-expanded={openProcedureActionGroup === "physical_exam"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || physicalExamOptions.length === 0}
-                  onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "physical_exam" ? null : "physical_exam")}
+                  disabled={isPhysicalExamActionDisabled}
+                  onClick={() => {
+                    setOpenProcedureActionGroup((currentGroup) => currentGroup === "physical_exam" ? null : "physical_exam");
+                    if (isIntermediateTrainingMode) {
+                      void ensureProcedureCatalog();
+                    }
+                  }}
                   type="button"
                 >
                   查体项目
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {completedPhysicalExamOptions.length}/{physicalExamOptions.length}
+                    {isIntermediateTrainingMode ? (
+                      <>{completedIntermediatePhysicalExamOptions.length}/{intermediatePhysicalExamOptions.length}</>
+                    ) : (
+                      <>{completedPhysicalExamOptions.length}/{physicalExamOptions.length}</>
+                    )}
                   </span>
                 </button>
                 <button
                   aria-expanded={openProcedureActionGroup === "auxiliary_test"}
                   className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || auxiliaryTestOptions.length === 0}
-                  onClick={() => setOpenProcedureActionGroup((currentGroup) => currentGroup === "auxiliary_test" ? null : "auxiliary_test")}
+                  disabled={isAuxiliaryTestActionDisabled}
+                  onClick={() => {
+                    setOpenProcedureActionGroup((currentGroup) => currentGroup === "auxiliary_test" ? null : "auxiliary_test");
+                    if (isIntermediateTrainingMode) {
+                      void ensureProcedureCatalog();
+                    }
+                  }}
                   type="button"
                 >
                   辅助检查
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {completedAuxiliaryTestOptions.length}/{auxiliaryTestOptions.length}
+                    {isIntermediateTrainingMode ? (
+                      <>{completedIntermediateAuxiliaryTestOptions.length}/{intermediateAuxiliaryTestOptions.length}</>
+                    ) : (
+                      <>{completedAuxiliaryTestOptions.length}/{auxiliaryTestOptions.length}</>
+                    )}
                   </span>
                 </button>
                 <button
@@ -3784,31 +4203,92 @@ function HomeContent() {
                       </span>
                     </div>
                     <div className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll={handleStudentRailScroll}>
-                      {pendingPhysicalExamOptions.length > 0 ? (
-                        pendingPhysicalExamOptions.map((examOption) => (
+                      {isIntermediateTrainingMode ? (
+                        <>
+                          {isLoadingProcedureCatalog && !procedureCatalog ? (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              正在读取可申请查体目录。
+                            </p>
+                          ) : null}
+                          {pendingIntermediatePhysicalExamOptions.length > 0 ? (
+                            pendingIntermediatePhysicalExamOptions.map((examOption) => {
+                              const isSelected = selectedIntermediateExamCodes.includes(examOption.exam_code);
+                              return (
+                                <button
+                                  className={`rounded-lg border px-3 py-2 text-left text-xs font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    isSelected ? "border-brand/60 bg-brand/10" : "border-border bg-muted/40 hover:border-brand/30 hover:bg-accent"
+                                  }`}
+                                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingExam}
+                                  key={examOption.exam_code}
+                                  onClick={() => toggleIntermediateExamSelection(examOption.exam_code)}
+                                  type="button"
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <span className={`h-3 w-3 rounded-sm border ${isSelected ? "border-brand bg-brand" : "border-border bg-background"}`} />
+                                    <span className="whitespace-nowrap">{examOption.category}：{examOption.exam_name_cn}</span>
+                                  </span>
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              当前查体目录都已申请。
+                            </p>
+                          )}
                           <button
-                            className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingExam}
-                            key={examOption.exam_code}
-                            onClick={() => {
-                              setOpenProcedureActionGroup(null);
-                              void handlePhysicalExamRequest(examOption.exam_code);
-                            }}
+                            className="rounded-lg border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingExam || selectedIntermediateExamCodes.length === 0}
+                            onClick={() => void handlePhysicalExamBatchRequest()}
                             type="button"
-                          >
-                            <span className="block whitespace-nowrap">{isRequestingExam ? "查体中" : examOption.exam_name_cn}</span>
-                          </button>
-                        ))
+                          >提交所选查体</button>
+                          {completedIntermediatePhysicalExamOptions.length > 0 ? (
+                            <div className="border-t border-border pt-3">
+                              <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                              <div className="mt-2 grid gap-2">
+                                {completedIntermediatePhysicalExamOptions.map((examOption) => (
+                                  <button
+                                    className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
+                                    key={examOption.exam_code}
+                                    onClick={() => {
+                                      setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
+                                      setOpenProcedureActionGroup(null);
+                                    }}
+                                    type="button"
+                                  >
+                                    查体：{examOption.exam_name_cn}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
                       ) : (
-                        <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                          当前查体项目都已查看。
-                        </p>
-                      )}
-                      {completedPhysicalExamOptions.length > 0 ? (
-                        <div className="border-t border-border pt-3">
-                          <p className="text-xs font-medium text-muted-foreground">已查看</p>
-                          <div className="mt-2 grid gap-2">
-                            {completedPhysicalExamOptions.map((examOption) => (
+                        <>
+                          {pendingPhysicalExamOptions.length > 0 ? (
+                            pendingPhysicalExamOptions.map((examOption) => (
+                              <button
+                                className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingExam}
+                                key={examOption.exam_code}
+                                onClick={() => {
+                                  setOpenProcedureActionGroup(null);
+                                  void handlePhysicalExamRequest(examOption.exam_code);
+                                }}
+                                type="button"
+                              >
+                                <span className="block whitespace-nowrap">{isRequestingExam ? "查体中" : examOption.exam_name_cn}</span>
+                              </button>
+                            ))
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              当前查体项目都已查看。
+                            </p>
+                          )}
+                          {completedPhysicalExamOptions.length > 0 ? (
+                            <div className="border-t border-border pt-3">
+                              <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                              <div className="mt-2 grid gap-2">
+                                {completedPhysicalExamOptions.map((examOption) => (
                               <button
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={examOption.exam_code}
@@ -3820,10 +4300,12 @@ function HomeContent() {
                               >
                                 查体：{examOption.exam_name_cn}
                               </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -3836,39 +4318,103 @@ function HomeContent() {
                       </span>
                     </div>
                     <div className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll={handleStudentRailScroll}>
-                      {pendingAuxiliaryTestOptions.length > 0 ? (
-                        pendingAuxiliaryTestOptions.map((testOption) => (
+                      {isIntermediateTrainingMode ? (
+                        <>
+                          {isLoadingProcedureCatalog && !procedureCatalog ? (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              正在读取可申请检查目录。
+                            </p>
+                          ) : null}
+                          {pendingIntermediateAuxiliaryTestOptions.length > 0 ? (
+                            pendingIntermediateAuxiliaryTestOptions.map((testOption) => {
+                              const isSelected = selectedIntermediateTestCodes.includes(testOption.test_code);
+                              return (
+                                <button
+                                  className={`rounded-lg border px-3 py-2 text-left text-xs font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    isSelected ? "border-brand/60 bg-brand/10" : "border-border bg-muted/40 hover:border-brand/30 hover:bg-accent"
+                                  }`}
+                                  disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingTest}
+                                  key={testOption.test_code}
+                                  onClick={() => toggleIntermediateTestSelection(testOption.test_code)}
+                                  type="button"
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <span className={`h-3 w-3 rounded-sm border ${isSelected ? "border-brand bg-brand" : "border-border bg-background"}`} />
+                                    <span className="whitespace-nowrap">{testOption.category}：{testOption.test_name_cn}</span>
+                                  </span>
+                                  <span className="mt-1 block whitespace-nowrap pl-5 text-[11px] font-normal text-muted-foreground">
+                                    {testOption.cost_hint} · {testOption.invasiveness}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              当前辅助检查目录都已申请。
+                            </p>
+                          )}
                           <button
-                            className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingTest}
-                            key={testOption.test_code}
-                            onClick={() => {
-                              setOpenProcedureActionGroup(null);
-                              void handleAuxiliaryTestRequest(testOption.test_code);
-                            }}
-                            title={
-                              testOption.rules_out.length > 0
-                                ? `用于排除：${testOption.rules_out.join("、")}`
-                                : testOption.overuse_warning ?? undefined
-                            }
+                            className="rounded-lg border border-brand bg-brand px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingTest || selectedIntermediateTestCodes.length === 0}
+                            onClick={() => void handleAuxiliaryTestBatchRequest()}
                             type="button"
-                          >
-                            <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
-                            <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
-                              {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
-                            </span>
-                          </button>
-                        ))
+                          >提交所选检查</button>
+                          {completedIntermediateAuxiliaryTestOptions.length > 0 ? (
+                            <div className="border-t border-border pt-3">
+                              <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                              <div className="mt-2 grid gap-2">
+                                {completedIntermediateAuxiliaryTestOptions.map((testOption) => (
+                                  <button
+                                    className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
+                                    key={testOption.test_code}
+                                    onClick={() => {
+                                      setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
+                                      setOpenProcedureActionGroup(null);
+                                    }}
+                                    type="button"
+                                  >
+                                    {testOption.category}：{testOption.test_name_cn}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
                       ) : (
-                        <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                          当前辅助检查都已查看。
-                        </p>
-                      )}
-                      {completedAuxiliaryTestOptions.length > 0 ? (
-                        <div className="border-t border-border pt-3">
-                          <p className="text-xs font-medium text-muted-foreground">已查看</p>
-                          <div className="mt-2 grid gap-2">
-                            {completedAuxiliaryTestOptions.map((testOption) => (
+                        <>
+                          {pendingAuxiliaryTestOptions.length > 0 ? (
+                            pendingAuxiliaryTestOptions.map((testOption) => (
+                              <button
+                                className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-xs font-medium shadow-xs transition hover:border-brand/30 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingTest}
+                                key={testOption.test_code}
+                                onClick={() => {
+                                  setOpenProcedureActionGroup(null);
+                                  void handleAuxiliaryTestRequest(testOption.test_code);
+                                }}
+                                title={
+                                  testOption.rules_out.length > 0
+                                    ? `用于排除：${testOption.rules_out.join("、")}`
+                                    : testOption.overuse_warning ?? undefined
+                                }
+                                type="button"
+                              >
+                                <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
+                                <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                                  {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                              当前辅助检查都已查看。
+                            </p>
+                          )}
+                          {completedAuxiliaryTestOptions.length > 0 ? (
+                            <div className="border-t border-border pt-3">
+                              <p className="text-xs font-medium text-muted-foreground">已查看</p>
+                              <div className="mt-2 grid gap-2">
+                                {completedAuxiliaryTestOptions.map((testOption) => (
                               <button
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={testOption.test_code}
@@ -3880,10 +4426,12 @@ function HomeContent() {
                               >
                                 {testOption.category}：{testOption.test_name_cn}
                               </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -4349,6 +4897,11 @@ function HomeContent() {
               <div>
                 <p className="text-xs font-medium text-brand">已查看结果</p>
                 <h2 className="mt-1 text-base font-semibold">{selectedProcedureResult.label}</h2>
+                {selectedProcedureResult.generatedByAi ? (
+                  <p className="mt-2 inline-flex rounded-full border border-brand/25 bg-brand/5 px-2.5 py-1 text-xs font-medium text-brand">
+                    AI 模拟结果 · 不计分
+                  </p>
+                ) : null}
               </div>
               <button
                 aria-label="关闭查体检查结果"
@@ -4362,6 +4915,15 @@ function HomeContent() {
             <p className="mt-4 rounded-xl border border-border bg-muted/50 p-4 text-sm leading-7 text-foreground">
               {selectedProcedureResult.result}
             </p>
+            {selectedProcedureResult.generatedByAi ? (
+              <div className="mt-3 rounded-xl border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+                <p>模拟补充结果仅用于训练，不写入病例标准事实，不参与 rubric 评分。</p>
+                {selectedProcedureResult.approvalStatus ? <p className="mt-1">门禁状态：{selectedProcedureResult.approvalStatus}</p> : null}
+                {selectedProcedureResult.sourceContextReferences?.length ? (
+                  <p className="mt-1 break-all">依据：{selectedProcedureResult.sourceContextReferences.join("、")}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -4571,8 +5133,16 @@ function HomeContent() {
       </div>
       </div>
       {!isCheckingAuth && isAuthDialogOpen ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur" onClick={() => setIsAuthDialogOpen(false)}>
-          <section className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/75 p-4 backdrop-blur">
+          <section className="relative w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+            <button
+              aria-label="关闭登录弹窗"
+              className="absolute right-4 top-4 rounded-full border border-border bg-background px-3 py-1 text-sm font-medium whitespace-nowrap text-muted-foreground transition hover:border-brand hover:text-brand"
+              onClick={() => setIsAuthDialogOpen(false)}
+              type="button"
+            >
+              关闭
+            </button>
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">{isAccountRegistrationEnabled ? "登录 / 注册" : "登录"}</h2>

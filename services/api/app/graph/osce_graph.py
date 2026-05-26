@@ -425,7 +425,7 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
         "stage": "physical_exam",
         "exam_code": exam_code,
         "exam_name_cn": "未提供查体",
-        "exam_result": "本病例未提供该查体结果。",
+        "exam_result": "该项目已记录，但本训练站点未提供该查体结果。",
         "requested_exams": requested_exams,
         "action_timeline": _append_action_timeline_events(
             state,
@@ -461,7 +461,7 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
         "stage": "auxiliary_test",
         "test_code": test_code,
         "test_name_cn": "未提供检查",
-        "test_result": "本病例未提供该辅助检查结果。",
+        "test_result": "该项目已记录，但本训练站点未提供该辅助检查结果。",
         "requested_tests": requested_tests,
         "action_timeline": _append_action_timeline_events(
             state,

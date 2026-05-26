@@ -603,6 +603,22 @@ test("report page renders a defense evidence chain from explanation source items
   assert.match(reportSource, /不参与评分裁判/);
 });
 
+test("report page exposes advanced simulated procedure audit items as collapsed non-scoring evidence", () => {
+  assert.match(reportModelSource, /export type ProcedureSimulationAuditItem = Readonly<\{/);
+  assert.match(reportModelSource, /approval_agent_review\?: Readonly<Record<string, unknown>>;/);
+  assert.match(reportModelSource, /procedure_simulation_audit_items\?: readonly ProcedureSimulationAuditItem\[];/);
+  assert.match(reportModelSource, /procedure_simulation_audit_items: readonly ProcedureSimulationAuditItem\[];/);
+  assert.match(reportModelSource, /procedure_simulation_audit_items: report\.procedure_simulation_audit_items \?\? \[\],/);
+  assert.match(reportSource, /function ProcedureSimulationAuditSection/);
+  assert.match(reportSource, /procedureSimulationAuditItems=\{report\.procedure_simulation_audit_items\}/);
+  assert.match(reportSource, /AI 模拟检查结果/);
+  assert.match(reportSource, /审批 Agent 记录/);
+  assert.match(reportSource, /审核结论/);
+  assert.match(reportSource, /仅用于高级训练连续性，不进入评分/);
+  assert.match(reportSource, /item\.scoring_eligible \? "可进入评分" : "不进入评分"/);
+  assert.match(reportSource, /item\.source_context_references\.map/);
+});
+
 test("report page renders evidence graph coverage from backend report", () => {
   assert.match(reportModelSource, /export type EvidenceGraphNodeItem = Readonly<\{/);
   assert.match(reportModelSource, /export type EvidenceGraphEdgeItem = Readonly<\{/);
@@ -1061,8 +1077,10 @@ test("home workspace treats completed sessions as read-only training records", (
   assert.match(pageSource, /const isCurrentSessionCompleted = isCompletedOsceSession\(session\);/);
   assert.match(pageSource, /if \(isCompletedOsceSession\(activeSession\)\) \{[\s\S]*?setErrorText\("训练已结束，请查看报告。"\);[\s\S]*?return;/);
   assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| physicalExamOptions\.length === 0\}/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| auxiliaryTestOptions\.length === 0\}/);
+  assert.match(pageSource, /const isPhysicalExamActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
+  assert.match(pageSource, /const isAuxiliaryTestActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
+  assert.match(pageSource, /disabled=\{isPhysicalExamActionDisabled\}/);
+  assert.match(pageSource, /disabled=\{isAuxiliaryTestActionDisabled\}/);
 });
 
 test("home workspace starts without a default case and only prepares a case after selection", () => {
@@ -1265,6 +1283,35 @@ test("home quick actions group procedure choices and open viewed results in a mo
   assert.match(pageSource, /aria-label="关闭查体检查结果"/);
   assert.match(pageSource, /selectedProcedureResult\.result/);
   assert.doesNotMatch(pageSource, /<p className="mt-1 text-xs leading-5 text-muted-foreground">\{item\.result\}<\/p>/);
+});
+
+test("home supports intermediate procedure catalog and batch procedure requests", () => {
+  assert.match(pageSource, /type TrainingDifficultyMode = "beginner" \| "intermediate" \| "advanced";/);
+  assert.match(pageSource, /type ProcedureCatalog = Readonly/);
+  assert.match(pageSource, /\/api\/procedure-catalog/);
+  assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/physical-exams/);
+  assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/auxiliary-tests/);
+  assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/procedure-request/);
+  assert.doesNotMatch(pageSource, /known_case_ids/);
+  assert.match(pageSource, /const \[trainingDifficultyMode, setTrainingDifficultyMode\] = useState<TrainingDifficultyMode>\("beginner"\);/);
+  assert.match(pageSource, /ensureProcedureCatalog/);
+  assert.match(pageSource, /selectedIntermediateExamCodes/);
+  assert.match(pageSource, /selectedIntermediateTestCodes/);
+  assert.match(pageSource, /advancedProcedureRequestText/);
+  assert.match(pageSource, /handleAdvancedProcedureRequest/);
+  assert.match(pageSource, />初级<\/button>/);
+  assert.match(pageSource, />中级<\/button>/);
+  assert.match(pageSource, />高级<\/button>/);
+  assert.match(pageSource, />提交所选查体<\/button>/);
+  assert.match(pageSource, />提交所选检查<\/button>/);
+  assert.match(pageSource, /提交自由申请/);
+  assert.match(pageSource, /未识别项目/);
+  assert.match(pageSource, /not_available_for_case/);
+  assert.match(pageSource, /ai_simulated_for_training/);
+  assert.match(pageSource, /approvalStatus/);
+  assert.match(pageSource, /sourceContextReferences/);
+  assert.match(pageSource, /AI 模拟结果 · 不计分/);
+  assert.match(pageSource, /模拟补充结果仅用于训练/);
 });
 
 test("home quick actions are available after a case is selected and before a backend session exists", () => {
@@ -1727,6 +1774,9 @@ test("home page renders login/register dialog on the existing workspace", () => 
   assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "h-full pointer-events-none blur-sm" : "h-full"\}>/);
   assert.match(pageSource, /\{!isCheckingAuth && isAuthDialogOpen \? \(/);
   assert.match(pageSource, /backdrop-blur/);
+  assert.doesNotMatch(pageSource, /<div className="fixed inset-0 z-\[60\][^"]*" onClick=\{\(\) => setIsAuthDialogOpen\(false\)\}>/);
+  assert.match(pageSource, /aria-label="关闭登录弹窗"/);
+  assert.match(pageSource, /onClick=\{\(\) => setIsAuthDialogOpen\(false\)\}[\s\S]*?>[\s\S]*关闭/);
   assert.match(pageSource, />\s*登录 \/ 注册\s*</);
   assert.match(pageSource, /id="auth-email-input"/);
   assert.match(pageSource, /id="auth-password-input"/);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -13,6 +14,15 @@ from app.graph.osce_graph import build_osce_graph, reflection_node, training_str
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.patient_language_service import build_patient_opening_utterance
+from app.services.agent_rag_context_service import retrieve_agent_context
+from app.services.procedure_result_simulator import (
+    ProcedureResultSimulationRequest,
+    create_default_procedure_result_simulator,
+)
+from app.services.procedure_result_approval_agent import (
+    ProcedureResultApprovalRequest,
+    create_default_procedure_result_approval_agent,
+)
 from app.services.report_store import ReportStore, report_store
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
@@ -26,6 +36,7 @@ from app.validators.case_validator import validate_case
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
+PROCEDURE_SIMULATION_SAFETY_BOUNDARY = "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。"
 
 
 @dataclass
@@ -54,6 +65,7 @@ class OsceSession:
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
+    procedure_simulation_audit_items: list[dict[str, Any]] = field(default_factory=list)
 
 
 class OsceSessionService:
@@ -68,6 +80,8 @@ class OsceSessionService:
         personal_skill_service: Any | None = None,
         graph: Any | None = None,
         patient_responder: Any | None = None,
+        procedure_result_simulator: Any | None = None,
+        procedure_result_approval_agent: Any | None = None,
     ) -> None:
         self._sessions: dict[str, OsceSession] = {}
         self.osce_graph = graph or build_osce_graph(
@@ -81,6 +95,10 @@ class OsceSessionService:
         self.session_store = session_store
         self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
+        self.procedure_result_simulator = procedure_result_simulator or create_default_procedure_result_simulator()
+        self.procedure_result_approval_agent = (
+            procedure_result_approval_agent or create_default_procedure_result_approval_agent()
+        )
         self._message_processing_statuses: dict[str, dict[str, Any]] = {}
         self._message_processing_status_lock = Lock()
 
@@ -92,6 +110,9 @@ class OsceSessionService:
         if not case_path.exists():
             return None
         return _serialize_case_summary(load_case_node(case_id))
+
+    def get_procedure_catalog(self) -> dict[str, Any]:
+        return _build_procedure_catalog()
 
     def get_case_raw(self, case_id: str) -> dict[str, Any] | None:
         case_path = CASES_DIR / f"{case_id}.json"
@@ -355,6 +376,68 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    def request_physical_exams(self, session_id: str, exam_codes: list[str]) -> dict[str, Any] | None:
+        session = self._get_session(session_id)
+        if session is None:
+            return None
+        self._refresh_active_skill_context(session)
+        case = load_case_node(session.case_id)
+        case_exam_map = _case_physical_exam_map(case)
+        catalog_exam_map = _catalog_physical_exam_map()
+        exam_results: list[dict[str, Any]] = []
+        for exam_code in _dedupe_non_empty(exam_codes):
+            configured_exam = case_exam_map.get(exam_code)
+            catalog_exam = catalog_exam_map.get(exam_code, {})
+            already_requested = exam_code in session.requested_exams
+            graph_state: dict[str, Any] = {
+                "exam_code": exam_code,
+                "exam_name_cn": configured_exam.exam_name_cn
+                if configured_exam is not None
+                else str(catalog_exam.get("exam_name_cn") or "未提供查体"),
+                "exam_result": configured_exam.result
+                if configured_exam is not None
+                else "该项目已记录，但本训练站点未提供该查体结果。",
+            }
+            if not already_requested:
+                graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
+                _apply_graph_state(session, graph_state)
+                if configured_exam is None and catalog_exam.get("exam_name_cn"):
+                    _relabel_latest_action_timeline_event(
+                        session,
+                        action_type="physical_exam_requested",
+                        source_id=exam_code,
+                        label=str(catalog_exam["exam_name_cn"]),
+                    )
+            is_configured = configured_exam is not None
+            exam_results.append(
+                {
+                    "exam_code": graph_state["exam_code"],
+                    "exam_name_cn": (
+                        configured_exam.exam_name_cn
+                        if configured_exam is not None
+                        else str(catalog_exam.get("exam_name_cn") or graph_state["exam_name_cn"])
+                    ),
+                    "result": (
+                        graph_state["exam_result"]
+                        if is_configured
+                        else "该项目已记录，但本训练站点未提供该查体结果。"
+                    ),
+                    "availability_status": "case_configured" if is_configured else "not_available_for_case",
+                }
+            )
+        self._refresh_active_skill_context(session)
+        agent_update = _refresh_agent_state(session)
+        self._save_session(session)
+        payload = _serialize_session(session, case)
+        payload["exam_results"] = exam_results
+        self._append_event(
+            session,
+            "physical_exams_requested",
+            {"exam_results": exam_results},
+        )
+        self._append_agent_update_event(session, agent_update)
+        return payload
+
     def request_auxiliary_test(self, session_id: str, test_code: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
@@ -380,6 +463,286 @@ class OsceSessionService:
         )
         self._append_agent_update_event(session, agent_update)
         return payload
+
+    def request_auxiliary_tests(self, session_id: str, test_codes: list[str]) -> dict[str, Any] | None:
+        session = self._get_session(session_id)
+        if session is None:
+            return None
+        self._refresh_active_skill_context(session)
+        case = load_case_node(session.case_id)
+        case_test_map = _case_auxiliary_test_map(case)
+        catalog_test_map = _catalog_auxiliary_test_map()
+        test_results: list[dict[str, Any]] = []
+        for test_code in _dedupe_non_empty(test_codes):
+            configured_test = case_test_map.get(test_code)
+            catalog_test = catalog_test_map.get(test_code, {})
+            already_requested = test_code in session.requested_tests
+            graph_state: dict[str, Any] = {
+                "test_code": test_code,
+                "test_name_cn": configured_test.test_name_cn
+                if configured_test is not None
+                else str(catalog_test.get("test_name_cn") or "未提供检查"),
+                "test_result": configured_test.result
+                if configured_test is not None
+                else "该项目已记录，但本训练站点未提供该辅助检查结果。",
+            }
+            if not already_requested:
+                graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
+                _apply_graph_state(session, graph_state)
+                if configured_test is None and catalog_test.get("test_name_cn"):
+                    _relabel_latest_action_timeline_event(
+                        session,
+                        action_type="auxiliary_test_requested",
+                        source_id=test_code,
+                        label=str(catalog_test["test_name_cn"]),
+                    )
+            is_configured = configured_test is not None
+            test_results.append(
+                {
+                    "test_code": graph_state["test_code"],
+                    "test_name_cn": (
+                        configured_test.test_name_cn
+                        if configured_test is not None
+                        else str(catalog_test.get("test_name_cn") or graph_state["test_name_cn"])
+                    ),
+                    "result": (
+                        graph_state["test_result"]
+                        if is_configured
+                        else "该项目已记录，但本训练站点未提供该辅助检查结果。"
+                    ),
+                    "availability_status": "case_configured" if is_configured else "not_available_for_case",
+                }
+            )
+        self._refresh_active_skill_context(session)
+        agent_update = _refresh_agent_state(session)
+        self._save_session(session)
+        payload = _serialize_session(session, case)
+        payload["test_results"] = test_results
+        self._append_event(
+            session,
+            "auxiliary_tests_requested",
+            {"test_results": test_results},
+        )
+        self._append_agent_update_event(session, agent_update)
+        return payload
+
+    def request_procedure_text(self, session_id: str, request_text: str) -> dict[str, Any] | None:
+        session = self._get_session(session_id)
+        if session is None:
+            return None
+        standardization = _standardize_procedure_request_text(request_text)
+        exam_results: list[dict[str, Any]] = []
+        test_results: list[dict[str, Any]] = []
+        if standardization["matched_exam_codes"]:
+            exam_payload = self.request_physical_exams(session_id, list(standardization["matched_exam_codes"]))
+            if exam_payload is not None:
+                exam_results = list(exam_payload.get("exam_results") or [])
+        if standardization["matched_test_codes"]:
+            test_payload = self.request_auxiliary_tests(session_id, list(standardization["matched_test_codes"]))
+            if test_payload is not None:
+                test_results = list(test_payload.get("test_results") or [])
+
+        session = self._get_session(session_id)
+        if session is None:
+            return None
+        case = load_case_node(session.case_id)
+        exam_result_map = {str(item.get("exam_code")): item for item in exam_results}
+        test_result_map = {str(item.get("test_code")): item for item in test_results}
+        matched_procedure_results = _build_standardized_procedure_results(
+            standardization["matched_items"],
+            exam_result_map,
+            test_result_map,
+        )
+        matched_procedure_results = self._simulate_unconfigured_procedure_results(
+            session=session,
+            case=case,
+            request_text=request_text,
+            matched_procedure_results=matched_procedure_results,
+        )
+        has_simulated_results = any(item.get("generated_by_ai") is True for item in matched_procedure_results)
+        procedure_simulation_audit_items = _procedure_simulation_audit_items_from_results(matched_procedure_results)
+        if procedure_simulation_audit_items:
+            session.procedure_simulation_audit_items = _merge_procedure_simulation_audit_items(
+                session.procedure_simulation_audit_items,
+                procedure_simulation_audit_items,
+            )
+            self._save_session(session)
+        payload = _serialize_session(session, case)
+        payload.update(
+            {
+                "standardized_request": {
+                    "mode": "advanced_free_text_catalog",
+                    "raw_request": request_text,
+                    "matched_exam_codes": list(standardization["matched_exam_codes"]),
+                    "matched_test_codes": list(standardization["matched_test_codes"]),
+                    "unmatched_requests": list(standardization["unmatched_requests"]),
+                    "generated_result_policy": "ai_simulated_not_scoring" if has_simulated_results else "disabled",
+                    "safety_boundary": (
+                        PROCEDURE_SIMULATION_SAFETY_BOUNDARY
+                        if has_simulated_results
+                        else "当前高级模式仅标准化到已有目录；未配置项目在无可用模型时不生成模拟结果，也不进入评分。"
+                    ),
+                },
+                "matched_procedure_results": matched_procedure_results,
+                "procedure_simulation_audit_items": list(session.procedure_simulation_audit_items),
+                "exam_results": exam_results,
+                "test_results": test_results,
+            }
+        )
+        self._append_event(
+            session,
+            "procedure_free_text_requested",
+            {
+                "request_text": request_text,
+                "standardized_request": payload["standardized_request"],
+                "matched_procedure_results": matched_procedure_results,
+                "procedure_simulation_audit_items": list(session.procedure_simulation_audit_items),
+            },
+        )
+        return payload
+
+    def _simulate_unconfigured_procedure_results(
+        self,
+        *,
+        session: OsceSession,
+        case: Case,
+        request_text: str,
+        matched_procedure_results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        forbidden_terms = _procedure_forbidden_terms(case)
+        simulated_results: list[dict[str, Any]] = []
+        for result in matched_procedure_results:
+            if result.get("availability_status") != "not_available_for_case":
+                simulated_results.append(result)
+                continue
+            knowledge_context = _retrieve_procedure_simulation_context(
+                case=case,
+                request_text=request_text,
+                procedure_result=result,
+                forbidden_terms=forbidden_terms,
+            )
+            try:
+                simulation = self.procedure_result_simulator(
+                    ProcedureResultSimulationRequest(
+                        case_id=case.case_id,
+                        case_title=case.case_title,
+                        chief_complaint=case.chief_complaint,
+                        request_text=request_text,
+                        procedure_kind=str(result.get("kind", "")),
+                        procedure_code=str(result.get("code", "")),
+                        procedure_name_cn=str(result.get("name_cn", "")),
+                        patient_context=_procedure_simulation_patient_context(case),
+                        configured_results=_procedure_simulation_configured_results(case),
+                        retrieved_knowledge_context=knowledge_context,
+                        forbidden_terms=forbidden_terms,
+                    )
+                )
+            except Exception:
+                simulated_results.append(
+                    {
+                        **result,
+                        "approval_status": "simulation_unavailable",
+                        "source_context_references": [
+                            "policy:advanced_procedure_simulation.not_for_scoring",
+                        ],
+                    }
+                )
+                continue
+
+            simulation_text = _sanitize_simulated_procedure_result(simulation.result, forbidden_terms)
+            if not simulation_text:
+                simulated_results.append(
+                    {
+                        **result,
+                        "approval_status": "blocked_by_safety_gate",
+                        "source_context_references": [
+                            "policy:advanced_procedure_simulation.not_for_scoring",
+                        ],
+                    }
+                )
+                continue
+            approval_request = ProcedureResultApprovalRequest(
+                case_id=case.case_id,
+                case_title=case.case_title,
+                chief_complaint=case.chief_complaint,
+                request_text=request_text,
+                procedure_kind=str(result.get("kind", "")),
+                procedure_code=str(result.get("code", "")),
+                procedure_name_cn=str(result.get("name_cn", "")),
+                simulated_result=simulation_text,
+                source_context_references=[
+                    str(item.get("reference")) for item in knowledge_context if item.get("reference")
+                ],
+                forbidden_terms=forbidden_terms,
+            )
+            try:
+                approval_review = _normalize_procedure_simulation_approval_review(
+                    self.procedure_result_approval_agent(approval_request)
+                )
+            except Exception:
+                approval_review = _procedure_approval_error_fallback_review(simulation_text, forbidden_terms)
+            approval_decision = str(approval_review.get("decision") or "approved")
+            if approval_decision == "blocked":
+                simulated_results.append(
+                    {
+                        **result,
+                        "approval_status": "blocked_by_procedure_result_approval_agent",
+                        "approval_agent_review": approval_review,
+                        "source_context_references": [
+                            "policy:advanced_procedure_simulation.not_for_scoring",
+                        ],
+                    }
+                )
+                continue
+            if approval_decision == "revise":
+                revised_text = _sanitize_simulated_procedure_result(
+                    str(approval_review.get("revised_result") or ""),
+                    forbidden_terms,
+                )
+                if not revised_text:
+                    simulated_results.append(
+                        {
+                            **result,
+                            "approval_status": "blocked_by_procedure_result_approval_agent",
+                            "approval_agent_review": {
+                                **approval_review,
+                                "decision": "blocked",
+                                "safety_issues": [
+                                    *[
+                                        str(item)
+                                        for item in approval_review.get("safety_issues", [])
+                                        if str(item).strip()
+                                    ],
+                                    "审批 Agent 改写结果为空或仍包含受保护内容。",
+                                ],
+                            },
+                            "source_context_references": [
+                                "policy:advanced_procedure_simulation.not_for_scoring",
+                            ],
+                        }
+                    )
+                    continue
+                simulation_text = revised_text
+            simulated_results.append(
+                {
+                    **result,
+                    "result": f"AI 模拟：{simulation_text}（训练参考，不进入评分。）",
+                    "availability_status": "ai_simulated_for_training",
+                    "generated_by_ai": True,
+                    "approval_status": (
+                        "revised_by_procedure_result_approval_agent"
+                        if approval_decision == "revise"
+                        else "approved_by_procedure_result_approval_agent"
+                    ),
+                    "approval_agent_review": approval_review,
+                    "source_context_references": [
+                        *[str(item.get("reference")) for item in knowledge_context if item.get("reference")],
+                        "policy:advanced_procedure_simulation.not_for_scoring",
+                    ],
+                    "scoring_eligible": False,
+                }
+            )
+        return simulated_results
 
     def record_hypothesis(self, session_id: str, hypothesis: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
@@ -447,23 +810,29 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
 
-    def get_report(self, session_id: str) -> dict[str, Any] | None:
+    def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
         if stored_report is not None:
             report = _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
             if session is None:
+                report = _ensure_report_procedure_simulation_audit_items(report, None)
                 if _ai_reflection_review_uses_legacy_generic_text(report.get("ai_reflection_review")):
                     report = _rehydrate_orphan_teacher_reflection(report)
                     self.report_store.save_report(report)
                 return report
             case = load_case_node(session.case_id)
             report = _ensure_report_training_progress_snapshot(report, session, case)
+            report = _ensure_report_procedure_simulation_audit_items(report, session)
             if session.final_submission is not None and _report_needs_completed_session_hydration(report):
                 session.feedback_report = report
                 agent_update = _refresh_agent_state(session, use_reflection=True)
-                session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+                if include_optional_agents:
+                    session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+                else:
+                    session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
                 session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
+                session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
                 self._save_session(session)
                 self.report_store.save_report(session.feedback_report)
                 self._refresh_student_profile(session.student_id)
@@ -484,7 +853,12 @@ class OsceSessionService:
         if session.feedback_report is not None:
             case = load_case_node(session.case_id)
             session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
-            session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+            session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
+            if include_optional_agents:
+                session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+            else:
+                session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
+            session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
             self._save_session(session)
             self.report_store.save_report(session.feedback_report)
             self._refresh_student_profile(session.student_id)
@@ -493,6 +867,9 @@ class OsceSessionService:
         else:
             self._save_session(session)
         return session.feedback_report
+
+    def enrich_report_optional_agents(self, session_id: str) -> dict[str, Any] | None:
+        return self.get_report(session_id, include_optional_agents=True)
 
     def delete_session(self, session_id: str) -> bool:
         self._sessions.pop(session_id, None)
@@ -624,7 +1001,7 @@ def physical_exam_node(case: Case, session: OsceSession, exam_code: str) -> dict
                 "exam_name_cn": exam.exam_name_cn,
                 "result": exam.result,
             }
-    return {"exam_code": exam_code, "exam_name_cn": "未提供查体", "result": "本病例未提供该查体结果。"}
+    return {"exam_code": exam_code, "exam_name_cn": "未提供查体", "result": "该项目已记录，但本训练站点未提供该查体结果。"}
 
 
 def auxiliary_test_node(case: Case, session: OsceSession, test_code: str) -> dict[str, str]:
@@ -638,7 +1015,7 @@ def auxiliary_test_node(case: Case, session: OsceSession, test_code: str) -> dic
                 "test_name_cn": test.test_name_cn,
                 "result": test.result,
             }
-    return {"test_code": test_code, "test_name_cn": "未提供检查", "result": "本病例未提供该辅助检查结果。"}
+    return {"test_code": test_code, "test_name_cn": "未提供检查", "result": "该项目已记录，但本训练站点未提供该辅助检查结果。"}
 
 
 def diagnosis_submit_node(session: OsceSession, diagnosis: str, reasoning: str) -> None:
@@ -768,6 +1145,49 @@ def _personal_skill_payload_for_report(
         )
     except TrainingSkillCandidateGenerationError:
         return build_generation_failed_personal_skill_payload(report=session.feedback_report, case=case)
+    except Exception as exc:
+        payload = build_generation_failed_personal_skill_payload(report=session.feedback_report, case=case)
+        payload["generation_warnings"] = _append_report_generation_warning(
+            session.feedback_report,
+            module="personal_skill_generation",
+            exc=exc,
+        )
+        return payload
+
+
+def _deferred_optional_agent_payload(report: dict[str, Any], case: Case) -> dict[str, Any]:
+    from app.services.personal_training_skill_service import build_teacher_reflection_review_payload
+
+    return {
+        "personal_skill_candidate": {
+            "status": "generation_pending",
+            "reason": "optional_agent_background_enrichment",
+            "scope": "personal",
+            "candidate_id": None,
+            "skill_id": None,
+            "web_check_status": "not_configured",
+            "external_evidence_checks": [],
+            "summary": "评分报告已生成；个人训练 Skill 正在后台生成，稍后刷新报告可查看。",
+        },
+        "ai_reflection_review": build_teacher_reflection_review_payload(report, case),
+    }
+
+
+def _append_report_generation_warning(
+    report: dict[str, Any],
+    *,
+    module: str,
+    exc: Exception,
+) -> list[dict[str, str]]:
+    warnings = list(report.get("generation_warnings") or [])
+    warnings.append(
+        {
+            "module": module,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    )
+    return warnings
 
 
 def _ensure_report_training_progress_snapshot(
@@ -783,6 +1203,21 @@ def _ensure_report_training_progress_snapshot(
     }
 
 
+def _ensure_report_procedure_simulation_audit_items(
+    report: dict[str, Any],
+    session: OsceSession | None,
+) -> dict[str, Any]:
+    audit_items = (
+        session.procedure_simulation_audit_items
+        if session is not None
+        else report.get("procedure_simulation_audit_items", [])
+    )
+    return {
+        **report,
+        "procedure_simulation_audit_items": list(audit_items) if isinstance(audit_items, list) else [],
+    }
+
+
 def _report_needs_completed_session_hydration(report: dict[str, Any]) -> bool:
     ai_reflection_review = report.get("ai_reflection_review")
     personal_skill_candidate = report.get("personal_skill_candidate")
@@ -791,7 +1226,7 @@ def _report_needs_completed_session_hydration(report: dict[str, Any]) -> bool:
     return (
         ai_status != "generated"
         or _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review)
-        or skill_status in {None, "legacy_report", "not_complete"}
+        or skill_status in {None, "legacy_report", "not_complete", "generation_pending"}
     )
 
 
@@ -836,6 +1271,7 @@ def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
         "source_reference_items": report.get("source_reference_items", []),
         "personal_skill_candidate": report.get("personal_skill_candidate"),
         "ai_reflection_review": report.get("ai_reflection_review"),
+        "procedure_simulation_audit_items": report.get("procedure_simulation_audit_items", []),
     }
 
 
@@ -961,6 +1397,496 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
             for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
         ],
     }
+
+
+def _build_procedure_catalog() -> dict[str, Any]:
+    physical_exam_map: dict[str, dict[str, Any]] = {}
+    auxiliary_test_map: dict[str, dict[str, Any]] = {}
+    for case_path in sorted(CASES_DIR.glob("*.json")):
+        case = load_case_node(case_path.stem)
+        for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
+            entry = physical_exam_map.setdefault(
+                exam.exam_code,
+                {
+                    "exam_code": exam.exam_code,
+                    "exam_name_cn": exam.exam_name_cn,
+                    "category": _physical_exam_category(exam.exam_code),
+                },
+            )
+        for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
+            entry = auxiliary_test_map.setdefault(
+                test.test_code,
+                {
+                    "test_code": test.test_code,
+                    "test_name_cn": test.test_name_cn,
+                    "category": test.category,
+                    "invasiveness": test.invasiveness,
+                    "cost_hint": test.cost_hint,
+                },
+            )
+    return {
+        "mode": "intermediate_catalog",
+        "physical_exams": sorted(
+            physical_exam_map.values(),
+            key=lambda item: (item["category"], item["exam_name_cn"], item["exam_code"]),
+        ),
+        "auxiliary_tests": sorted(
+            auxiliary_test_map.values(),
+            key=lambda item: (item["category"], item["test_name_cn"], item["test_code"]),
+        ),
+        "safety_boundary": "目录只展示可申请项目名称，不包含病例结果、标准诊断或评分答案。",
+    }
+
+
+def _physical_exam_category(exam_code: str) -> str:
+    if exam_code.startswith("vital."):
+        return "生命体征"
+    if exam_code.startswith("abd."):
+        return "腹部查体"
+    if exam_code.startswith(("lung.", "resp.")):
+        return "心肺查体"
+    if exam_code.startswith("neuro."):
+        return "神经系统查体"
+    if exam_code.startswith("thy."):
+        return "甲状腺查体"
+    if exam_code.startswith("ext."):
+        return "四肢/外周查体"
+    return "其他查体"
+
+
+def _case_physical_exam_map(case: Case) -> dict[str, PhysicalExamItem]:
+    return {exam.exam_code: exam for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]}
+
+
+def _case_auxiliary_test_map(case: Case) -> dict[str, AuxiliaryTestItem]:
+    return {test.test_code: test for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]}
+
+
+def _catalog_physical_exam_map() -> dict[str, dict[str, Any]]:
+    catalog = _build_procedure_catalog()
+    return {str(item["exam_code"]): item for item in catalog["physical_exams"]}
+
+
+def _catalog_auxiliary_test_map() -> dict[str, dict[str, Any]]:
+    catalog = _build_procedure_catalog()
+    return {str(item["test_code"]): item for item in catalog["auxiliary_tests"]}
+
+
+PROCEDURE_REQUEST_SYNONYMS_BY_CODE: dict[str, list[str]] = {
+    "abd.inspection": ["腹部视诊", "看腹部", "腹部外观"],
+    "abd.palpation.tenderness": ["压痛", "腹部压痛", "麦氏点压痛", "mcburney", "mc burney"],
+    "abd.palpation.rebound": ["反跳痛", "blumberg", "腹膜刺激"],
+    "abd.palpation.guarding": ["肌紧张", "板状腹", "腹肌紧张"],
+    "abd.special.rovsing": ["rovsing", "罗氏征"],
+    "abd.special.psoas": ["腰大肌征", "psoas"],
+    "ecg.st_segment": ["心电图", "心电", "ecg", "st段"],
+    "ext.pitting_edema": ["下肢水肿", "凹陷性水肿", "腿肿"],
+    "img.abd_ct": ["腹部ct", "腹部 ct", "阑尾ct", "ct"],
+    "img.abd_us": ["腹部超声", "腹部彩超", "腹部b超", "腹部 b超", "b超"],
+    "img.chest_xray": ["胸片", "胸部x线", "胸部 x线", "胸部x光", "胸部 x光"],
+    "img.echo": ["超声心动图", "心脏彩超", "心超"],
+    "img.thyroid_us": ["甲状腺超声", "甲状腺彩超"],
+    "lab.bnp": ["bnp", "脑钠肽"],
+    "lab.cbc": ["血常规", "白细胞", "中性粒", "血象"],
+    "lab.crp": ["crp", "c反应蛋白", "c 反应蛋白", "炎症指标"],
+    "lab.ft4": ["ft4", "游离甲状腺素"],
+    "lab.troponin": ["肌钙蛋白", "肌红蛋白", "心肌酶"],
+    "lab.tsh": ["tsh", "促甲状腺激素"],
+    "lab.urinalysis": ["尿常规", "小便常规", "尿检"],
+    "lung.auscultation.rales": ["肺部听诊", "听诊", "湿啰音", "啰音"],
+    "neuro.hand_tremor": ["手颤", "手抖", "震颤"],
+    "resp.auscultation.crackle": ["肺部听诊", "听诊", "湿啰音", "啰音"],
+    "resp.rate": ["呼吸频率", "呼吸次数", "呼吸"],
+    "thy.inspect.goiter": ["甲状腺视诊", "甲状腺肿大", "看甲状腺"],
+    "vital.blood_pressure": ["血压", "测血压"],
+    "vital.heart_rate": ["心率", "脉搏", "心跳"],
+    "vital.temperature": ["体温", "发热", "测体温"],
+}
+
+
+def _standardize_procedure_request_text(request_text: str) -> dict[str, Any]:
+    normalized_request = _normalize_procedure_request_text(request_text)
+    matched_items: list[dict[str, Any]] = []
+    matched_aliases: list[str] = []
+    catalog = _build_procedure_catalog()
+    for item in catalog["physical_exams"]:
+        match = _match_procedure_catalog_item(normalized_request, item, code_key="exam_code", name_key="exam_name_cn")
+        if match is not None:
+            matched_items.append(
+                {
+                    "kind": "physical_exam",
+                    "code": item["exam_code"],
+                    "name_cn": item["exam_name_cn"],
+                    "match_index": match["index"],
+                    "matched_alias": match["alias"],
+                }
+            )
+            matched_aliases.append(match["alias"])
+    for item in catalog["auxiliary_tests"]:
+        match = _match_procedure_catalog_item(normalized_request, item, code_key="test_code", name_key="test_name_cn")
+        if match is not None:
+            matched_items.append(
+                {
+                    "kind": "auxiliary_test",
+                    "code": item["test_code"],
+                    "name_cn": item["test_name_cn"],
+                    "match_index": match["index"],
+                    "matched_alias": match["alias"],
+                }
+            )
+            matched_aliases.append(match["alias"])
+    matched_items = sorted(matched_items, key=lambda item: (int(item["match_index"]), str(item["kind"]), str(item["code"])))
+    matched_exam_codes = _dedupe_non_empty(
+        [str(item["code"]) for item in matched_items if item["kind"] == "physical_exam"]
+    )
+    matched_test_codes = _dedupe_non_empty(
+        [str(item["code"]) for item in matched_items if item["kind"] == "auxiliary_test"]
+    )
+    return {
+        "matched_items": matched_items,
+        "matched_exam_codes": matched_exam_codes,
+        "matched_test_codes": matched_test_codes,
+        "unmatched_requests": _extract_unmatched_procedure_terms(request_text, matched_aliases),
+    }
+
+
+def _match_procedure_catalog_item(
+    normalized_request: str,
+    item: dict[str, Any],
+    *,
+    code_key: str,
+    name_key: str,
+) -> dict[str, Any] | None:
+    code = str(item[code_key])
+    aliases = _procedure_aliases(code, str(item[name_key]), str(item.get("category") or ""))
+    match_candidates: list[dict[str, Any]] = []
+    for alias in aliases:
+        if not _is_searchable_procedure_alias(alias):
+            continue
+        index = normalized_request.find(alias)
+        if index >= 0:
+            match_candidates.append({"alias": alias, "index": index})
+    if not match_candidates:
+        return None
+    return sorted(match_candidates, key=lambda match: (int(match["index"]), -len(str(match["alias"]))))[0]
+
+
+def _procedure_aliases(code: str, name: str, category: str) -> list[str]:
+    aliases = [name, category, code, code.replace(".", " ")]
+    aliases.extend(PROCEDURE_REQUEST_SYNONYMS_BY_CODE.get(code, []))
+    aliases.extend(_split_procedure_label_terms(name))
+    return _dedupe_non_empty([_normalize_procedure_request_text(alias) for alias in aliases])
+
+
+def _split_procedure_label_terms(label: str) -> list[str]:
+    terms = [label]
+    terms.extend(re.split(r"[（）()、/·\-_\s]+", label))
+    without_brackets = re.sub(r"[（(].*?[）)]", "", label)
+    if without_brackets != label:
+        terms.append(without_brackets)
+    bracket_terms = re.findall(r"[（(](.*?)[）)]", label)
+    terms.extend(bracket_terms)
+    return terms
+
+
+def _normalize_procedure_request_text(value: str) -> str:
+    return re.sub(r"[\s，,。；;：:、/\\（）()\[\]{}<>《》“”\"'`~!！?？+-]+", "", value.lower())
+
+
+def _is_searchable_procedure_alias(alias: str) -> bool:
+    if len(alias) >= 2 and not alias.isascii():
+        return True
+    return alias in {"ct", "b超"} or len(alias) >= 3
+
+
+def _extract_unmatched_procedure_terms(request_text: str, matched_aliases: list[str]) -> list[str]:
+    matched_aliases = _dedupe_non_empty(matched_aliases)
+    chunks = re.split(
+        r"和|及|与|并|再|看看|看一下|查一下|查个|检查|申请|做|测|查|要|想|请|，|,|、|；|;|。|\s+",
+        request_text,
+    )
+    ignored_terms = {"我", "我想", "一下", "一个", "相关", "项目", "结果", "还有", "一下子"}
+    unmatched: list[str] = []
+    for chunk in chunks:
+        term = chunk.strip()
+        normalized_term = _normalize_procedure_request_text(term)
+        if len(normalized_term) < 2 or normalized_term in ignored_terms:
+            continue
+        if any(
+            normalized_term == alias
+            or normalized_term in alias
+            or alias in normalized_term
+            for alias in matched_aliases
+        ):
+            continue
+        if normalized_term not in [_normalize_procedure_request_text(value) for value in unmatched]:
+            unmatched.append(term)
+    return unmatched
+
+
+def _build_standardized_procedure_results(
+    matched_items: list[dict[str, Any]],
+    exam_result_map: dict[str, dict[str, Any]],
+    test_result_map: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for item in matched_items:
+        code = str(item["code"])
+        if item["kind"] == "physical_exam":
+            result = exam_result_map.get(code)
+            availability_status = str(result.get("availability_status")) if result is not None else "not_available_for_case"
+            results.append(
+                {
+                    "id": f"exam:{code}",
+                    "kind": "physical_exam",
+                    "code": code,
+                    "name_cn": str(item["name_cn"]),
+                    "label": f"查体：{item['name_cn']}",
+                    "result": str(result.get("result")) if result is not None else "该项目已记录，但本训练站点未提供该查体结果。",
+                    "availability_status": availability_status,
+                    "generated_by_ai": False,
+                    "approval_status": "not_required",
+                    "source_context_references": [],
+                    "scoring_eligible": availability_status == "case_configured",
+                }
+            )
+        if item["kind"] == "auxiliary_test":
+            result = test_result_map.get(code)
+            availability_status = str(result.get("availability_status")) if result is not None else "not_available_for_case"
+            results.append(
+                {
+                    "id": f"test:{code}",
+                    "kind": "auxiliary_test",
+                    "code": code,
+                    "name_cn": str(item["name_cn"]),
+                    "label": f"检查：{item['name_cn']}",
+                    "result": str(result.get("result")) if result is not None else "该项目已记录，但本训练站点未提供该辅助检查结果。",
+                    "availability_status": availability_status,
+                    "generated_by_ai": False,
+                    "approval_status": "not_required",
+                    "source_context_references": [],
+                    "scoring_eligible": availability_status == "case_configured",
+                }
+            )
+    return results
+
+
+def _procedure_simulation_audit_items_from_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    audit_items: list[dict[str, Any]] = []
+    for result in results:
+        if result.get("generated_by_ai") is not True:
+            continue
+        source_context_references = [
+            str(reference)
+            for reference in result.get("source_context_references", [])
+            if str(reference).strip()
+        ]
+        audit_items.append(
+            {
+                "procedure_id": str(result.get("id") or ""),
+                "kind": _procedure_audit_kind(str(result.get("kind") or "")),
+                "code": str(result.get("code") or ""),
+                "label": str(result.get("name_cn") or result.get("label") or result.get("code") or ""),
+                "result": str(result.get("result") or ""),
+                "approval_status": str(result.get("approval_status") or ""),
+                "approval_agent_review": _normalize_procedure_simulation_approval_review(
+                    result.get("approval_agent_review", {})
+                ),
+                "source_context_references": source_context_references,
+                "scoring_eligible": result.get("scoring_eligible") is True,
+                "safety_boundary": PROCEDURE_SIMULATION_SAFETY_BOUNDARY,
+            }
+        )
+    return audit_items
+
+
+def _normalize_procedure_simulation_approval_review(review: Any) -> dict[str, Any]:
+    if hasattr(review, "model_dump"):
+        review = review.model_dump()
+    if not isinstance(review, dict):
+        review = {}
+    safety_issues = [
+        str(item)
+        for item in review.get("safety_issues", [])
+        if str(item).strip()
+    ]
+    return {
+        "agent_id": str(review.get("agent_id") or "procedure_result_approval_agent"),
+        "decision": str(review.get("decision") or "approved"),
+        "approval_mode": str(review.get("approval_mode") or "deterministic_safety_gate"),
+        "rationale": str(review.get("rationale") or ""),
+        "safety_issues": safety_issues,
+        "revised_result": str(review.get("revised_result") or ""),
+    }
+
+
+def _procedure_approval_error_fallback_review(
+    simulation_text: str,
+    forbidden_terms: list[str],
+) -> dict[str, Any]:
+    safety_issues = [
+        f"包含受保护词：{term}"
+        for term in forbidden_terms
+        if term and term in simulation_text
+    ]
+    if safety_issues:
+        return {
+            "agent_id": "procedure_result_approval_agent",
+            "decision": "blocked",
+            "approval_mode": "approval_agent_error_fallback",
+            "rationale": "审批 Agent 调用失败，本地安全门禁发现受保护内容，已阻断展示。",
+            "safety_issues": safety_issues,
+            "revised_result": "",
+        }
+    return {
+        "agent_id": "procedure_result_approval_agent",
+        "decision": "approved",
+        "approval_mode": "approval_agent_error_fallback",
+        "rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
+        "safety_issues": [],
+        "revised_result": "",
+    }
+
+
+def _procedure_audit_kind(kind: str) -> str:
+    if kind == "auxiliary_test":
+        return "test"
+    if kind == "physical_exam":
+        return "exam"
+    return kind
+
+
+def _merge_procedure_simulation_audit_items(
+    existing_items: list[dict[str, Any]],
+    new_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    ordered_ids: list[str] = []
+    for item in [*existing_items, *new_items]:
+        procedure_id = str(item.get("procedure_id") or "")
+        if not procedure_id:
+            continue
+        if procedure_id not in merged_by_id:
+            ordered_ids.append(procedure_id)
+        merged_by_id[procedure_id] = dict(item)
+    return [merged_by_id[procedure_id] for procedure_id in ordered_ids]
+
+
+def _retrieve_procedure_simulation_context(
+    *,
+    case: Case,
+    request_text: str,
+    procedure_result: dict[str, Any],
+    forbidden_terms: list[str],
+) -> list[dict[str, Any]]:
+    try:
+        return retrieve_agent_context(
+            agent_role="coach",
+            case_ids=[case.case_id],
+            query_terms=[
+                case.chief_complaint,
+                request_text,
+                str(procedure_result.get("name_cn", "")),
+                str(procedure_result.get("code", "")),
+            ],
+            allowed_visibilities={"pre_submit_safe"},
+            forbidden_terms=forbidden_terms,
+            limit=3,
+        )
+    except Exception:
+        return []
+
+
+def _procedure_simulation_patient_context(case: Case) -> dict[str, Any]:
+    return {
+        "age": f"{case.patient_profile.age_value}{case.patient_profile.age_unit}",
+        "gender": case.patient_profile.gender,
+        "occupation": case.patient_profile.occupation,
+        "department": case.patient_profile.hospital_department,
+        "chief_complaint": case.chief_complaint,
+        "present_illness_summary": case.history.present_illness_summary,
+        "history_facts": [
+            {
+                "topic": fact.topic,
+                "slot": fact.slot,
+                "answer": fact.canonical_answer,
+            }
+            for fact in case.history.hidden_facts
+        ],
+    }
+
+
+def _procedure_simulation_configured_results(case: Case) -> list[dict[str, str]]:
+    configured_results: list[dict[str, str]] = []
+    for item in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
+        configured_results.append(
+            {
+                "kind": "physical_exam",
+                "code": item.exam_code,
+                "name_cn": item.exam_name_cn,
+                "result": item.result,
+            }
+        )
+    for item in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
+        configured_results.append(
+            {
+                "kind": "auxiliary_test",
+                "code": item.test_code,
+                "name_cn": item.test_name_cn,
+                "result": item.result,
+            }
+        )
+    return configured_results
+
+
+def _procedure_forbidden_terms(case: Case) -> list[str]:
+    return [
+        case.diagnosis.main_diagnosis,
+        *case.diagnosis.main_diagnosis_synonyms,
+        *[differential.disease_name for differential in case.diagnosis.differential_diagnoses],
+        "治疗方案",
+        "用药剂量",
+        "手术方案",
+        "处置建议",
+        "标准答案",
+        "rubric",
+    ]
+
+
+def _sanitize_simulated_procedure_result(result: str, forbidden_terms: list[str]) -> str:
+    sanitized = re.sub(r"\s+", " ", result).strip()
+    for term in forbidden_terms:
+        if term:
+            sanitized = sanitized.replace(term, "相关诊断")
+    for unsafe_term in ["治疗方案", "用药剂量", "手术方案", "处置建议"]:
+        sanitized = sanitized.replace(unsafe_term, "真实处置")
+    if not sanitized:
+        return ""
+    if len(sanitized) > 160:
+        sanitized = f"{sanitized[:157]}..."
+    return sanitized
+
+
+def _dedupe_non_empty(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for value in values:
+        normalized = str(value).strip()
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
+    return deduped
+
+
+def _relabel_latest_action_timeline_event(
+    session: OsceSession,
+    *,
+    action_type: str,
+    source_id: str,
+    label: str,
+) -> None:
+    for event in reversed(session.action_timeline):
+        if event.get("action_type") == action_type and event.get("source_id") == source_id:
+            event["label"] = label
+            return
 
 
 def _serialize_case_content_stats(case: Case) -> dict[str, int]:
@@ -1452,6 +2378,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,
+        "procedure_simulation_audit_items": session.procedure_simulation_audit_items,
     }
 
 

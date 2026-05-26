@@ -178,6 +178,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.get("/api/admin/reports"),
             unauthenticated_client.get("/api/admin/sessions"),
+            unauthenticated_client.get("/api/admin/procedure-simulation-audits"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/events"),
             unauthenticated_client.get("/api/admin/teaching-focus/patterns"),
@@ -234,6 +235,7 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.get("/api/admin/reports"),
             client.get("/api/admin/sessions"),
+            client.get("/api/admin/procedure-simulation-audits"),
             client.get("/api/admin/sessions/missing_session/report"),
             client.get("/api/admin/sessions/missing_session/events"),
             client.get("/api/admin/teaching-focus/patterns"),
@@ -2858,6 +2860,96 @@ def test_admin_can_filter_session_reports(tmp_path, monkeypatch) -> None:
             }
         ],
         "pagination": {"limit": 5, "offset": 0, "total": 1},
+    }
+
+
+def test_admin_can_list_procedure_simulation_audits(tmp_path, monkeypatch) -> None:
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    report_store.save_report(
+        {
+            "report_id": "report_procedure_audit",
+            "session_id": "session_procedure_audit",
+            "case_id": "appendicitis_001",
+            "student_id": "student_procedure_audit",
+            "total_score": 74,
+            "dimension_scores": {},
+            "missed_items": [],
+            "knowledge_recommendations": [],
+            "procedure_simulation_audit_items": [
+                {
+                    "procedure_id": "test:ecg.st_segment",
+                    "kind": "test",
+                    "code": "ecg.st_segment",
+                    "label": "心电图",
+                    "result": "AI 模拟：窦性心律，未见明确急性 ST 段抬高或压低。（训练参考，不进入评分。）",
+                    "approval_status": "approved_by_procedure_result_approval_agent",
+                    "approval_agent_review": {
+                        "agent_id": "procedure_result_approval_agent",
+                        "decision": "approved",
+                        "approval_mode": "approval_agent_error_fallback",
+                        "rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
+                        "safety_issues": [],
+                        "revised_result": "",
+                    },
+                    "source_context_references": [
+                        "policy:advanced_procedure_simulation.not_for_scoring",
+                    ],
+                    "scoring_eligible": False,
+                    "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
+                }
+            ],
+        }
+    )
+    report_store.save_report(
+        {
+            "report_id": "report_without_procedure_audit",
+            "session_id": "session_without_procedure_audit",
+            "case_id": "acs_001",
+            "student_id": "student_without_procedure_audit",
+            "total_score": 91,
+            "dimension_scores": {},
+            "missed_items": [],
+            "knowledge_recommendations": [],
+            "procedure_simulation_audit_items": [],
+        }
+    )
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/procedure-simulation-audits", params={"limit": 10})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "procedure_simulation_audits": [
+            {
+                "report_id": "report_procedure_audit",
+                "session_id": "session_procedure_audit",
+                "case_id": "appendicitis_001",
+                "case_title": "右下腹痛教学病例",
+                "student_id": "student_procedure_audit",
+                "procedure_id": "test:ecg.st_segment",
+                "kind": "test",
+                "code": "ecg.st_segment",
+                "label": "心电图",
+                "result": "AI 模拟：窦性心律，未见明确急性 ST 段抬高或压低。（训练参考，不进入评分。）",
+                "approval_status": "approved_by_procedure_result_approval_agent",
+                "approval_decision": "approved",
+                "approval_mode": "approval_agent_error_fallback",
+                "approval_rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
+                "safety_issues": [],
+                "source_context_references": [
+                    "policy:advanced_procedure_simulation.not_for_scoring",
+                ],
+                "scoring_eligible": False,
+                "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
+            }
+        ],
+        "summary": {
+            "total": 1,
+            "by_approval_status": {"approved_by_procedure_result_approval_agent": 1},
+            "by_case_title": {"右下腹痛教学病例": 1},
+        },
+        "pagination": {"limit": 10, "offset": 0, "total": 1},
     }
 
 
