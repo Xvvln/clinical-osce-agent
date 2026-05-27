@@ -27,6 +27,10 @@ type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
 type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
 
+type SearchParamReader = Readonly<{
+  get: (name: string) => string | null;
+}>;
+
 type OsceDockSide = "left" | "right";
 
 type BackendConnectionStatus = "checking" | "online" | "offline";
@@ -463,6 +467,7 @@ type OsceSession = Readonly<{
   student_id: string;
   case_id: string;
   stage: string;
+  training_difficulty: TrainingDifficultyMode;
   case_title: string;
   chief_complaint: string;
   patient_opening_utterance: string;
@@ -1934,10 +1939,31 @@ async function getCases(): Promise<readonly CaseOption[]> {
   return response.cases.map(mapCaseSummary);
 }
 
-function createSession(caseId: string): Promise<OsceSession> {
+function normalizeTrainingDifficultyMode(rawMode: string | null | undefined): TrainingDifficultyMode {
+  if (rawMode === "intermediate" || rawMode === "advanced") {
+    return rawMode;
+  }
+  return "beginner";
+}
+
+function getTrainingDifficultyModeFromSearchParams(searchParams: SearchParamReader): TrainingDifficultyMode {
+  return normalizeTrainingDifficultyMode(searchParams.get("difficulty"));
+}
+
+function getTrainingDifficultyLabel(trainingDifficultyMode: TrainingDifficultyMode): string {
+  if (trainingDifficultyMode === "intermediate") {
+    return "中级";
+  }
+  if (trainingDifficultyMode === "advanced") {
+    return "高级";
+  }
+  return "初级";
+}
+
+function createSession(caseId: string, trainingDifficultyMode: TrainingDifficultyMode): Promise<OsceSession> {
   return requestJson<OsceSession>("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ case_id: caseId, student_id: STUDENT_ID }),
+    body: JSON.stringify({ case_id: caseId, student_id: STUDENT_ID, training_difficulty: trainingDifficultyMode }),
   });
 }
 
@@ -2325,7 +2351,7 @@ function HomeContent() {
   const [pendingPatientMessage, setPendingPatientMessage] = useState<ChatMessage | null>(null);
   const [isCasePreparationPromptDismissed, setIsCasePreparationPromptDismissed] = useState(false);
   const [openProcedureActionGroup, setOpenProcedureActionGroup] = useState<ProcedureActionGroup | null>(null);
-  const [trainingDifficultyMode, setTrainingDifficultyMode] = useState<TrainingDifficultyMode>("beginner");
+  const [trainingDifficultyMode, setTrainingDifficultyMode] = useState<TrainingDifficultyMode>(() => getTrainingDifficultyModeFromSearchParams(searchParams));
   const [procedureCatalog, setProcedureCatalog] = useState<ProcedureCatalog | null>(null);
   const [isLoadingProcedureCatalog, setIsLoadingProcedureCatalog] = useState(false);
   const [selectedIntermediateExamCodes, setSelectedIntermediateExamCodes] = useState<readonly string[]>([]);
@@ -2348,6 +2374,7 @@ function HomeContent() {
   const [feedbackReport, setFeedbackReport] = useState<FeedbackReport | null>(null);
   const [procedureResults, setProcedureResults] = useState<readonly ProcedureResult[]>([]);
   const [selectedProcedureResult, setSelectedProcedureResult] = useState<ProcedureResult | null>(null);
+  const [selectedProcedureResults, setSelectedProcedureResults] = useState<readonly ProcedureResult[]>([]);
   const [latestRevealedFactId, setLatestRevealedFactId] = useState<string | null>(null);
   const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
@@ -2559,6 +2586,12 @@ function HomeContent() {
   }, [selectedCaseId]);
 
   useEffect(() => {
+    if (!requestedSessionId) {
+      setTrainingDifficultyMode(getTrainingDifficultyModeFromSearchParams(searchParams));
+    }
+  }, [requestedSessionId, searchParams]);
+
+  useEffect(() => {
     if (isCheckingAuth) {
       return;
     }
@@ -2576,6 +2609,7 @@ function HomeContent() {
       setFeedbackReport(null);
       setProcedureResults([]);
       setSelectedProcedureResult(null);
+      setSelectedProcedureResults([]);
       setSelectedIntermediateExamCodes([]);
       setSelectedIntermediateTestCodes([]);
       setAdvancedProcedureRequestText("");
@@ -2608,6 +2642,7 @@ function HomeContent() {
       setFeedbackReport(null);
       setProcedureResults([]);
       setSelectedProcedureResult(null);
+      setSelectedProcedureResults([]);
       setSelectedIntermediateExamCodes([]);
       setSelectedIntermediateTestCodes([]);
       setAdvancedProcedureRequestText("");
@@ -2624,6 +2659,7 @@ function HomeContent() {
 
         setSession(nextSession);
         setSelectedCaseId(nextSession.case_id);
+        setTrainingDifficultyMode(nextSession.training_difficulty);
         setStatusText(isCompletedOsceSession(nextSession) ? "该训练已提交诊断，训练已结束。可以查看评分报告或重新选择病例开始新训练。" : "已恢复后端训练会话，可以继续训练。");
         setErrorText(null);
       } catch (error) {
@@ -3125,6 +3161,21 @@ function HomeContent() {
     return procedureItems.find((item) => item.id === procedureId) ?? null;
   }
 
+  function openProcedureResultGroup(nextProcedureResults: readonly ProcedureResult[]) {
+    const firstProcedureResult = nextProcedureResults[0] ?? null;
+    setSelectedProcedureResult(firstProcedureResult);
+    setSelectedProcedureResults(firstProcedureResult ? nextProcedureResults : []);
+  }
+
+  function openProcedureResult(nextProcedureResult: ProcedureResult | null) {
+    openProcedureResultGroup(nextProcedureResult ? [nextProcedureResult] : []);
+  }
+
+  function closeProcedureResultModal() {
+    setSelectedProcedureResult(null);
+    setSelectedProcedureResults([]);
+  }
+
   const sourceReferenceGroups = useMemo(
     () => groupSourceReferences(feedbackReport?.source_reference_items ?? [], feedbackReport?.source_references ?? []),
     [feedbackReport?.source_reference_items, feedbackReport?.source_references],
@@ -3264,6 +3315,7 @@ function HomeContent() {
     setFeedbackReport(null);
     setProcedureResults([]);
     setSelectedProcedureResult(null);
+    setSelectedProcedureResults([]);
     setSelectedIntermediateExamCodes([]);
     setSelectedIntermediateTestCodes([]);
     setAdvancedProcedureRequestText("");
@@ -3274,9 +3326,10 @@ function HomeContent() {
     setStatusText("正在创建训练会话...");
 
     try {
-      const nextSession = await createSession(selectedCaseId);
+      const nextSession = await createSession(selectedCaseId, trainingDifficultyMode);
       setSession(nextSession);
       setSelectedCaseId(nextSession.case_id);
+      setTrainingDifficultyMode(nextSession.training_difficulty);
       setStatusText("已创建训练会话，可以继续训练。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "创建训练会话失败。";
@@ -3321,9 +3374,10 @@ function HomeContent() {
     setStatusText("正在创建训练会话...");
 
     try {
-      const nextSession = await createSession(selectedCaseId);
+      const nextSession = await createSession(selectedCaseId, trainingDifficultyMode);
       setSession(nextSession);
       setSelectedCaseId(nextSession.case_id);
+      setTrainingDifficultyMode(nextSession.training_difficulty);
       setStatusText("已创建训练会话，可以继续训练。");
       return nextSession;
     } catch (error) {
@@ -3540,7 +3594,7 @@ function HomeContent() {
         ...currentResults.filter((result) => result.id !== `exam:${updatedSession.exam_code}`),
         nextProcedureResult,
       ]);
-      setSelectedProcedureResult(nextProcedureResult);
+      openProcedureResult(nextProcedureResult);
       const sequenceReminder = shouldShowPhysicalExamSequenceReminder
         ? " OSCE 通常建议先完成核心病史采集，再进入查体。"
         : "";
@@ -3601,7 +3655,7 @@ function HomeContent() {
         ...currentResults.filter((result) => !nextResultIds.has(result.id)),
         ...nextProcedureResults,
       ]);
-      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      openProcedureResultGroup(nextProcedureResults);
       setSelectedIntermediateExamCodes([]);
       setOpenProcedureActionGroup(null);
       const unavailableCount = updatedSession.exam_results.filter((examResult) => examResult.availability_status === "not_available_for_case").length;
@@ -3648,7 +3702,7 @@ function HomeContent() {
         ...currentResults.filter((result) => result.id !== `test:${updatedSession.test_code}`),
         nextProcedureResult,
       ]);
-      setSelectedProcedureResult(nextProcedureResult);
+      openProcedureResult(nextProcedureResult);
       const sequenceReminder = shouldShowAuxiliaryTestSequenceReminder
         ? " 现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。"
         : "";
@@ -3693,7 +3747,7 @@ function HomeContent() {
         ...currentResults.filter((result) => !nextResultIds.has(result.id)),
         ...nextProcedureResults,
       ]);
-      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      openProcedureResultGroup(nextProcedureResults);
       setSelectedIntermediateTestCodes([]);
       setOpenProcedureActionGroup(null);
       const unavailableCount = updatedSession.test_results.filter((testResult) => testResult.availability_status === "not_available_for_case").length;
@@ -3747,7 +3801,7 @@ function HomeContent() {
         ...currentResults.filter((result) => !nextResultIds.has(result.id)),
         ...nextProcedureResults,
       ]);
-      setSelectedProcedureResult(nextProcedureResults[0] ?? null);
+      openProcedureResultGroup(nextProcedureResults);
       setAdvancedProcedureUnmatchedRequests(updatedSession.standardized_request.unmatched_requests);
       setAdvancedProcedureRequestText("");
       const unavailableCount = updatedSession.matched_procedure_results.filter((procedureResult) => procedureResult.availability_status === "not_available_for_case").length;
@@ -3883,6 +3937,8 @@ function HomeContent() {
       setIsSubmittingDiagnosis(false);
     }
   }
+
+  const selectedProcedureResultItems = selectedProcedureResult ? (selectedProcedureResults.length > 0 ? selectedProcedureResults : [selectedProcedureResult]) : [];
 
   return (
     <main className="relative h-screen overflow-hidden bg-muted/40 text-foreground">
@@ -4096,33 +4152,9 @@ function HomeContent() {
                 >
                   患者信息
                 </button>
-                <div className="inline-flex rounded-full border border-border bg-background p-0.5 shadow-xs">
-                  <button
-                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "beginner" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-                    onClick={() => {
-                      setTrainingDifficultyMode("beginner");
-                      setOpenProcedureActionGroup(null);
-                    }}
-                    type="button"
-                  >初级</button>
-                  <button
-                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "intermediate" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-                    onClick={() => {
-                      setTrainingDifficultyMode("intermediate");
-                      setOpenProcedureActionGroup(null);
-                      void ensureProcedureCatalog();
-                    }}
-                    type="button"
-                  >中级</button>
-                  <button
-                    className={`rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${trainingDifficultyMode === "advanced" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-                    onClick={() => {
-                      setTrainingDifficultyMode("advanced");
-                      setOpenProcedureActionGroup(null);
-                    }}
-                    type="button"
-                  >高级</button>
-                </div>
+                <span className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground shadow-xs">
+                  当前难度：{getTrainingDifficultyLabel(trainingDifficultyMode)}
+                </span>
                 {isAdvancedTrainingMode ? (
                   <div className="flex min-w-[18rem] max-w-xl flex-1 items-center gap-2 rounded-full border border-border bg-background px-2 py-1 shadow-xs">
                     <input
@@ -4250,7 +4282,7 @@ function HomeContent() {
                                     className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                     key={examOption.exam_code}
                                     onClick={() => {
-                                      setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
+                                      openProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
                                       setOpenProcedureActionGroup(null);
                                     }}
                                     type="button"
@@ -4293,7 +4325,7 @@ function HomeContent() {
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={examOption.exam_code}
                                 onClick={() => {
-                                  setSelectedProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
+                                  openProcedureResult(getProcedureResultById(`exam:${examOption.exam_code}`));
                                   setOpenProcedureActionGroup(null);
                                 }}
                                 type="button"
@@ -4368,7 +4400,7 @@ function HomeContent() {
                                     className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                     key={testOption.test_code}
                                     onClick={() => {
-                                      setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
+                                      openProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
                                       setOpenProcedureActionGroup(null);
                                     }}
                                     type="button"
@@ -4419,7 +4451,7 @@ function HomeContent() {
                                 className="rounded-lg border border-[#86B993]/40 bg-[#EEF6EF] px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-[#236146] shadow-xs transition hover:bg-[#E2F0E4]"
                                 key={testOption.test_code}
                                 onClick={() => {
-                                  setSelectedProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
+                                  openProcedureResult(getProcedureResultById(`test:${testOption.test_code}`));
                                   setOpenProcedureActionGroup(null);
                                 }}
                                 type="button"
@@ -4891,13 +4923,15 @@ function HomeContent() {
         </button>
       </div>
       {selectedProcedureResult ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setSelectedProcedureResult(null)}>
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeProcedureResultModal}>
+          <div className="max-h-[82vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">已查看结果</p>
-                <h2 className="mt-1 text-base font-semibold">{selectedProcedureResult.label}</h2>
-                {selectedProcedureResult.generatedByAi ? (
+                <h2 className="mt-1 text-base font-semibold">
+                  {selectedProcedureResultItems.length > 1 ? `已返回 ${selectedProcedureResultItems.length} 项结果` : selectedProcedureResult.label}
+                </h2>
+                {selectedProcedureResultItems.some((procedureResult) => procedureResult.generatedByAi) ? (
                   <p className="mt-2 inline-flex rounded-full border border-brand/25 bg-brand/5 px-2.5 py-1 text-xs font-medium text-brand">
                     AI 模拟结果 · 不计分
                   </p>
@@ -4906,24 +4940,31 @@ function HomeContent() {
               <button
                 aria-label="关闭查体检查结果"
                 className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                onClick={() => setSelectedProcedureResult(null)}
+                onClick={closeProcedureResultModal}
                 type="button"
               >
                 关闭
               </button>
             </div>
-            <p className="mt-4 rounded-xl border border-border bg-muted/50 p-4 text-sm leading-7 text-foreground">
-              {selectedProcedureResult.result}
-            </p>
-            {selectedProcedureResult.generatedByAi ? (
-              <div className="mt-3 rounded-xl border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
-                <p>模拟补充结果仅用于训练，不写入病例标准事实，不参与 rubric 评分。</p>
-                {selectedProcedureResult.approvalStatus ? <p className="mt-1">门禁状态：{selectedProcedureResult.approvalStatus}</p> : null}
-                {selectedProcedureResult.sourceContextReferences?.length ? (
-                  <p className="mt-1 break-all">依据：{selectedProcedureResult.sourceContextReferences.join("、")}</p>
-                ) : null}
-              </div>
-            ) : null}
+            <div className="mt-4 space-y-3">
+              {selectedProcedureResultItems.map((procedureResult) => (
+                <article className="rounded-xl border border-border bg-muted/50 p-4" key={procedureResult.id}>
+                  {selectedProcedureResultItems.length > 1 ? (
+                    <h3 className="mb-2 text-sm font-semibold text-foreground">{procedureResult.label}</h3>
+                  ) : null}
+                  <p className="text-sm leading-7 text-foreground">{procedureResult.result}</p>
+                  {procedureResult.generatedByAi ? (
+                    <div className="mt-3 rounded-xl border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+                      <p>模拟补充结果仅用于训练，不写入病例标准事实，不参与 rubric 评分。</p>
+                      {procedureResult.approvalStatus ? <p className="mt-1">门禁状态：{procedureResult.approvalStatus}</p> : null}
+                      {procedureResult.sourceContextReferences?.length ? (
+                        <p className="mt-1 break-all">依据：{procedureResult.sourceContextReferences.join("、")}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
           </div>
         </div>
       ) : null}

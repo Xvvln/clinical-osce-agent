@@ -98,6 +98,34 @@ def _request() -> module.CoachRequest:
     )
 
 
+def test_coach_request_carries_difficulty_and_hint_context() -> None:
+    request = module.CoachRequest(
+        case_id="appendicitis_001",
+        case_title="急性腹痛问诊",
+        chief_complaint="腹痛 1 天",
+        stage="history_taking",
+        training_difficulty="advanced",
+        prompt_kind="socratic_hint",
+        base_hint="先解释下一步为什么要补病史。",
+        prior_messages=[{"role": "student", "content": "什么时候开始疼的？"}],
+        pedagogy_state={"training_phase": "history_taking"},
+        clinical_reasoning_state={"pedagogical_phase": "needs_history"},
+        skill_context=["腹痛问诊训练：先建立疼痛时间线。"],
+        retrieved_knowledge_context=[],
+        hint_context={
+            "session": {"training_difficulty": "advanced"},
+            "next_step": {"base_hint": "先解释下一步为什么要补病史。"},
+        },
+        forbidden_terms=[],
+    )
+
+    payload = request.model_dump()
+
+    assert payload["training_difficulty"] == "advanced"
+    assert payload["hint_context"]["session"]["training_difficulty"] == "advanced"
+    assert payload["hint_context"]["next_step"]["base_hint"] == "先解释下一步为什么要补病史。"
+
+
 def test_create_configured_coach_agent_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
     runtime_model_config_store.clear()
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")

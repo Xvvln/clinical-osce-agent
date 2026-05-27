@@ -304,6 +304,7 @@ class AuthLoginRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     case_id: str
     student_id: str = "anonymous"
+    training_difficulty: str = "beginner"
 
 
 class MessageRequest(BaseModel):
@@ -2238,9 +2239,12 @@ def create_session(
 ) -> dict[str, object]:
     user = _require_current_user(auth_token)
     _require_runtime_model_config_for_training(user["user_id"])
+    if request.training_difficulty not in {"beginner", "intermediate", "advanced"}:
+        raise HTTPException(status_code=422, detail="invalid training_difficulty")
     return osce_session_service.create_session(
         case_id=request.case_id,
         student_id=user["user_id"],
+        training_difficulty=request.training_difficulty,
     )
 
 

@@ -14,6 +14,7 @@ from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.agent_state_service import append_decision_trace, build_pedagogy_state, build_reflection_summary
 from app.services.clinical_reasoning_trace_service import build_clinical_reasoning_trace
 from app.services.coach_agent import CoachRequest, create_default_coach_agent, normalize_coach_response, sanitize_coach_hint
+from app.services.coach_hint_context_service import build_coach_hint_context
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.patient_language_service import (
@@ -58,6 +59,7 @@ PROCESSING_STEP_LABELS = {
 class OsceGraphState(TypedDict, total=False):
     case_id: str
     stage: str
+    training_difficulty: str
     case_title: str
     chief_complaint: str
     session_id: str
@@ -109,6 +111,7 @@ def load_case_node(state: OsceGraphState) -> dict[str, str]:
     return {
         "case_id": case.case_id,
         "stage": state.get("stage") or "case_intro",
+        "training_difficulty": str(state.get("training_difficulty") or "beginner"),
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
     }
@@ -546,18 +549,26 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     base_hint = _build_socratic_hint(state, pedagogy_state)
     selected_skill_context = _selected_skill_context_strings(state)
     selected_skill_ids = _selected_skill_ids(state)
-    forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
+    forbidden_terms = _coach_diagnosis_forbidden_terms(case)
+    visible_forbidden_terms = _coach_visible_forbidden_terms(case)
     retrieved_knowledge_context = _retrieve_coach_knowledge_context(
         state,
         case=case,
         query=base_hint,
         forbidden_terms=forbidden_terms,
     )
+    hint_context = build_coach_hint_context(
+        state=dict(state),
+        case=case,
+        pedagogy_state=pedagogy_state,
+        base_hint=base_hint,
+        retrieved_knowledge_context=retrieved_knowledge_context,
+    )
     turn_analysis = _boundary_turn_analysis("socratic_hint", "学生请求教学提示。")
     turn_policy = "teaching_hint"
     agent_path = ["socratic_hint_node", "coach_agent"]
     try:
-        hint = sanitize_coach_hint(
+        hint = _sanitize_visible_coach_hint(
             normalize_coach_response(
                 coach_agent(
                     CoachRequest(
@@ -565,6 +576,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
                         case_title=case.case_title,
                         chief_complaint=case.chief_complaint,
                         stage=state.get("stage", "case_intro"),
+                        training_difficulty=str(state.get("training_difficulty") or "beginner"),
                         prompt_kind="socratic_hint",
                         base_hint=base_hint,
                         prior_messages=state.get("messages", []),
@@ -572,14 +584,15 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
                         clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
                         skill_context=selected_skill_context,
                         retrieved_knowledge_context=retrieved_knowledge_context,
+                        hint_context=hint_context,
                         forbidden_terms=[],
                     )
                 )
             ).hint,
-            forbidden_terms,
+            visible_forbidden_terms,
         )
     except Exception as exc:
-        hint = sanitize_coach_hint(base_hint, forbidden_terms)
+        hint = _sanitize_visible_coach_hint(base_hint, visible_forbidden_terms)
         turn_policy = "teaching_hint_unavailable"
         agent_path = ["socratic_hint_node", "coach_agent_unavailable"]
         turn_analysis = {
@@ -1090,6 +1103,51 @@ def _retrieve_reflection_knowledge_context(
         limit=limit,
         store=rag_knowledge_store,
     )
+
+
+def _coach_diagnosis_forbidden_terms(case: Case) -> list[str]:
+    return _unique_non_empty_strings([case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms])
+
+
+def _coach_visible_forbidden_terms(case: Case) -> list[str]:
+    private_terms: list[str] = list(_coach_diagnosis_forbidden_terms(case))
+    private_terms.extend(fact.canonical_answer for fact in case.history.hidden_facts)
+    private_terms.extend(
+        exam.result
+        for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+    )
+    private_terms.extend(
+        test.result
+        for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+    )
+    return _unique_non_empty_strings(private_terms)
+
+
+def _sanitize_visible_coach_hint(hint: str, forbidden_terms: list[str]) -> str:
+    sanitized = sanitize_coach_hint(hint, forbidden_terms)
+    for unsafe_term in ["标准答案", "答案是"]:
+        sanitized = sanitized.replace(unsafe_term, "训练目标")
+    return sanitized
+
+
+def _unique_non_empty_strings(values: list[str] | Any) -> list[str]:
+    unique_values: list[str] = []
+    for value in values if isinstance(values, list) else []:
+        for text in _forbidden_term_variants(str(value)):
+            if text and text not in unique_values:
+                unique_values.append(text)
+    return unique_values
+
+
+def _forbidden_term_variants(value: str) -> list[str]:
+    text = value.strip()
+    if not text:
+        return []
+    variants = [text]
+    trimmed = text.rstrip("。！？；;,.，、 ")
+    if trimmed and trimmed != text:
+        variants.append(trimmed)
+    return variants
 
 
 def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> str:

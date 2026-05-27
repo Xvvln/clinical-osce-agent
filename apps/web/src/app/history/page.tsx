@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
+
 type PersistedSessionSummary = Readonly<{
   session_id: string;
   case_id: string;
   case_title: string;
+  training_difficulty: TrainingDifficultyMode;
   stage: string;
   created_at: string;
   updated_at: string;
@@ -49,6 +52,16 @@ function getTrainingSessionStatusClass(session: PersistedSessionSummary): string
   return "border-border bg-background text-muted-foreground";
 }
 
+function getTrainingDifficultyLabel(trainingDifficultyMode: TrainingDifficultyMode): string {
+  if (trainingDifficultyMode === "intermediate") {
+    return "中级";
+  }
+  if (trainingDifficultyMode === "advanced") {
+    return "高级";
+  }
+  return "初级";
+}
+
 async function getCurrentUserSessions(): Promise<readonly PersistedSessionSummary[]> {
   const response = await fetch("/api/me/sessions", {
     credentials: "same-origin",
@@ -84,6 +97,7 @@ export default function HistoryPage() {
   const [backendSessions, setBackendSessions] = useState<readonly PersistedSessionSummary[]>([]);
   const [backendStatusText, setBackendStatusText] = useState("正在读取后端持久记录...");
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<PersistedSessionSummary | null>(null);
 
   useEffect(() => {
     async function loadBackendSessions() {
@@ -107,6 +121,7 @@ export default function HistoryPage() {
     try {
       await deleteCurrentUserSession(sessionId);
       setBackendSessions((currentSessions) => currentSessions.filter((session) => session.session_id !== sessionId));
+      setPendingDeleteSession(null);
       setBackendStatusText("已删除后端训练记录。");
     } catch (error) {
       setBackendStatusText(error instanceof Error ? error.message : "删除后端训练记录失败。");
@@ -165,6 +180,11 @@ export default function HistoryPage() {
                     {getTrainingSessionStatusLabel(session)}
                   </span>
                 </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full border border-brand/20 bg-brand/5 px-3 py-1 font-medium whitespace-nowrap text-brand">
+                    {getTrainingDifficultyLabel(session.training_difficulty)}训练
+                  </span>
+                </div>
                 <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs leading-5 text-muted-foreground">
                     更新时间：{formatSavedAt(session.updated_at)} · 创建时间：{formatSavedAt(session.created_at)}
@@ -195,9 +215,9 @@ export default function HistoryPage() {
                       </span>
                     )}
                     <button
-                      className="w-fit rounded-md border border-destructive/30 bg-background px-3 py-2 text-xs font-medium whitespace-nowrap text-destructive shadow-xs transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="w-fit rounded-md border border-destructive bg-destructive px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={deletingSessionId !== null}
-                      onClick={() => handleDeleteBackendSession(session.session_id)}
+                      onClick={() => setPendingDeleteSession(session)}
                       type="button"
                     >
                       {deletingSessionId === session.session_id ? "删除中" : "删除记录"}
@@ -222,6 +242,36 @@ export default function HistoryPage() {
           </section>
         )}
       </div>
+      {pendingDeleteSession ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-background p-5 shadow-[0_24px_70px_rgba(20,20,19,0.22)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-destructive">删除确认</p>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight">确认删除训练记录</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              删除后将无法从训练记录继续训练或打开该记录。病例：{pendingDeleteSession.case_title ?? pendingDeleteSession.case_id}，
+              难度：{getTrainingDifficultyLabel(pendingDeleteSession.training_difficulty)}训练。
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deletingSessionId !== null}
+                onClick={() => setPendingDeleteSession(null)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="rounded-md border border-destructive bg-destructive px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deletingSessionId !== null}
+                onClick={() => handleDeleteBackendSession(pendingDeleteSession.session_id)}
+                type="button"
+              >
+                {deletingSessionId === pendingDeleteSession.session_id ? "删除中" : "确认删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -37,6 +37,7 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 PROCEDURE_SIMULATION_SAFETY_BOUNDARY = "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。"
+TRAINING_DIFFICULTY_MODES = {"beginner", "intermediate", "advanced"}
 
 
 @dataclass
@@ -45,6 +46,7 @@ class OsceSession:
     student_id: str
     case_id: str
     stage: str
+    training_difficulty: str = "beginner"
     messages: list[dict[str, str]] = field(default_factory=list)
     asked_questions: list[str] = field(default_factory=list)
     intent_history: list[str] = field(default_factory=list)
@@ -122,7 +124,7 @@ class OsceSessionService:
         validate_case(case_payload)
         return case_payload
 
-    def create_session(self, case_id: str, student_id: str) -> dict[str, Any]:
+    def create_session(self, case_id: str, student_id: str, training_difficulty: str = "beginner") -> dict[str, Any]:
         graph_state = self.osce_graph.invoke(_initial_graph_state(case_id))
         case = load_case_node(graph_state["case_id"])
         all_enabled_skills = self.training_skill_store.list_enabled_skills()
@@ -148,12 +150,13 @@ class OsceSessionService:
             student_id=student_id,
             case_id=graph_state["case_id"],
             stage=graph_state["stage"],
+            training_difficulty=_normalize_training_difficulty(training_difficulty),
             evolution_candidates=_enabled_skill_prompts(enabled_skills),
             active_skill_context=active_skill_context,
         )
         agent_update = _refresh_agent_state(session)
         self._save_session(session)
-        self._append_event(session, "session_created", {"stage": session.stage})
+        self._append_event(session, "session_created", {"stage": session.stage, "training_difficulty": session.training_difficulty})
         self._append_agent_update_event(session, agent_update)
         for skill in enabled_skills:
             skill_event_payload = {
@@ -1041,6 +1044,7 @@ def _graph_state_from_session(
         "session_id": session.session_id,
         "case_id": session.case_id,
         "stage": session.stage,
+        "training_difficulty": session.training_difficulty,
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
         "student_message": student_message,
@@ -2334,12 +2338,18 @@ def _rubric_item_ids(case_id: str) -> set[str]:
     }
 
 
+def _normalize_training_difficulty(training_difficulty: str) -> str:
+    normalized = str(training_difficulty or "beginner").strip()
+    return normalized if normalized in TRAINING_DIFFICULTY_MODES else "beginner"
+
+
 def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
     return {
         "session_id": session.session_id,
         "student_id": session.student_id,
         "case_id": session.case_id,
         "stage": session.stage,
+        "training_difficulty": session.training_difficulty,
         "case_title": case.case_title,
         "chief_complaint": case.chief_complaint,
         "patient_opening_utterance": build_patient_opening_utterance(case.chief_complaint),

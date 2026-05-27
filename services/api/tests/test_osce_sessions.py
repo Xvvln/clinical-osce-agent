@@ -270,6 +270,27 @@ def test_create_session_uses_authenticated_user_id(authenticated_user: dict[str,
     assert create_response.json()["student_id"] == authenticated_user["user_id"]
 
 
+def test_create_session_persists_training_difficulty(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service._sessions.clear()
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+
+    assert create_response.status_code == 200
+    payload = create_response.json()
+    assert payload["training_difficulty"] == "advanced"
+
+    osce_session_service._sessions.clear()
+    reloaded_payload = client.get(f"/api/sessions/{payload['session_id']}").json()
+    session_summaries = client.get("/api/me/sessions").json()["sessions"]
+
+    assert reloaded_payload["training_difficulty"] == "advanced"
+    assert session_summaries[0]["training_difficulty"] == "advanced"
+
+
 def test_create_session_returns_patient_opening_utterance_in_patient_voice() -> None:
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
 

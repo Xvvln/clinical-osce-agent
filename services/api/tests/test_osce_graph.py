@@ -1725,6 +1725,53 @@ def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:
     ]
 
 
+def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    graph.invoke(
+        base_hint_state(
+            training_difficulty="advanced",
+            messages=[
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始。"},
+                {"role": "student", "content": "查一下 McBurney 点。"},
+                {"role": "tool", "content": "右下腹 McBurney 点明显压痛。"},
+            ],
+            asked_questions=["什么时候开始疼的？"],
+            intent_history=["ask_onset"],
+            revealed_facts=["appendicitis_001.hf_01"],
+            requested_exams=["abd.palpation.tenderness"],
+            requested_tests=["lab.cbc"],
+            student_hypotheses=["考虑急腹症，需要继续补充证据。"],
+            active_skill_context=active_skill_context(),
+        )
+    )
+
+    assert len(captured_requests) == 1
+    payload = captured_requests[0].model_dump()
+    hint_context = payload["hint_context"]
+    assert payload["training_difficulty"] == "advanced"
+    assert hint_context["session"]["training_difficulty"] == "advanced"
+    assert hint_context["conversation"]["recent_turns"][-1]["content"] == "右下腹 McBurney 点明显压痛。"
+    assert hint_context["conversation"]["student_hypotheses"] == ["考虑急腹症，需要继续补充证据。"]
+    assert hint_context["evidence_coverage"]["history"]["collected"][0]["id"] == "hf_01"
+    assert hint_context["evidence_coverage"]["physical_exam"]["collected"][0]["id"] == "abd.palpation.tenderness"
+    assert hint_context["evidence_coverage"]["auxiliary_test"]["collected"][0]["id"] == "lab.cbc"
+    assert hint_context["next_step"]["base_hint"] == payload["base_hint"]
+    assert hint_context["next_step"]["clinical_reasoning_state"]["pedagogical_phase"]
+    assert hint_context["difficulty_policy"]["mode"] == "advanced"
+    assert "自由文本" in hint_context["difficulty_policy"]["student_action_boundary"]
+    assert hint_context["skill_selection"]["selected_skills"][0]["skill_id"] == "skill_selected_history"
+    assert hint_context["skill_selection"]["selected_skills"][0]["why_selected_label"]
+    assert "急性阑尾炎" not in str(payload)
+
+
 def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() -> None:
     captured_requests: list[object] = []
 
@@ -1834,6 +1881,24 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
         "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     )
     assert result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0]["visibility"] == "pre_submit_safe"
+
+
+def test_osce_graph_socratic_hint_sanitizes_private_case_terms_from_coach_output() -> None:
+    def leaking_coach_agent(request: object) -> dict[str, object]:
+        return {
+            "should_emit": True,
+            "hint": "标准答案是急性阑尾炎，右下腹 McBurney 点明显压痛，不用再问。",
+            "trigger_kind": "socratic_hint",
+        }
+
+    graph = build_osce_graph(coach_agent=leaking_coach_agent)
+
+    result = graph.invoke(base_hint_state())
+
+    assert "急性阑尾炎" not in result["hint"]
+    assert "阑尾炎" not in result["hint"]
+    assert "右下腹 McBurney 点明显压痛" not in result["hint"]
+    assert "标准答案" not in result["hint"]
 
 
 @pytest.mark.parametrize(

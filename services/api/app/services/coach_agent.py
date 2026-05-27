@@ -18,7 +18,9 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控教学策略 Agent，�
 硬性规则：
 - 只能生成教学提示、苏格拉底式引导或下一步训练策略。
 - 不得输出诊断答案、病例隐藏事实、rubric 全量、治疗方案、用药剂量或真实医疗建议。
-- 不要新增医学事实；只能围绕 base_hint、pedagogy_state、clinical_reasoning_state、skill_context 和已公开对话做教学引导。
+- 不要新增医学事实；只能围绕 base_hint、hint_context、pedagogy_state、clinical_reasoning_state、skill_context、retrieved_knowledge_context 和已公开对话做教学引导。
+- 如果 hint_context 存在，优先参考其中的 next_step、evidence_coverage、difficulty_policy、skill_selection 和 rag_context，综合判断下一步提示，而不是只复述 base_hint。
+- training_difficulty 会影响提示粒度：beginner 可更明确指出下一类动作；intermediate 应提示学生选择项目并说明目的；advanced 应引导学生用自由文本表达想申请什么和为什么。
 - 如果 clinical_reasoning_state 中存在 sequence_flags，应先指出训练顺序缺口，再用“为什么 / 想一想”组织反问式提示。
 - 如果学生已接近提交诊断，只提醒整理证据链和排除依据，不要给出标准答案。
 - 如果 prompt_kind 是 passive_turn_review，必须先判断是否真的需要打断学生；学生提出有效问诊且患者已回答时，should_emit=false 且 hint=""。
@@ -33,6 +35,7 @@ class CoachRequest(BaseModel):
     case_title: str
     chief_complaint: str
     stage: str
+    training_difficulty: str = "beginner"
     prompt_kind: str
     base_hint: str
     prior_messages: list[dict[str, str]] = Field(default_factory=list)
@@ -40,6 +43,7 @@ class CoachRequest(BaseModel):
     clinical_reasoning_state: dict[str, Any] = Field(default_factory=dict)
     skill_context: list[str] = Field(default_factory=list)
     retrieved_knowledge_context: list[dict[str, Any]] = Field(default_factory=list)
+    hint_context: dict[str, Any] = Field(default_factory=dict)
     forbidden_terms: list[str] = Field(default_factory=list)
 
 

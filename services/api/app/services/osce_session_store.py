@@ -142,6 +142,7 @@ def _session_completion_summary(session_json: str, stage: str, case_id: str) -> 
     final_submission = payload.get("final_submission")
     feedback_report = payload.get("feedback_report")
     case_title = payload.get("case_title")
+    training_difficulty = payload.get("training_difficulty")
     has_report = bool(feedback_report)
     has_final_submission = bool(final_submission)
     stage_is_closed = stage in {"diagnosis_submission", "feedback"}
@@ -154,6 +155,11 @@ def _session_completion_summary(session_json: str, stage: str, case_id: str) -> 
         completion_status = "in_progress"
     return {
         "case_title": case_title if isinstance(case_title, str) and case_title.strip() else _case_title_for_case_id(case_id),
+        "training_difficulty": (
+            training_difficulty
+            if isinstance(training_difficulty, str) and training_difficulty in {"beginner", "intermediate", "advanced"}
+            else "beginner"
+        ),
         "is_completed": is_completed,
         "can_continue": not is_completed,
         "has_report": has_report,

@@ -3,6 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
+
+type TrainingDifficultyOption = Readonly<{
+  mode: TrainingDifficultyMode;
+  label: string;
+  description: string;
+}>;
+
 type StudentVisiblePatientProfile = Readonly<{
   age: string;
   gender: string;
@@ -67,6 +75,23 @@ type CaseListResponse = Readonly<{
 }>;
 
 const RECOMMENDED_CASE_ID = "appendicitis_001";
+const TRAINING_DIFFICULTY_OPTIONS: readonly TrainingDifficultyOption[] = [
+  {
+    mode: "beginner",
+    label: "初级",
+    description: "直接点选病例提供的核心查体与检查，适合先熟悉 OSCE 训练流程。",
+  },
+  {
+    mode: "intermediate",
+    label: "中级",
+    description: "从完整目录里勾选查体或辅助检查，提交后统一返回所选项目结果。",
+  },
+  {
+    mode: "advanced",
+    label: "高级",
+    description: "自由输入想申请的查体或检查；已有数据直接返回，缺失项目由 AI 教学模拟并标注不计分。",
+  },
+];
 
 async function getCases(): Promise<readonly CaseSummary[]> {
   const response = await fetch("/api/cases", {
@@ -102,7 +127,11 @@ function getDifficultyLabel(difficulty: string): string {
   }
 
   if (difficulty === "intermediate") {
-    return "进阶";
+    return "中级";
+  }
+
+  if (difficulty === "advanced") {
+    return "高级";
   }
 
   return difficulty;
@@ -231,14 +260,30 @@ export default function CasesPage() {
                   </span>
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
+                <div className="mt-5 grid gap-2 border-t border-border pt-4">
+                  <p className="text-xs font-semibold text-muted-foreground">选择训练难度</p>
                   {caseSummary.enabled ? (
-                    <Link
-                      className="inline-flex items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
-                      href={`/?case_id=${encodeURIComponent(caseSummary.case_id)}`}
-                    >
-                      选择并进入工作台
-                    </Link>
+                    <div className="grid gap-2">
+                      {TRAINING_DIFFICULTY_OPTIONS.map((difficultyOption) => (
+                        <Link
+                          className="group rounded-2xl border border-border bg-background px-3 py-2.5 text-left shadow-xs transition hover:border-brand/35 hover:bg-brand-hover/5"
+                          href={`/?case_id=${encodeURIComponent(caseSummary.case_id)}&difficulty=${difficultyOption.mode}`}
+                          key={difficultyOption.mode}
+                        >
+                          <span className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="inline-flex rounded-full border border-border bg-muted px-3 py-1 text-xs font-semibold whitespace-nowrap text-foreground transition group-hover:border-brand/30 group-hover:bg-brand group-hover:text-white">
+                              {difficultyOption.label}
+                            </span>
+                            <span className="text-xs font-medium whitespace-nowrap text-brand">
+                              选择{difficultyOption.label}并进入工作台
+                            </span>
+                          </span>
+                          <span className="mt-2 block text-xs leading-5 text-muted-foreground">
+                            {difficultyOption.description}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
                   ) : (
                     <button
                       className="rounded-md border border-border bg-muted px-4 py-2 text-sm font-medium whitespace-nowrap text-muted-foreground"

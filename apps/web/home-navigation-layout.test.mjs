@@ -83,8 +83,8 @@ test("student action buttons keep Chinese labels on one line", () => {
     "保存配置",
     "测试连通性",
   ]);
-  assertInteractiveLabelsDoNotWrap("history page", historySource, ["返回工作台", "继续训练", "删除记录"]);
-  assertInteractiveLabelsDoNotWrap("cases page", casesSource, ["返回工作台", "选择并进入工作台"]);
+  assertInteractiveLabelsDoNotWrap("history page", historySource, ["返回工作台", "继续训练", "删除记录", "确认删除"]);
+  assertInteractiveLabelsDoNotWrap("cases page", casesSource, ["返回工作台"]);
   assertInteractiveLabelsDoNotWrap("report page", reportSource, ["返回工作台"]);
   assertInteractiveLabelsDoNotWrap("profile page", profileSource, ["返回工作台", "继续训练"]);
   assertInteractiveLabelsDoNotWrap("safety page", safetySource, ["返回工作台"]);
@@ -174,6 +174,17 @@ test("home inquiry composer does not show canned history shortcut or example pla
   assert.doesNotMatch(pageSource, /setInputValue\("什么时候开始疼的？"\)/);
   assert.doesNotMatch(pageSource, /placeholder="例如：什么时候开始疼的？疼痛在哪里？有没有恶心或腹泻？"/);
   assert.match(pageSource, /placeholder="输入问诊问题，开始诊断训练"/);
+});
+
+test("home procedure result modal shows the whole returned batch", () => {
+  assert.match(pageSource, /const \[selectedProcedureResults, setSelectedProcedureResults\] = useState<readonly ProcedureResult\[]>\(\[]\);/);
+  assert.match(pageSource, /function openProcedureResultGroup\(nextProcedureResults: readonly ProcedureResult\[]\)/);
+  assert.match(pageSource, /const selectedProcedureResultItems = selectedProcedureResult \? \(selectedProcedureResults\.length > 0 \? selectedProcedureResults : \[selectedProcedureResult\]\) : \[];/);
+  assert.match(pageSource, /openProcedureResult\(nextProcedureResult\);/);
+  assert.match(pageSource, /openProcedureResultGroup\(nextProcedureResults\);/);
+  assert.match(pageSource, /selectedProcedureResultItems\.length > 1 \? `已返回 \$\{selectedProcedureResultItems\.length\} 项结果` : selectedProcedureResult\.label/);
+  assert.match(pageSource, /selectedProcedureResultItems\.map\(\(procedureResult\) => \(/);
+  assert.doesNotMatch(pageSource, /setSelectedProcedureResult\(nextProcedureResults\[0\] \?\? null\);/);
 });
 
 test("home message failure status is not limited to backend downtime", () => {
@@ -1120,7 +1131,7 @@ test("home workspace keeps implicit session creation and exposes explicit restar
     pageSource.indexOf("async function ensureActiveSession"),
     pageSource.indexOf("async function animatePendingPatientReply"),
   );
-  assert.match(ensureActiveSessionSource, /const nextSession = await createSession\(selectedCaseId\);/);
+  assert.match(ensureActiveSessionSource, /const nextSession = await createSession\(selectedCaseId, trainingDifficultyMode\);/);
   assert.match(ensureActiveSessionSource, /setSession\(nextSession\);/);
   assert.match(ensureActiveSessionSource, /return nextSession;/);
   assert.match(pageSource, /const activeSession = await ensureActiveSession\(\);/);
@@ -1278,30 +1289,35 @@ test("home quick actions group procedure choices and open viewed results in a mo
   assert.match(pageSource, /className="mt-3 grid max-h-72 gap-2 overflow-y-scroll pr-1 student-rail-scrollbar" onScroll=\{handleStudentRailScroll\}/);
   assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedPhysicalExamOptions\.map/);
   assert.match(pageSource, />\s*已查看\s*<\/p>[\s\S]*completedAuxiliaryTestOptions\.map/);
-  assert.match(pageSource, /setSelectedProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\)/);
-  assert.match(pageSource, /setSelectedProcedureResult\(getProcedureResultById\(`test:\$\{testOption\.test_code\}`\)\)/);
+  assert.match(pageSource, /openProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\)/);
+  assert.match(pageSource, /openProcedureResult\(getProcedureResultById\(`test:\$\{testOption\.test_code\}`\)\)/);
   assert.match(pageSource, /aria-label="关闭查体检查结果"/);
-  assert.match(pageSource, /selectedProcedureResult\.result/);
+  assert.match(pageSource, /procedureResult\.result/);
   assert.doesNotMatch(pageSource, /<p className="mt-1 text-xs leading-5 text-muted-foreground">\{item\.result\}<\/p>/);
 });
 
 test("home supports intermediate procedure catalog and batch procedure requests", () => {
   assert.match(pageSource, /type TrainingDifficultyMode = "beginner" \| "intermediate" \| "advanced";/);
+  assert.match(pageSource, /training_difficulty: TrainingDifficultyMode;/);
   assert.match(pageSource, /type ProcedureCatalog = Readonly/);
   assert.match(pageSource, /\/api\/procedure-catalog/);
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/physical-exams/);
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/auxiliary-tests/);
   assert.match(pageSource, /\/api\/sessions\/\$\{sessionId\}\/procedure-request/);
   assert.doesNotMatch(pageSource, /known_case_ids/);
-  assert.match(pageSource, /const \[trainingDifficultyMode, setTrainingDifficultyMode\] = useState<TrainingDifficultyMode>\("beginner"\);/);
+  assert.match(pageSource, /function getTrainingDifficultyModeFromSearchParams/);
+  assert.match(pageSource, /useState<TrainingDifficultyMode>\(\(\) => getTrainingDifficultyModeFromSearchParams\(searchParams\)\)/);
+  assert.match(pageSource, /createSession\(selectedCaseId, trainingDifficultyMode\)/);
+  assert.match(pageSource, /training_difficulty: trainingDifficultyMode/);
+  assert.match(pageSource, /setTrainingDifficultyMode\(nextSession\.training_difficulty\)/);
   assert.match(pageSource, /ensureProcedureCatalog/);
   assert.match(pageSource, /selectedIntermediateExamCodes/);
   assert.match(pageSource, /selectedIntermediateTestCodes/);
   assert.match(pageSource, /advancedProcedureRequestText/);
   assert.match(pageSource, /handleAdvancedProcedureRequest/);
-  assert.match(pageSource, />初级<\/button>/);
-  assert.match(pageSource, />中级<\/button>/);
-  assert.match(pageSource, />高级<\/button>/);
+  assert.doesNotMatch(pageSource, /setTrainingDifficultyMode\("beginner"\);/);
+  assert.doesNotMatch(pageSource, /setTrainingDifficultyMode\("intermediate"\);/);
+  assert.doesNotMatch(pageSource, /setTrainingDifficultyMode\("advanced"\);/);
   assert.match(pageSource, />提交所选查体<\/button>/);
   assert.match(pageSource, />提交所选检查<\/button>/);
   assert.match(pageSource, /提交自由申请/);
@@ -1490,7 +1506,7 @@ test("home secondary menus close from outside clicks and after action selection"
   assert.match(pageSource, /href="\/sources" onClick=\{closeOsceDock\}/);
   assert.match(pageSource, /href="\/cases" onClick=\{closeOsceDock\}/);
   assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?closeOsceDock\(\);[\s\S]*?void handleHintRequest\(\);[\s\S]*?\}\}/);
-  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?setSelectedProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\);[\s\S]*?setOpenProcedureActionGroup\(null\);[\s\S]*?\}\}/);
+  assert.match(pageSource, /onClick=\{\(\) => \{[\s\S]*?openProcedureResult\(getProcedureResultById\(`exam:\$\{examOption\.exam_code\}`\)\);[\s\S]*?setOpenProcedureActionGroup\(null\);[\s\S]*?\}\}/);
 });
 
 
@@ -1513,7 +1529,7 @@ test("home current case card can show student-visible patient profile modal", ()
 
 
 test("home floating dialogs close from backdrop clicks while preserving inner clicks", () => {
-  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setSelectedProcedureResult\(null\)\}>[\s\S]*?<div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
+  assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{closeProcedureResultModal\}>[\s\S]*?<div className="max-h-\[82vh\] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
   assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsCoverageMapOpen\(false\)\}>[\s\S]*?<div className="max-h-\[82vh\] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
   assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsPatientProfileOpen\(false\)\}>[\s\S]*?<div className="w-full max-w-sm rounded-2xl border border-border bg-background p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
   assert.match(pageSource, /<div className="fixed inset-0 z-50 flex items-center justify-center bg-black\/30 p-4" onClick=\{\(\) => setIsApiConfigHelpOpen\(false\)\}>[\s\S]*?<div className="max-h-\[86vh\] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-white p-5 shadow-xl" onClick=\{\(event\) => event\.stopPropagation\(\)\}>/);
@@ -1671,6 +1687,7 @@ test("report score status uses a non-action low score label", () => {
 
 test("history page lists backend sessions as the only official records", () => {
   assert.match(historySource, /type PersistedSessionSummary = Readonly<\{/);
+  assert.match(historySource, /training_difficulty: TrainingDifficultyMode;/);
   assert.match(historySource, /is_completed: boolean;/);
   assert.match(historySource, /can_continue: boolean;/);
   assert.match(historySource, /has_report: boolean;/);
@@ -1685,6 +1702,7 @@ test("history page lists backend sessions as the only official records", () => {
   assert.match(historySource, /credentials: "same-origin"/);
   assert.match(historySource, /const \[backendSessions, setBackendSessions\] = useState<readonly PersistedSessionSummary\[\]>\(\[\]\);/);
   assert.match(historySource, /const \[deletingSessionId, setDeletingSessionId\] = useState<string \| null>\(null\);/);
+  assert.match(historySource, /const \[pendingDeleteSession, setPendingDeleteSession\] = useState<PersistedSessionSummary \| null>\(null\);/);
   assert.match(historySource, /setBackendSessions\(await getCurrentUserSessions\(\)\)/);
   assert.match(historySource, /setBackendSessions\(\(currentSessions\) => currentSessions\.filter\(\(session\) => session\.session_id !== sessionId\)\)/);
   assert.match(historySource, /<p className="text-sm font-semibold text-brand">后端持久记录<\/p>/);
@@ -1694,12 +1712,18 @@ test("history page lists backend sessions as the only official records", () => {
   assert.match(historySource, /href="\/"[\s\S]*?>\s*返回工作台\s*<\/Link>/);
   assert.match(historySource, /session\.can_continue \? \(/);
   assert.match(historySource, /href=\{`\/\?session_id=\$\{session\.session_id\}`\}[\s\S]*?>\s*继续训练\s*<\/Link>/);
+  assert.match(historySource, /getTrainingDifficultyLabel\(session\.training_difficulty\)/);
+  assert.match(historySource, />\s*\{getTrainingDifficultyLabel\(session\.training_difficulty\)\}训练\s*<\/span>/);
   assert.match(historySource, /训练已结束/);
   assert.match(historySource, /href=\{`\/report\?session_id=\$\{session\.session_id\}`\}/);
   assert.doesNotMatch(historySource, /href=\{`\/api\/me\/sessions\/\$\{session\.session_id\}`\}/);
   assert.doesNotMatch(historySource, />\s*查看状态\s*<\/Link>/);
-  assert.match(historySource, /onClick=\{\(\) => handleDeleteBackendSession\(session\.session_id\)\}/);
+  assert.match(historySource, /onClick=\{\(\) => setPendingDeleteSession\(session\)\}/);
   assert.match(historySource, /\{deletingSessionId === session\.session_id \? "删除中" : "删除记录"\}/);
+  assert.match(historySource, /确认删除训练记录/);
+  assert.match(historySource, /删除后将无法从训练记录继续训练或打开该记录。/);
+  assert.match(historySource, /onClick=\{\(\) => handleDeleteBackendSession\(pendingDeleteSession\.session_id\)\}/);
+  assert.match(historySource, /确认删除/);
   assert.doesNotMatch(historySource, /本机历史/);
   assert.doesNotMatch(historySource, /localStorage/);
   assert.doesNotMatch(historySource, /readTrainingHistoryRecords/);
@@ -1720,6 +1744,14 @@ test("profile recent sessions do not offer continue actions for completed sessio
 test("cases page starts selected cases in a prepared workspace without exposing static teaching focus cards", () => {
   assert.match(casesSource, /type CaseContentStats = Readonly<\{/);
   assert.match(casesSource, /content_stats: CaseContentStats;/);
+  assert.match(casesSource, /type TrainingDifficultyMode = "beginner" \| "intermediate" \| "advanced";/);
+  assert.match(casesSource, /const TRAINING_DIFFICULTY_OPTIONS/);
+  assert.match(casesSource, /label: "初级"/);
+  assert.match(casesSource, /label: "中级"/);
+  assert.match(casesSource, /label: "高级"/);
+  assert.match(casesSource, /直接点选病例提供的核心查体与检查/);
+  assert.match(casesSource, /从完整目录里勾选查体或辅助检查/);
+  assert.match(casesSource, /自由输入想申请的查体或检查/);
   assert.match(casesSource, /const RECOMMENDED_CASE_ID = "appendicitis_001";/);
   assert.match(casesSource, /function getCaseTrainingItemTotal\(caseSummary: CaseSummary\): number/);
   assert.match(casesSource, /caseSummary\.content_stats\.total_training_items/);
@@ -1740,8 +1772,10 @@ test("cases page starts selected cases in a prepared workspace without exposing 
   assert.doesNotMatch(casesSource, /caseSummary\.teaching_focus\.common_error_patterns\.map/);
   assert.doesNotMatch(casesSource, />\s*教学重点\s*<\/p>/);
   assert.doesNotMatch(casesSource, />\s*常见训练误区\s*<\/p>/);
-  assert.match(casesSource, /href=\{`\/\?case_id=\$\{encodeURIComponent\(caseSummary\.case_id\)\}`\}/);
-  assert.match(casesSource, />\s*选择并进入工作台\s*<\/Link>/);
+  assert.match(casesSource, /TRAINING_DIFFICULTY_OPTIONS\.map\(\(difficultyOption\) =>/);
+  assert.match(casesSource, /difficulty=\$\{difficultyOption\.mode\}/);
+  assert.match(casesSource, /选择\{difficultyOption\.label\}并进入工作台/);
+  assert.doesNotMatch(casesSource, />\s*选择并进入工作台\s*<\/Link>/);
   assert.doesNotMatch(casesSource, /创建新的本地 session/);
 });
 
