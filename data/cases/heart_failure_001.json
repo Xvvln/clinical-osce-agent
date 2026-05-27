@@ -26,40 +26,132 @@
         "topic": "现病史",
         "slot": "progression",
         "canonical_answer": "最开始走快一点才喘，这 3 天连晚上躺下都觉得喘。",
-        "variants": ["最近明显更喘了", "这几天晚上最难受"],
-        "trigger_intents": ["ask_progression"],
+        "variants": [
+          "最近明显更喘了",
+          "这几天晚上最难受"
+        ],
+        "trigger_intents": [
+          "ask_progression"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_progression"]
+        "linked_rubric_items": [
+          "ht_progression"
+        ]
       },
       {
         "fact_id": "heart_failure_001.hf_02",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "晚上睡觉需要垫高枕头，半夜会憋醒坐起来。",
-        "variants": ["不能平躺睡", "半夜会憋醒"],
-        "trigger_intents": ["ask_orthopnea"],
+        "variants": [
+          "不能平躺睡",
+          "半夜会憋醒"
+        ],
+        "trigger_intents": [
+          "ask_orthopnea"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_orthopnea"]
+        "linked_rubric_items": [
+          "ht_orthopnea"
+        ]
       },
       {
         "fact_id": "heart_failure_001.hf_03",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "双脚和小腿近几天有些浮肿。",
-        "variants": ["脚肿了", "腿有点肿"],
-        "trigger_intents": ["ask_edema"],
+        "variants": [
+          "脚肿了",
+          "腿有点肿"
+        ],
+        "trigger_intents": [
+          "ask_edema"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_edema"]
+        "linked_rubric_items": [
+          "ht_edema"
+        ]
       },
       {
         "fact_id": "heart_failure_001.hf_04",
         "topic": "既往史",
         "slot": null,
         "canonical_answer": "有高血压病史 10 年，曾提示冠心病。",
-        "variants": ["血压高很多年了", "以前医生说过心脏供血不好"],
-        "trigger_intents": ["ask_past_medical_history"],
+        "variants": [
+          "血压高很多年了",
+          "以前医生说过心脏供血不好"
+        ],
+        "trigger_intents": [
+          "ask_past_medical_history"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_history"]
+        "linked_rubric_items": [
+          "ht_history"
+        ]
+      },
+      {
+        "fact_id": "heart_failure_001.hf_05",
+        "topic": "用药史",
+        "slot": null,
+        "canonical_answer": "平时吃降压药和利尿药，但最近一周利尿药吃得不规律。",
+        "variants": [
+          "最近药有时忘了吃",
+          "利尿药没有按时吃"
+        ],
+        "trigger_intents": [
+          "ask_past_medical_history"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "heart_failure_001.hf_06",
+        "topic": "个人史",
+        "slot": null,
+        "canonical_answer": "最近吃得比较咸，也没有明显增加运动量。",
+        "variants": [
+          "这几天口味比较重",
+          "吃咸了一点"
+        ],
+        "trigger_intents": [
+          "ask_diet"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "heart_failure_001.hf_07",
+        "topic": "系统回顾",
+        "slot": "negation",
+        "canonical_answer": "没有明显发热、黄痰或胸痛。",
+        "variants": [
+          "没发烧，也没咳黄痰",
+          "胸口不疼"
+        ],
+        "trigger_intents": [
+          "ask_fever",
+          "ask_sputum",
+          "ask_chest_pain_character"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "heart_failure_001.hf_08",
+        "topic": "ICE",
+        "slot": null,
+        "canonical_answer": "我以为是感冒没好，但担心晚上喘不上气，希望弄清楚是不是心脏问题。",
+        "variants": [
+          "怕夜里喘不上来",
+          "担心是心脏的问题"
+        ],
+        "trigger_intents": [
+          "ask_idea",
+          "ask_concern",
+          "ask_expectation"
+        ],
+        "blocking_rule": "reveal_after_stage",
+        "linked_rubric_items": []
       }
     ],
     "past_medical_history": "高血压病史 10 年，既往有冠心病病史。",
@@ -79,24 +171,59 @@
         "exam_name_cn": "呼吸频率",
         "result": "呼吸 24 次/分。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_resp_rate"]
+        "linked_rubric_items": [
+          "pe_resp_rate"
+        ]
       },
       {
         "exam_code": "lung.auscultation.rales",
         "exam_name_cn": "肺部听诊",
         "result": "双肺底可闻及湿啰音。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_rales"]
+        "linked_rubric_items": [
+          "pe_rales"
+        ]
       },
       {
         "exam_code": "ext.pitting_edema",
         "exam_name_cn": "下肢水肿检查",
         "result": "双下肢凹陷性水肿阳性。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_edema"]
+        "linked_rubric_items": [
+          "pe_edema"
+        ]
+      },
+      {
+        "exam_code": "vital.spo2",
+        "exam_name_cn": "指氧饱和度",
+        "result": "静息指氧饱和度 93%。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "neck.jvp",
+        "exam_name_cn": "颈静脉检查",
+        "result": "颈静脉充盈。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "heart.auscultation.s3",
+        "exam_name_cn": "心脏听诊",
+        "result": "心尖部可闻及第三心音。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
-    "optional_items": []
+    "optional_items": [
+      {
+        "exam_code": "lung.auscultation.wheeze",
+        "exam_name_cn": "肺部喘鸣音",
+        "result": "未闻及明显哮鸣音。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ]
   },
   "auxiliary_tests": {
     "must_items": [
@@ -107,12 +234,16 @@
         "invasiveness": "微创",
         "cost_hint": "中等",
         "diagnostic_role": "supports_primary_diagnosis",
-        "rules_out": ["肺炎"],
+        "rules_out": [
+          "肺炎"
+        ],
         "recommended_stage": "auxiliary_test",
         "overuse_warning": null,
         "result": "BNP 明显升高。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_bnp"]
+        "linked_rubric_items": [
+          "at_bnp"
+        ]
       },
       {
         "test_code": "img.echo",
@@ -121,20 +252,75 @@
         "invasiveness": "无创",
         "cost_hint": "中等",
         "diagnostic_role": "supports_primary_diagnosis",
-        "rules_out": ["慢性阻塞性肺疾病急性加重"],
+        "rules_out": [
+          "慢性阻塞性肺疾病急性加重"
+        ],
         "recommended_stage": "auxiliary_test",
         "overuse_warning": null,
         "result": "左心室射血分数降低。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_echo"]
+        "linked_rubric_items": [
+          "at_echo"
+        ]
+      },
+      {
+        "test_code": "img.chest_xray",
+        "test_name_cn": "胸部 X 线",
+        "category": "影像",
+        "invasiveness": "无创",
+        "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "心影增大，双肺纹理增多，肺淤血表现。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
-    "optional_items": [],
+    "optional_items": [
+      {
+        "test_code": "lab.troponin",
+        "test_name_cn": "肌钙蛋白",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": [
+          "急性冠脉综合征"
+        ],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "肌钙蛋白未明显升高。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      },
+      {
+        "test_code": "lab.cbc",
+        "test_name_cn": "血常规",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": [
+          "肺炎"
+        ],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "白细胞未见明显升高。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ],
     "forbidden_items": []
   },
   "diagnosis": {
     "main_diagnosis": "慢性心力衰竭急性加重",
-    "main_diagnosis_synonyms": ["心力衰竭", "心衰", "acute decompensated heart failure"],
+    "main_diagnosis_synonyms": [
+      "心力衰竭",
+      "心衰",
+      "acute decompensated heart failure"
+    ],
     "icd10_hint": "I50",
     "differential_diagnoses": [
       {
@@ -148,6 +334,12 @@
         "icd10_hint": "J18",
         "expected_action": "排除",
         "key_distinction": "通常发热、感染症状更突出，超声心动图和 BNP 不支持。"
+      },
+      {
+        "disease_name": "急性冠脉综合征",
+        "icd10_hint": "I24",
+        "expected_action": "排除",
+        "key_distinction": "常有胸痛、动态心电图缺血改变或肌钙蛋白升高，本例缺乏这些主导证据。"
       }
     ],
     "reasoning_points": [
@@ -155,28 +347,98 @@
         "point_id": "heart_failure_001.rp_01",
         "statement": "活动后气短进行性加重、端坐呼吸和夜间阵发性呼吸困难提示心衰症状谱。",
         "kind": "支持",
-        "required_evidence": ["heart_failure_001.hf_01", "heart_failure_001.hf_02"],
+        "required_evidence": [
+          "heart_failure_001.hf_01",
+          "heart_failure_001.hf_02"
+        ],
         "weight": 8
       },
       {
         "point_id": "heart_failure_001.rp_02",
         "statement": "肺底湿啰音和下肢凹陷性水肿提示体循环及肺循环淤血。",
         "kind": "支持",
-        "required_evidence": ["heart_failure_001.hf_03", "lung.auscultation.rales", "ext.pitting_edema"],
+        "required_evidence": [
+          "heart_failure_001.hf_03",
+          "lung.auscultation.rales",
+          "ext.pitting_edema",
+          "vital.spo2",
+          "neck.jvp"
+        ],
         "weight": 8
       },
       {
         "point_id": "heart_failure_001.rp_03",
         "statement": "BNP 升高且超声心动图示射血分数降低，支持慢性心力衰竭急性加重。",
         "kind": "支持",
-        "required_evidence": ["lab.bnp", "img.echo", "resp.rate"],
+        "required_evidence": [
+          "lab.bnp",
+          "img.echo",
+          "resp.rate",
+          "img.chest_xray",
+          "heart.auscultation.s3"
+        ],
         "weight": 9
+      },
+      {
+        "point_id": "heart_failure_001.rp_04",
+        "statement": "饮食偏咸和利尿药不规律提供本次加重的常见诱因线索。",
+        "kind": "支持",
+        "required_evidence": [
+          "heart_failure_001.hf_05",
+          "heart_failure_001.hf_06"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "heart_failure_001.rp_05",
+        "statement": "无发热黄痰、血常规无明显感染证据，不支持肺炎作为主要诊断。",
+        "kind": "排除",
+        "required_evidence": [
+          "heart_failure_001.hf_07",
+          "lab.cbc"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "heart_failure_001.rp_06",
+        "statement": "无胸痛且肌钙蛋白未提示急性心肌损伤，不支持急性冠脉综合征为主因。",
+        "kind": "排除",
+        "required_evidence": [
+          "heart_failure_001.hf_07",
+          "lab.troponin"
+        ],
+        "weight": 4
       }
     ],
     "suggested_next_steps": "建议结合心内科评估进一步判断心衰分型与诱因，教学模拟不涉及具体剂量方案。"
   },
-  "distractor_clues": [],
-  "negative_findings": [],
+  "distractor_clues": [
+    {
+      "clue_id": "dc_cold_recovery_guess",
+      "patient_expression": "我一开始以为是感冒后一直没恢复。",
+      "teaching_value": "训练学生区分患者解释与心源性呼吸困难证据，避免把夜间憋醒和水肿误归为感冒。",
+      "should_not_score_as": [
+        "肺炎确诊依据",
+        "普通感冒确诊依据"
+      ]
+    }
+  ],
+  "negative_findings": [
+    {
+      "finding_id": "nf_no_fever_purulent_sputum",
+      "source": "heart_failure_001.hf_07",
+      "supports_exclusion_of": [
+        "肺炎"
+      ]
+    },
+    {
+      "finding_id": "nf_no_troponin_rise",
+      "source": "lab.troponin",
+      "supports_exclusion_of": [
+        "急性冠脉综合征"
+      ]
+    }
+  ],
   "evidence_graph": {
     "evidence_nodes": [
       {
@@ -250,6 +512,78 @@
         "node_type": "reasoning_point",
         "source_id": "heart_failure_001.rp_03",
         "label": "BNP 与心超客观证据推理点"
+      },
+      {
+        "node_id": "ev_med_nonadherence",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_05",
+        "label": "利尿药服用不规律"
+      },
+      {
+        "node_id": "ev_salty_diet",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_06",
+        "label": "近期饮食偏咸"
+      },
+      {
+        "node_id": "ev_no_infection_or_chest_pain",
+        "node_type": "history_fact",
+        "source_id": "heart_failure_001.hf_07",
+        "label": "无发热黄痰或胸痛"
+      },
+      {
+        "node_id": "ev_low_spo2",
+        "node_type": "physical_exam",
+        "source_id": "vital.spo2",
+        "label": "指氧轻度降低"
+      },
+      {
+        "node_id": "ev_jvp",
+        "node_type": "physical_exam",
+        "source_id": "neck.jvp",
+        "label": "颈静脉充盈"
+      },
+      {
+        "node_id": "ev_s3",
+        "node_type": "physical_exam",
+        "source_id": "heart.auscultation.s3",
+        "label": "第三心音"
+      },
+      {
+        "node_id": "ev_xray_congestion",
+        "node_type": "auxiliary_test",
+        "source_id": "img.chest_xray",
+        "label": "胸片肺淤血"
+      },
+      {
+        "node_id": "ev_cbc_no_infection",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.cbc",
+        "label": "血常规不支持明显感染"
+      },
+      {
+        "node_id": "ev_troponin_normal",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.troponin",
+        "label": "肌钙蛋白未明显升高"
+      },
+      {
+        "node_id": "rp_trigger_context",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_04",
+        "label": "心衰加重诱因推理点"
+      },
+      {
+        "node_id": "rp_exclude_pneumonia",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_05",
+        "label": "肺炎排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_acs",
+        "node_type": "reasoning_point",
+        "source_id": "heart_failure_001.rp_06",
+        "label": "急性冠脉综合征排除推理点"
       }
     ],
     "evidence_edges": [
@@ -297,6 +631,26 @@
         "from_node": "ev_echo_low_ef",
         "to_node": "rp_objective_hf",
         "relation": "supports"
+      },
+      {
+        "from_node": "ev_med_nonadherence",
+        "to_node": "rp_trigger_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_salty_diet",
+        "to_node": "rp_trigger_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_cbc_no_infection",
+        "to_node": "rp_exclude_pneumonia",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_troponin_normal",
+        "to_node": "rp_exclude_acs",
+        "relation": "refutes"
       }
     ]
   },
@@ -317,25 +671,39 @@
         "pattern_id": "heart_failure_001.pattern.dyspnea_history_gap",
         "title": "呼吸困难进展史采集不足",
         "focus": "把气短直接当作呼吸系统问题处理，漏问端坐呼吸和夜间阵发性呼吸困难。",
-        "related_rubric_items": ["ht_progression", "ht_orthopnea"]
+        "related_rubric_items": [
+          "ht_progression",
+          "ht_orthopnea"
+        ]
       },
       {
         "pattern_id": "heart_failure_001.pattern.congestion_history_gap",
         "title": "体液潴留线索采集不足",
         "focus": "只关注主诉气短，未追问水肿和既往心血管病史，导致心源性呼吸困难线索链不完整。",
-        "related_rubric_items": ["ht_edema", "pe_edema"]
+        "related_rubric_items": [
+          "ht_edema",
+          "pe_edema"
+        ]
       },
       {
         "pattern_id": "heart_failure_001.pattern.congestion_exam_gap",
         "title": "淤血体征整合不足",
         "focus": "申请 BNP 或心超后没有结合湿啰音、下肢水肿解释循环淤血。",
-        "related_rubric_items": ["pe_rales", "pe_edema", "at_bnp", "at_echo"]
+        "related_rubric_items": [
+          "pe_rales",
+          "pe_edema",
+          "at_bnp",
+          "at_echo"
+        ]
       },
       {
         "pattern_id": "heart_failure_001.pattern.respiratory_differential_gap",
         "title": "呼吸困难鉴别不足",
         "focus": "过早提出诊断，未说明为什么当前证据不优先支持肺炎或 COPD 急性加重。",
-        "related_rubric_items": ["dd_copd", "reasoning_core"]
+        "related_rubric_items": [
+          "dd_copd",
+          "reasoning_core"
+        ]
       }
     ],
     "recommended_training_path": [
@@ -352,5 +720,9 @@
     "modified": true
   },
   "schema_version": "1.1",
-  "tags": ["呼吸困难", "心血管", "心衰"]
+  "tags": [
+    "呼吸困难",
+    "心血管",
+    "心衰"
+  ]
 }

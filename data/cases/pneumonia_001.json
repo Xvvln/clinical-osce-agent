@@ -26,40 +26,134 @@
         "topic": "现病史",
         "slot": "onset",
         "canonical_answer": "3 天前开始发热咳嗽，昨天开始右侧胸口疼。",
-        "variants": ["三天前开始不舒服", "昨天胸口疼得更明显"],
-        "trigger_intents": ["ask_onset"],
+        "variants": [
+          "三天前开始不舒服",
+          "昨天胸口疼得更明显"
+        ],
+        "trigger_intents": [
+          "ask_onset"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_onset"]
+        "linked_rubric_items": [
+          "ht_onset"
+        ]
       },
       {
         "fact_id": "pneumonia_001.hf_02",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "咳黄痰，痰量不多，没有咯血。",
-        "variants": ["有黄痰，但是不算很多", "没咳血"],
-        "trigger_intents": ["ask_sputum"],
+        "variants": [
+          "有黄痰，但是不算很多",
+          "没咳血"
+        ],
+        "trigger_intents": [
+          "ask_sputum"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_sputum"]
+        "linked_rubric_items": [
+          "ht_sputum"
+        ]
       },
       {
         "fact_id": "pneumonia_001.hf_03",
         "topic": "现病史",
         "slot": "character",
         "canonical_answer": "右侧胸痛在深呼吸和咳嗽时更明显。",
-        "variants": ["一咳嗽就更疼", "深呼吸也会疼"],
-        "trigger_intents": ["ask_chest_pain_character"],
+        "variants": [
+          "一咳嗽就更疼",
+          "深呼吸也会疼"
+        ],
+        "trigger_intents": [
+          "ask_chest_pain_character"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_chest_pain"]
+        "linked_rubric_items": [
+          "ht_chest_pain"
+        ]
       },
       {
         "fact_id": "pneumonia_001.hf_04",
         "topic": "既往史",
         "slot": null,
         "canonical_answer": "既往体健，无慢性肺病史。",
-        "variants": ["以前身体还可以", "没有慢性肺病"],
-        "trigger_intents": ["ask_past_medical_history"],
+        "variants": [
+          "以前身体还可以",
+          "没有慢性肺病"
+        ],
+        "trigger_intents": [
+          "ask_past_medical_history"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_past_history"]
+        "linked_rubric_items": [
+          "ht_past_history"
+        ]
+      },
+      {
+        "fact_id": "pneumonia_001.hf_05",
+        "topic": "现病史",
+        "slot": "severity",
+        "canonical_answer": "这两天最高体温约 38.7℃，活动后有点气短，但休息能缓解。",
+        "variants": [
+          "最高三十八度多",
+          "活动后有点喘"
+        ],
+        "trigger_intents": [
+          "ask_fever",
+          "ask_severity",
+          "ask_progression"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "pneumonia_001.hf_06",
+        "topic": "系统回顾",
+        "slot": "negation",
+        "canonical_answer": "没有长期低热、盗汗、体重明显下降，也没有结核接触史。",
+        "variants": [
+          "没有盗汗消瘦",
+          "没接触过结核病人"
+        ],
+        "trigger_intents": [
+          "ask_fever",
+          "ask_past_medical_history"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "pneumonia_001.hf_07",
+        "topic": "个人史",
+        "slot": null,
+        "canonical_answer": "近期没有长途旅行或久坐，偶尔吸烟，近年已明显减少。",
+        "variants": [
+          "最近没长途坐车",
+          "只是偶尔抽烟"
+        ],
+        "trigger_intents": [
+          "ask_travel",
+          "ask_personal"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "pneumonia_001.hf_08",
+        "topic": "ICE",
+        "slot": null,
+        "canonical_answer": "我以为只是普通感冒，但担心发热咳嗽一直不好，希望确认是不是肺部感染。",
+        "variants": [
+          "怕拖成肺炎",
+          "想知道是不是普通感冒"
+        ],
+        "trigger_intents": [
+          "ask_idea",
+          "ask_concern",
+          "ask_expectation"
+        ],
+        "blocking_rule": "reveal_after_stage",
+        "linked_rubric_items": []
       }
     ],
     "past_medical_history": "既往体健，无慢性肺病史。",
@@ -79,17 +173,57 @@
         "exam_name_cn": "体温",
         "result": "体温 38.7℃。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_temperature"]
+        "linked_rubric_items": [
+          "pe_temperature"
+        ]
       },
       {
         "exam_code": "resp.auscultation.crackle",
         "exam_name_cn": "肺部听诊",
         "result": "右下肺可闻及湿啰音。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_crackle"]
+        "linked_rubric_items": [
+          "pe_crackle"
+        ]
+      },
+      {
+        "exam_code": "resp.rate",
+        "exam_name_cn": "呼吸频率",
+        "result": "呼吸 22 次/分。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "vital.spo2",
+        "exam_name_cn": "指氧饱和度",
+        "result": "室内空气下 SpO2 95%。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "resp.percussion.dullness",
+        "exam_name_cn": "肺部叩诊",
+        "result": "右下肺叩诊稍浊。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "resp.breath_sound.bronchial",
+        "exam_name_cn": "呼吸音",
+        "result": "右下肺呼吸音增粗。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
-    "optional_items": []
+    "optional_items": [
+      {
+        "exam_code": "leg.dvt_sign",
+        "exam_name_cn": "下肢静脉血栓体征",
+        "result": "双下肢无明显不对称肿胀或压痛。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ]
   },
   "auxiliary_tests": {
     "must_items": [
@@ -105,7 +239,9 @@
         "overuse_warning": null,
         "result": "白细胞和中性粒细胞比例升高。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_cbc"]
+        "linked_rubric_items": [
+          "at_cbc"
+        ]
       },
       {
         "test_code": "img.chest_xray",
@@ -119,15 +255,65 @@
         "overuse_warning": null,
         "result": "右下肺片状浸润影。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_chest_xray"]
+        "linked_rubric_items": [
+          "at_chest_xray"
+        ]
+      },
+      {
+        "test_code": "lab.crp",
+        "test_name_cn": "C 反应蛋白",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "CRP 升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "test_code": "lab.pct",
+        "test_name_cn": "降钙素原",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "PCT 轻度升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
-    "optional_items": [],
+    "optional_items": [
+      {
+        "test_code": "lab.d_dimer",
+        "test_name_cn": "D-二聚体",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": [
+          "肺栓塞"
+        ],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "D-二聚体未明显升高。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ],
     "forbidden_items": []
   },
   "diagnosis": {
     "main_diagnosis": "社区获得性肺炎",
-    "main_diagnosis_synonyms": ["肺炎", "Community-acquired pneumonia"],
+    "main_diagnosis_synonyms": [
+      "肺炎",
+      "Community-acquired pneumonia"
+    ],
     "icd10_hint": "J18",
     "differential_diagnoses": [
       {
@@ -141,6 +327,12 @@
         "icd10_hint": "I26",
         "expected_action": "排除",
         "key_distinction": "常有突发呼吸困难、危险因素及不典型感染指标。"
+      },
+      {
+        "disease_name": "肺结核",
+        "icd10_hint": "A16",
+        "expected_action": "排除",
+        "key_distinction": "多为慢性咳嗽、低热盗汗、消瘦或接触史，急性细菌感染证据链不同。"
       }
     ],
     "reasoning_points": [
@@ -148,28 +340,98 @@
         "point_id": "pneumonia_001.rp_01",
         "statement": "发热、咳嗽、黄痰和呼吸相关胸痛提示下呼吸道感染。",
         "kind": "支持",
-        "required_evidence": ["pneumonia_001.hf_01", "pneumonia_001.hf_02", "pneumonia_001.hf_03"],
+        "required_evidence": [
+          "pneumonia_001.hf_01",
+          "pneumonia_001.hf_02",
+          "pneumonia_001.hf_03"
+        ],
         "weight": 8
       },
       {
         "point_id": "pneumonia_001.rp_02",
         "statement": "体温升高及右下肺湿啰音支持肺部感染体征。",
         "kind": "支持",
-        "required_evidence": ["vital.temperature", "resp.auscultation.crackle"],
+        "required_evidence": [
+          "vital.temperature",
+          "resp.auscultation.crackle",
+          "resp.rate",
+          "resp.percussion.dullness",
+          "resp.breath_sound.bronchial"
+        ],
         "weight": 8
       },
       {
         "point_id": "pneumonia_001.rp_03",
         "statement": "血常规炎症指标升高且胸片见右下肺浸润影，支持社区获得性肺炎。",
         "kind": "支持",
-        "required_evidence": ["lab.cbc", "img.chest_xray"],
+        "required_evidence": [
+          "lab.cbc",
+          "img.chest_xray",
+          "lab.crp",
+          "lab.pct"
+        ],
         "weight": 9
+      },
+      {
+        "point_id": "pneumonia_001.rp_04",
+        "statement": "指氧尚可但存在气短，需要同时完成严重程度与安全边界评估。",
+        "kind": "支持",
+        "required_evidence": [
+          "pneumonia_001.hf_05",
+          "vital.spo2"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "pneumonia_001.rp_05",
+        "statement": "无咯血、久坐旅行或下肢血栓体征，D-二聚体未明显升高，不支持肺栓塞为主因。",
+        "kind": "排除",
+        "required_evidence": [
+          "pneumonia_001.hf_02",
+          "pneumonia_001.hf_07",
+          "leg.dvt_sign",
+          "lab.d_dimer"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "pneumonia_001.rp_06",
+        "statement": "无长期低热盗汗、消瘦或结核接触史，不支持肺结核作为本次急性发热咳嗽主因。",
+        "kind": "排除",
+        "required_evidence": [
+          "pneumonia_001.hf_06"
+        ],
+        "weight": 4
       }
     ],
     "suggested_next_steps": "建议结合呼吸内科评估进一步判断严重程度并完善后续处理。"
   },
-  "distractor_clues": [],
-  "negative_findings": [],
+  "distractor_clues": [
+    {
+      "clue_id": "dc_common_cold_guess",
+      "patient_expression": "我一开始以为只是普通感冒。",
+      "teaching_value": "训练学生不能只根据患者自我解释结束问诊，需要用肺部体征和影像证据判断是否为肺炎。",
+      "should_not_score_as": [
+        "普通感冒确诊依据"
+      ]
+    }
+  ],
+  "negative_findings": [
+    {
+      "finding_id": "nf_no_tb_constitutional_symptoms",
+      "source": "pneumonia_001.hf_06",
+      "supports_exclusion_of": [
+        "肺结核"
+      ]
+    },
+    {
+      "finding_id": "nf_no_dvt_or_d_dimer",
+      "source": "lab.d_dimer",
+      "supports_exclusion_of": [
+        "肺栓塞"
+      ]
+    }
+  ],
   "evidence_graph": {
     "evidence_nodes": [
       {
@@ -237,6 +499,90 @@
         "node_type": "reasoning_point",
         "source_id": "pneumonia_001.rp_03",
         "label": "炎症指标与胸片证据推理点"
+      },
+      {
+        "node_id": "ev_fever_dyspnea_severity",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_05",
+        "label": "发热程度和轻度气短"
+      },
+      {
+        "node_id": "ev_no_tb_context",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_06",
+        "label": "无结核相关慢性线索"
+      },
+      {
+        "node_id": "ev_no_travel_immobility",
+        "node_type": "history_fact",
+        "source_id": "pneumonia_001.hf_07",
+        "label": "无久坐旅行危险因素"
+      },
+      {
+        "node_id": "ev_resp_rate_high",
+        "node_type": "physical_exam",
+        "source_id": "resp.rate",
+        "label": "呼吸频率增快"
+      },
+      {
+        "node_id": "ev_spo2_ok",
+        "node_type": "physical_exam",
+        "source_id": "vital.spo2",
+        "label": "指氧尚可"
+      },
+      {
+        "node_id": "ev_dullness",
+        "node_type": "physical_exam",
+        "source_id": "resp.percussion.dullness",
+        "label": "右下肺叩诊稍浊"
+      },
+      {
+        "node_id": "ev_bronchial_sound",
+        "node_type": "physical_exam",
+        "source_id": "resp.breath_sound.bronchial",
+        "label": "右下肺呼吸音增粗"
+      },
+      {
+        "node_id": "ev_no_dvt_sign",
+        "node_type": "physical_exam",
+        "source_id": "leg.dvt_sign",
+        "label": "下肢无 DVT 体征"
+      },
+      {
+        "node_id": "ev_crp_high",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.crp",
+        "label": "CRP 升高"
+      },
+      {
+        "node_id": "ev_pct_high",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.pct",
+        "label": "PCT 轻度升高"
+      },
+      {
+        "node_id": "ev_d_dimer_normal",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.d_dimer",
+        "label": "D-二聚体未明显升高"
+      },
+      {
+        "node_id": "rp_severity_boundary",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_04",
+        "label": "严重程度评估推理点"
+      },
+      {
+        "node_id": "rp_exclude_pe",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_05",
+        "label": "肺栓塞排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_tb",
+        "node_type": "reasoning_point",
+        "source_id": "pneumonia_001.rp_06",
+        "label": "肺结核排除推理点"
       }
     ],
     "evidence_edges": [
@@ -279,6 +625,36 @@
         "from_node": "ev_xray_infiltrate",
         "to_node": "rp_objective_pneumonia",
         "relation": "supports"
+      },
+      {
+        "from_node": "ev_fever_dyspnea_severity",
+        "to_node": "rp_severity_boundary",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_spo2_ok",
+        "to_node": "rp_severity_boundary",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_no_travel_immobility",
+        "to_node": "rp_exclude_pe",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_no_dvt_sign",
+        "to_node": "rp_exclude_pe",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_d_dimer_normal",
+        "to_node": "rp_exclude_pe",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_no_tb_context",
+        "to_node": "rp_exclude_tb",
+        "relation": "refutes"
       }
     ]
   },
@@ -299,25 +675,39 @@
         "pattern_id": "pneumonia_001.pattern.infection_history_gap",
         "title": "感染病史采集不足",
         "focus": "只问发热和咳嗽，漏问痰色、痰量以及胸痛是否随咳嗽或深呼吸加重。",
-        "related_rubric_items": ["ht_onset", "ht_sputum", "ht_chest_pain"]
+        "related_rubric_items": [
+          "ht_onset",
+          "ht_sputum",
+          "ht_chest_pain"
+        ]
       },
       {
         "pattern_id": "pneumonia_001.pattern.lung_exam_gap",
         "title": "肺部查体不足",
         "focus": "没有做肺部听诊就直接申请检查，导致体征链不完整。",
-        "related_rubric_items": ["pe_temperature", "pe_crackle"]
+        "related_rubric_items": [
+          "pe_temperature",
+          "pe_crackle"
+        ]
       },
       {
         "pattern_id": "pneumonia_001.pattern.chest_pain_context_gap",
         "title": "胸痛语境判断不足",
         "focus": "看到胸痛后过早转向心血管诊断，忽略感染症状和呼吸相关胸痛特点。",
-        "related_rubric_items": ["ht_chest_pain", "dd_pulmonary_embolism"]
+        "related_rubric_items": [
+          "ht_chest_pain",
+          "dd_pulmonary_embolism"
+        ]
       },
       {
         "pattern_id": "pneumonia_001.pattern.objective_evidence_gap",
         "title": "客观证据闭环不足",
         "focus": "提出感染性肺部病变诊断方向但未用血常规和胸片结果形成客观证据闭环。",
-        "related_rubric_items": ["at_cbc", "at_chest_xray", "reasoning_core"]
+        "related_rubric_items": [
+          "at_cbc",
+          "at_chest_xray",
+          "reasoning_core"
+        ]
       }
     ],
     "recommended_training_path": [
@@ -334,5 +724,9 @@
     "modified": true
   },
   "schema_version": "1.1",
-  "tags": ["发热", "呼吸系统", "肺炎"]
+  "tags": [
+    "发热",
+    "呼吸系统",
+    "肺炎"
+  ]
 }

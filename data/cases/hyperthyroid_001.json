@@ -26,60 +26,130 @@
         "topic": "现病史",
         "slot": "onset",
         "canonical_answer": "2 个月前开始心慌、手抖，1 个月前症状明显加重。",
-        "variants": ["两个月前开始的", "最近一个月更明显了"],
-        "trigger_intents": ["ask_onset"],
+        "variants": [
+          "两个月前开始的",
+          "最近一个月更明显了"
+        ],
+        "trigger_intents": [
+          "ask_onset"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_onset"]
+        "linked_rubric_items": [
+          "ht_onset"
+        ]
       },
       {
         "fact_id": "hyperthyroid_001.hf_02",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "伴怕热、多汗、易饥、多食但体重下降。",
-        "variants": ["特别怕热，老出汗，吃得多还瘦了"],
-        "trigger_intents": ["ask_heat_intolerance"],
+        "variants": [
+          "特别怕热，老出汗，吃得多还瘦了"
+        ],
+        "trigger_intents": [
+          "ask_heat_intolerance"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_hypermetabolic"]
+        "linked_rubric_items": [
+          "ht_hypermetabolic"
+        ]
       },
       {
         "fact_id": "hyperthyroid_001.hf_03",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "大便次数增多，每日 3-4 次稀便，无腹痛。",
-        "variants": ["最近大便次数多了", "一天要去三四次厕所"],
-        "trigger_intents": ["ask_bowel_change"],
+        "variants": [
+          "最近大便次数多了",
+          "一天要去三四次厕所"
+        ],
+        "trigger_intents": [
+          "ask_bowel_change"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_bowel_change"]
+        "linked_rubric_items": [
+          "ht_bowel_change"
+        ]
       },
       {
         "fact_id": "hyperthyroid_001.hf_04",
         "topic": "月经史",
         "slot": null,
         "canonical_answer": "近 2 个月月经量较前减少。",
-        "variants": ["最近月经量少了些"],
-        "trigger_intents": ["ask_menstrual_history"],
+        "variants": [
+          "最近月经量少了些"
+        ],
+        "trigger_intents": [
+          "ask_menstrual_history"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_menstrual"]
+        "linked_rubric_items": [
+          "ht_menstrual"
+        ]
       },
       {
         "fact_id": "hyperthyroid_001.hf_05",
         "topic": "家族史",
         "slot": null,
         "canonical_answer": "母亲患甲状腺功能减退症，长期服药控制。",
-        "variants": ["妈妈有甲状腺方面的病"],
-        "trigger_intents": ["ask_family_history"],
+        "variants": [
+          "妈妈有甲状腺方面的病"
+        ],
+        "trigger_intents": [
+          "ask_family_history"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_family_history"]
+        "linked_rubric_items": [
+          "ht_family_history"
+        ]
       },
       {
         "fact_id": "hyperthyroid_001.hf_06",
         "topic": "过敏史",
         "slot": null,
         "canonical_answer": "对鸡蛋过敏，否认药物过敏史。",
-        "variants": ["鸡蛋会过敏，药物不过敏"],
-        "trigger_intents": ["ask_allergy"],
+        "variants": [
+          "鸡蛋会过敏，药物不过敏"
+        ],
+        "trigger_intents": [
+          "ask_allergy"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_allergy"]
+        "linked_rubric_items": [
+          "ht_allergy"
+        ]
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_07",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "最近睡眠差、容易烦躁，工作时注意力也差一些。",
+        "variants": [
+          "睡不好，容易急",
+          "人比较烦躁"
+        ],
+        "trigger_intents": [
+          "ask_character",
+          "ask_idea"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "hyperthyroid_001.hf_08",
+        "topic": "个人史",
+        "slot": null,
+        "canonical_answer": "近期没有大量海产品摄入，也没有使用含碘药物或甲状腺相关药物。",
+        "variants": [
+          "没特意吃很多海产品",
+          "没吃过甲状腺药"
+        ],
+        "trigger_intents": [
+          "ask_diet",
+          "ask_past_medical_history"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
       }
     ],
     "past_medical_history": "否认肝炎、结核、肾脏病、心脏病史。",
@@ -99,21 +169,48 @@
         "exam_name_cn": "心率",
         "result": "心率 110 次/分。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_heart_rate"]
+        "linked_rubric_items": [
+          "pe_heart_rate"
+        ]
       },
       {
         "exam_code": "thy.inspect.goiter",
         "exam_name_cn": "甲状腺视诊",
         "result": "甲状腺弥漫性 I 度肿大。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_goiter"]
+        "linked_rubric_items": [
+          "pe_goiter"
+        ]
       },
       {
         "exam_code": "neuro.hand_tremor",
         "exam_name_cn": "手颤检查",
         "result": "双手细颤阳性。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_tremor"]
+        "linked_rubric_items": [
+          "pe_tremor"
+        ]
+      },
+      {
+        "exam_code": "vital.blood_pressure",
+        "exam_name_cn": "血压",
+        "result": "血压 138/62 mmHg，脉压增宽。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "thy.auscultation.bruit",
+        "exam_name_cn": "甲状腺听诊",
+        "result": "甲状腺区可闻及血管杂音。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "skin.warm_moist",
+        "exam_name_cn": "皮肤检查",
+        "result": "皮肤温暖潮湿。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
     "optional_items": []
@@ -132,7 +229,9 @@
         "overuse_warning": null,
         "result": "TSH < 0.01 mIU/L。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_tsh"]
+        "linked_rubric_items": [
+          "at_tsh"
+        ]
       },
       {
         "test_code": "lab.ft4",
@@ -141,12 +240,16 @@
         "invasiveness": "微创",
         "cost_hint": "基础",
         "diagnostic_role": "supports_primary_diagnosis",
-        "rules_out": ["焦虑障碍"],
+        "rules_out": [
+          "焦虑障碍"
+        ],
         "recommended_stage": "auxiliary_test",
         "overuse_warning": null,
         "result": "FT4 明显升高。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_ft4"]
+        "linked_rubric_items": [
+          "at_ft4"
+        ]
       },
       {
         "test_code": "img.thyroid_us",
@@ -160,15 +263,51 @@
         "overuse_warning": null,
         "result": "甲状腺弥漫性增大，血流丰富。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_thyroid_us"]
+        "linked_rubric_items": [
+          "at_thyroid_us"
+        ]
+      },
+      {
+        "test_code": "lab.ft3",
+        "test_name_cn": "游离三碘甲状腺原氨酸",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "FT3 明显升高。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "test_code": "lab.trab",
+        "test_name_cn": "促甲状腺激素受体抗体",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "中等",
+        "diagnostic_role": "supports_primary_diagnosis",
+        "rules_out": [],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "TRAb 阳性。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
       }
     ],
     "optional_items": [],
-    "forbidden_items": ["img.brain_mri"]
+    "forbidden_items": [
+      "img.brain_mri"
+    ]
   },
   "diagnosis": {
     "main_diagnosis": "甲状腺功能亢进症",
-    "main_diagnosis_synonyms": ["甲亢", "Graves 病", "Graves disease"],
+    "main_diagnosis_synonyms": [
+      "甲亢",
+      "Graves 病",
+      "Graves disease"
+    ],
     "icd10_hint": "E05",
     "differential_diagnoses": [
       {
@@ -182,6 +321,12 @@
         "icd10_hint": "D35.0",
         "expected_action": "排除",
         "key_distinction": "常为阵发性高血压发作，甲状腺功能不一定异常。"
+      },
+      {
+        "disease_name": "亚急性甲状腺炎",
+        "icd10_hint": "E06.1",
+        "expected_action": "排除",
+        "key_distinction": "常有甲状腺疼痛、压痛和炎症病程，TRAb 一般不作为阳性支持。"
       }
     ],
     "reasoning_points": [
@@ -189,28 +334,99 @@
         "point_id": "hyperthyroid_001.rp_01",
         "statement": "心慌、手抖、怕热、多汗、易饥而消瘦符合高代谢表现。",
         "kind": "支持",
-        "required_evidence": ["hyperthyroid_001.hf_01", "hyperthyroid_001.hf_02", "hyperthyroid_001.hf_03"],
+        "required_evidence": [
+          "hyperthyroid_001.hf_01",
+          "hyperthyroid_001.hf_02",
+          "hyperthyroid_001.hf_03"
+        ],
         "weight": 8
       },
       {
         "point_id": "hyperthyroid_001.rp_02",
         "statement": "心动过速、甲状腺肿大和手颤支持甲状腺激素作用增强。",
         "kind": "支持",
-        "required_evidence": ["vital.heart_rate", "thy.inspect.goiter", "neuro.hand_tremor"],
+        "required_evidence": [
+          "vital.heart_rate",
+          "thy.inspect.goiter",
+          "neuro.hand_tremor",
+          "vital.blood_pressure",
+          "skin.warm_moist"
+        ],
         "weight": 8
       },
       {
         "point_id": "hyperthyroid_001.rp_03",
         "statement": "TSH 明显抑制、FT4 升高且超声提示弥漫性改变，支持甲亢诊断。",
         "kind": "支持",
-        "required_evidence": ["lab.tsh", "lab.ft4", "img.thyroid_us"],
+        "required_evidence": [
+          "lab.tsh",
+          "lab.ft4",
+          "img.thyroid_us",
+          "lab.ft3"
+        ],
         "weight": 9
+      },
+      {
+        "point_id": "hyperthyroid_001.rp_04",
+        "statement": "甲状腺血管杂音、TRAb 阳性和家族甲状腺病史支持 Graves 病相关甲亢可能。",
+        "kind": "支持",
+        "required_evidence": [
+          "thy.auscultation.bruit",
+          "lab.trab",
+          "hyperthyroid_001.hf_05"
+        ],
+        "weight": 6
+      },
+      {
+        "point_id": "hyperthyroid_001.rp_05",
+        "statement": "睡眠差和烦躁不能直接归因于焦虑障碍，需要被甲状腺功能异常和体征重新解释。",
+        "kind": "排除",
+        "required_evidence": [
+          "hyperthyroid_001.hf_07",
+          "lab.tsh",
+          "lab.ft4",
+          "thy.inspect.goiter"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "hyperthyroid_001.rp_06",
+        "statement": "无大量碘摄入或相关用药史，有助于区分外源性或药物相关甲状腺毒症。",
+        "kind": "排除",
+        "required_evidence": [
+          "hyperthyroid_001.hf_08"
+        ],
+        "weight": 4
       }
     ],
     "suggested_next_steps": "建议结合内分泌专科评估进一步完善病因学检查，教学模拟不涉及具体药物剂量。"
   },
-  "distractor_clues": [],
-  "negative_findings": [],
+  "distractor_clues": [
+    {
+      "clue_id": "dc_stress_anxiety_guess",
+      "patient_expression": "我一开始也想是不是工作压力太大、太焦虑了。",
+      "teaching_value": "训练学生不要只按心理因素解释心悸和消瘦，要用体征和甲状腺功能证据闭环。",
+      "should_not_score_as": [
+        "焦虑障碍确诊依据"
+      ]
+    }
+  ],
+  "negative_findings": [
+    {
+      "finding_id": "nf_no_iodine_drug_exposure",
+      "source": "hyperthyroid_001.hf_08",
+      "supports_exclusion_of": [
+        "药物或碘相关甲状腺毒症"
+      ]
+    },
+    {
+      "finding_id": "nf_not_pure_anxiety",
+      "source": "lab.tsh",
+      "supports_exclusion_of": [
+        "焦虑障碍"
+      ]
+    }
+  ],
   "evidence_graph": {
     "evidence_nodes": [
       {
@@ -290,6 +506,66 @@
         "node_type": "reasoning_point",
         "source_id": "hyperthyroid_001.rp_03",
         "label": "甲状腺功能与影像证据推理点"
+      },
+      {
+        "node_id": "ev_irritable_sleep",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_07",
+        "label": "睡眠差和烦躁"
+      },
+      {
+        "node_id": "ev_no_iodine_drug",
+        "node_type": "history_fact",
+        "source_id": "hyperthyroid_001.hf_08",
+        "label": "无大量碘摄入或相关用药"
+      },
+      {
+        "node_id": "ev_wide_pulse_pressure",
+        "node_type": "physical_exam",
+        "source_id": "vital.blood_pressure",
+        "label": "脉压增宽"
+      },
+      {
+        "node_id": "ev_thyroid_bruit",
+        "node_type": "physical_exam",
+        "source_id": "thy.auscultation.bruit",
+        "label": "甲状腺血管杂音"
+      },
+      {
+        "node_id": "ev_warm_moist_skin",
+        "node_type": "physical_exam",
+        "source_id": "skin.warm_moist",
+        "label": "皮肤温暖潮湿"
+      },
+      {
+        "node_id": "ev_ft3_elevated",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.ft3",
+        "label": "FT3 升高"
+      },
+      {
+        "node_id": "ev_trab_positive",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.trab",
+        "label": "TRAb 阳性"
+      },
+      {
+        "node_id": "rp_graves_context",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_04",
+        "label": "Graves 病因线索推理点"
+      },
+      {
+        "node_id": "rp_exclude_anxiety",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_05",
+        "label": "焦虑障碍排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_exogenous",
+        "node_type": "reasoning_point",
+        "source_id": "hyperthyroid_001.rp_06",
+        "label": "外源性甲状腺毒症排除推理点"
       }
     ],
     "evidence_edges": [
@@ -342,6 +618,26 @@
         "from_node": "ev_thyroid_us_diffuse",
         "to_node": "rp_lab_confirm",
         "relation": "supports"
+      },
+      {
+        "from_node": "ev_thyroid_bruit",
+        "to_node": "rp_graves_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_trab_positive",
+        "to_node": "rp_graves_context",
+        "relation": "supports"
+      },
+      {
+        "from_node": "ev_irritable_sleep",
+        "to_node": "rp_exclude_anxiety",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_no_iodine_drug",
+        "to_node": "rp_exclude_exogenous",
+        "relation": "refutes"
       }
     ]
   },
@@ -362,25 +658,43 @@
         "pattern_id": "hyperthyroid_001.pattern.hypermetabolic_history_gap",
         "title": "高代谢症状群采集不足",
         "focus": "只追问心慌，漏问怕热多汗、体重下降、大便次数和月经变化。",
-        "related_rubric_items": ["ht_onset", "ht_hypermetabolic", "ht_bowel_change", "ht_menstrual"]
+        "related_rubric_items": [
+          "ht_onset",
+          "ht_hypermetabolic",
+          "ht_bowel_change",
+          "ht_menstrual"
+        ]
       },
       {
         "pattern_id": "hyperthyroid_001.pattern.endocrine_workup_gap",
         "title": "内分泌证据验证不足",
         "focus": "把症状过早归因于焦虑，未完成甲状腺查体和内分泌检查。",
-        "related_rubric_items": ["pe_goiter", "pe_tremor", "at_tsh", "at_ft4"]
+        "related_rubric_items": [
+          "pe_goiter",
+          "pe_tremor",
+          "at_tsh",
+          "at_ft4"
+        ]
       },
       {
         "pattern_id": "hyperthyroid_001.pattern.lab_interpretation_gap",
         "title": "甲功结果解释不足",
         "focus": "申请甲功后没有解释 TSH 降低和 FT4 升高的组合意义。",
-        "related_rubric_items": ["at_tsh", "at_ft4", "reasoning_core"]
+        "related_rubric_items": [
+          "at_tsh",
+          "at_ft4",
+          "reasoning_core"
+        ]
       },
       {
         "pattern_id": "hyperthyroid_001.pattern.thyroid_exam_gap",
         "title": "甲状腺查体整合不足",
         "focus": "忽略甲状腺肿大和手颤等体征，导致病史与查体之间缺少相互印证。",
-        "related_rubric_items": ["pe_heart_rate", "pe_goiter", "pe_tremor"]
+        "related_rubric_items": [
+          "pe_heart_rate",
+          "pe_goiter",
+          "pe_tremor"
+        ]
       }
     ],
     "recommended_training_path": [
@@ -397,5 +711,9 @@
     "modified": true
   },
   "schema_version": "1.1",
-  "tags": ["心悸", "内分泌", "甲亢"]
+  "tags": [
+    "心悸",
+    "内分泌",
+    "甲亢"
+  ]
 }

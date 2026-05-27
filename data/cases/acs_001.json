@@ -26,40 +26,131 @@
         "topic": "现病史",
         "slot": "onset",
         "canonical_answer": "今天上午活动后开始胸口痛，到现在 2 个小时了。",
-        "variants": ["两个小时前开始的", "一活动后就开始疼了"],
-        "trigger_intents": ["ask_onset"],
+        "variants": [
+          "两个小时前开始的",
+          "一活动后就开始疼了"
+        ],
+        "trigger_intents": [
+          "ask_onset"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_onset"]
+        "linked_rubric_items": [
+          "ht_onset"
+        ]
       },
       {
         "fact_id": "acs_001.hf_02",
         "topic": "现病史",
         "slot": "character",
         "canonical_answer": "胸口像被压着一样闷痛，不是针扎样疼。",
-        "variants": ["就是压榨样的闷痛", "感觉胸口很闷很重"],
-        "trigger_intents": ["ask_pain_character"],
+        "variants": [
+          "就是压榨样的闷痛",
+          "感觉胸口很闷很重"
+        ],
+        "trigger_intents": [
+          "ask_pain_character"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_character"]
+        "linked_rubric_items": [
+          "ht_character"
+        ]
       },
       {
         "fact_id": "acs_001.hf_03",
         "topic": "现病史",
         "slot": "radiation",
         "canonical_answer": "疼痛会往左肩和左上臂放射。",
-        "variants": ["左肩也跟着难受", "左胳膊也有点放射痛"],
-        "trigger_intents": ["ask_radiation"],
+        "variants": [
+          "左肩也跟着难受",
+          "左胳膊也有点放射痛"
+        ],
+        "trigger_intents": [
+          "ask_radiation"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_radiation"]
+        "linked_rubric_items": [
+          "ht_radiation"
+        ]
       },
       {
         "fact_id": "acs_001.hf_04",
         "topic": "既往史",
         "slot": null,
         "canonical_answer": "有高血压病史 5 年，吸烟 30 年。",
-        "variants": ["血压高好多年了", "抽烟很多年了"],
-        "trigger_intents": ["ask_past_medical_history"],
+        "variants": [
+          "血压高好多年了",
+          "抽烟很多年了"
+        ],
+        "trigger_intents": [
+          "ask_past_medical_history"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_risk_factor"]
+        "linked_rubric_items": [
+          "ht_risk_factor"
+        ]
+      },
+      {
+        "fact_id": "acs_001.hf_05",
+        "topic": "现病史",
+        "slot": "severity",
+        "canonical_answer": "疼痛大约 8 分，休息以后也没有明显缓解。",
+        "variants": [
+          "挺重的，休息也不怎么好",
+          "差不多八分痛"
+        ],
+        "trigger_intents": [
+          "ask_severity",
+          "ask_progression"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "acs_001.hf_06",
+        "topic": "现病史",
+        "slot": "associated_symptom",
+        "canonical_answer": "疼的时候出了一身汗，有点恶心和气短，没有咯血。",
+        "variants": [
+          "出了很多汗",
+          "有点想吐，也有点喘不上气"
+        ],
+        "trigger_intents": [
+          "ask_associated_nausea",
+          "ask_sputum"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "acs_001.hf_07",
+        "topic": "现病史",
+        "slot": "context",
+        "canonical_answer": "不是饭后反酸烧心样不适，改变体位也不能缓解。",
+        "variants": [
+          "不像胃酸反上来的感觉",
+          "坐起来躺下都差不多疼"
+        ],
+        "trigger_intents": [
+          "ask_diet"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
+      },
+      {
+        "fact_id": "acs_001.hf_08",
+        "topic": "家族史",
+        "slot": null,
+        "canonical_answer": "父亲有冠心病史，否认家族中主动脉夹层病史。",
+        "variants": [
+          "父亲心脏不好",
+          "家里没人说过主动脉夹层"
+        ],
+        "trigger_intents": [
+          "ask_family",
+          "ask_family_history"
+        ],
+        "blocking_rule": "reveal_on_direct_question",
+        "linked_rubric_items": []
       }
     ],
     "past_medical_history": "高血压病史 5 年，否认冠心病明确诊断史。",
@@ -79,17 +170,50 @@
         "exam_name_cn": "血压",
         "result": "血压 168/96 mmHg。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_blood_pressure"]
+        "linked_rubric_items": [
+          "pe_blood_pressure"
+        ]
       },
       {
         "exam_code": "vital.heart_rate",
         "exam_name_cn": "心率",
         "result": "心率 104 次/分。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_heart_rate"]
+        "linked_rubric_items": [
+          "pe_heart_rate"
+        ]
+      },
+      {
+        "exam_code": "general.sweating",
+        "exam_name_cn": "一般状态",
+        "result": "表情痛苦，皮肤湿冷、大汗。",
+        "is_abnormal": true,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "heart.auscultation",
+        "exam_name_cn": "心脏听诊",
+        "result": "心律齐，未闻及明显病理性杂音。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      },
+      {
+        "exam_code": "pulse.peripheral",
+        "exam_name_cn": "四肢脉搏",
+        "result": "双侧桡动脉和足背动脉搏动基本对称。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
       }
     ],
-    "optional_items": []
+    "optional_items": [
+      {
+        "exam_code": "lung.auscultation",
+        "exam_name_cn": "肺部听诊",
+        "result": "双肺呼吸音清，未闻及明显湿啰音。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ]
   },
   "auxiliary_tests": {
     "must_items": [
@@ -105,7 +229,9 @@
         "overuse_warning": null,
         "result": "Ⅱ、Ⅲ、aVF 导联 ST 段抬高。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_ecg"]
+        "linked_rubric_items": [
+          "at_ecg"
+        ]
       },
       {
         "test_code": "lab.troponin",
@@ -119,15 +245,54 @@
         "overuse_warning": null,
         "result": "肌钙蛋白升高。",
         "is_abnormal": true,
-        "linked_rubric_items": ["at_troponin"]
+        "linked_rubric_items": [
+          "at_troponin"
+        ]
       }
     ],
-    "optional_items": [],
+    "optional_items": [
+      {
+        "test_code": "img.chest_xray",
+        "test_name_cn": "胸部 X 线",
+        "category": "影像",
+        "invasiveness": "无创",
+        "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": [
+          "主动脉夹层"
+        ],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "未见纵隔明显增宽。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      },
+      {
+        "test_code": "lab.d_dimer",
+        "test_name_cn": "D-二聚体",
+        "category": "实验室",
+        "invasiveness": "微创",
+        "cost_hint": "基础",
+        "diagnostic_role": "rules_out_alternative",
+        "rules_out": [
+          "肺栓塞"
+        ],
+        "recommended_stage": "auxiliary_test",
+        "overuse_warning": null,
+        "result": "D-二聚体未明显升高。",
+        "is_abnormal": false,
+        "linked_rubric_items": []
+      }
+    ],
     "forbidden_items": []
   },
   "diagnosis": {
     "main_diagnosis": "急性冠脉综合征",
-    "main_diagnosis_synonyms": ["ACS", "急性心肌梗死", "acute coronary syndrome"],
+    "main_diagnosis_synonyms": [
+      "ACS",
+      "急性心肌梗死",
+      "acute coronary syndrome"
+    ],
     "icd10_hint": "I24",
     "differential_diagnoses": [
       {
@@ -141,6 +306,12 @@
         "icd10_hint": "K21",
         "expected_action": "排除",
         "key_distinction": "多与进食、体位相关，通常缺乏心电图和肌钙蛋白异常。"
+      },
+      {
+        "disease_name": "肺栓塞",
+        "icd10_hint": "I26",
+        "expected_action": "排除",
+        "key_distinction": "常有突发呼吸困难、低氧或血栓危险因素，D-二聚体和影像线索不同。"
       }
     ],
     "reasoning_points": [
@@ -148,28 +319,105 @@
         "point_id": "acs_001.rp_01",
         "statement": "活动后胸骨后压榨性胸痛并向左肩放射，伴大汗，符合典型心肌缺血表现。",
         "kind": "支持",
-        "required_evidence": ["acs_001.hf_01", "acs_001.hf_02", "acs_001.hf_03"],
+        "required_evidence": [
+          "acs_001.hf_01",
+          "acs_001.hf_02",
+          "acs_001.hf_03",
+          "acs_001.hf_06",
+          "general.sweating"
+        ],
         "weight": 8
       },
       {
         "point_id": "acs_001.rp_02",
         "statement": "高血压、长期吸烟和心率增快提示动脉粥样硬化及急性应激背景。",
         "kind": "支持",
-        "required_evidence": ["acs_001.hf_04", "vital.blood_pressure", "vital.heart_rate"],
+        "required_evidence": [
+          "acs_001.hf_04",
+          "vital.blood_pressure",
+          "vital.heart_rate"
+        ],
         "weight": 8
       },
       {
         "point_id": "acs_001.rp_03",
         "statement": "心电图 ST 段抬高且肌钙蛋白升高，强烈支持急性冠脉综合征。",
         "kind": "支持",
-        "required_evidence": ["ecg.st_segment", "lab.troponin"],
+        "required_evidence": [
+          "ecg.st_segment",
+          "lab.troponin"
+        ],
         "weight": 9
+      },
+      {
+        "point_id": "acs_001.rp_04",
+        "statement": "非撕裂样疼痛、四肢脉搏对称且胸片未见纵隔增宽，不支持主动脉夹层。",
+        "kind": "排除",
+        "required_evidence": [
+          "acs_001.hf_02",
+          "pulse.peripheral",
+          "img.chest_xray"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "acs_001.rp_05",
+        "statement": "症状与进食和体位关系不典型，且存在明确缺血客观证据，不应以胃食管反流解释。",
+        "kind": "排除",
+        "required_evidence": [
+          "acs_001.hf_07",
+          "ecg.st_segment",
+          "lab.troponin"
+        ],
+        "weight": 5
+      },
+      {
+        "point_id": "acs_001.rp_06",
+        "statement": "无咯血、D-二聚体未明显升高且肺部听诊缺乏明显异常，肺栓塞证据不足。",
+        "kind": "排除",
+        "required_evidence": [
+          "acs_001.hf_06",
+          "lab.d_dimer",
+          "lung.auscultation"
+        ],
+        "weight": 4
       }
     ],
     "suggested_next_steps": "建议立即结合心内科评估完善急诊处置流程，教学模拟不涉及具体抢救用药。"
   },
-  "distractor_clues": [],
-  "negative_findings": [],
+  "distractor_clues": [
+    {
+      "clue_id": "dc_reflux_or_stomach_guess",
+      "patient_expression": "我也担心是不是胃不舒服或者反酸引起的。",
+      "teaching_value": "训练学生先识别胸痛危险信号和缺血证据，不能被患者对“胃病”的猜测带偏。",
+      "should_not_score_as": [
+        "胃食管反流病确诊依据"
+      ]
+    }
+  ],
+  "negative_findings": [
+    {
+      "finding_id": "nf_no_pulse_asymmetry",
+      "source": "pulse.peripheral",
+      "supports_exclusion_of": [
+        "主动脉夹层"
+      ]
+    },
+    {
+      "finding_id": "nf_no_wide_mediastinum",
+      "source": "img.chest_xray",
+      "supports_exclusion_of": [
+        "主动脉夹层"
+      ]
+    },
+    {
+      "finding_id": "nf_no_hemoptysis_d_dimer",
+      "source": "lab.d_dimer",
+      "supports_exclusion_of": [
+        "肺栓塞"
+      ]
+    }
+  ],
   "evidence_graph": {
     "evidence_nodes": [
       {
@@ -237,6 +485,72 @@
         "node_type": "reasoning_point",
         "source_id": "acs_001.rp_03",
         "label": "心电图与肌钙蛋白证据推理点"
+      },
+      {
+        "node_id": "ev_no_relief",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_05",
+        "label": "重度胸痛且休息不缓解"
+      },
+      {
+        "node_id": "ev_autonomic_symptom",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_06",
+        "label": "大汗恶心和轻度气短"
+      },
+      {
+        "node_id": "ev_non_reflux_context",
+        "node_type": "history_fact",
+        "source_id": "acs_001.hf_07",
+        "label": "非进食或体位相关不适"
+      },
+      {
+        "node_id": "ev_sweating",
+        "node_type": "physical_exam",
+        "source_id": "general.sweating",
+        "label": "皮肤湿冷大汗"
+      },
+      {
+        "node_id": "ev_symmetric_pulses",
+        "node_type": "physical_exam",
+        "source_id": "pulse.peripheral",
+        "label": "四肢脉搏对称"
+      },
+      {
+        "node_id": "ev_lung_clear",
+        "node_type": "physical_exam",
+        "source_id": "lung.auscultation",
+        "label": "肺部听诊无明显异常"
+      },
+      {
+        "node_id": "ev_chest_xray_no_wide",
+        "node_type": "auxiliary_test",
+        "source_id": "img.chest_xray",
+        "label": "胸片未见纵隔明显增宽"
+      },
+      {
+        "node_id": "ev_d_dimer_normal",
+        "node_type": "auxiliary_test",
+        "source_id": "lab.d_dimer",
+        "label": "D-二聚体未明显升高"
+      },
+      {
+        "node_id": "rp_exclude_dissection",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_04",
+        "label": "主动脉夹层排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_reflux",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_05",
+        "label": "胃食管反流排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_pe",
+        "node_type": "reasoning_point",
+        "source_id": "acs_001.rp_06",
+        "label": "肺栓塞排除推理点"
       }
     ],
     "evidence_edges": [
@@ -279,6 +593,31 @@
         "from_node": "ev_troponin_elevated",
         "to_node": "rp_objective_acs",
         "relation": "supports"
+      },
+      {
+        "from_node": "ev_symmetric_pulses",
+        "to_node": "rp_exclude_dissection",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_chest_xray_no_wide",
+        "to_node": "rp_exclude_dissection",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_non_reflux_context",
+        "to_node": "rp_exclude_reflux",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_d_dimer_normal",
+        "to_node": "rp_exclude_pe",
+        "relation": "refutes"
+      },
+      {
+        "from_node": "ev_lung_clear",
+        "to_node": "rp_exclude_pe",
+        "relation": "refutes"
       }
     ]
   },
@@ -299,25 +638,40 @@
         "pattern_id": "acs_001.pattern.chest_pain_history_gap",
         "title": "胸痛特征采集不足",
         "focus": "只问胸口疼痛部位，漏问压榨感、活动诱发、持续时间和放射部位。",
-        "related_rubric_items": ["ht_onset", "ht_character", "ht_radiation"]
+        "related_rubric_items": [
+          "ht_onset",
+          "ht_character",
+          "ht_radiation"
+        ]
       },
       {
         "pattern_id": "acs_001.pattern.risk_context_gap",
         "title": "心血管危险因素补充不足",
         "focus": "先下诊断但没有补充高血压、吸烟等危险因素，导致推理链缺少背景风险。",
-        "related_rubric_items": ["pe_blood_pressure", "pe_heart_rate"]
+        "related_rubric_items": [
+          "pe_blood_pressure",
+          "pe_heart_rate"
+        ]
       },
       {
         "pattern_id": "acs_001.pattern.objective_evidence_gap",
         "title": "客观检查证据回扣不足",
         "focus": "申请心电图或肌钙蛋白后没有把结果回扣到缺血性胸痛假设。",
-        "related_rubric_items": ["at_ecg", "at_troponin", "reasoning_core"]
+        "related_rubric_items": [
+          "at_ecg",
+          "at_troponin",
+          "reasoning_core"
+        ]
       },
       {
         "pattern_id": "acs_001.pattern.high_risk_differential_gap",
         "title": "高危胸痛鉴别不足",
         "focus": "忽略主动脉夹层等高危胸痛鉴别，未说明为什么当前线索更支持缺血性胸痛方向。",
-        "related_rubric_items": ["dd_aortic_dissection", "dd_gerd", "reasoning_core"]
+        "related_rubric_items": [
+          "dd_aortic_dissection",
+          "dd_gerd",
+          "reasoning_core"
+        ]
       }
     ],
     "recommended_training_path": [
@@ -334,5 +688,9 @@
     "modified": true
   },
   "schema_version": "1.1",
-  "tags": ["胸痛", "心血管", "急症"]
+  "tags": [
+    "胸痛",
+    "心血管",
+    "急症"
+  ]
 }

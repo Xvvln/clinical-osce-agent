@@ -55,6 +55,38 @@ def test_all_demo_cases_have_teaching_focus_content() -> None:
         assert len(teaching_focus["recommended_training_path"]) >= 3, case["case_id"]  # type: ignore[index]
 
 
+def test_all_demo_cases_have_enough_structured_training_material() -> None:
+    for case in _load_cases():
+        history = case["history"]
+        physical_exam = case["physical_exam"]
+        auxiliary_tests = case["auxiliary_tests"]
+        diagnosis = case["diagnosis"]
+
+        exam_count = len(physical_exam["must_items"]) + len(physical_exam.get("optional_items", []))  # type: ignore[union-attr]
+        test_count = len(auxiliary_tests["must_items"]) + len(auxiliary_tests.get("optional_items", []))  # type: ignore[union-attr]
+
+        assert len(history["hidden_facts"]) >= 8, case["case_id"]  # type: ignore[index]
+        assert exam_count >= 5, case["case_id"]
+        assert test_count >= 4, case["case_id"]
+        assert len(diagnosis["reasoning_points"]) >= 5, case["case_id"]  # type: ignore[index]
+        assert len(diagnosis["differential_diagnoses"]) >= 3, case["case_id"]  # type: ignore[index]
+        assert len(case.get("negative_findings", [])) >= 2, case["case_id"]
+        assert len(case.get("distractor_clues", [])) >= 1, case["case_id"]
+
+
+def test_all_demo_cases_have_reasoning_graph_for_every_reasoning_point() -> None:
+    for case in _load_cases():
+        graph = case["evidence_graph"]
+        reasoning_point_ids = {str(item["point_id"]) for item in case["diagnosis"]["reasoning_points"]}  # type: ignore[index]
+        graph_reasoning_sources = {
+            str(node["source_id"])
+            for node in graph["evidence_nodes"]  # type: ignore[index]
+            if node["node_type"] == "reasoning_point"
+        }
+
+        assert reasoning_point_ids <= graph_reasoning_sources, case["case_id"]
+
+
 def test_all_demo_cases_have_traceable_evidence_graph_content() -> None:
     required_node_types = {"history_fact", "physical_exam", "auxiliary_test", "reasoning_point"}
 

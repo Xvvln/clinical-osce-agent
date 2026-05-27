@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from app.services import personal_training_skill_service as personal_skill_module
 from app.services.personal_training_skill_service import PersonalTrainingSkillService, build_teacher_reflection_review_payload
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
@@ -54,6 +55,45 @@ class PassingGate:
             "candidate_safety_violations": [],
             "candidate_context_violations": [],
         }
+
+
+def test_personal_skill_default_generator_is_resolved_when_generating(tmp_path, monkeypatch) -> None:
+    case = _load_case()
+    late_generator = CapturingGenerator()
+    service = PersonalTrainingSkillService(
+        approval_agent=ApprovingAgent(),
+        regression_gate=PassingGate(),
+    )
+    monkeypatch.setattr(
+        personal_skill_module,
+        "create_default_training_skill_candidate_generator",
+        lambda: late_generator,
+    )
+    session = SimpleNamespace(
+        session_id="personal-late-generator-session",
+        case_id=case.case_id,
+        student_id="student-a",
+    )
+    report = {
+        "report_id": "personal-late-generator-report",
+        "case_id": case.case_id,
+        "total_score": 18,
+        "max_score": 40,
+        "missed_items": ["ht_migration"],
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=report,
+        candidate_store=TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3"),
+        skill_store=TrainingSkillStore(tmp_path / "skills.sqlite3"),
+        event_store=TrainingEventStore(tmp_path / "events.sqlite3"),
+    )
+
+    assert late_generator.contexts
 
 
 def test_personal_skill_uses_reasoning_trace_patterns_for_candidate_and_reflection(tmp_path) -> None:

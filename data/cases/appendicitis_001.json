@@ -26,100 +26,182 @@
         "topic": "现病史",
         "slot": "onset",
         "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
-        "variants": ["昨天这个点开始的", "差不多一天前开始"],
-        "trigger_intents": ["ask_onset", "ask_when_started"],
+        "variants": [
+          "昨天这个点开始的",
+          "差不多一天前开始"
+        ],
+        "trigger_intents": [
+          "ask_onset",
+          "ask_when_started"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_onset"]
+        "linked_rubric_items": [
+          "ht_onset"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_02",
         "topic": "现病史",
         "slot": "location",
         "canonical_answer": "开始在上腹部，大约 8 小时前转移并固定到右下腹。",
-        "variants": ["一开始胃那里不舒服，后来跑到右下腹"],
-        "trigger_intents": ["ask_location", "ask_migration"],
+        "variants": [
+          "一开始胃那里不舒服，后来跑到右下腹"
+        ],
+        "trigger_intents": [
+          "ask_location",
+          "ask_migration"
+        ],
         "blocking_rule": "never_auto_reveal",
-        "linked_rubric_items": ["ht_migration"]
+        "linked_rubric_items": [
+          "ht_migration"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_03",
         "topic": "现病史",
         "slot": "character",
         "canonical_answer": "现在是持续性胀痛，行走时加重。",
-        "variants": ["一直疼，走路震一下更疼"],
-        "trigger_intents": ["ask_character", "ask_quality_of_pain"],
+        "variants": [
+          "一直疼，走路震一下更疼"
+        ],
+        "trigger_intents": [
+          "ask_character",
+          "ask_quality_of_pain"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_character"]
+        "linked_rubric_items": [
+          "ht_character"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_04",
         "topic": "现病史",
         "slot": "severity",
         "canonical_answer": "大约 VAS 6/10，属于中等偏重的疼痛。",
-        "variants": ["挺疼的，十分里六七分"],
-        "trigger_intents": ["ask_severity", "ask_pain_score"],
+        "variants": [
+          "挺疼的，十分里六七分"
+        ],
+        "trigger_intents": [
+          "ask_severity",
+          "ask_pain_score"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_severity"]
+        "linked_rubric_items": [
+          "ht_severity"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_05",
         "topic": "现病史",
         "slot": "associated_symptom",
         "canonical_answer": "有恶心，没吐出来，低热约 37.8 ℃；没有明显腹泻，也没有尿频、尿急或肉眼血尿。",
-        "variants": ["有点想吐，没吐出来", "感觉有点发烧", "没有拉肚子", "小便没什么异常"],
-        "trigger_intents": ["ask_associated_nausea", "ask_fever", "ask_stool", "ask_urinary"],
+        "variants": [
+          "有点想吐，没吐出来",
+          "感觉有点发烧",
+          "没有拉肚子",
+          "小便没什么异常"
+        ],
+        "trigger_intents": [
+          "ask_associated_nausea",
+          "ask_fever",
+          "ask_stool",
+          "ask_urinary"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_associated_gi", "ht_associated_fever"]
+        "linked_rubric_items": [
+          "ht_associated_gi",
+          "ht_associated_fever"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_06",
         "topic": "既往史",
         "slot": null,
         "canonical_answer": "既往体健，否认高血压、糖尿病、心脏病、肝炎、结核等病史，也没有腹部手术史。",
-        "variants": ["以前身体还可以", "没做过腹部手术"],
-        "trigger_intents": ["ask_past_medical", "ask_past_medical_history", "ask_prior_surgery"],
+        "variants": [
+          "以前身体还可以",
+          "没做过腹部手术"
+        ],
+        "trigger_intents": [
+          "ask_past_medical",
+          "ask_past_medical_history",
+          "ask_prior_surgery"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_past_medical"]
+        "linked_rubric_items": [
+          "ht_past_medical"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_07",
         "topic": "过敏史",
         "slot": null,
         "canonical_answer": "否认药物和食物过敏。",
-        "variants": ["没有药物过敏", "吃东西也没发现过敏"],
-        "trigger_intents": ["ask_allergy"],
+        "variants": [
+          "没有药物过敏",
+          "吃东西也没发现过敏"
+        ],
+        "trigger_intents": [
+          "ask_allergy"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_allergy"]
+        "linked_rubric_items": [
+          "ht_allergy"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_08",
         "topic": "个人史",
         "slot": null,
         "canonical_answer": "在校大学生，否认烟酒嗜好，饮食基本规律，近期无旅行史。",
-        "variants": ["不抽烟不喝酒", "最近没出远门"],
-        "trigger_intents": ["ask_personal", "ask_diet", "ask_travel"],
+        "variants": [
+          "不抽烟不喝酒",
+          "最近没出远门"
+        ],
+        "trigger_intents": [
+          "ask_personal",
+          "ask_diet",
+          "ask_travel"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_personal"]
+        "linked_rubric_items": [
+          "ht_personal"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_09",
         "topic": "家族史",
         "slot": null,
         "canonical_answer": "父母健在，家族中无类似腹痛病史，也没有明确消化系统遗传病史。",
-        "variants": ["家里人没有类似情况"],
-        "trigger_intents": ["ask_family"],
+        "variants": [
+          "家里人没有类似情况"
+        ],
+        "trigger_intents": [
+          "ask_family"
+        ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": ["ht_family"]
+        "linked_rubric_items": [
+          "ht_family"
+        ]
       },
       {
         "fact_id": "appendicitis_001.hf_10",
         "topic": "ICE",
         "slot": null,
         "canonical_answer": "我担心是不是吃坏了东西，也有点害怕要开刀，希望能尽快止痛并弄清楚原因。",
-        "variants": ["怕需要开刀", "想快点知道是什么原因"],
-        "trigger_intents": ["ask_idea", "ask_concern", "ask_expectation"],
+        "variants": [
+          "怕需要开刀",
+          "想快点知道是什么原因"
+        ],
+        "trigger_intents": [
+          "ask_idea",
+          "ask_concern",
+          "ask_expectation"
+        ],
         "blocking_rule": "reveal_after_stage",
-        "linked_rubric_items": ["ht_ice"]
+        "linked_rubric_items": [
+          "ht_ice"
+        ]
       }
     ],
     "past_medical_history": "既往体健，否认高血压、糖尿病、心脏病、肝炎、结核等病史。",
@@ -139,28 +221,36 @@
         "exam_name_cn": "体温",
         "result": "37.8 ℃。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_vital_temp"]
+        "linked_rubric_items": [
+          "pe_vital_temp"
+        ]
       },
       {
         "exam_code": "abd.inspection",
         "exam_name_cn": "腹部视诊",
         "result": "腹平坦，无胃肠型，呼吸运动减弱。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_abd_inspection"]
+        "linked_rubric_items": [
+          "pe_abd_inspection"
+        ]
       },
       {
         "exam_code": "abd.palpation.tenderness",
         "exam_name_cn": "McBurney 点压痛",
         "result": "右下腹 McBurney 点明显压痛。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_tenderness"]
+        "linked_rubric_items": [
+          "pe_tenderness"
+        ]
       },
       {
         "exam_code": "abd.palpation.rebound",
         "exam_name_cn": "反跳痛（Blumberg 征）",
         "result": "右下腹反跳痛阳性。",
         "is_abnormal": true,
-        "linked_rubric_items": ["pe_rebound"]
+        "linked_rubric_items": [
+          "pe_rebound"
+        ]
       }
     ],
     "optional_items": [
@@ -201,7 +291,9 @@
         "overuse_warning": null,
         "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
         "is_abnormal": true,
-        "linked_rubric_items": ["ax_cbc"]
+        "linked_rubric_items": [
+          "ax_cbc"
+        ]
       },
       {
         "test_code": "lab.crp",
@@ -215,7 +307,9 @@
         "overuse_warning": null,
         "result": "CRP 48 mg/L。",
         "is_abnormal": true,
-        "linked_rubric_items": ["ax_crp"]
+        "linked_rubric_items": [
+          "ax_crp"
+        ]
       },
       {
         "test_code": "img.abd_us",
@@ -229,7 +323,9 @@
         "overuse_warning": null,
         "result": "右下腹见管状低回声结构，直径 9 mm，周围少量渗出。",
         "is_abnormal": true,
-        "linked_rubric_items": ["ax_us"]
+        "linked_rubric_items": [
+          "ax_us"
+        ]
       }
     ],
     "optional_items": [
@@ -240,12 +336,16 @@
         "invasiveness": "无创",
         "cost_hint": "基础",
         "diagnostic_role": "rules_out_alternative",
-        "rules_out": ["右侧输尿管结石"],
+        "rules_out": [
+          "右侧输尿管结石"
+        ],
         "recommended_stage": "auxiliary_test",
         "overuse_warning": null,
         "result": "尿常规阴性，未见血尿。",
         "is_abnormal": false,
-        "linked_rubric_items": ["ax_ua"]
+        "linked_rubric_items": [
+          "ax_ua"
+        ]
       },
       {
         "test_code": "img.abd_ct",
@@ -262,11 +362,18 @@
         "linked_rubric_items": []
       }
     ],
-    "forbidden_items": ["img.brain_mri", "endo.colonoscopy"]
+    "forbidden_items": [
+      "img.brain_mri",
+      "endo.colonoscopy"
+    ]
   },
   "diagnosis": {
     "main_diagnosis": "急性阑尾炎",
-    "main_diagnosis_synonyms": ["阑尾炎", "Acute appendicitis", "acute appendicitis"],
+    "main_diagnosis_synonyms": [
+      "阑尾炎",
+      "Acute appendicitis",
+      "acute appendicitis"
+    ],
     "icd10_hint": "K35",
     "differential_diagnoses": [
       {
@@ -293,49 +400,70 @@
         "point_id": "appendicitis_001.rp_01",
         "statement": "转移性右下腹痛是急性阑尾炎的典型症状。",
         "kind": "支持",
-        "required_evidence": ["appendicitis_001.hf_02"],
+        "required_evidence": [
+          "appendicitis_001.hf_02"
+        ],
         "weight": 10
       },
       {
         "point_id": "appendicitis_001.rp_02",
         "statement": "McBurney 点压痛、反跳痛、肌紧张和 Rovsing 征提示右下腹腹膜刺激征。",
         "kind": "支持",
-        "required_evidence": ["abd.palpation.tenderness", "abd.palpation.rebound", "abd.palpation.guarding", "abd.special.rovsing"],
+        "required_evidence": [
+          "abd.palpation.tenderness",
+          "abd.palpation.rebound",
+          "abd.palpation.guarding",
+          "abd.special.rovsing"
+        ],
         "weight": 9
       },
       {
         "point_id": "appendicitis_001.rp_03",
         "statement": "白细胞升高伴 CRP 升高支持炎症性腹痛。",
         "kind": "支持",
-        "required_evidence": ["lab.cbc", "lab.crp"],
+        "required_evidence": [
+          "lab.cbc",
+          "lab.crp"
+        ],
         "weight": 7
       },
       {
         "point_id": "appendicitis_001.rp_04",
         "statement": "腹部超声或腹部 CT 的阑尾异常表现支持阑尾区炎症。",
         "kind": "支持",
-        "required_evidence": ["img.abd_us", "img.abd_ct"],
+        "required_evidence": [
+          "img.abd_us",
+          "img.abd_ct"
+        ],
         "weight": 8
       },
       {
         "point_id": "appendicitis_001.rp_05",
         "statement": "尿常规阴性有助于排除输尿管结石。",
         "kind": "排除",
-        "required_evidence": ["lab.urinalysis"],
+        "required_evidence": [
+          "lab.urinalysis"
+        ],
         "weight": 5
       },
       {
         "point_id": "appendicitis_001.rp_06",
         "statement": "无明显腹泻且疼痛转移固定右下腹，不支持单纯急性胃肠炎。",
         "kind": "排除",
-        "required_evidence": ["appendicitis_001.hf_02", "appendicitis_001.hf_05"],
+        "required_evidence": [
+          "appendicitis_001.hf_02",
+          "appendicitis_001.hf_05"
+        ],
         "weight": 3
       },
       {
         "point_id": "appendicitis_001.rp_07",
         "statement": "低热和腹部呼吸运动减弱支持局部炎症刺激。",
         "kind": "支持",
-        "required_evidence": ["vital.temperature", "abd.inspection"],
+        "required_evidence": [
+          "vital.temperature",
+          "abd.inspection"
+        ],
         "weight": 5
       }
     ],
@@ -346,19 +474,25 @@
       "clue_id": "dc_food_poisoning_concern",
       "patient_expression": "我一开始以为是不是吃坏肚子了。",
       "teaching_value": "训练学生区分患者想法与结构化医学证据，避免把患者猜测直接当成诊断依据。",
-      "should_not_score_as": ["急性胃肠炎确诊依据"]
+      "should_not_score_as": [
+        "急性胃肠炎确诊依据"
+      ]
     }
   ],
   "negative_findings": [
     {
       "finding_id": "nf_no_diarrhea",
       "source": "appendicitis_001.hf_05",
-      "supports_exclusion_of": ["急性胃肠炎"]
+      "supports_exclusion_of": [
+        "急性胃肠炎"
+      ]
     },
     {
       "finding_id": "nf_urinalysis_negative",
       "source": "lab.urinalysis",
-      "supports_exclusion_of": ["右侧输尿管结石"]
+      "supports_exclusion_of": [
+        "右侧输尿管结石"
+      ]
     }
   ],
   "evidence_graph": {
@@ -387,14 +521,14 @@
         "source_id": "img.abd_us",
         "label": "右下腹管状低回声结构"
       },
-      {
-        "node_id": "nf_urinalysis_negative",
-        "node_type": "auxiliary_test",
-        "source_id": "lab.urinalysis",
-        "label": "尿常规阴性"
-      },
-      {
-        "node_id": "rp_migration_support",
+    {
+      "node_id": "nf_urinalysis_negative",
+      "node_type": "auxiliary_test",
+      "source_id": "lab.urinalysis",
+      "label": "尿常规阴性"
+    },
+    {
+      "node_id": "rp_migration_support",
         "node_type": "reasoning_point",
         "source_id": "appendicitis_001.rp_01",
         "label": "迁移痛推理点"
@@ -422,6 +556,18 @@
         "node_type": "reasoning_point",
         "source_id": "appendicitis_001.rp_05",
         "label": "泌尿系鉴别排除推理点"
+      },
+      {
+        "node_id": "rp_exclude_gastroenteritis",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_06",
+        "label": "急性胃肠炎排除推理点"
+      },
+      {
+        "node_id": "rp_local_inflammation",
+        "node_type": "reasoning_point",
+        "source_id": "appendicitis_001.rp_07",
+        "label": "局部炎症刺激推理点"
       }
     ],
     "evidence_edges": [
@@ -469,19 +615,30 @@
         "pattern_id": "appendicitis_001.pattern.history_migration_gap",
         "title": "腹痛演变史采集不足",
         "focus": "只问当前疼痛部位，漏掉起病部位、转移过程和诱发加重因素。",
-        "related_rubric_items": ["ht_onset", "ht_migration", "ht_character"]
+        "related_rubric_items": [
+          "ht_onset",
+          "ht_migration",
+          "ht_character"
+        ]
       },
       {
         "pattern_id": "appendicitis_001.pattern.peritoneal_exam_gap",
         "title": "腹膜刺激征检查不足",
         "focus": "完成一般查体后，没有继续验证右下腹压痛、反跳痛和局部肌紧张。",
-        "related_rubric_items": ["pe_tenderness", "pe_rebound"]
+        "related_rubric_items": [
+          "pe_tenderness",
+          "pe_rebound"
+        ]
       },
       {
         "pattern_id": "appendicitis_001.pattern.reasoning_chain_gap",
         "title": "证据链表达不足",
         "focus": "诊断假设较早出现，但没有把病史、查体、检查和鉴别排除串成完整推理。",
-        "related_rubric_items": ["rs_support", "rs_exclude", "dxd_urolith"]
+        "related_rubric_items": [
+          "rs_support",
+          "rs_exclude",
+          "dxd_urolith"
+        ]
       }
     ],
     "recommended_training_path": [
@@ -498,5 +655,9 @@
     "modified": true
   },
   "schema_version": "1.1",
-  "tags": ["腹痛", "外科急腹症", "Demo"]
+  "tags": [
+    "腹痛",
+    "外科急腹症",
+    "Demo"
+  ]
 }

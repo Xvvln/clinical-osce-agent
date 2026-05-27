@@ -147,7 +147,7 @@ class PersonalTrainingSkillService:
         approval_agent: TrainingSkillApprovalAgent | None = None,
         regression_gate: TrainingSkillRegressionGate | None = None,
     ) -> None:
-        self._generator = generator or create_default_training_skill_candidate_generator()
+        self._generator = generator
         self._approval_agent = approval_agent or TrainingSkillApprovalAgent()
         self._regression_gate = regression_gate or TrainingSkillRegressionGate()
 
@@ -212,7 +212,8 @@ class PersonalTrainingSkillService:
             related_recommendations=_related_recommendations(report),
             turn_patterns=reasoning_turn_patterns,
         )
-        candidate = self._generator.generate_candidate(context)
+        generator = self._generator or create_default_training_skill_candidate_generator()
+        candidate = generator.generate_candidate(context)
         trigger_item_ids = [item.item_id for item in missed_items] or ["reflection:structured_expression"]
         stage_scope = ["case_intro", "history_taking", "physical_exam", "auxiliary_testing", "diagnosis_submission"]
         candidate.update(
