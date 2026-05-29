@@ -61,60 +61,83 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
     if limit <= 0 or not active_queries:
         return results_by_query
 
-    embedding_client, embedding_model = _build_embedding_client_from_environment()
-    if embedding_client is None:
+    embedding_clients = _build_embedding_clients_from_environment()
+    if not embedding_clients:
         LOGGER.warning("RAG vector retrieval skipped because no embedding client is configured")
         return results_by_query
 
-    try:
-        chroma_index = build_chroma_retrieval_index_from_environment(
-            embedding_client=embedding_client,
-            documents=get_chroma_source_documents(),
-            root_dir=ROOT_DIR,
-            embedding_model=embedding_model,
-        )
-        if chroma_index is not None:
-            chroma_results_by_query = chroma_index.search_batch(
+    for embedding_client, embedding_model in embedding_clients:
+        try:
+            chroma_index = build_chroma_retrieval_index_from_environment(
+                embedding_client=embedding_client,
+                documents=get_chroma_source_documents(),
+                root_dir=ROOT_DIR,
+                embedding_model=embedding_model,
+            )
+            if chroma_index is not None:
+                chroma_results_by_query = chroma_index.search_batch(
+                    [query for _, query in active_queries],
+                    limit=limit,
+                )
+                for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
+                    results_by_query[original_index] = [
+                        RetrievalDocument(
+                            reference=result.reference,
+                            source_type=result.source_type,
+                            title=result.title,
+                            snippet=result.snippet,
+                            score=result.score,
+                        )
+                        for result in chroma_results
+                    ]
+                return results_by_query
+        except Exception as exc:
+            LOGGER.warning(
+                "ChromaDB retrieval failed for embedding model %s; falling back to in-memory vector search: %s",
+                embedding_model,
+                exc,
+            )
+
+        try:
+            embedding_results_by_query = search_retrieval_documents_with_embeddings_batch(
                 [query for _, query in active_queries],
+                embedding_client=embedding_client,
                 limit=limit,
             )
-            for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
-                results_by_query[original_index] = [
-                    RetrievalDocument(
-                        reference=result.reference,
-                        source_type=result.source_type,
-                        title=result.title,
-                        snippet=result.snippet,
-                        score=result.score,
-                    )
-                    for result in chroma_results
-                ]
+            for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
+                results_by_query[original_index] = embedding_results
             return results_by_query
-    except Exception as exc:
-        LOGGER.warning("ChromaDB retrieval failed; falling back to in-memory vector search: %s", exc)
-
-    try:
-        embedding_results_by_query = search_retrieval_documents_with_embeddings_batch(
-            [query for _, query in active_queries],
-            embedding_client=embedding_client,
-            limit=limit,
-        )
-        for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
-            results_by_query[original_index] = embedding_results
-        return results_by_query
-    except Exception as exc:
-        LOGGER.warning("RAG vector retrieval failed; returning no RAG retrieval results: %s", exc)
-        return results_by_query
+        except Exception as exc:
+            LOGGER.warning("RAG vector retrieval failed for embedding model %s: %s", embedding_model, exc)
+            continue
+    LOGGER.warning("RAG vector retrieval failed for every configured embedding client; returning no retrieval results")
+    return results_by_query
 
 
 def _build_embedding_client_from_environment() -> tuple[EmbeddingClient | None, str]:
-    vertex_embedding_client = build_vertex_embedding_client_from_environment()
+    embedding_clients = _build_embedding_clients_from_environment()
+    return embedding_clients[0] if embedding_clients else (None, "")
+
+
+def _build_embedding_clients_from_environment() -> list[tuple[EmbeddingClient, str]]:
+    embedding_clients: list[tuple[EmbeddingClient, str]] = []
+    try:
+        vertex_embedding_client = build_vertex_embedding_client_from_environment()
+    except Exception as exc:
+        LOGGER.warning("Vertex embedding client initialization failed; continuing without it: %s", exc)
+        vertex_embedding_client = None
     if vertex_embedding_client is not None:
-        return vertex_embedding_client, _env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL)
-    local_embedding_client = build_local_embedding_client_from_environment()
+        embedding_clients.append(
+            (vertex_embedding_client, _env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL))
+        )
+    try:
+        local_embedding_client = build_local_embedding_client_from_environment()
+    except Exception as exc:
+        LOGGER.warning("Local embedding client initialization failed; continuing without it: %s", exc)
+        local_embedding_client = None
     if local_embedding_client is not None:
-        return local_embedding_client, get_local_embedding_model_name_from_environment()
-    return None, ""
+        embedding_clients.append((local_embedding_client, get_local_embedding_model_name_from_environment()))
+    return embedding_clients
 
 
 def search_retrieval_documents_with_embeddings(

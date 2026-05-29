@@ -15,8 +15,10 @@ from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.admin_display_resolver import trigger_item_labels as resolve_trigger_item_labels
 from app.services.training_skill_policy import (
     build_prohibited_content_policy,
+    build_skill_memory_fields,
     build_success_metrics,
     build_teaching_action_plan,
 )
@@ -52,6 +54,7 @@ class TrainingSkillCandidateContext:
     related_recommendations: list[str]
     turn_patterns: list[TrainingSkillCandidateTurnPattern] = field(default_factory=list)
     retrieved_knowledge_context: list[dict[str, Any]] = field(default_factory=list)
+    teacher_analysis_context: dict[str, Any] = field(default_factory=dict)
 
 
 SkillCandidateType = str
@@ -128,6 +131,7 @@ class VertexGeminiTrainingSkillCandidateGenerator:
                         "source_report_ids": _context_source_report_ids(context),
                         "related_recommendations": context.related_recommendations,
                         "retrieved_knowledge_context": context.retrieved_knowledge_context,
+                        "teacher_analysis_context": context.teacher_analysis_context,
                     },
                     ensure_ascii=False,
                 ),
@@ -163,6 +167,7 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
                     "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
                     "retrieved_knowledge_context": context.retrieved_knowledge_context,
+                    "teacher_analysis_context": context.teacher_analysis_context,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
@@ -192,6 +197,7 @@ class AnthropicTrainingSkillCandidateGenerator:
                     "source_report_ids": _context_source_report_ids(context),
                     "related_recommendations": context.related_recommendations,
                     "retrieved_knowledge_context": context.retrieved_knowledge_context,
+                    "teacher_analysis_context": context.teacher_analysis_context,
                 },
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
@@ -390,6 +396,7 @@ def _candidate_from_content(
     skill_type = _skill_type(context)
     stage_scope = _stage_scope(skill_type)
     trigger_item_ids = _context_trigger_item_ids(context)
+    trigger_labels = resolve_trigger_item_labels(trigger_item_ids, context.case_ids)
     candidate = {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
         "trigger_item_id": context.pattern_id,
@@ -414,8 +421,27 @@ def _candidate_from_content(
         "support_count": context.support_count,
         "related_recommendations": list(context.related_recommendations),
     }
+    candidate.update(
+        build_skill_memory_fields(
+            pattern_id=context.pattern_id,
+            skill_type=skill_type,
+            trigger_item_ids=trigger_item_ids,
+            case_ids=list(context.case_ids),
+            source_report_count=context.source_report_count,
+            support_count=context.support_count,
+            title=content.title,
+            description=content.description,
+            suggested_strategy=content.suggested_strategy,
+            stage_scope=stage_scope,
+            effect_status="insufficient_samples",
+            reasoning_pattern_ids=[pattern.pattern_id for pattern in context.turn_patterns],
+            reasoning_pattern_labels=[pattern.title for pattern in context.turn_patterns],
+            trigger_item_labels=trigger_labels,
+        )
+    )
     _add_turn_pattern_source_fields(candidate, context)
     _add_knowledge_context_source_fields(candidate, context)
+    _add_teacher_analysis_context(candidate, context)
     return candidate
 
 
@@ -423,6 +449,7 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
     skill_type = _skill_type(context)
     stage_scope = _stage_scope(skill_type)
     trigger_item_ids = _context_trigger_item_ids(context)
+    trigger_labels = resolve_trigger_item_labels(trigger_item_ids, context.case_ids)
     suggested_strategy = _suggested_strategy(context)
     candidate = {
         "candidate_id": f"skill_candidate_{context.pattern_id}",
@@ -448,8 +475,27 @@ def _build_candidate(context: TrainingSkillCandidateContext) -> dict[str, Any]:
         "support_count": context.support_count,
         "related_recommendations": context.related_recommendations,
     }
+    candidate.update(
+        build_skill_memory_fields(
+            pattern_id=context.pattern_id,
+            skill_type=skill_type,
+            trigger_item_ids=trigger_item_ids,
+            case_ids=list(context.case_ids),
+            source_report_count=context.source_report_count,
+            support_count=context.support_count,
+            title="OSCE 训练模式纠偏提示",
+            description=_candidate_description(context),
+            suggested_strategy=suggested_strategy,
+            stage_scope=stage_scope,
+            effect_status="insufficient_samples",
+            reasoning_pattern_ids=[pattern.pattern_id for pattern in context.turn_patterns],
+            reasoning_pattern_labels=[pattern.title for pattern in context.turn_patterns],
+            trigger_item_labels=trigger_labels,
+        )
+    )
     _add_turn_pattern_source_fields(candidate, context)
     _add_knowledge_context_source_fields(candidate, context)
+    _add_teacher_analysis_context(candidate, context)
     return candidate
 
 
@@ -463,6 +509,7 @@ def _with_skill_generation_knowledge_context(context: TrainingSkillCandidateCont
         related_recommendations=context.related_recommendations,
         turn_patterns=context.turn_patterns,
         retrieved_knowledge_context=_retrieve_skill_generation_knowledge_context(context),
+        teacher_analysis_context=dict(context.teacher_analysis_context),
     )
 
 
@@ -505,21 +552,42 @@ def _add_knowledge_context_source_fields(candidate: dict[str, Any], context: Tra
     candidate["retrieved_knowledge_context"] = list(context.retrieved_knowledge_context)
 
 
+def _add_teacher_analysis_context(candidate: dict[str, Any], context: TrainingSkillCandidateContext) -> None:
+    if context.teacher_analysis_context:
+        candidate["teacher_analysis_context"] = dict(context.teacher_analysis_context)
+
+
 def _candidate_description(context: TrainingSkillCandidateContext) -> str:
+    teacher_summary = _teacher_analysis_summary(context)
+    thinking_hypothesis = _teacher_student_thinking_hypothesis(context)
+    teacher_prefix = ""
+    if teacher_summary and thinking_hypothesis:
+        teacher_prefix = f"TeacherAgent 分析指出：{teacher_summary}；学生思维假设：{thinking_hypothesis}。"
+    elif teacher_summary:
+        teacher_prefix = f"TeacherAgent 分析指出：{teacher_summary}。"
+    elif thinking_hypothesis:
+        teacher_prefix = f"TeacherAgent 学生思维假设：{thinking_hypothesis}。"
     if context.turn_patterns:
         turn_pattern_summaries = "、".join(
             f"{pattern.title}（{pattern.count} 次，涉及 {'、'.join(pattern.session_ids)}）"
             for pattern in context.turn_patterns
         )
+        if teacher_prefix:
+            return f"{teacher_prefix}{context.source_report_count} 份报告关联的话轮记录中反复出现 {len(context.turn_patterns)} 类训练过程模式：{turn_pattern_summaries}。"
         return f"{context.source_report_count} 份报告关联的话轮记录中反复出现 {len(context.turn_patterns)} 类训练过程模式：{turn_pattern_summaries}。"
     missed_item_summaries = "、".join(
         f"{item.item_id}（{item.count} 次，涉及 {'、'.join(item.case_ids)}）"
         for item in context.missed_items
     )
+    if teacher_prefix:
+        return f"{teacher_prefix}{context.source_report_count} 份报告中反复出现 {len(context.missed_items)} 类训练漏项：{missed_item_summaries}。"
     return f"{context.source_report_count} 份报告中反复出现 {len(context.missed_items)} 类训练漏项：{missed_item_summaries}。"
 
 
 def _suggested_strategy(context: TrainingSkillCandidateContext) -> str:
+    teacher_intervention = _teacher_recommended_intervention(context)
+    if teacher_intervention:
+        return teacher_intervention
     if context.turn_patterns:
         pattern_types = [pattern.pattern_type for pattern in context.turn_patterns]
         if any(pattern_type == "evidence_chain_breakpoint" for pattern_type in pattern_types):
@@ -528,6 +596,23 @@ def _suggested_strategy(context: TrainingSkillCandidateContext) -> str:
             return "在不透露标准答案的前提下，先指出本轮训练中的顺序跳步，再用问题引导学生回到病史、查体、检查和诊断表达的合理验证链。"
         return "在不透露标准答案的前提下，先识别本轮训练中的偏题、跳步或过早索要答案模式，再用苏格拉底式问题把学生带回当前 OSCE 阶段的证据采集目标。"
     return "在不透露标准答案的前提下，提醒学生按本轮训练中反复出现的漏项模式复盘问诊、查体、检查、诊断和推理链，而不是只修补单个评分点。"
+
+
+def _teacher_analysis_summary(context: TrainingSkillCandidateContext) -> str:
+    value = context.teacher_analysis_context.get("analysis_summary")
+    return str(value or "").strip()
+
+
+def _teacher_student_thinking_hypothesis(context: TrainingSkillCandidateContext) -> str:
+    value = context.teacher_analysis_context.get("student_thinking_hypothesis")
+    return str(value or "").strip()
+
+
+def _teacher_recommended_intervention(context: TrainingSkillCandidateContext) -> str:
+    focus = context.teacher_analysis_context.get("skill_memory_focus")
+    if not isinstance(focus, dict):
+        return ""
+    return str(focus.get("recommended_intervention") or "").strip()
 
 
 def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:

@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.main import AUTH_COOKIE_NAME
 from app.services.auth_store import AuthStore
+from app.services.runtime_model_config_store import RuntimeModelConfig
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services import student_model_config_service
 
@@ -214,7 +215,7 @@ def test_student_model_config_test_includes_sanitized_provider_error_detail(monk
                 "provider": "openai_compatible",
                 "api_key": "student-openai-secret",
                 "model": "unsupported-model",
-                "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+                "base_url": "https://fallback-gateway.example/v1",
                 "proxy_url": "direct",
             },
         )
@@ -344,6 +345,7 @@ def test_student_can_apply_openai_compatible_config_to_runtime_without_leaking_s
             "coach_agent",
             "llm_rubric_scorer",
             "skill_candidate_generator",
+            "procedure_request_router",
             "procedure_result_simulator",
         ],
         "message": "OpenAI 兼容服务端已应用到本次后端运行时。",
@@ -385,6 +387,7 @@ def test_student_can_apply_anthropic_config_to_runtime_without_leaking_secret(tm
             "coach_agent",
             "llm_rubric_scorer",
             "skill_candidate_generator",
+            "procedure_request_router",
             "procedure_result_simulator",
         ],
         "message": "Anthropic 服务端已应用到本次后端运行时。",
@@ -428,6 +431,7 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key(t
             "coach_agent",
             "llm_rubric_scorer",
             "skill_candidate_generator",
+            "procedure_request_router",
             "procedure_result_simulator",
             "rag_vector_retrieval",
         ],
@@ -470,6 +474,7 @@ def test_student_can_apply_vertex_gemini_api_key_config_to_runtime_without_leaki
             "coach_agent",
             "llm_rubric_scorer",
             "skill_candidate_generator",
+            "procedure_request_router",
             "procedure_result_simulator",
             "rag_vector_retrieval",
         ],
@@ -516,7 +521,7 @@ def test_production_runtime_config_status_exposes_environment_default_without_us
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
     monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
-    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "http://20.89.192.82:8317/v1")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://managed-gateway.example/v1")
     monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
     client = _authenticated_client(tmp_path, monkeypatch, "student-prod@example.test")
 
@@ -527,14 +532,15 @@ def test_production_runtime_config_status_exposes_environment_default_without_us
         "active": True,
         "provider": "openai_compatible",
         "model": "gemini-3.5-flash",
-        "base_url": "http://20.89.192.82:8317/v1",
-        "proxy_url": "direct",
+        "base_url": "",
+        "proxy_url": "",
         "integration_targets": [
             "patient_responder",
             "turn_intent_agent",
             "coach_agent",
             "llm_rubric_scorer",
             "skill_candidate_generator",
+            "procedure_request_router",
             "procedure_result_simulator",
         ],
         "api_key_saved": False,
@@ -545,13 +551,89 @@ def test_production_runtime_config_status_exposes_environment_default_without_us
     assert "server-gemini-secret" not in status_response.text
 
 
+def test_server_managed_model_config_disables_runtime_writes_in_demo_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-dev")
+    monkeypatch.setenv("CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG", "true")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://managed-gateway.example/v1")
+    monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
+    client = _authenticated_client(tmp_path, monkeypatch, "student-managed@example.test")
+
+    write_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "student-model",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        },
+    )
+    status_response = client.get("/api/model-config/runtime")
+
+    assert write_response.status_code == 403
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["active"] is True
+    assert payload["provider"] == "openai_compatible"
+    assert payload["model"] == "gemini-3.5-flash"
+    assert payload["base_url"] == ""
+    assert payload["proxy_url"] == ""
+    assert payload["api_key_saved"] is False
+    assert payload["runtime_write_supported"] is False
+    assert payload["deployment_mode"] == "local-dev"
+    assert "server-gemini-secret" not in status_response.text
+    assert "student-openai-secret" not in status_response.text
+
+
+def test_server_managed_model_config_ignores_previously_saved_user_runtime_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    monkeypatch.setenv("CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG", "true")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://managed-gateway.example/v1")
+    monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    monkeypatch.setattr(main, "auth_store", auth_store)
+    user = auth_store.create_user("student-managed-saved@example.test", "safe-password-123", "学生")
+    assert user is not None
+    main.user_model_config_store.save_runtime_config(
+        user["user_id"],
+        RuntimeModelConfig(
+            provider="openai_compatible",
+            api_key="old-student-secret",
+            model="student-old-model",
+            base_url="https://student-old.example/v1",
+            proxy_url="direct",
+        ),
+    )
+    token = auth_store.create_session(user["user_id"])
+    client = TestClient(main.app)
+    client.cookies.set(AUTH_COOKIE_NAME, token)
+
+    status_response = client.get("/api/model-config/runtime")
+
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["active"] is True
+    assert payload["provider"] == "openai_compatible"
+    assert payload["model"] == "gemini-3.5-flash"
+    assert payload["base_url"] == ""
+    assert payload["api_key_saved"] is False
+    assert payload["runtime_write_supported"] is False
+    assert "old-student-secret" not in status_response.text
+
+
 def test_production_training_uses_environment_default_when_runtime_write_is_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
     monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
     monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
-    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "http://20.89.192.82:8317/v1")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://managed-gateway.example/v1")
     monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
     client = _authenticated_client(tmp_path, monkeypatch, "student-prod-session@example.test")
 

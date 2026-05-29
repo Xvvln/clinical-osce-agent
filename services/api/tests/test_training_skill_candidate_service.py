@@ -23,6 +23,8 @@ from app.services.training_skill_candidate_service import (
     create_default_training_skill_candidate_generator,
 )
 
+FORBIDDEN_EVALUATION_TERMS = ["治疗方案", "用药剂量", "手术方案"]
+
 
 def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
     monkeypatch.setattr(
@@ -40,6 +42,14 @@ def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
         ][:limit],
         raising=False,
     )
+
+
+def _json_text(value: object) -> str:
+    if isinstance(value, dict):
+        return " ".join(_json_text(item) for pair in value.items() for item in pair)
+    if isinstance(value, list):
+        return " ".join(_json_text(item) for item in value)
+    return str(value)
 
 
 class FakeSkillCandidateModels:
@@ -146,6 +156,22 @@ def _expected_success_metrics() -> list[str]:
     ]
 
 
+def _without_memory_fields(candidate: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in candidate.items()
+        if key
+        not in {
+            "memory_layer",
+            "skill_memory_version",
+            "problem_pattern",
+            "router_index",
+            "intervention",
+            "effect_tracking",
+        }
+    }
+
+
 def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_context_and_response_schema() -> None:
     fake_client = FakeSkillCandidateClient()
     generator = VertexGeminiTrainingSkillCandidateGenerator(
@@ -159,7 +185,7 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
 
     candidate = generator.generate_candidate(_training_pattern_candidate_context())
 
-    assert candidate == {
+    assert _without_memory_fields(candidate) == {
         "candidate_id": "skill_candidate_training_pattern_reasoning_core_rs_exclude",
         "trigger_item_id": "training_pattern_reasoning_core_rs_exclude",
         "trigger_item_ids": ["reasoning_core", "rs_exclude"],
@@ -192,6 +218,9 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
             "knowledge:appendicitis_001.rp_03",
         ],
     }
+    assert candidate["memory_layer"] == "procedural_teaching_skill"
+    assert candidate["router_index"]["summary"] == "LLM 生成的训练模式 Skill：基于多项高频漏项生成的训练级教学 Skill。"
+    assert candidate["intervention"]["coach_strategy"] == "提交诊断前，请先按证据链复核主要诊断、鉴别诊断和排除依据。"
     call = fake_client.models.calls[0]
     assert call["model"] == "gemini-3.1-pro-preview"
     assert '"pattern_id": "training_pattern_reasoning_core_rs_exclude"' in str(call["contents"])
@@ -202,6 +231,37 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
     assert call["config"].response_mime_type == "application/json"
     assert call["config"].response_schema.__name__ == "GeneratedTrainingSkillCandidateContent"
     assert "不得生成真实诊疗建议" in call["config"].system_instruction
+
+
+def test_vertex_gemini_training_skill_candidate_generator_passes_teacher_analysis_context_to_model() -> None:
+    fake_client = FakeSkillCandidateClient()
+    generator = VertexGeminiTrainingSkillCandidateGenerator(
+        settings=VertexGeminiSkillCandidateSettings(
+            project="demo-project",
+            skill_candidate_enabled=True,
+            _env_file=None,
+        ),
+        client=fake_client,
+    )
+    context = replace(
+        _training_pattern_candidate_context(),
+        teacher_analysis_context={
+            "analysis_mode": "post_session_teacher_analysis",
+            "analysis_summary": "学生没有把疼痛迁移、查体证据和鉴别排除连成验证链。",
+            "major_issue_titles": ["问题表征薄弱", "证据链断点"],
+            "skill_memory_focus": {
+                "problem_pattern_summary": "假设形成后缺少验证路径",
+                "recommended_intervention": "用反问引导学生说明下一项查体或检查验证什么。",
+            },
+        },
+    )
+
+    candidate = generator.generate_candidate(context)
+
+    call = fake_client.models.calls[0]
+    assert '"teacher_analysis_context"' in str(call["contents"])
+    assert "学生没有把疼痛迁移、查体证据和鉴别排除连成验证链" in str(call["contents"])
+    assert candidate["teacher_analysis_context"]["skill_memory_focus"]["problem_pattern_summary"] == "假设形成后缺少验证路径"
 
 
 def test_vertex_gemini_training_skill_candidate_generator_raises_generation_error_when_model_call_fails() -> None:
@@ -729,7 +789,7 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
         knowledge_references
     )
     assert {item["reference"] for item in retrieved_knowledge_context} == set(knowledge_references)
-    assert candidate == {
+    assert _without_memory_fields(candidate) == {
         "candidate_id": "skill_candidate_training_pattern_rs_exclude_reasoning_core",
         "trigger_item_id": "training_pattern_rs_exclude_reasoning_core",
         "trigger_item_ids": ["rs_exclude", "reasoning_core"],
@@ -762,6 +822,9 @@ def test_training_skill_candidate_service_proposes_one_training_pattern_candidat
             "knowledge:appendicitis_001.rp_03",
         ],
     }
+    assert candidate["memory_layer"] == "procedural_teaching_skill"
+    assert candidate["router_index"]["summary"] == "OSCE 训练模式纠偏提示：3 份报告中反复出现 2 类训练漏项：rs_exclude（3 次，涉及 appendicitis_001）、reasoning_core（2 次，涉及 appendicitis_001、pneumonia_001）。"
+    assert candidate["intervention"]["coach_strategy"] == candidate["suggested_strategy"]
 
 
 def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_metadata(monkeypatch) -> None:
@@ -809,6 +872,58 @@ def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_me
     )
     assert candidate["prohibited_content_policy"] == _expected_policy()
     assert candidate["success_metrics"] == _expected_success_metrics()
+    assert candidate["memory_layer"] == "procedural_teaching_skill"
+    assert candidate["skill_memory_version"] == "skill_memory_v1"
+    assert candidate["problem_pattern"] == {
+        "pattern_id": "training_pattern_dxd_crohn_reasoning_core",
+        "pattern_type": "differential_broadening",
+        "clinical_reasoning_gap": "鉴别诊断与证据链拓展不足",
+        "trigger_item_ids": ["dxd_crohn", "reasoning_core"],
+        "reasoning_pattern_ids": [],
+        "reasoning_pattern_labels": [],
+        "case_ids": ["appendicitis_001"],
+        "source_report_count": 3,
+        "support_count": 2,
+    }
+    assert candidate["router_index"]["when_not_to_use"] == (
+        "空白开局、学生尚未暴露相关错误模式、该问题已冷却/退休，或提示会泄露标准答案 / 隐藏事实时不要使用。"
+    )
+    assert "suggested_strategy" not in candidate["router_index"]
+    assert candidate["intervention"]["coach_strategy"] == candidate["suggested_strategy"]
+    assert candidate["intervention"]["focus_points"] == [
+        "提出克罗恩病并说明排除依据",
+        "推理表达：核心证据链",
+    ]
+    assert candidate["intervention"]["hint_ladder"] == [
+        "先让学生列出当前主诊断假设之外还需要排除的方向，重点围绕提出克罗恩病并说明排除依据、推理表达：核心证据链。",
+        "再引导学生为每个鉴别方向补齐支持证据、反对证据和必要检查，而不是只写一个诊断名。",
+        "最后让学生说明新增证据如何改变诊断排序，并明确哪些依据仍然不足。",
+    ]
+    teaching_sop = candidate["intervention"]["teaching_sop"]
+    assert teaching_sop["version"] == "teaching_sop_v1"
+    assert teaching_sop["clinical_reasoning_focus"] == ["鉴别诊断", "假设检验", "证据链完整性"]
+    assert teaching_sop["student_task"] == "补齐每个鉴别方向的支持证据、反对证据和必要检查。"
+    assert teaching_sop["completion_signal"] == "学生能说明新增证据如何改变诊断排序，并指出仍缺的依据。"
+    assert len(teaching_sop["teacher_moves"]) == 3
+    assert teaching_sop["teacher_moves"][0]["prompt_style"] == "socratic_question"
+    assert "提出克罗恩病并说明排除依据" in teaching_sop["teacher_moves"][0]["move"]
+    assert "不得透露标准诊断" in " ".join(teaching_sop["safety_guardrails"])
+    generated_memory_text = _json_text(
+        {
+            "router_index": candidate["router_index"],
+            "intervention": candidate["intervention"],
+        }
+    )
+    for forbidden_term in FORBIDDEN_EVALUATION_TERMS:
+        assert forbidden_term not in generated_memory_text
+    assert candidate["effect_tracking"] == {
+        "status": "insufficient_samples",
+        "status_label": "样本不足",
+        "support_count": 2,
+        "source_report_count": 3,
+        "application_count": 0,
+        "summary": "样本不足，仅记录应用痕迹，不宣称能力提升。",
+    }
 
 
 def test_training_skill_candidate_service_skips_when_no_repeated_training_pattern(monkeypatch) -> None:
@@ -1097,4 +1212,7 @@ def test_template_training_skill_candidate_generator_maps_evidence_chain_breakpo
     assert candidate["skill_type"] == "reasoning_bridge"
     assert candidate["stage_scope"] == ["case_intro", "diagnosis_submission"]
     assert "证据链" in candidate["suggested_strategy"]
+    assert candidate["problem_pattern"]["reasoning_pattern_ids"] == ["evidence_chain_rp_migration_support"]
+    assert candidate["problem_pattern"]["reasoning_pattern_labels"] == ["迁移痛推理点"]
+    assert candidate["router_index"]["risk"] == "仅用于教学提示和复盘，不得透露标准诊断、隐藏事实或真实临床处理细节。"
     assert candidate["source_turn_patterns"][0]["title"] == "迁移痛推理点"

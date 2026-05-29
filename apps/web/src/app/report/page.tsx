@@ -18,6 +18,7 @@ import {
   type ReportCoverageMapPayload,
   type RubricScoreItem,
   type SourceReferenceItem,
+  type TeacherAnalysisContext,
   type TeacherReasoningTraceSummary,
 } from "./report-model";
 
@@ -132,6 +133,8 @@ const REPORT_BRAND_GRID_OPACITY = 0.16;
 const REPORT_BRAND_FILL_OPACITY = 0.22;
 const REPORT_SECTION_ACTIVATION_OFFSET_PX = 96;
 const REPORT_REQUEST_TIMEOUT_MS = 45_000;
+const PERSONAL_SKILL_POLL_INTERVAL_MS = 3_500;
+const PERSONAL_SKILL_NOTICE_TIMEOUT_MS = 7_000;
 const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 
 const reportSections: readonly ReportSection[] = [
@@ -247,6 +250,19 @@ function getPersonalSkillStatusLabel(status: string): string {
     return "历史报告";
   }
   return status;
+}
+
+function getPersonalSkillCompletionNoticeText(status: string): string | null {
+  if (status === "approved") {
+    return "个人训练 Skill 已生成，报告内容已自动刷新。";
+  }
+  if (status === "blocked_by_regression") {
+    return "个人训练 Skill 已完成审核，但未进入训练库，报告内容已自动刷新。";
+  }
+  if (status === "generation_failed") {
+    return "个人训练 Skill 生成失败，报告内容已自动刷新，可稍后重试。";
+  }
+  return null;
 }
 
 function createTrainingPointLabelResolver(report: FeedbackReport): (itemId: string) => string {
@@ -731,6 +747,7 @@ export default function ReportPage() {
   const [statusText, setStatusText] = useState("正在读取评分报告...");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [shareStatusText, setShareStatusText] = useState<string | null>(null);
+  const [personalSkillNoticeText, setPersonalSkillNoticeText] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<ReportSectionId>("overview");
   const [isReportNavigatorCollapsed, setIsReportNavigatorCollapsed] = useState(false);
 
@@ -785,6 +802,65 @@ export default function ReportPage() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionId || report?.personal_skill_candidate.status !== "generation_pending") {
+      return;
+    }
+
+    let isCancelled = false;
+    let pollTimer: number | null = null;
+
+    async function pollPersonalSkillCandidate() {
+      try {
+        const nextReportPayload = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${sessionId}/report`, {
+          timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
+        });
+        if (isCancelled) {
+          return;
+        }
+
+        const nextReport = normalizeFeedbackReport(nextReportPayload);
+        setReport(nextReport);
+        if (nextReport.personal_skill_candidate.status !== "generation_pending") {
+          const noticeText = getPersonalSkillCompletionNoticeText(nextReport.personal_skill_candidate.status);
+          if (noticeText) {
+            setPersonalSkillNoticeText(noticeText);
+          }
+          return;
+        }
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+      }
+
+      pollTimer = window.setTimeout(pollPersonalSkillCandidate, PERSONAL_SKILL_POLL_INTERVAL_MS);
+    }
+
+    pollTimer = window.setTimeout(pollPersonalSkillCandidate, PERSONAL_SKILL_POLL_INTERVAL_MS);
+
+    return () => {
+      isCancelled = true;
+      if (pollTimer) {
+        window.clearTimeout(pollTimer);
+      }
+    };
+  }, [sessionId, report?.personal_skill_candidate.status]);
+
+  useEffect(() => {
+    if (!personalSkillNoticeText) {
+      return;
+    }
+
+    const dismissTimer = window.setTimeout(() => {
+      setPersonalSkillNoticeText(null);
+    }, PERSONAL_SKILL_NOTICE_TIMEOUT_MS);
+
+    return () => {
+      window.clearTimeout(dismissTimer);
+    };
+  }, [personalSkillNoticeText]);
 
   useEffect(() => {
     function updateActiveSection() {
@@ -862,6 +938,27 @@ export default function ReportPage() {
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
+      {personalSkillNoticeText ? (
+        <div
+          className="fixed right-5 bottom-5 z-50 max-w-sm rounded-2xl border border-brand/20 bg-background/95 p-4 text-sm leading-6 text-foreground shadow-[0_18px_60px_rgba(0,0,0,0.14)] backdrop-blur"
+          role="status"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold text-brand">个人 Skill 已更新</p>
+              <p className="mt-1 text-muted-foreground">{personalSkillNoticeText}</p>
+            </div>
+            <button
+              aria-label="关闭个人 Skill 提示"
+              className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-muted"
+              onClick={() => setPersonalSkillNoticeText(null)}
+              type="button"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="mx-auto flex max-w-7xl flex-col gap-4">
         <header className="rounded-2xl border border-border bg-background p-5 shadow-xs">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -1261,6 +1358,52 @@ function ReportCoverageMapGroup({
   );
 }
 
+function hasTeacherAnalysisContext(context: TeacherAnalysisContext): boolean {
+  return Boolean(
+    context.analysis_summary
+    || context.student_thinking_hypothesis
+    || Object.keys(context.clinical_thinking_profile).length > 0
+    || Object.keys(context.skill_memory_focus).length > 0
+    || context.source_anchor_labels.length > 0,
+  );
+}
+
+function stringifyTeacherAnalysisValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyTeacherAnalysisValue(item)).filter(Boolean).join("、");
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nestedValue]) => {
+        const nestedText = stringifyTeacherAnalysisValue(nestedValue);
+        return nestedText ? `${formatTeacherAnalysisKey(key)}：${nestedText}` : "";
+      })
+      .filter(Boolean)
+      .join("；");
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value);
+}
+
+function formatTeacherAnalysisKey(key: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    problem_representation: "问题表征",
+    hypothesis_management: "假设管理",
+    verification_strategy: "验证策略",
+    differential_reasoning: "鉴别诊断",
+    metacognitive_next_move: "下一步思维动作",
+    next_teacher_move: "下一步教学动作",
+    problem_pattern_summary: "问题模式",
+    recommended_intervention: "建议干预",
+  };
+  return labels[key] ?? key.replaceAll("_", " ");
+}
+
 function getCoverageMapStats(coverageMap: ReportCoverageMapPayload) {
   const items = [
     ...coverageMap.history,
@@ -1302,6 +1445,7 @@ function AiReflectionReviewSection({
         <h3 className="text-sm font-semibold text-foreground">总体判断</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{overallComment}</p>
       </div>
+      <TeacherAnalysisContextSection context={review.teacher_analysis_context} />
       {review.teacher_coaching_review.length > 0 ? (
         <div className="mt-3 rounded-xl border border-border bg-muted/20 p-4">
           <h3 className="text-sm font-semibold text-foreground">老师带你重走一遍临床思路</h3>
@@ -1464,6 +1608,78 @@ function AiReflectionReviewSection({
   );
 }
 
+function TeacherAnalysisContextSection({
+  context,
+  title = "教师智能体分析",
+}: Readonly<{
+  context: TeacherAnalysisContext;
+  title?: string;
+}>) {
+  if (!hasTeacherAnalysisContext(context)) {
+    return null;
+  }
+  const thinkingProfileEntries = Object.entries(context.clinical_thinking_profile)
+    .map(([key, value]) => [key, stringifyTeacherAnalysisValue(value)] as const)
+    .filter(([, value]) => value);
+  const skillMemoryFocusEntries = Object.entries(context.skill_memory_focus)
+    .map(([key, value]) => [key, stringifyTeacherAnalysisValue(value)] as const)
+    .filter(([, value]) => value);
+
+  return (
+    <section className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            这是 TeacherAgent 基于本轮训练材料形成的教学分析，只用于复盘和 Skill 记忆，不参与评分裁判。
+          </p>
+        </div>
+        {context.analysis_mode ? (
+          <span className="w-fit rounded-full border border-brand/20 bg-background px-2.5 py-1 text-[11px] text-brand">
+            {context.analysis_mode}
+          </span>
+        ) : null}
+      </div>
+
+      {context.analysis_summary ? <p className="mt-3 text-sm leading-6 text-muted-foreground">{context.analysis_summary}</p> : null}
+      {context.student_thinking_hypothesis ? (
+        <div className="mt-3 rounded-lg border border-border bg-background p-3">
+          <p className="text-xs font-semibold text-foreground">学生思维假设</p>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{context.student_thinking_hypothesis}</p>
+        </div>
+      ) : null}
+
+      {thinkingProfileEntries.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold text-foreground">临床思维画像</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {thinkingProfileEntries.map(([key, value]) => (
+              <article className="rounded-lg border border-border bg-background p-3 text-xs leading-5" key={key}>
+                <p className="font-semibold text-foreground">{formatTeacherAnalysisKey(key)}</p>
+                <p className="mt-1 text-muted-foreground">{value}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {skillMemoryFocusEntries.length > 0 ? (
+        <details className="mt-3 rounded-lg border border-border bg-background p-3">
+          <summary className="cursor-pointer list-none text-xs font-semibold text-foreground">Skill 记忆来源</summary>
+          <div className="mt-2 grid gap-2">
+            {skillMemoryFocusEntries.map(([key, value]) => (
+              <p className="text-xs leading-5 text-muted-foreground" key={key}>
+                <span className="font-medium text-foreground">{formatTeacherAnalysisKey(key)}：</span>
+                {value}
+              </p>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
 function TeacherReasoningTraceSummarySection({ summary }: Readonly<{ summary: TeacherReasoningTraceSummary }>) {
   const hasSequenceFlags = summary.sequence_flags.length > 0;
   const hasEvidenceBreakpoints = summary.evidence_chain_breakpoints.length > 0;
@@ -1561,6 +1777,7 @@ function PersonalTrainingSkillSection({
         </div>
       </div>
       {candidate.title ? <p className="mt-3 text-sm font-semibold text-foreground">{candidate.title}</p> : null}
+      <TeacherAnalysisContextSection context={candidate.teacher_analysis_context} title="Skill 记忆来源" />
       {candidate.description || candidate.suggested_strategy ? (
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <div className="rounded-xl border border-border bg-muted/25 p-3">

@@ -163,6 +163,11 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /missing_edges\.map/);
   assert.match(adminPageSource, /系统评测/);
   assert.match(adminPageSource, /训练日志/);
+  assert.match(adminPageSource, /sessionRuntimeErrorEvents/);
+  assert.match(adminPageSource, /event\.event_type === "session_runtime_error"/);
+  assert.match(adminPageSource, /function getSessionRuntimeErrorPayload/);
+  assert.match(adminPageSource, /运行异常/);
+  assert.match(adminPageSource, /错误编号/);
   assert.match(adminPageSource, /受控话轮记忆/);
   assert.match(adminPageSource, /agentTurnEvents/);
   assert.match(adminPageSource, /event\.payload\.agent_turn/);
@@ -660,8 +665,8 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /fetch\("\/api\/auth\/login"/);
   assert.match(adminPageSource, /fetch\("\/api\/auth\/logout"/);
   assert.match(adminPageSource, /credentials: "same-origin"/);
-  assert.match(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin-demo@example.test"/);
-  assert.match(adminPageSource, /const DEMO_ADMIN_PASSWORD = "safe-admin-password"/);
+  assert.match(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin@osce.test"/);
+  assert.match(adminPageSource, /const DEMO_ADMIN_PASSWORD = "admin"/);
   assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\(DEMO_ADMIN_EMAIL\)/);
   assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(DEMO_ADMIN_PASSWORD\)/);
   assert.match(adminPageSource, /const \[isAdminLoginDialogOpen, setIsAdminLoginDialogOpen\] = useState\(false\)/);

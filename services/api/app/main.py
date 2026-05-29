@@ -83,9 +83,13 @@ ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
 DEMO_ADMIN_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_EMAIL"
 DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
-DEFAULT_DEMO_ADMIN_EMAIL = "admin-demo@example.test"
-DEFAULT_DEMO_ADMIN_PASSWORD = "safe-admin-password"
+DEFAULT_DEMO_ADMIN_EMAIL = "admin@osce.test"
+DEFAULT_DEMO_ADMIN_PASSWORD = "admin"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
+DEFAULT_DEMO_STUDENT_EMAIL = "student@osce.test"
+DEFAULT_DEMO_STUDENT_PASSWORD = "student"
+DEFAULT_DEMO_STUDENT_DISPLAY_NAME = "演示学生"
+FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = "当前演示仅开放固定学生和管理员账号，不允许创建新账号。"
 TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME = "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING"
 TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。"
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
@@ -461,6 +465,9 @@ def _is_training_model_config_required() -> bool:
 
 
 def _activate_user_runtime_model_config(user_id: str) -> bool:
+    if not is_runtime_model_config_write_supported():
+        runtime_model_config_store.clear()
+        return False
     saved_config = user_model_config_store.get_runtime_config(user_id)
     if saved_config is None:
         runtime_model_config_store.clear()
@@ -470,13 +477,24 @@ def _activate_user_runtime_model_config(user_id: str) -> bool:
 
 
 def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, object]:
+    if not is_runtime_model_config_write_supported():
+        runtime_model_config_store.clear()
+        environment_payload = _environment_runtime_model_config_public_payload()
+        if environment_payload is not None:
+            return environment_payload
+        return {
+            "active": False,
+            "provider": "",
+            "model": "",
+            "base_url": "",
+            "proxy_url": "",
+            "integration_targets": [],
+            "api_key_saved": False,
+            "message": "当前服务端未配置可用模型。",
+        }
     saved_config = user_model_config_store.get_runtime_config(user_id)
     if saved_config is None:
         runtime_model_config_store.clear()
-        if not is_runtime_model_config_write_supported():
-            environment_payload = _environment_runtime_model_config_public_payload()
-            if environment_payload is not None:
-                return environment_payload
         return {
             "active": False,
             "provider": "",
@@ -500,14 +518,15 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "active": True,
             "provider": "openai_compatible",
             "model": openai_settings.model,
-            "base_url": openai_settings.base_url,
-            "proxy_url": openai_settings.proxy_url,
+            "base_url": "",
+            "proxy_url": "",
             "integration_targets": [
                 "patient_responder",
                 "turn_intent_agent",
                 "coach_agent",
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
+                "procedure_request_router",
                 "procedure_result_simulator",
             ],
             "api_key_saved": False,
@@ -528,6 +547,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
                 "coach_agent",
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
+                "procedure_request_router",
                 "procedure_result_simulator",
             ],
             "api_key_saved": False,
@@ -541,7 +561,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "model": _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL") or "gemini-3.1-pro-preview",
             "base_url": _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT"),
             "proxy_url": _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL") or "http://127.0.0.1:7897",
-            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent", "procedure_result_simulator"],
+            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent", "procedure_request_router", "procedure_result_simulator"],
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
         }
@@ -626,6 +646,16 @@ def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"模型服务调用失败：{exc.__class__.__name__}")
 
 
+def _training_flow_runtime_error(exc: BaseException) -> HTTPException:
+    trace_id = str(getattr(exc, "osce_runtime_trace_id", "") or "").strip()
+    detail = (
+        f"训练流程异常，管理员可在训练日志中查看错误编号：{trace_id}"
+        if trace_id
+        else "训练流程异常，管理员可在训练日志中查看具体错误。"
+    )
+    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+
+
 def _model_provider_response_error_detail(response: httpx.Response) -> str:
     parts: list[str] = []
     try:
@@ -676,12 +706,36 @@ def _get_demo_admin_password() -> str:
     return os.environ.get(DEMO_ADMIN_PASSWORD_ENV_NAME, DEFAULT_DEMO_ADMIN_PASSWORD)
 
 
+def _get_demo_student_email() -> str:
+    return DEFAULT_DEMO_STUDENT_EMAIL
+
+
+def _get_demo_student_password() -> str:
+    return DEFAULT_DEMO_STUDENT_PASSWORD
+
+
 def _matches_demo_admin_credentials(email: str, password: str) -> bool:
     return _is_demo_admin_enabled() and email.strip().lower() == _get_demo_admin_email() and password == _get_demo_admin_password()
 
 
 def _ensure_demo_admin_user(email: str, password: str) -> dict[str, str]:
     return auth_store.upsert_user_password(email=email, password=password, display_name=DEFAULT_DEMO_ADMIN_DISPLAY_NAME)
+
+
+def _matches_demo_student_credentials(email: str, password: str) -> bool:
+    return email.strip().lower() == _get_demo_student_email() and password == _get_demo_student_password()
+
+
+def _ensure_demo_student_user(email: str, password: str) -> dict[str, str]:
+    return auth_store.upsert_user_password(email=email, password=password, display_name=DEFAULT_DEMO_STUDENT_DISPLAY_NAME)
+
+
+def _authenticate_fixed_demo_user(email: str, password: str) -> dict[str, str] | None:
+    if _matches_demo_admin_credentials(email, password):
+        return _ensure_demo_admin_user(email, password)
+    if _matches_demo_student_credentials(email, password):
+        return _ensure_demo_student_user(email, password)
+    return None
 
 
 def _require_admin_user(auth_token: str | None) -> dict[str, str]:
@@ -1200,29 +1254,16 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
 
 @app.post("/api/auth/register")
 def register(request: AuthRegisterRequest, response: Response) -> dict[str, object]:
-    if not is_account_registration_supported():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="服务器演示模式不允许创建新账号，请使用预置学生或管理员账号登录。",
-        )
-    _validate_auth_request(request.email, request.password)
-    user = auth_store.create_user(
-        email=request.email,
-        password=request.password,
-        display_name=request.display_name,
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE,
     )
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email already registered")
-    _set_auth_cookie(response, auth_store.create_session(user["user_id"]))
-    return {"user": user}
 
 
 @app.post("/api/auth/login")
 def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
     _validate_auth_request(request.email, request.password)
-    user = auth_store.authenticate_user(request.email, request.password)
-    if user is None and _matches_demo_admin_credentials(request.email, request.password):
-        user = _ensure_demo_admin_user(request.email, request.password)
+    user = _authenticate_fixed_demo_user(request.email, request.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     _set_auth_cookie(response, auth_store.create_session(user["user_id"]))
@@ -2277,6 +2318,8 @@ def send_message(
         session = osce_session_service.handle_message(session_id, request.message)
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
+    except Exception as exc:
+        raise _training_flow_runtime_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session

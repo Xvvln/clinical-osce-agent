@@ -67,7 +67,7 @@ def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -
     with TestClient(main.app) as client:
         response = client.post(
             "/api/auth/login",
-            json={"email": "admin-demo@example.test", "password": "safe-admin-password"},
+            json={"email": "admin@osce.test", "password": "admin"},
         )
 
     assert response.status_code == 401
@@ -75,7 +75,7 @@ def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -
 
 def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gemini_env(monkeypatch) -> None:
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
-    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin-demo@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@osce.test")
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "configured")
@@ -158,15 +158,17 @@ def test_compose_health_path_remains_valid() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_documented_gemini_defaults_match_current_code_defaults() -> None:
+def test_documented_test_stage_model_defaults_match_current_policy() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     readme_source = (repo_root / "README.md").read_text(encoding="utf-8")
     env_example_source = (repo_root / ".env.example").read_text(encoding="utf-8")
 
     for source in [readme_source, env_example_source]:
-        assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-pro-preview" in source
-        assert "OSCE_VERTEX_MODEL=gemini-3.1-pro-preview" in source
-        assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-pro-preview" in source
+        assert "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true" in source
+        assert "OSCE_OPENAI_MODEL=gemini-3.5-flash" in source
+        assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" in source
+        assert "OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001" in source
+        assert "OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5" in source
         assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in source
         assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in source
         assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview" not in source

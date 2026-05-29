@@ -255,6 +255,9 @@ def _profile_skill_state(skill_id: str, skill_states: Mapping[str, Any]) -> str:
 def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
     trigger_items = list(candidate["trigger_item_ids"])
+    router_index = skill.get("router_index")
+    if not isinstance(router_index, Mapping):
+        router_index = {}
     payload = {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
@@ -266,6 +269,10 @@ def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why_candidate": str(candidate["why_candidate"]),
         "why_selected_label": str(candidate["why_selected_label"]),
     }
+    for field_name in ("summary", "when_to_use", "when_not_to_use", "risk"):
+        field_value = str(router_index.get(field_name) or "").strip()
+        if field_value:
+            payload[field_name] = field_value
     reasoning_pattern_ids = list(candidate.get("reasoning_pattern_ids", []))
     if reasoning_pattern_ids:
         payload["reasoning_pattern_ids"] = reasoning_pattern_ids
@@ -276,6 +283,9 @@ def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
 def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
     skill = candidate["skill"]
     trigger_items = list(candidate["trigger_item_ids"])
+    router_index = skill.get("router_index")
+    if not isinstance(router_index, Mapping):
+        router_index = {}
     payload = {
         "skill_id": str(skill["skill_id"]),
         "title": str(skill.get("title", "")),
@@ -289,6 +299,13 @@ def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why_selected_label": str(candidate["why_selected_label"]),
         "effect_status": str(skill.get("effect_status", "insufficient_samples")),
     }
+    intervention = skill.get("intervention")
+    if isinstance(intervention, Mapping):
+        payload["intervention"] = dict(intervention)
+    for field_name in ("summary", "when_to_use", "when_not_to_use", "risk"):
+        field_value = str(router_index.get(field_name) or "").strip()
+        if field_value:
+            payload[field_name] = field_value
     reasoning_pattern_ids = list(candidate.get("reasoning_pattern_ids", []))
     if reasoning_pattern_ids:
         payload["reasoning_pattern_ids"] = reasoning_pattern_ids

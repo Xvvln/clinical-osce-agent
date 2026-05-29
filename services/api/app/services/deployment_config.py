@@ -4,6 +4,7 @@ import os
 
 DEPLOYMENT_MODE_ENV_NAME = "CLINICAL_OSCE_DEPLOYMENT_MODE"
 DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
+SERVER_MANAGED_MODEL_CONFIG_ENV_NAME = "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG"
 DEFAULT_DEPLOYMENT_MODE = "local-dev"
 ALLOWED_DEPLOYMENT_MODES = ["local-dev", "local-demo", "single-node-prod", "vertex-prod"]
 PRODUCTION_DEPLOYMENT_MODES = {"single-node-prod", "vertex-prod"}
@@ -23,11 +24,11 @@ def is_production_deployment_mode(mode: str | None = None) -> bool:
 
 
 def is_runtime_model_config_write_supported(mode: str | None = None) -> bool:
-    return not is_production_deployment_mode(mode)
+    return not is_production_deployment_mode(mode) and not _truthy(os.environ.get(SERVER_MANAGED_MODEL_CONFIG_ENV_NAME))
 
 
 def is_account_registration_supported(mode: str | None = None) -> bool:
-    return not is_production_deployment_mode(mode)
+    return False
 
 
 def is_demo_admin_effectively_enabled(mode: str | None = None) -> bool:
@@ -47,6 +48,7 @@ __all__ = [
     "DEMO_ADMIN_ENABLED_ENV_NAME",
     "DEPLOYMENT_MODE_ENV_NAME",
     "PRODUCTION_DEPLOYMENT_MODES",
+    "SERVER_MANAGED_MODEL_CONFIG_ENV_NAME",
     "get_deployment_mode",
     "is_account_registration_supported",
     "is_demo_admin_effectively_enabled",

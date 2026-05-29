@@ -28,7 +28,7 @@ def canonical_patient_responder(request: object) -> str:
 
 
 def failing_openai_patient_responder(request: object) -> str:
-    http_request = httpx.Request("POST", "https://token-plan-cn.xiaomimimo.com/v1/chat/completions")
+    http_request = httpx.Request("POST", "https://fallback-gateway.example/v1/chat/completions")
     http_response = httpx.Response(
         status_code=401,
         request=http_request,
@@ -325,6 +325,44 @@ def test_session_teaching_focus_returns_dynamic_runtime_patterns(authenticated_u
     assert "急性冠脉综合征" not in visible_text
     assert "ACS" not in visible_text
     assert "急性心肌梗死" not in visible_text
+
+
+def test_message_runtime_error_is_recorded_for_admin_diagnostics(tmp_path, authenticated_user: dict[str, str]) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    osce_session_service._sessions.clear()
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session_id"]
+
+    class FailingGraph:
+        def invoke(self, state: dict[str, object]) -> dict[str, object]:
+            raise RuntimeError("fastembed is required when OSCE_LOCAL_EMBEDDING_ENABLED=true")
+
+    osce_session_service.osce_graph = FailingGraph()
+    with TestClient(app, raise_server_exceptions=False) as error_client:
+        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
+        response = error_client.post(
+            f"/api/sessions/{session_id}/message",
+            json={"message": "有没有吃坏肚子啊？"},
+        )
+
+    assert response.status_code == 500
+    assert "训练流程异常" in response.text
+    events = osce_session_service.training_event_store.list_session_events(session_id)
+    runtime_error_event = find_event(events, "session_runtime_error")
+    payload = runtime_error_event["payload"]
+    assert payload["operation"] == "message"
+    assert payload["training_difficulty"] == "advanced"
+    assert payload["error_type"] == "RuntimeError"
+    assert "fastembed is required" in payload["message"]
+    assert payload["student_message"] == "有没有吃坏肚子啊？"
+    assert payload["trace_id"]
+    assert "stack_trace" in payload
 
 
 def test_agent_decision_trace_is_persisted(tmp_path, authenticated_user: dict[str, str]) -> None:
@@ -1219,6 +1257,10 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
             "priority": 0,
             "why_candidate": "适用训练点 ht_migration",
             "why_selected_label": "适用训练点：追问疼痛部位及转移特征。",
+            "summary": "腹痛迁移追问训练：反复遗漏腹痛迁移过程。",
+            "when_to_use": "当学生在训练开始阶段暴露出病史采集结构化不足，且当前上下文命中关联训练点时使用。",
+            "when_not_to_use": "空白开局、学生尚未暴露相关错误模式、该问题已冷却/退休，或提示会泄露标准答案 / 隐藏事实时不要使用。",
+            "risk": "仅用于教学提示和复盘，不得透露标准诊断、隐藏事实或真实临床处理细节。",
         }
     ]
     assert active_skill_context["selected_skills"][0]["suggested_strategy"] == "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。"
@@ -2014,6 +2056,99 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         assert forbidden_term not in report_text
 
 
+def test_advanced_procedure_request_routes_safe_unmatched_items_to_simulation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcedureRequestRouter:
+        calls: list[object] = []
+
+        def __call__(self, request: object) -> dict[str, object]:
+            self.calls.append(request)
+            assert getattr(request, "unmatched_requests") == ["身高体重姓名"]
+            return {
+                "routed_items": [
+                    {
+                        "raw_text": "身高体重姓名",
+                        "decision": "generate",
+                        "kind": "patient_profile",
+                        "name_cn": "身高体重姓名",
+                        "rationale": "基础身份与体格信息可作为高级训练补充结果，不进入评分。",
+                        "safety_issues": [],
+                    }
+                ]
+            }
+
+    class FakeProcedureResultSimulator:
+        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
+            assert getattr(request, "procedure_kind") == "patient_profile"
+            assert getattr(request, "procedure_name_cn") == "身高体重姓名"
+            return ProcedureResultSimulationResponse(
+                result="姓名未提供；身高约 175 cm，体重约 68 kg。",
+                safety_note="训练模拟，不参与评分。",
+            )
+
+    class FakeProcedureResultApprovalAgent:
+        calls: list[object] = []
+
+        def __call__(self, request: object) -> dict[str, object]:
+            self.calls.append(request)
+            assert getattr(request, "procedure_kind") == "patient_profile"
+            assert getattr(request, "procedure_name_cn") == "身高体重姓名"
+            assert getattr(request, "simulated_result") == "姓名未提供；身高约 175 cm，体重约 68 kg。"
+            return {
+                "agent_id": "procedure_result_approval_agent",
+                "decision": "approved",
+                "approval_mode": "llm_review",
+                "rationale": "基础体格信息未泄露诊断或评分答案，可作为高级训练补充结果。",
+                "safety_issues": [],
+                "revised_result": "",
+            }
+
+    fake_router = FakeProcedureRequestRouter()
+    fake_approval_agent = FakeProcedureResultApprovalAgent()
+    monkeypatch.setattr(osce_session_service, "procedure_request_router", fake_router, raising=False)
+    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
+    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", fake_approval_agent, raising=False)
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "身高体重姓名"},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["standardized_request"]["unmatched_requests"] == []
+    assert payload["standardized_request"]["routed_unmatched_requests"] == [
+        {
+            "raw_text": "身高体重姓名",
+            "decision": "generate",
+            "kind": "patient_profile",
+            "name_cn": "身高体重姓名",
+            "rationale": "基础身份与体格信息可作为高级训练补充结果，不进入评分。",
+            "safety_issues": [],
+        }
+    ]
+    assert len(payload["matched_procedure_results"]) == 1
+    simulated_result = payload["matched_procedure_results"][0]
+    assert simulated_result["id"].startswith("generated:patient_profile:")
+    assert simulated_result["kind"] == "patient_profile"
+    assert simulated_result["label"] == "信息：身高体重姓名"
+    assert simulated_result["availability_status"] == "ai_simulated_for_training"
+    assert simulated_result["generated_by_ai"] is True
+    assert simulated_result["scoring_eligible"] is False
+    assert "身高约 175 cm" in simulated_result["result"]
+    assert payload["procedure_simulation_audit_items"][0]["kind"] == "patient_profile"
+    assert len(fake_router.calls) == 1
+    assert len(fake_approval_agent.calls) == 1
+
+
 def test_advanced_procedure_request_falls_back_when_approval_agent_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeProcedureResultSimulator:
         def __call__(self, request: object) -> ProcedureResultSimulationResponse:
@@ -2184,7 +2319,7 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
     assert "current_intent" not in hint_event_payload["agent_turn"]
     assert hint_event_payload["agent_turn"]["current_intents"] == ["socratic_hint"]
     assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
-    assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
+    assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "skill_router", "coach_agent"]
 
 
 def test_session_report_can_be_read_after_session_memory_is_cleared(tmp_path) -> None:
@@ -2243,8 +2378,10 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert report["ai_reflection_review"]["status"] == "generated"
     assert report["ai_reflection_review"]["source_references"]
     reflection = report["ai_reflection_review"]
-    assert reflection["generated_by"] == "teacher_reflection_agent"
+    assert reflection["generated_by"] in {"teacher_reflection_agent", "teacher_agent_deterministic"}
     assert reflection["teaching_prompt_version"] == "teacher_reflection_v3"
+    if reflection["generated_by"] == "teacher_agent_deterministic":
+        assert reflection["teacher_analysis_context"]["analysis_mode"] == "deterministic_baseline"
     assert reflection["reasoning_trace_summary"]["dominant_patterns"]
     assert "证据链" in reflection["overall_comment"]
     assert reflection["strengths_review"]
@@ -2345,8 +2482,22 @@ def test_current_user_report_defers_optional_personal_skill_enrichment(
             "personal_skill_candidate": {"status": "generation_pending", "scope": "personal"},
         }
 
-    def enrich_report(session_id_arg: str) -> None:
+    def enrich_report(session_id_arg: str) -> dict[str, object]:
         calls["enriched_session_id"] = session_id_arg
+        return {
+            "report_id": f"{session_id_arg}_report",
+            "session_id": session_id_arg,
+            "case_id": "appendicitis_001",
+            "total_score": 0,
+            "dimension_scores": {},
+            "rubric_scores": {},
+            "missed_items": [],
+            "source_references": [],
+            "source_reference_items": [],
+            "explanation_source_items": [],
+            "feedback_summary": "基础报告。",
+            "personal_skill_candidate": {"status": "approved", "scope": "personal"},
+        }
 
     monkeypatch.setattr(main.osce_session_service, "get_report", fast_report)
     monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
@@ -2357,6 +2508,7 @@ def test_current_user_report_defers_optional_personal_skill_enrichment(
     assert calls["session_id"] == session_id
     assert calls["include_optional_agents"] is False
     assert calls["enriched_session_id"] == session_id
+    assert response.json()["personal_skill_candidate"]["status"] == "generation_pending"
 
 
 def test_report_can_return_before_personal_skill_agent_finishes(

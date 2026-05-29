@@ -42,6 +42,22 @@ def _expected_success_metrics() -> list[str]:
     ]
 
 
+def _without_memory_fields(skill: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in skill.items()
+        if key
+        not in {
+            "memory_layer",
+            "skill_memory_version",
+            "problem_pattern",
+            "router_index",
+            "intervention",
+            "effect_tracking",
+        }
+    }
+
+
 def test_training_skill_store_enables_approved_candidate_across_instances(tmp_path) -> None:
     database_path = tmp_path / "training_skills.sqlite3"
     candidate = {
@@ -77,7 +93,7 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
     loaded_skill = TrainingSkillStore(database_path).get_skill("skill_reasoning_core")
 
     assert enabled is True
-    assert loaded_skill == {
+    assert _without_memory_fields(loaded_skill) == {
         "skill_id": "skill_reasoning_core",
         "source_candidate_id": "skill_candidate_reasoning_core",
         "trigger_item_id": "reasoning_core",
@@ -114,6 +130,31 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         "support_count": 2,
         "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
     }
+    assert loaded_skill["memory_layer"] == "procedural_teaching_skill"
+    assert loaded_skill["skill_memory_version"] == "skill_memory_v1"
+    assert loaded_skill["problem_pattern"] == {
+        "pattern_id": "reasoning_core",
+        "pattern_type": "reasoning_bridge",
+        "clinical_reasoning_gap": "证据链整合与推理表达不足",
+        "trigger_item_ids": ["reasoning_core", "rs_exclude"],
+        "reasoning_pattern_ids": [],
+        "reasoning_pattern_labels": [],
+        "case_ids": ["appendicitis_001", "pneumonia_001"],
+        "source_report_count": 3,
+        "support_count": 2,
+    }
+    assert "suggested_strategy" not in loaded_skill["router_index"]
+    assert loaded_skill["intervention"]["coach_strategy"] == candidate["suggested_strategy"]
+    assert loaded_skill["intervention"]["focus_points"] == [
+        "推理链覆盖感染症状、体征和影像证据",
+        "推理表达覆盖关键排除依据",
+    ]
+    assert loaded_skill["intervention"]["hint_ladder"] == [
+        "先让学生复盘已获得的症状、体征和检查线索，标出推理链覆盖感染症状、体征和影像证据、推理表达覆盖关键排除依据仍缺哪一环。",
+        "再引导学生把每条证据写成“支持什么、排除什么、还缺什么”的链条，而不是只罗列事实。",
+        "最后让学生用新增证据重新组织诊断假设和鉴别诊断，但不直接给出标准答案。",
+    ]
+    assert loaded_skill["effect_tracking"]["summary"] == "样本不足，仅记录应用痕迹，不宣称能力提升。"
 
 
 def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
@@ -295,7 +336,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
 
     skills = TrainingSkillStore(database_path).list_enabled_skills()
 
-    assert skills == [
+    assert [_without_memory_fields(skill) for skill in skills] == [
         {
             "skill_id": "skill_reasoning_core",
             "source_candidate_id": "skill_candidate_reasoning_core",
@@ -339,7 +380,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "trigger_item_id": "ht_location",
             "trigger_item_ids": ["ht_location"],
             "case_ids": [],
-            "skill_type": "reasoning_bridge",
+            "skill_type": "history_bundle",
             "stage_scope": ["case_intro"],
             "effect_status": "insufficient_samples",
             "applies_when": {
@@ -371,3 +412,9 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "related_recommendations": [],
         },
     ]
+    assert all(skill["memory_layer"] == "procedural_teaching_skill" for skill in skills)
+    assert skills[0]["router_index"]["risk"] == "仅用于教学提示和复盘，不得透露标准诊断、隐藏事实或真实临床处理细节。"
+    generated_memory_text = str(skills[0]["router_index"]) + str(skills[0]["intervention"])
+    assert "治疗方案" not in generated_memory_text
+    assert "用药剂量" not in generated_memory_text
+    assert "手术方案" not in generated_memory_text

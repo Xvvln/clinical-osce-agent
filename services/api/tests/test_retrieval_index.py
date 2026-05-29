@@ -152,6 +152,48 @@ def test_search_retrieval_documents_uses_local_embedding_when_vertex_is_not_conf
     assert results[0].source_type == "case"
 
 
+def test_search_retrieval_documents_falls_back_to_local_embedding_when_vertex_fails(monkeypatch) -> None:
+    class FailingVertexEmbeddingClient:
+        def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+            raise RuntimeError("vertex embedding quota exceeded")
+
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: FailingVertexEmbeddingClient(),
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("右下腹痛"),
+    )
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert results
+    assert results[0].reference == "case:appendicitis_001"
+    assert results[0].source_type == "case"
+
+
+def test_search_retrieval_documents_skips_unavailable_local_embedding_client(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: (_ for _ in ()).throw(RuntimeError("fastembed is required when OSCE_LOCAL_EMBEDDING_ENABLED=true")),
+    )
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert results == []
+
+
 def test_search_retrieval_documents_returns_rubric_item_for_exam_query(monkeypatch) -> None:
     monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
     monkeypatch.setattr(

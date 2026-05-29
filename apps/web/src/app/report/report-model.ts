@@ -96,6 +96,18 @@ export type TeacherReasoningTraceSummary = Readonly<{
   evidence_chain_focus: readonly Readonly<Record<string, unknown>>[];
 }>;
 
+export type TeacherAnalysisContext = Readonly<{
+  agent_id: string;
+  analysis_mode: string;
+  analysis_summary: string;
+  student_thinking_hypothesis: string;
+  clinical_thinking_profile: Readonly<Record<string, unknown>>;
+  major_issue_titles: readonly string[];
+  skill_memory_focus: Readonly<Record<string, unknown>>;
+  source_anchor_labels: readonly string[];
+  teaching_prompt_version?: string;
+}>;
+
 export type AiReflectionReview = Readonly<{
   status: string;
   reason?: string;
@@ -113,6 +125,7 @@ export type AiReflectionReview = Readonly<{
   reasoning_trace_summary: TeacherReasoningTraceSummary;
   source_references: readonly string[];
   source_reference_items: readonly SourceReferenceItem[];
+  teacher_analysis_context: TeacherAnalysisContext;
   generated_by?: string;
   teaching_prompt_version?: string;
   safety_note?: string;
@@ -147,10 +160,22 @@ export type PersonalTrainingSkillCandidate = Readonly<{
   review?: Readonly<Record<string, unknown>>;
   approval_agent_review?: Readonly<Record<string, unknown>>;
   approval_dialogue?: readonly PersonalTrainingSkillApprovalDialogueTurn[];
+  teacher_analysis_context: TeacherAnalysisContext;
   rag_evidence_items: readonly SourceReferenceItem[];
   web_check_status: string;
   external_evidence_checks: readonly unknown[];
 }>;
+
+export const DEFAULT_TEACHER_ANALYSIS_CONTEXT: TeacherAnalysisContext = {
+  agent_id: "",
+  analysis_mode: "",
+  analysis_summary: "",
+  student_thinking_hypothesis: "",
+  clinical_thinking_profile: {},
+  major_issue_titles: [],
+  skill_memory_focus: {},
+  source_anchor_labels: [],
+};
 
 export const DEFAULT_REASONING_TRACE_SUMMARY: TeacherReasoningTraceSummary = {
   trace_version: "",
@@ -187,6 +212,7 @@ export const DEFAULT_AI_REFLECTION_REVIEW: AiReflectionReview = {
   reasoning_trace_summary: DEFAULT_REASONING_TRACE_SUMMARY,
   source_references: [],
   source_reference_items: [],
+  teacher_analysis_context: DEFAULT_TEACHER_ANALYSIS_CONTEXT,
 };
 
 export const DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE: PersonalTrainingSkillCandidate = {
@@ -195,6 +221,7 @@ export const DEFAULT_PERSONAL_TRAINING_SKILL_CANDIDATE: PersonalTrainingSkillCan
   candidate_id: null,
   skill_id: null,
   scope: "personal",
+  teacher_analysis_context: DEFAULT_TEACHER_ANALYSIS_CONTEXT,
   rag_evidence_items: [],
   web_check_status: "not_configured",
   external_evidence_checks: [],
@@ -316,6 +343,18 @@ function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiRe
     reasoning_trace_summary: normalizeTeacherReasoningTraceSummary(review?.reasoning_trace_summary),
     source_references: review?.source_references ?? [],
     source_reference_items: review?.source_reference_items ?? [],
+    teacher_analysis_context: normalizeTeacherAnalysisContext(review?.teacher_analysis_context),
+  };
+}
+
+function normalizeTeacherAnalysisContext(context?: Partial<TeacherAnalysisContext>): TeacherAnalysisContext {
+  return {
+    ...DEFAULT_TEACHER_ANALYSIS_CONTEXT,
+    ...context,
+    clinical_thinking_profile: context?.clinical_thinking_profile ?? {},
+    major_issue_titles: context?.major_issue_titles ?? [],
+    skill_memory_focus: context?.skill_memory_focus ?? {},
+    source_anchor_labels: context?.source_anchor_labels ?? [],
   };
 }
 
@@ -341,6 +380,7 @@ function normalizePersonalTrainingSkillCandidate(candidate?: Partial<PersonalTra
     candidate_id: candidate?.candidate_id ?? null,
     skill_id: candidate?.skill_id ?? null,
     scope: candidate?.scope ?? "personal",
+    teacher_analysis_context: normalizeTeacherAnalysisContext(candidate?.teacher_analysis_context),
     rag_evidence_items: candidate?.rag_evidence_items ?? [],
     external_evidence_checks: candidate?.external_evidence_checks ?? [],
   };

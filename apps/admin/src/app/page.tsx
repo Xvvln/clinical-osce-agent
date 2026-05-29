@@ -466,6 +466,17 @@ type AgentDecisionPayload = Readonly<{
   pedagogyState: Record<string, unknown> | null;
 }>;
 
+type SessionRuntimeErrorPayload = Readonly<{
+  trace_id: string;
+  operation: string;
+  stage: string;
+  training_difficulty: string;
+  error_type: string;
+  message: string;
+  student_message: string;
+  stack_trace: string;
+}>;
+
 type AgentTurnPayload = Readonly<{
   turn_id: string;
   student_message: string;
@@ -1004,8 +1015,8 @@ type AdminWorkspaceSubsection = Readonly<{
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
 const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。";
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
-const DEMO_ADMIN_EMAIL = "admin-demo@example.test";
-const DEMO_ADMIN_PASSWORD = "safe-admin-password";
+const DEMO_ADMIN_EMAIL = "admin@osce.test";
+const DEMO_ADMIN_PASSWORD = "admin";
 const ADMIN_LIST_PAGE_SIZE = 20;
 const EMPTY_ADMIN_PAGINATION: AdminPagination = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, total: 0 };
 const EMPTY_ADMIN_CASE_EDIT_FORM: AdminCaseFieldUpdatePayload = {
@@ -1273,6 +1284,19 @@ function getAgentDecisionPayload(event: TrainingEventRecord): AgentDecisionPaylo
   return {
     latestDecision: getRecordValue(event.payload.latest_decision),
     pedagogyState: getRecordValue(event.payload.pedagogy_state),
+  };
+}
+
+function getSessionRuntimeErrorPayload(event: TrainingEventRecord): SessionRuntimeErrorPayload {
+  return {
+    trace_id: getStringValue(event.payload, "trace_id"),
+    operation: getStringValue(event.payload, "operation"),
+    stage: getStringValue(event.payload, "stage"),
+    training_difficulty: getStringValue(event.payload, "training_difficulty"),
+    error_type: getStringValue(event.payload, "error_type"),
+    message: getStringValue(event.payload, "message"),
+    student_message: getStringValue(event.payload, "student_message"),
+    stack_trace: getStringValue(event.payload, "stack_trace"),
   };
 }
 
@@ -2431,6 +2455,7 @@ export default function AdminDashboardPage() {
   const agentTurnEvents = trainingEvents.filter((event) => getAgentTurnPayload(event) !== null);
   const agentDecisionEvents = trainingEvents.filter((event) => event.event_type === "agent_decision_traced");
   const agentReflectionEvents = trainingEvents.filter((event) => event.event_type === "agent_reflection_recorded");
+  const sessionRuntimeErrorEvents = trainingEvents.filter((event) => event.event_type === "session_runtime_error");
   const activeSystemSubsectionId = activeAdminWorkspaceSubsectionIds.system;
   const activeResourcesSubsectionId = activeAdminWorkspaceSubsectionIds.resources;
   const activeTrainingSubsectionId = activeAdminWorkspaceSubsectionIds.training;
@@ -4735,6 +4760,43 @@ export default function AdminDashboardPage() {
 
             <section className={getAdminSubsectionPanelClassName(activeTrainingSubsectionId === "training-logs", adminWidePanelCardClassName)}>
               <h2 className="text-xl font-semibold">训练日志</h2>
+              {sessionRuntimeErrorEvents.length > 0 ? (
+                <div className="mt-3 grid gap-3">
+                  {sessionRuntimeErrorEvents.map((event) => {
+                    const errorPayload = getSessionRuntimeErrorPayload(event);
+                    return (
+                      <article className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900" key={`runtime-error-${event.created_at}-${errorPayload.trace_id}`}>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-xs font-semibold text-red-700">运行异常</p>
+                            <h3 className="mt-1 text-base font-semibold">{errorPayload.error_type || event.event_type}</h3>
+                          </div>
+                          <span className="rounded-full border border-red-200 bg-white px-3 py-1 text-xs text-red-700">错误编号：{errorPayload.trace_id || "未记录"}</span>
+                        </div>
+                        <p className="mt-3 break-words rounded-lg border border-red-100 bg-white p-3 leading-6">{errorPayload.message || "后端未返回错误摘要"}</p>
+                        <dl className="mt-3 grid gap-2 md:grid-cols-3">
+                          <div className="rounded-lg border border-red-100 bg-white p-3">
+                            <dt className="text-xs text-red-700">触发操作</dt>
+                            <dd className="mt-1 break-words font-medium">{errorPayload.operation || "未记录"}</dd>
+                          </div>
+                          <div className="rounded-lg border border-red-100 bg-white p-3">
+                            <dt className="text-xs text-red-700">训练阶段</dt>
+                            <dd className="mt-1 break-words font-medium">{errorPayload.stage || "未记录"} · {errorPayload.training_difficulty || "未记录"}</dd>
+                          </div>
+                          <div className="rounded-lg border border-red-100 bg-white p-3">
+                            <dt className="text-xs text-red-700">学生输入</dt>
+                            <dd className="mt-1 break-words font-medium">{errorPayload.student_message || "未记录"}</dd>
+                          </div>
+                        </dl>
+                        <details className="mt-3 rounded-lg border border-red-100 bg-white p-3 text-xs leading-5 text-red-900">
+                          <summary className="cursor-pointer font-semibold">展开后端堆栈</summary>
+                          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words">{errorPayload.stack_trace || JSON.stringify(event.payload, null, 2)}</pre>
+                        </details>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="admin-panel-scrollbar mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1">
                 {trainingEvents.length > 0 ? (
                   trainingEvents.map((event) => (

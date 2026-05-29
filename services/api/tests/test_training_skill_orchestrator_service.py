@@ -171,6 +171,19 @@ def test_skill_orchestrator_returns_compact_index_without_full_strategy_text() -
                 "skill_id": "skill_index_only",
                 "title": "腹痛问诊顺序训练",
                 "suggested_strategy": strategy,
+                "router_index": {
+                    "summary": "腹痛问诊顺序训练：训练学生先建立病史时间线。",
+                    "when_to_use": "学生开始问诊但未形成疼痛演变时间线时使用。",
+                    "when_not_to_use": "空白开局或学生已经覆盖疼痛演变时间线时不要使用。",
+                    "risk": "不得透露标准诊断或隐藏事实。",
+                },
+                "intervention": {
+                    "teaching_goal": "帮助学生先形成问题表征。",
+                    "coach_strategy": strategy,
+                    "hint_ladder": ["先问起病。", "再问迁移。"],
+                    "reflection_prompt": "复盘是否先建立疼痛时间线。",
+                    "avoid": ["不得透露答案。"],
+                },
                 "case_ids": ["appendicitis_001"],
                 "stage_scope": ["case_intro"],
                 "trigger_item_ids": ["ht_onset"],
@@ -195,10 +208,15 @@ def test_skill_orchestrator_returns_compact_index_without_full_strategy_text() -
             "priority": 4,
             "why_candidate": "当前缺口命中 ht_onset",
             "why_selected_label": "当前缺口命中：追问起病时间。",
+            "summary": "腹痛问诊顺序训练：训练学生先建立病史时间线。",
+            "when_to_use": "学生开始问诊但未形成疼痛演变时间线时使用。",
+            "when_not_to_use": "空白开局或学生已经覆盖疼痛演变时间线时不要使用。",
+            "risk": "不得透露标准诊断或隐藏事实。",
         }
     ]
     assert context["skill_index"][0].get("suggested_strategy") is None
     assert context["selected_skills"][0]["suggested_strategy"] == strategy
+    assert context["selected_skills"][0]["intervention"]["hint_ladder"] == ["先问起病。", "再问迁移。"]
 
 
 def test_skill_orchestrator_skips_profile_cooldown_and_retired_skills() -> None:

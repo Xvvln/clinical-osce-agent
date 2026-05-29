@@ -5,9 +5,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.services.admin_display_resolver import trigger_item_labels as resolve_trigger_item_labels
 from app.services.training_skill_context_safety import candidate_context_safety_violations
 from app.services.training_skill_policy import (
     build_prohibited_content_policy,
+    build_skill_memory_fields,
     build_success_metrics,
     build_teaching_action_plan,
 )
@@ -123,6 +125,7 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         stage_scope = _normalized_string_list(applies_when.get("stage_scope"))
     if not stage_scope:
         stage_scope = ["case_intro"]
+    skill_type = _candidate_skill_type(candidate, trigger_item_ids)
     if not applies_when:
         applies_when = {
             "case_ids": case_ids,
@@ -159,7 +162,7 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "trigger_item_id": trigger_item_id,
         "trigger_item_ids": trigger_item_ids,
         "case_ids": case_ids,
-        "skill_type": str(candidate.get("skill_type", "reasoning_bridge")),
+        "skill_type": skill_type,
         "stage_scope": stage_scope,
         "effect_status": str(candidate.get("effect_status", "insufficient_samples")),
         "applies_when": applies_when,
@@ -174,6 +177,16 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "support_count": candidate["support_count"],
         "related_recommendations": list(candidate.get("related_recommendations", [])),
     }
+    for memory_key in (
+        "memory_layer",
+        "skill_memory_version",
+        "problem_pattern",
+        "router_index",
+        "intervention",
+        "effect_tracking",
+    ):
+        if memory_key in candidate:
+            skill[memory_key] = candidate[memory_key]
     reasoning_pattern_ids = _normalized_string_list(candidate.get("reasoning_pattern_ids"))
     reasoning_pattern_labels = _normalized_string_list(candidate.get("reasoning_pattern_labels"))
     source_trace_version = _non_empty_string(candidate.get("source_trace_version"))
@@ -190,6 +203,9 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         skill["reasoning_pattern_labels"] = reasoning_pattern_labels
     if source_trace_version:
         skill["source_trace_version"] = source_trace_version
+    teacher_analysis_context = candidate.get("teacher_analysis_context")
+    if isinstance(teacher_analysis_context, dict) and teacher_analysis_context:
+        skill["teacher_analysis_context"] = dict(teacher_analysis_context)
     scope = str(candidate.get("scope", "global"))
     if scope != "global":
         skill["scope"] = scope
@@ -243,6 +259,7 @@ def _hydrate_skill_student_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hydrated_skill.get("success_metrics"), list) or not hydrated_skill["success_metrics"]:
         hydrated_skill["success_metrics"] = build_success_metrics()
     hydrated_skill["related_recommendations"] = _normalized_string_list(hydrated_skill.get("related_recommendations"))
+    hydrated_skill = _ensure_skill_memory_fields(hydrated_skill)
     return hydrated_skill
 
 
@@ -322,6 +339,59 @@ def _build_source_summary(source_report_count: int, support_count: int) -> str:
     return f"来自训练事件聚合，累计支持 {support_count} 次。"
 
 
+def _candidate_skill_type(candidate: dict[str, Any], trigger_item_ids: list[str]) -> str:
+    explicit_skill_type = _non_empty_string(candidate.get("skill_type"))
+    if explicit_skill_type:
+        return explicit_skill_type
+    if trigger_item_ids and all(item_id.startswith("ht_") for item_id in trigger_item_ids):
+        return "history_bundle"
+    if trigger_item_ids and all(item_id.startswith("pe_") for item_id in trigger_item_ids):
+        return "exam_bundle"
+    if trigger_item_ids and all(item_id.startswith(("lab.", "img.", "aux_", "test_")) for item_id in trigger_item_ids):
+        return "test_strategy"
+    return "reasoning_bridge"
+
+
+def _ensure_skill_memory_fields(skill: dict[str, Any]) -> dict[str, Any]:
+    trigger_item_ids = _normalized_string_list(skill.get("trigger_item_ids"))
+    case_ids = _normalized_string_list(skill.get("case_ids"))
+    defaults = build_skill_memory_fields(
+        pattern_id=_non_empty_string(skill.get("trigger_item_id"))
+        or _non_empty_string(skill.get("source_candidate_id"))
+        or _non_empty_string(skill.get("skill_id")),
+        skill_type=str(skill.get("skill_type", "reasoning_bridge")),
+        trigger_item_ids=trigger_item_ids,
+        case_ids=case_ids,
+        source_report_count=_safe_int(skill.get("source_report_count")),
+        support_count=_safe_int(skill.get("support_count")),
+        title=_non_empty_string(skill.get("title")),
+        description=_non_empty_string(skill.get("description")),
+        suggested_strategy=_non_empty_string(skill.get("suggested_strategy")),
+        stage_scope=_normalized_string_list(skill.get("stage_scope")),
+        effect_status=str(skill.get("effect_status", "insufficient_samples")),
+        reasoning_pattern_ids=_normalized_string_list(skill.get("reasoning_pattern_ids")),
+        reasoning_pattern_labels=_normalized_string_list(skill.get("reasoning_pattern_labels")),
+        trigger_item_labels=resolve_trigger_item_labels(trigger_item_ids, case_ids),
+        application_count=_safe_int(_dict(skill.get("effect_tracking")).get("application_count")),
+    )
+    for key, default_value in defaults.items():
+        existing_value = skill.get(key)
+        if _has_meaningful_memory_value(existing_value):
+            continue
+        skill[key] = default_value
+    return skill
+
+
+def _has_meaningful_memory_value(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None
+
+
 def _scope_label(skill: dict[str, Any]) -> str:
     return "个人 Skill" if str(skill.get("scope", "global")) == "personal" else "全局 Skill"
 
@@ -333,6 +403,10 @@ def _case_title(case_id: str) -> str:
     payload = json.loads(case_path.read_text(encoding="utf-8"))
     title = payload.get("case_title")
     return str(title) if title else case_id
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _safe_int(value: Any) -> int:

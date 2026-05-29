@@ -13,6 +13,7 @@ RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     "coach_agent",
     "llm_rubric_scorer",
     "skill_candidate_generator",
+    "procedure_request_router",
     "procedure_result_simulator",
 ]
 

@@ -145,7 +145,7 @@ def _chat_completions_url(base_url: str) -> str:
 
 def _model_name_for_base_url(model: str, base_url: str) -> str:
     normalized_model = model.strip()
-    if "xiaomimimo.com" in base_url.lower() and normalized_model.lower().startswith("mimo-"):
+    if normalized_model.lower().startswith("mimo-"):
         return normalized_model.lower()
     return normalized_model
 

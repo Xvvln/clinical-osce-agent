@@ -49,11 +49,13 @@ PROCESSING_STEP_LABELS = {
     "intent": "解析问诊意图",
     "case_context": "匹配病例事实",
     "patient_reply": "组织标准化病人回复",
-    "skill": "检查个性化 Skill",
+    "skill": "评估是否调用 Skill",
     "rag": "检索教学知识库",
     "coach": "Coach 复核边界",
     "response": "生成可见回复",
 }
+
+EMPTY_SESSION_SOCRATIC_HINT = "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
 
 
 class OsceGraphState(TypedDict, total=False):
@@ -545,17 +547,44 @@ def reflection_node(state: OsceGraphState) -> dict[str, Any]:
 
 def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[str, Any]:
     case = _load_case(state["case_id"])
+    processing_trace = list(state.get("processing_trace", []))
+
+    _emit_processing_progress(state, "case_context", status="active")
+    case_step_started_at, case_step_started_perf = _start_processing_step()
     pedagogy_state = build_pedagogy_state(dict(state))
     base_hint = _build_socratic_hint(state, pedagogy_state)
-    selected_skill_context = _selected_skill_context_strings(state)
-    selected_skill_ids = _selected_skill_ids(state)
+    selected_skill_context: list[str] = []
+    selected_skill_ids: list[str] = []
+    routed_skill_context: dict[str, Any] | None = None
     forbidden_terms = _coach_diagnosis_forbidden_terms(case)
     visible_forbidden_terms = _coach_visible_forbidden_terms(case)
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "case_context",
+        "completed",
+        case_step_started_at,
+        case_step_started_perf,
+        metadata={
+            "stage": state.get("stage", "case_intro"),
+            "base_hint_available": bool(base_hint),
+        },
+    )
+
+    _emit_processing_progress(state, "rag", status="active")
+    rag_step_started_at, rag_step_started_perf = _start_processing_step()
     retrieved_knowledge_context = _retrieve_coach_knowledge_context(
         state,
         case=case,
         query=base_hint,
         forbidden_terms=forbidden_terms,
+    )
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "rag",
+        "completed" if retrieved_knowledge_context else "skipped",
+        rag_step_started_at,
+        rag_step_started_perf,
+        metadata={"retrieved_count": len(retrieved_knowledge_context)},
     )
     hint_context = build_coach_hint_context(
         state=dict(state),
@@ -567,6 +596,34 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     turn_analysis = _boundary_turn_analysis("socratic_hint", "学生请求教学提示。")
     turn_policy = "teaching_hint"
     agent_path = ["socratic_hint_node", "coach_agent"]
+    _emit_processing_progress(state, "skill", status="active")
+    skill_step_started_at, skill_step_started_perf = _start_processing_step()
+    selected_skill_ids, selected_skill_context, routed_skill_context, router_turn_analysis = _route_skill_context_for_coach(
+        state,
+        case=case,
+        coach_agent=coach_agent,
+        base_hint=base_hint,
+        prior_messages=state.get("messages", []),
+        pedagogy_state=pedagogy_state,
+        retrieved_knowledge_context=retrieved_knowledge_context,
+        hint_context=hint_context,
+    )
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "skill",
+        "completed" if selected_skill_ids else "skipped",
+        skill_step_started_at,
+        skill_step_started_perf,
+        metadata={"selected_skill_count": len(selected_skill_ids)},
+    )
+    if routed_skill_context is not None:
+        agent_path = ["socratic_hint_node", "skill_router", "coach_agent"]
+        turn_analysis = {**turn_analysis, "routed_skill_context": routed_skill_context}
+    if router_turn_analysis:
+        turn_analysis = {**turn_analysis, **router_turn_analysis}
+    coach_base_hint = _build_enabled_skill_hint(selected_skill_context) or base_hint
+    _emit_processing_progress(state, "coach", status="active")
+    coach_step_started_at, coach_step_started_perf = _start_processing_step()
     try:
         hint = _sanitize_visible_coach_hint(
             normalize_coach_response(
@@ -578,7 +635,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
                         stage=state.get("stage", "case_intro"),
                         training_difficulty=str(state.get("training_difficulty") or "beginner"),
                         prompt_kind="socratic_hint",
-                        base_hint=base_hint,
+                        base_hint=coach_base_hint,
                         prior_messages=state.get("messages", []),
                         pedagogy_state=pedagogy_state,
                         clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
@@ -591,8 +648,9 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             ).hint,
             visible_forbidden_terms,
         )
+        coach_step_status = "completed"
     except Exception as exc:
-        hint = _sanitize_visible_coach_hint(base_hint, visible_forbidden_terms)
+        hint = _sanitize_visible_coach_hint(coach_base_hint, visible_forbidden_terms)
         turn_policy = "teaching_hint_unavailable"
         agent_path = ["socratic_hint_node", "coach_agent_unavailable"]
         turn_analysis = {
@@ -600,6 +658,25 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             "coach_unavailable": True,
             "coach_error_type": exc.__class__.__name__,
         }
+        coach_step_status = "error"
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "coach",
+        coach_step_status,
+        coach_step_started_at,
+        coach_step_started_perf,
+        metadata={"agent_path": agent_path},
+    )
+    _emit_processing_progress(state, "response", status="active")
+    response_step_started_at, response_step_started_perf = _start_processing_step()
+    processing_trace = _append_processing_trace_step(
+        processing_trace,
+        "response",
+        "completed",
+        response_step_started_at,
+        response_step_started_perf,
+        metadata={"reply_role": "coach"},
+    )
     return {
         "stage": state.get("stage", "case_intro"),
         "hint": hint,
@@ -619,8 +696,94 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             retrieved_knowledge_context=retrieved_knowledge_context,
             selected_skill_ids=selected_skill_ids,
             skill_context=selected_skill_context,
+            processing_trace=processing_trace,
         ),
+        "processing_trace": processing_trace,
     }
+
+
+def _route_skill_context_for_coach(
+    state: OsceGraphState,
+    *,
+    case: Case,
+    coach_agent: CoachAgent,
+    base_hint: str,
+    prior_messages: list[dict[str, str]],
+    pedagogy_state: dict[str, Any],
+    retrieved_knowledge_context: list[dict[str, Any]],
+    hint_context: dict[str, Any],
+) -> tuple[list[str], list[str], dict[str, Any] | None, dict[str, Any] | None]:
+    candidate_skill_items = _selected_skill_items(state)
+    if not candidate_skill_items:
+        return [], [], None, None
+    try:
+        router_response = normalize_coach_response(
+            coach_agent(
+                CoachRequest(
+                    case_id=case.case_id,
+                    case_title=case.case_title,
+                    chief_complaint=case.chief_complaint,
+                    stage=state.get("stage", "case_intro"),
+                    training_difficulty=str(state.get("training_difficulty") or "beginner"),
+                    prompt_kind="skill_router",
+                    base_hint=base_hint,
+                    prior_messages=prior_messages,
+                    pedagogy_state=pedagogy_state,
+                    clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
+                    skill_context=[],
+                    retrieved_knowledge_context=retrieved_knowledge_context,
+                    hint_context=hint_context,
+                    forbidden_terms=[],
+                )
+            )
+        )
+        requested_skill_ids = [str(skill_id).strip() for skill_id in router_response.selected_skill_ids if str(skill_id).strip()]
+        routed_skill_items, rejected_skill_ids = _route_skill_items(candidate_skill_items, requested_skill_ids)
+        selection_policy = "coach_agent"
+        if (
+            not routed_skill_items
+            and not requested_skill_ids
+            and router_response.skill_intervention_level == "auto"
+            and (_has_student_training_action(state) or _messages_include_student_action(prior_messages))
+        ):
+            routed_skill_items = candidate_skill_items[:3]
+            rejected_skill_ids = []
+            selection_policy = "deterministic_fallback"
+        selected_skill_context = _skill_context_strings_from_items(routed_skill_items)
+        selected_skill_ids = _skill_ids_from_items(routed_skill_items)
+        routed_skill_context = {
+            "available_skill_ids": _skill_ids_from_items(candidate_skill_items),
+            "selected_skill_ids": selected_skill_ids,
+            "selection_policy": selection_policy,
+            "intervention_level": router_response.skill_intervention_level,
+            "selection_reason": router_response.skill_selection_reason,
+            "rejected_skill_ids": rejected_skill_ids,
+        }
+        return selected_skill_ids, selected_skill_context, routed_skill_context, None
+    except Exception as exc:
+        routed_skill_context = {
+            "available_skill_ids": _skill_ids_from_items(candidate_skill_items),
+            "selected_skill_ids": [],
+            "selection_policy": "router_unavailable",
+            "intervention_level": "none",
+            "selection_reason": "",
+            "rejected_skill_ids": [],
+            "error_type": exc.__class__.__name__,
+        }
+        router_turn_analysis = {
+            "skill_router_unavailable": True,
+            "skill_router_error_type": exc.__class__.__name__,
+        }
+        return [], [], routed_skill_context, router_turn_analysis
+
+
+def _messages_include_student_action(messages: list[dict[str, str]]) -> bool:
+    return any(
+        isinstance(message, dict)
+        and message.get("role") == "student"
+        and str(message.get("content") or "").strip()
+        for message in messages
+    )
 
 
 
@@ -1022,9 +1185,8 @@ def _append_evidence_references(
 def _build_socratic_hint(state: OsceGraphState, pedagogy_state: dict[str, Any] | None = None) -> str:
     if state.get("final_submission") is not None:
         return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
-    skill_hint = _build_enabled_skill_hint(_selected_skill_context_strings(state))
-    if skill_hint:
-        return skill_hint
+    if not _has_student_training_action(state):
+        return EMPTY_SESSION_SOCRATIC_HINT
     clinical_reasoning_state = (pedagogy_state or {}).get("clinical_reasoning_state", {})
     if isinstance(clinical_reasoning_state, dict) and clinical_reasoning_state.get("sequence_flags"):
         next_best_action = clinical_reasoning_state.get("next_best_action", {})
@@ -1070,7 +1232,7 @@ def _retrieve_coach_knowledge_context(
             case.chief_complaint,
             str(state.get("stage", "")),
             str(state.get("training_progress_next_focus", "")),
-            " ".join(_selected_skill_context_strings(state)),
+            " ".join(_selected_skill_index_terms(state)),
         ],
         allowed_visibilities=COACH_RAG_VISIBILITIES,
         forbidden_terms=forbidden_terms,
@@ -1183,7 +1345,7 @@ def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> st
 
 def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
     for candidate in evolution_candidates:
-        normalized_candidate = candidate.strip()
+        normalized_candidate = candidate.strip().splitlines()[0].strip()
         if not normalized_candidate:
             continue
         if "：" not in normalized_candidate:
@@ -1193,6 +1355,17 @@ def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
         normalized_strategy = normalized_strategy.replace("学生", "你")
         return f"本轮训练重点是{title}。{normalized_strategy}"
     return ""
+
+
+def _has_student_training_action(state: OsceGraphState) -> bool:
+    if state.get("asked_questions") or state.get("revealed_facts"):
+        return True
+    if state.get("requested_exams") or state.get("requested_tests") or state.get("student_hypotheses"):
+        return True
+    for message in state.get("messages", []):
+        if isinstance(message, dict) and message.get("role") == "student" and str(message.get("content") or "").strip():
+            return True
+    return False
 
 
 def _selected_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:
@@ -1205,39 +1378,132 @@ def _selected_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:
     return [skill for skill in selected_skills if isinstance(skill, dict)]
 
 
-def _selected_skill_context_strings(state: OsceGraphState) -> list[str]:
+def _skill_context_strings_from_items(skills: list[dict[str, Any]]) -> list[str]:
     selected_skill_texts: list[str] = []
-    for skill in _selected_skill_items(state):
+    for skill in skills:
         title = str(skill.get("title") or "").strip()
         strategy = str(skill.get("suggested_strategy") or "").strip()
+        intervention = skill.get("intervention")
+        if isinstance(intervention, dict):
+            strategy = str(intervention.get("coach_strategy") or strategy).strip()
+            lines: list[str] = []
+            if title and strategy:
+                lines.append(f"{title}：{strategy}")
+            elif title:
+                lines.append(title)
+            elif strategy:
+                lines.append(strategy)
+            teaching_goal = str(intervention.get("teaching_goal") or "").strip()
+            if teaching_goal:
+                lines.append(f"教学目标：{teaching_goal}")
+            hint_ladder = [
+                str(item).strip()
+                for item in intervention.get("hint_ladder", [])
+                if str(item).strip()
+            ] if isinstance(intervention.get("hint_ladder"), list) else []
+            if hint_ladder:
+                lines.append(f"分层提示：{' / '.join(hint_ladder)}")
+            reflection_prompt = str(intervention.get("reflection_prompt") or "").strip()
+            if reflection_prompt:
+                lines.append(f"复盘提示：{reflection_prompt}")
+            avoid = [
+                str(item).strip()
+                for item in intervention.get("avoid", [])
+                if str(item).strip()
+            ] if isinstance(intervention.get("avoid"), list) else []
+            if avoid:
+                lines.append(f"避免事项：{' / '.join(avoid)}")
+            if lines:
+                selected_skill_texts.append("\n".join(lines))
+                continue
         if title and strategy:
             selected_skill_texts.append(f"{title}：{strategy}")
         elif title:
             selected_skill_texts.append(title)
         elif strategy:
             selected_skill_texts.append(strategy)
+    return selected_skill_texts
+
+
+def _selected_skill_context_strings(state: OsceGraphState) -> list[str]:
+    selected_skill_texts = _skill_context_strings_from_items(_selected_skill_items(state))
     if selected_skill_texts:
         return selected_skill_texts
     return [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
 
 
-def _selected_skill_ids(state: OsceGraphState) -> list[str]:
-    selected_skill_ids = [
+def _skill_ids_from_items(skills: list[dict[str, Any]]) -> list[str]:
+    return [
         str(skill.get("skill_id"))
-        for skill in _selected_skill_items(state)
+        for skill in skills
         if str(skill.get("skill_id") or "").strip()
     ]
+
+
+def _selected_skill_ids(state: OsceGraphState) -> list[str]:
+    selected_skill_ids = _skill_ids_from_items(_selected_skill_items(state))
     if selected_skill_ids:
         return selected_skill_ids
     legacy_candidates = [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
     return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(legacy_candidates)]
 
 
-def _selected_skill_reason_items(state: OsceGraphState) -> list[dict[str, Any]]:
+def _route_skill_items(
+    candidate_skill_items: list[dict[str, Any]],
+    selected_skill_ids: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    candidate_by_id = {
+        str(skill.get("skill_id")): skill
+        for skill in candidate_skill_items
+        if str(skill.get("skill_id") or "").strip()
+    }
+    routed_items: list[dict[str, Any]] = []
+    rejected_skill_ids: list[str] = []
+    for skill_id in selected_skill_ids:
+        normalized_id = str(skill_id or "").strip()
+        if not normalized_id:
+            continue
+        skill = candidate_by_id.get(normalized_id)
+        if skill is None:
+            rejected_skill_ids.append(normalized_id)
+            continue
+        routed_items.append(skill)
+    return routed_items, rejected_skill_ids
+
+
+def _selected_skill_index_terms(state: OsceGraphState) -> list[str]:
+    terms: list[str] = []
+    for skill in _selected_skill_items(state):
+        for key in ("title", "why_selected_label", "why_candidate"):
+            value = str(skill.get(key) or "").strip()
+            if value:
+                terms.append(value)
+        for label in skill.get("trigger_item_labels", []):
+            label_text = str(label).strip()
+            if label_text:
+                terms.append(label_text)
+    if terms:
+        return terms
+    legacy_terms: list[str] = []
+    for candidate in state.get("evolution_candidates", []):
+        candidate_text = str(candidate).strip()
+        if not candidate_text:
+            continue
+        legacy_terms.append(candidate_text.split("：", 1)[0])
+    return legacy_terms
+
+
+def _selected_skill_reason_items(
+    state: OsceGraphState,
+    selected_skill_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    allowed_ids = {str(skill_id) for skill_id in selected_skill_ids or [] if str(skill_id).strip()}
     reason_items: list[dict[str, Any]] = []
     for skill in _selected_skill_items(state):
         skill_id = str(skill.get("skill_id", "")).strip()
         if not skill_id:
+            continue
+        if allowed_ids and skill_id not in allowed_ids:
             continue
         reason_items.append(
             {
@@ -1716,17 +1982,48 @@ def _apply_passive_coach_review(
         primary_intent=primary_intent,
         revealed_fact_id=revealed_fact_id,
     )
+    pedagogy_state = build_pedagogy_state(
+        {
+            **dict(state),
+            "current_intents": current_intents,
+            "turn_analysis": turn_analysis,
+            "messages": messages,
+        }
+    )
+    preliminary_hint_context = build_coach_hint_context(
+        state={**dict(state), "messages": messages},
+        case=case,
+        pedagogy_state=pedagogy_state,
+        base_hint=base_hint,
+        retrieved_knowledge_context=[],
+    )
     _emit_processing_progress(state, "skill", status="active")
     skill_started_at, skill_started_perf = _start_processing_step()
-    selected_skill_context = _selected_skill_context_strings(state)
-    selected_skill_ids = _selected_skill_ids(state)
+    selected_skill_ids, selected_skill_context, routed_skill_context, router_turn_analysis = _route_skill_context_for_coach(
+        state,
+        case=case,
+        coach_agent=coach_agent,
+        base_hint=base_hint,
+        prior_messages=messages,
+        pedagogy_state=pedagogy_state,
+        retrieved_knowledge_context=[],
+        hint_context=preliminary_hint_context,
+    )
+    if routed_skill_context is not None:
+        turn_analysis = {**turn_analysis, "routed_skill_context": routed_skill_context}
+    if router_turn_analysis:
+        turn_analysis = {**turn_analysis, **router_turn_analysis}
+    passive_agent_path = ["input_router_node", "patient_response_node"]
+    if routed_skill_context is not None:
+        passive_agent_path.append("skill_router")
+    passive_agent_path.append("coach_agent")
     processing_trace = _append_processing_trace_step(
         processing_trace,
         "skill",
-        "completed" if selected_skill_ids or selected_skill_context else "skipped",
+        "completed" if selected_skill_ids else "skipped",
         skill_started_at,
         skill_started_perf,
-        metadata={"selected_skill_ids": selected_skill_ids},
+        metadata={"selected_skill_ids": selected_skill_ids, "routed_skill_context": routed_skill_context},
     )
     _emit_processing_progress(state, "rag", status="active")
     rag_started_at, rag_started_perf = _start_processing_step()
@@ -1744,13 +2041,12 @@ def _apply_passive_coach_review(
         rag_started_perf,
         metadata={"knowledge_references": [item["reference"] for item in retrieved_knowledge_context]},
     )
-    pedagogy_state = build_pedagogy_state(
-        {
-            **dict(state),
-            "current_intents": current_intents,
-            "turn_analysis": turn_analysis,
-            "messages": messages,
-        }
+    hint_context = build_coach_hint_context(
+        state={**dict(state), "messages": messages},
+        case=case,
+        pedagogy_state=pedagogy_state,
+        base_hint=base_hint,
+        retrieved_knowledge_context=retrieved_knowledge_context,
     )
     _emit_processing_progress(state, "coach", status="active")
     coach_started_at, coach_started_perf = _start_processing_step()
@@ -1773,6 +2069,7 @@ def _apply_passive_coach_review(
                     clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
                     skill_context=selected_skill_context,
                     retrieved_knowledge_context=retrieved_knowledge_context,
+                    hint_context=hint_context,
                     forbidden_terms=forbidden_terms,
                 )
             )
@@ -1807,7 +2104,7 @@ def _apply_passive_coach_review(
             current_intents=current_intents,
             turn_policy="passive_review_unavailable",
             turn_analysis=unavailable_turn_analysis,
-            agent_path=["input_router_node", "patient_response_node", "coach_agent_unavailable"],
+            agent_path=[*passive_agent_path[:-1], "coach_agent_unavailable"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
             selected_skill_ids=selected_skill_ids,
@@ -1836,7 +2133,7 @@ def _apply_passive_coach_review(
         current_intents=current_intents,
         turn_policy="passive_review_hint" if should_emit else "passive_review_silent",
         turn_analysis=turn_analysis,
-        agent_path=["input_router_node", "patient_response_node", "coach_agent"],
+        agent_path=passive_agent_path,
         revealed_fact_id=None,
         safety_flags=list(state.get("safety_flags", [])),
         source_references=[item["reference"] for item in retrieved_knowledge_context] if should_emit else [],
@@ -1937,11 +2234,12 @@ def _append_agent_turn_memory(
     if turn_knowledge_context:
         turn_payload["knowledge_references"] = [item["reference"] for item in turn_knowledge_context]
         turn_payload["retrieved_knowledge_context"] = turn_knowledge_context
-    if selected_skill_ids:
+    if selected_skill_ids is not None:
         turn_payload["selected_skill_ids"] = list(selected_skill_ids)
-    selected_skill_reasons = _selected_skill_reason_items(state)
-    if selected_skill_reasons:
-        turn_payload["selected_skill_reasons"] = selected_skill_reasons
+    if selected_skill_ids:
+        selected_skill_reasons = _selected_skill_reason_items(state, selected_skill_ids)
+        if selected_skill_reasons:
+            turn_payload["selected_skill_reasons"] = selected_skill_reasons
     if skill_context:
         turn_payload["skill_context"] = list(skill_context)
     if processing_trace is not None:

@@ -14,7 +14,9 @@ from app.services.clinical_reasoning_trace_service import (
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_auto_approval_service import AUTO_APPROVAL_AGENT_ID, TrainingSkillApprovalAgent
 from app.services.training_skill_candidate_service import (
+    TemplateTrainingSkillCandidateGenerator,
     TrainingSkillCandidateContext,
+    TrainingSkillCandidateGenerationError,
     TrainingSkillCandidateGenerator,
     TrainingSkillCandidateMissedItem,
     TrainingSkillCandidateTurnPattern,
@@ -23,6 +25,11 @@ from app.services.training_skill_candidate_service import (
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_regression_gate import TrainingSkillRegressionGate
 from app.services.training_skill_store import TrainingSkillStore
+from app.services.teacher_agent import (
+    TeacherAnalysisRequest,
+    create_default_teacher_agent,
+    normalize_teacher_analysis_response,
+)
 
 MAX_APPROVAL_AGENT_ROUNDS = 3
 TEACHER_REFLECTION_PROMPT_VERSION = "teacher_reflection_v3"
@@ -123,7 +130,12 @@ def build_not_ready_personal_skill_payload() -> dict[str, Any]:
     }
 
 
-def build_generation_failed_personal_skill_payload(*, report: dict[str, Any], case: Case) -> dict[str, Any]:
+def build_generation_failed_personal_skill_payload(
+    *,
+    report: dict[str, Any],
+    case: Case,
+    teacher_agent: Any | None = None,
+) -> dict[str, Any]:
     return {
         "personal_skill_candidate": {
             "status": "generation_failed",
@@ -135,7 +147,7 @@ def build_generation_failed_personal_skill_payload(*, report: dict[str, Any], ca
             "external_evidence_checks": [],
             "summary": "个人训练 Skill 暂未生成；请检查当前账号的模型服务配置后重试打开报告。",
         },
-        "ai_reflection_review": _build_ai_reflection_review(report, case),
+        "ai_reflection_review": _build_ai_reflection_review(report, case, teacher_agent=teacher_agent),
     }
 
 
@@ -146,10 +158,12 @@ class PersonalTrainingSkillService:
         generator: TrainingSkillCandidateGenerator | None = None,
         approval_agent: TrainingSkillApprovalAgent | None = None,
         regression_gate: TrainingSkillRegressionGate | None = None,
+        teacher_agent: Any | None = None,
     ) -> None:
         self._generator = generator
         self._approval_agent = approval_agent or TrainingSkillApprovalAgent()
         self._regression_gate = regression_gate or TrainingSkillRegressionGate()
+        self._teacher_agent = teacher_agent if teacher_agent is not None else create_default_teacher_agent()
 
     def generate_for_completed_session(
         self,
@@ -163,13 +177,23 @@ class PersonalTrainingSkillService:
     ) -> dict[str, Any]:
         candidate_id = _personal_candidate_id(str(session.session_id))
         existing_candidate = candidate_store.get_candidate(candidate_id)
+        teacher_reflection = _build_ai_reflection_review(
+            report,
+            case,
+            teacher_agent=self._teacher_agent,
+        )
         if existing_candidate is not None:
             return {
                 "personal_skill_candidate": _report_candidate_summary(existing_candidate),
-                "ai_reflection_review": _build_ai_reflection_review(report, case),
+                "ai_reflection_review": teacher_reflection,
             }
 
-        candidate = self._generate_candidate(session=session, case=case, report=report)
+        candidate = self._generate_candidate(
+            session=session,
+            case=case,
+            report=report,
+            teacher_analysis_context=_teacher_analysis_context_for_skill(teacher_reflection),
+        )
         candidate, review, approval_dialogue = self._review_candidate(candidate, case)
         candidate["approval_dialogue"] = approval_dialogue
         candidate["review"] = review
@@ -187,10 +211,17 @@ class PersonalTrainingSkillService:
         )
         return {
             "personal_skill_candidate": _report_candidate_summary(candidate),
-            "ai_reflection_review": _build_ai_reflection_review(report, case),
+            "ai_reflection_review": teacher_reflection,
         }
 
-    def _generate_candidate(self, *, session: Any, case: Case, report: dict[str, Any]) -> dict[str, Any]:
+    def _generate_candidate(
+        self,
+        *,
+        session: Any,
+        case: Case,
+        report: dict[str, Any],
+        teacher_analysis_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         session_id = str(session.session_id)
         report_id = str(report.get("report_id") or f"{session_id}_report")
         missed_items = _missed_items_from_report(report, case.case_id)
@@ -211,9 +242,15 @@ class PersonalTrainingSkillService:
             source_report_count=1,
             related_recommendations=_related_recommendations(report),
             turn_patterns=reasoning_turn_patterns,
+            teacher_analysis_context=teacher_analysis_context or {},
         )
         generator = self._generator or create_default_training_skill_candidate_generator()
-        candidate = generator.generate_candidate(context)
+        try:
+            candidate = generator.generate_candidate(context)
+        except TrainingSkillCandidateGenerationError as exc:
+            candidate = TemplateTrainingSkillCandidateGenerator().generate_candidate(context)
+            candidate["generation_mode"] = "template_fallback"
+            candidate["generation_warnings"] = [str(exc)]
         trigger_item_ids = [item.item_id for item in missed_items] or ["reflection:structured_expression"]
         stage_scope = ["case_intro", "history_taking", "physical_exam", "auxiliary_testing", "diagnosis_submission"]
         candidate.update(
@@ -489,11 +526,21 @@ def _safe_pattern_id_fragment(value: str) -> str:
     return normalized[:96] or "unknown"
 
 
-def build_teacher_reflection_review_payload(report: dict[str, Any], case: Case | None = None) -> dict[str, Any]:
-    return _build_ai_reflection_review(report, case)
+def build_teacher_reflection_review_payload(
+    report: dict[str, Any],
+    case: Case | None = None,
+    *,
+    teacher_agent: Any | None = None,
+) -> dict[str, Any]:
+    return _build_ai_reflection_review(report, case, teacher_agent=teacher_agent)
 
 
-def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None) -> dict[str, Any]:
+def _build_ai_reflection_review(
+    report: dict[str, Any],
+    case: Case | None = None,
+    *,
+    teacher_agent: Any | None = None,
+) -> dict[str, Any]:
     missed_items = [str(item_id) for item_id in report.get("missed_items", [])]
     case_id = str(report.get("case_id") or getattr(case, "case_id", "") or "")
     case_title = str(getattr(case, "case_title", "") or case_id or "当前病例")
@@ -564,7 +611,7 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         )
     else:
         next_focus = "下一轮继续练习把已收集证据整理成支持依据、反证依据和仍需验证的问题。"
-    return {
+    review = {
         "status": "generated",
         "summary": summary,
         "overall_comment": overall_comment,
@@ -584,6 +631,146 @@ def _build_ai_reflection_review(report: dict[str, Any], case: Case | None = None
         "teaching_prompt_version": TEACHER_REFLECTION_PROMPT_VERSION,
         "safety_note": "本轮教师复盘仅用于 OSCE 教学训练，不改变病例事实、rubric、标准诊断或评分规则。",
     }
+    if teacher_agent is None:
+        return review
+    return _apply_teacher_agent_analysis(
+        review=review,
+        teacher_agent=teacher_agent,
+        report=report,
+        case_id=case_id,
+        case_title=case_title,
+        score_text=score_text,
+        missed_items=missed_items,
+        missed_labels=missed_labels,
+        covered_labels=covered_labels,
+        pending_labels=pending_labels,
+        reasoning_trace_summary=reasoning_trace_summary,
+        source_reference_items=source_reference_items,
+    )
+
+
+def _apply_teacher_agent_analysis(
+    *,
+    review: dict[str, Any],
+    teacher_agent: Any,
+    report: dict[str, Any],
+    case_id: str,
+    case_title: str,
+    score_text: str,
+    missed_items: list[str],
+    missed_labels: list[str],
+    covered_labels: list[str],
+    pending_labels: list[str],
+    reasoning_trace_summary: dict[str, Any],
+    source_reference_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    request = TeacherAnalysisRequest(
+        case_id=case_id,
+        case_title=case_title,
+        score_text=score_text,
+        missed_items=missed_items,
+        missed_labels=missed_labels,
+        covered_labels=covered_labels,
+        pending_labels=pending_labels,
+        student_submission=_dict(report.get("final_submission")),
+        clinical_reasoning_trace=_dict(report.get("clinical_reasoning_trace")),
+        reasoning_trace_summary=reasoning_trace_summary,
+        base_reflection=_teacher_agent_base_reflection(review),
+        source_reference_items=source_reference_items,
+    )
+    try:
+        analysis = normalize_teacher_analysis_response(teacher_agent(request))
+    except Exception as exc:
+        warnings = list(review.get("generation_warnings", []))
+        warnings.append(
+            {
+                "module": "teacher_agent_analysis",
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:240],
+            }
+        )
+        return {**review, "generation_warnings": warnings}
+    analysis_payload = analysis.model_dump()
+    if analysis.agent_id == "teacher_agent_deterministic" or analysis.analysis_mode == "deterministic_baseline":
+        return {
+            **review,
+            "generated_by": analysis.agent_id,
+            "teacher_analysis_context": _teacher_analysis_context_from_response(analysis_payload),
+        }
+    return _merge_teacher_agent_analysis(review, analysis_payload)
+
+
+def _teacher_agent_base_reflection(review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": review.get("summary", ""),
+        "overall_comment": review.get("overall_comment", ""),
+        "major_issues": review.get("major_issues", []),
+        "teacher_coaching_review": review.get("teacher_coaching_review", []),
+        "reasoning_chain_review": review.get("reasoning_chain_review", ""),
+        "next_practice_plan": review.get("next_practice_plan", []),
+        "teacher_feedback": review.get("teacher_feedback", ""),
+        "next_focus": review.get("next_focus", ""),
+        "reasoning_trace_summary": review.get("reasoning_trace_summary", {}),
+    }
+
+
+def _merge_teacher_agent_analysis(review: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(review)
+    for field in [
+        "overall_comment",
+        "major_issues",
+        "teacher_coaching_review",
+        "reasoning_chain_review",
+        "next_practice_plan",
+        "teacher_note",
+    ]:
+        value = analysis.get(field)
+        if _has_meaningful_teacher_value(value):
+            merged[field] = value
+    analysis_summary = str(analysis.get("analysis_summary") or "").strip()
+    if analysis_summary:
+        merged["teacher_feedback"] = analysis_summary
+    next_plan = analysis.get("next_practice_plan")
+    if isinstance(next_plan, list) and next_plan:
+        merged["next_focus"] = str(next_plan[0])
+    merged["generated_by"] = str(analysis.get("agent_id") or "teacher_agent")
+    merged["teacher_analysis_context"] = _teacher_analysis_context_from_response(analysis)
+    return merged
+
+
+def _teacher_analysis_context_from_response(analysis: dict[str, Any]) -> dict[str, Any]:
+    major_issues = analysis.get("major_issues")
+    major_issue_titles = [
+        str(issue.get("title"))
+        for issue in major_issues
+        if isinstance(issue, dict) and str(issue.get("title") or "").strip()
+    ] if isinstance(major_issues, list) else []
+    return {
+        "agent_id": str(analysis.get("agent_id") or "teacher_agent"),
+        "analysis_mode": str(analysis.get("analysis_mode") or "post_session_teacher_analysis"),
+        "analysis_summary": str(analysis.get("analysis_summary") or "").strip(),
+        "student_thinking_hypothesis": str(analysis.get("student_thinking_hypothesis") or "").strip(),
+        "clinical_thinking_profile": _dict(analysis.get("clinical_thinking_profile")),
+        "major_issue_titles": major_issue_titles[:6],
+        "skill_memory_focus": _dict(analysis.get("skill_memory_focus")),
+        "source_anchor_labels": _normalized_string_list(analysis.get("source_anchor_labels"))[:8],
+        "teaching_prompt_version": TEACHER_REFLECTION_PROMPT_VERSION,
+    }
+
+
+def _teacher_analysis_context_for_skill(reflection: dict[str, Any]) -> dict[str, Any]:
+    context = reflection.get("teacher_analysis_context")
+    return dict(context) if isinstance(context, dict) else {}
+
+
+def _has_meaningful_teacher_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, dict):
+        return bool(value)
+    return value is not None
 
 
 def _build_overall_teacher_comment(
@@ -1084,6 +1271,10 @@ def _normalized_string_list(value: Any) -> list[str]:
     return [item for item in (str(raw_item).strip() for raw_item in value) if item]
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _coverage_map_labels(report: dict[str, Any], status: str, *, limit: int, case: Case | None = None) -> list[str]:
     snapshot = report.get("training_progress_snapshot")
     coverage_map = snapshot.get("coverage_map") if isinstance(snapshot, dict) else None
@@ -1271,6 +1462,7 @@ def _report_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
         "review": review,
         "approval_agent_review": candidate.get("approval_agent_review", {}),
         "approval_dialogue": list(candidate.get("approval_dialogue", [])),
+        "teacher_analysis_context": candidate.get("teacher_analysis_context", {}),
         "rag_evidence_items": list(candidate.get("rag_evidence_items", [])),
         "web_check_status": candidate.get("web_check_status", "not_configured"),
         "external_evidence_checks": list(candidate.get("external_evidence_checks", [])),

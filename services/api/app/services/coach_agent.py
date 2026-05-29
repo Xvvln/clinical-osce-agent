@@ -20,13 +20,15 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控教学策略 Agent，�
 - 不得输出诊断答案、病例隐藏事实、rubric 全量、治疗方案、用药剂量或真实医疗建议。
 - 不要新增医学事实；只能围绕 base_hint、hint_context、pedagogy_state、clinical_reasoning_state、skill_context、retrieved_knowledge_context 和已公开对话做教学引导。
 - 如果 hint_context 存在，优先参考其中的 next_step、evidence_coverage、difficulty_policy、skill_selection 和 rag_context，综合判断下一步提示，而不是只复述 base_hint。
+- 如果 prompt_kind 是 skill_router，只判断是否需要使用候选 Skill：只可从 hint_context.skill_selection.candidate_skills 中选择 selected_skill_ids；空白开局、普通下一步提示或没有明确错误模式时 selected_skill_ids=[]，skill_intervention_level="none"。
+- 如果 prompt_kind 是 socratic_hint，只有 skill_context 非空时才把其中 Skill 作为本轮教学策略；skill_context 为空时不要编造“本轮训练重点”。
 - training_difficulty 会影响提示粒度：beginner 可更明确指出下一类动作；intermediate 应提示学生选择项目并说明目的；advanced 应引导学生用自由文本表达想申请什么和为什么。
 - 如果 clinical_reasoning_state 中存在 sequence_flags，应先指出训练顺序缺口，再用“为什么 / 想一想”组织反问式提示。
 - 如果学生已接近提交诊断，只提醒整理证据链和排除依据，不要给出标准答案。
 - 如果 prompt_kind 是 passive_turn_review，必须先判断是否真的需要打断学生；学生提出有效问诊且患者已回答时，should_emit=false 且 hint=""。
 - 如果 prompt_kind 是 answer_boundary_redirect 或 safety_boundary_redirect，必须 should_emit=true，并用 base_hint 改写为教练边界提示。
 - 输出中文，简洁，不超过 80 个汉字。
-- 只输出 JSON，字段为 should_emit、hint、trigger_kind。
+- 只输出 JSON，字段为 should_emit、hint、trigger_kind、selected_skill_ids、skill_intervention_level、skill_selection_reason。
 """
 
 
@@ -51,10 +53,49 @@ class CoachResponse(BaseModel):
     should_emit: bool = True
     hint: str = Field(default="", max_length=160)
     trigger_kind: str = "manual_hint"
+    selected_skill_ids: list[str] = Field(default_factory=list)
+    skill_intervention_level: str = "auto"
+    skill_selection_reason: str = ""
 
 
 class DeterministicCoachAgent:
     def __call__(self, request: CoachRequest) -> CoachResponse:
+        if request.prompt_kind == "skill_router":
+            skill_selection = request.hint_context.get("skill_selection", {})
+            candidate_ids = [
+                str(skill_id)
+                for skill_id in skill_selection.get("available_skill_ids", [])
+                if str(skill_id).strip()
+            ]
+            conversation = request.hint_context.get("conversation", {})
+            evidence_coverage = request.hint_context.get("evidence_coverage", {})
+            has_student_progress = bool(
+                conversation.get("asked_questions_count")
+                or conversation.get("student_hypotheses")
+                or evidence_coverage.get("history", {}).get("collected")
+                or evidence_coverage.get("physical_exam", {}).get("collected")
+                or evidence_coverage.get("physical_exam", {}).get("requested_count")
+                or evidence_coverage.get("auxiliary_test", {}).get("collected")
+                or evidence_coverage.get("auxiliary_test", {}).get("requested_count")
+                or evidence_coverage.get("reasoning", {}).get("hypothesis_count")
+            )
+            if candidate_ids and has_student_progress:
+                return CoachResponse(
+                    should_emit=True,
+                    hint="",
+                    trigger_kind="skill_router",
+                    selected_skill_ids=candidate_ids[:3],
+                    skill_intervention_level="active",
+                    skill_selection_reason="deterministic_router_selected_after_student_progress",
+                )
+            return CoachResponse(
+                should_emit=True,
+                hint="",
+                trigger_kind="skill_router",
+                selected_skill_ids=[],
+                skill_intervention_level="none",
+                skill_selection_reason="deterministic_router_keeps_skill_as_background",
+            )
         if request.prompt_kind == "passive_turn_review":
             base_hint = request.base_hint.strip()
             if not base_hint:

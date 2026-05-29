@@ -141,6 +141,7 @@ export default function CasesPage() {
   const [cases, setCases] = useState<readonly CaseSummary[]>([]);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedTrainingDifficultyByCaseId, setSelectedTrainingDifficultyByCaseId] = useState<Record<string, TrainingDifficultyMode>>({});
 
   useEffect(() => {
     let isMounted = true;
@@ -212,6 +213,8 @@ export default function CasesPage() {
           <section className="grid gap-3 md:grid-cols-2">
             {cases.map((caseSummary) => {
               const isRecommendedCase = caseSummary.case_id === RECOMMENDED_CASE_ID;
+              const selectedTrainingDifficulty = selectedTrainingDifficultyByCaseId[caseSummary.case_id] ?? "beginner";
+              const selectedTrainingDifficultyOption = TRAINING_DIFFICULTY_OPTIONS.find((difficultyOption) => difficultyOption.mode === selectedTrainingDifficulty) ?? TRAINING_DIFFICULTY_OPTIONS[0];
               return (
                 <article
                   className={`rounded-2xl border p-5 shadow-xs ${
@@ -263,26 +266,37 @@ export default function CasesPage() {
                 <div className="mt-5 grid gap-2 border-t border-border pt-4">
                   <p className="text-xs font-semibold text-muted-foreground">选择训练难度</p>
                   {caseSummary.enabled ? (
-                    <div className="grid gap-2">
-                      {TRAINING_DIFFICULTY_OPTIONS.map((difficultyOption) => (
-                        <Link
-                          className="group rounded-2xl border border-border bg-background px-3 py-2.5 text-left shadow-xs transition hover:border-brand/35 hover:bg-brand-hover/5"
-                          href={`/?case_id=${encodeURIComponent(caseSummary.case_id)}&difficulty=${difficultyOption.mode}`}
-                          key={difficultyOption.mode}
-                        >
-                          <span className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="inline-flex rounded-full border border-border bg-muted px-3 py-1 text-xs font-semibold whitespace-nowrap text-foreground transition group-hover:border-brand/30 group-hover:bg-brand group-hover:text-white">
+                    <div className="grid gap-3">
+                      <div className="inline-flex w-fit flex-wrap gap-1 rounded-full border border-border bg-muted/60 p-1">
+                        {TRAINING_DIFFICULTY_OPTIONS.map((difficultyOption) => {
+                          const isSelectedDifficulty = difficultyOption.mode === selectedTrainingDifficulty;
+                          return (
+                            <button
+                              aria-pressed={isSelectedDifficulty}
+                              className={`rounded-full border px-4 py-1.5 text-xs font-semibold whitespace-nowrap transition ${
+                                isSelectedDifficulty
+                                  ? "border-foreground bg-foreground text-background shadow-[0_8px_18px_rgba(20,20,19,0.18)]"
+                                  : "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                              }`}
+                              key={difficultyOption.mode}
+                              onClick={() => setSelectedTrainingDifficultyByCaseId((currentSelection) => ({ ...currentSelection, [caseSummary.case_id]: difficultyOption.mode }))}
+                              type="button"
+                            >
                               {difficultyOption.label}
-                            </span>
-                            <span className="text-xs font-medium whitespace-nowrap text-brand">
-                              选择{difficultyOption.label}并进入工作台
-                            </span>
-                          </span>
-                          <span className="mt-2 block text-xs leading-5 text-muted-foreground">
-                            {difficultyOption.description}
-                          </span>
-                        </Link>
-                      ))}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="min-h-10 rounded-xl border border-border bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
+                        {selectedTrainingDifficultyOption.description}
+                      </p>
+                      <Link
+                        aria-label={`以${selectedTrainingDifficultyOption.label}模式进入${caseSummary.case_title}`}
+                        className="inline-flex w-fit items-center justify-center rounded-full border border-brand bg-brand px-4 py-2 text-sm font-semibold whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
+                        href={`/?case_id=${encodeURIComponent(caseSummary.case_id)}&difficulty=${selectedTrainingDifficulty}`}
+                      >
+                        进入工作台
+                      </Link>
                     </div>
                   ) : (
                     <button

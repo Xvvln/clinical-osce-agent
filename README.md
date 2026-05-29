@@ -169,8 +169,8 @@ corepack pnpm --dir 'apps/admin' dev --hostname '127.0.0.1' --port 3001
 本地 demo 管理员可参考 `.env.example` 中的配置：
 
 ```env
-CLINICAL_OSCE_DEMO_ADMIN_EMAIL=admin-demo@example.test
-CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=safe-admin-password
+CLINICAL_OSCE_DEMO_ADMIN_EMAIL=admin@osce.test
+CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=admin
 ```
 
 ### Docker Compose
@@ -221,23 +221,32 @@ Copy-Item '.env.example' '.env'
 | `single-node-prod` | 单机生产基线，禁用公开注册和运行时模型配置写入 |
 | `vertex-prod` | 偏向 Vertex / 云平台身份认证的部署方式 |
 
-模型配置说明：
+测试阶段模型配置说明：
 
-- 本地演示时，学生端可以测试 Gemini、Vertex Gemini、OpenAI-compatible 和 Anthropic 的连通性。
-- 训练运行时写入当前支持 OpenAI-compatible、Anthropic、Vertex Gemini ADC/API Key。
-- 当前 Gemini / Vertex 默认模型保持一致：
+- 学生端 API 配置页只展示托管模型说明，不再允许学生自填 API Key。
+- 主对话模型统一走 Gemini 3.5 Flash；如果上游失败，后端回落到 MiMo V2.5 Pro。
+- RAG 向量检索优先使用 Gemini Embedding；如果不可用，回落到本地 `BAAI/bge-small-zh-v1.5`。
+- 当前上游 API 有速率限制，演示时避免高并发连续请求。
 
 ```env
-OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-pro-preview
-OSCE_VERTEX_MODEL=gemini-3.1-pro-preview
-OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-pro-preview
+CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
+OSCE_OPENAI_ENABLED=true
+OSCE_OPENAI_BASE_URL=https://your-managed-gateway.example/v1
+OSCE_OPENAI_MODEL=gemini-3.5-flash
+OSCE_OPENAI_FALLBACK_ENABLED=true
+OSCE_OPENAI_FALLBACK_BASE_URL=https://your-fallback-gateway.example/v1
+OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
+OSCE_VERTEX_EMBEDDING_ENABLED=true
+OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
+OSCE_LOCAL_EMBEDDING_ENABLED=true
+OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
 - 生产环境不建议把 API Key 写入本地 SQLite，应使用环境变量、密钥服务或云平台身份。
 
 RAG 配置说明：
 
-- `.env.example` 默认关闭 Chroma 和 Vertex embedding。
+- `.env.example` 默认启用 Chroma、Gemini embedding 和本地 embedding fallback，便于测试阶段演示。
 - `docker-compose.yml` 默认启用本地 embedding 与 Chroma，便于演示。
 - RAG 用于提示、复盘、知识推荐和来源引用，不作为诊断标准答案或评分裁判。
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -23,6 +25,10 @@ from app.services.procedure_result_approval_agent import (
     ProcedureResultApprovalRequest,
     create_default_procedure_result_approval_agent,
 )
+from app.services.procedure_request_router import (
+    ProcedureRequestRoutingRequest,
+    create_default_procedure_request_router,
+)
 from app.services.report_store import ReportStore, report_store
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
@@ -38,6 +44,7 @@ CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 PROCEDURE_SIMULATION_SAFETY_BOUNDARY = "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。"
 TRAINING_DIFFICULTY_MODES = {"beginner", "intermediate", "advanced"}
+MAX_RUNTIME_ERROR_FIELD_LENGTH = 12000
 
 
 @dataclass
@@ -82,6 +89,7 @@ class OsceSessionService:
         personal_skill_service: Any | None = None,
         graph: Any | None = None,
         patient_responder: Any | None = None,
+        procedure_request_router: Any | None = None,
         procedure_result_simulator: Any | None = None,
         procedure_result_approval_agent: Any | None = None,
     ) -> None:
@@ -97,6 +105,7 @@ class OsceSessionService:
         self.session_store = session_store
         self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
+        self.procedure_request_router = procedure_request_router or create_default_procedure_request_router()
         self.procedure_result_simulator = procedure_result_simulator or create_default_procedure_result_simulator()
         self.procedure_result_approval_agent = (
             procedure_result_approval_agent or create_default_procedure_result_approval_agent()
@@ -308,8 +317,15 @@ class OsceSessionService:
             agent_update = _refresh_agent_state(session)
             self._save_session(session)
             self.complete_message_processing_status(session_id)
-        except Exception:
+        except Exception as exc:
             self.complete_message_processing_status(session_id, errored=True)
+            trace_id = self._append_runtime_error_event(
+                session,
+                operation="message",
+                exc=exc,
+                extra_payload={"student_message": message},
+            )
+            setattr(exc, "osce_runtime_trace_id", trace_id)
             raise
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
@@ -533,7 +549,13 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        case = load_case_node(session.case_id)
         standardization = _standardize_procedure_request_text(request_text)
+        routed_unmatched_requests = self._route_unmatched_procedure_requests(
+            case=case,
+            request_text=request_text,
+            unmatched_requests=list(standardization["unmatched_requests"]),
+        )
         exam_results: list[dict[str, Any]] = []
         test_results: list[dict[str, Any]] = []
         if standardization["matched_exam_codes"]:
@@ -548,7 +570,6 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
-        case = load_case_node(session.case_id)
         exam_result_map = {str(item.get("exam_code")): item for item in exam_results}
         test_result_map = {str(item.get("test_code")): item for item in test_results}
         matched_procedure_results = _build_standardized_procedure_results(
@@ -556,6 +577,7 @@ class OsceSessionService:
             exam_result_map,
             test_result_map,
         )
+        matched_procedure_results.extend(_build_routed_unmatched_procedure_results(routed_unmatched_requests))
         matched_procedure_results = self._simulate_unconfigured_procedure_results(
             session=session,
             case=case,
@@ -578,7 +600,11 @@ class OsceSessionService:
                     "raw_request": request_text,
                     "matched_exam_codes": list(standardization["matched_exam_codes"]),
                     "matched_test_codes": list(standardization["matched_test_codes"]),
-                    "unmatched_requests": list(standardization["unmatched_requests"]),
+                    "unmatched_requests": _remaining_unmatched_requests(
+                        list(standardization["unmatched_requests"]),
+                        routed_unmatched_requests,
+                    ),
+                    "routed_unmatched_requests": routed_unmatched_requests,
                     "generated_result_policy": "ai_simulated_not_scoring" if has_simulated_results else "disabled",
                     "safety_boundary": (
                         PROCEDURE_SIMULATION_SAFETY_BOUNDARY
@@ -603,6 +629,36 @@ class OsceSessionService:
             },
         )
         return payload
+
+    def _route_unmatched_procedure_requests(
+        self,
+        *,
+        case: Case,
+        request_text: str,
+        unmatched_requests: list[str],
+    ) -> list[dict[str, Any]]:
+        if not unmatched_requests:
+            return []
+        catalog = _build_procedure_catalog()
+        known_catalog_labels = [
+            *[str(item.get("exam_name_cn") or "") for item in catalog["physical_exams"]],
+            *[str(item.get("test_name_cn") or "") for item in catalog["auxiliary_tests"]],
+        ]
+        try:
+            routing_response = self.procedure_request_router(
+                ProcedureRequestRoutingRequest(
+                    case_id=case.case_id,
+                    case_title=case.case_title,
+                    chief_complaint=case.chief_complaint,
+                    request_text=request_text,
+                    unmatched_requests=unmatched_requests,
+                    known_catalog_labels=known_catalog_labels,
+                    forbidden_terms=_procedure_forbidden_terms(case),
+                )
+            )
+        except Exception:
+            return []
+        return _normalize_routed_unmatched_requests(routing_response, unmatched_requests)
 
     def _simulate_unconfigured_procedure_results(
         self,
@@ -763,12 +819,29 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
-        self._refresh_active_skill_context(session)
-        graph_state = self.osce_graph.invoke(_graph_state_from_session(session, hint_requested=True))
-        _apply_graph_state(session, graph_state)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        self.begin_message_processing_status(session_id)
+        try:
+            self._refresh_active_skill_context(session)
+            graph_state = self.osce_graph.invoke(
+                _graph_state_from_session(
+                    session,
+                    hint_requested=True,
+                    processing_progress_callback=lambda event: self.update_message_processing_status(
+                        session_id,
+                        step_id=str(event.get("step_id") or ""),
+                        label=str(event.get("label") or event.get("step_id") or ""),
+                        status=str(event.get("status") or "active"),
+                    ),
+                )
+            )
+            _apply_graph_state(session, graph_state)
+            self._refresh_active_skill_context(session)
+            agent_update = _refresh_agent_state(session)
+            self._save_session(session)
+            self.complete_message_processing_status(session_id)
+        except Exception:
+            self.complete_message_processing_status(session_id, errored=True)
+            raise
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["hint"] = graph_state["hint"]
         self._append_event(
@@ -964,11 +1037,52 @@ class OsceSessionService:
             payload["reflection_summary"] = agent_update["reflection_summary"]
         self._append_event(session, event_type, payload)
 
+    def _append_runtime_error_event(
+        self,
+        session: OsceSession,
+        *,
+        operation: str,
+        exc: BaseException,
+        extra_payload: dict[str, Any] | None = None,
+    ) -> str:
+        trace_id = f"osce-error-{uuid4().hex[:12]}"
+        payload: dict[str, Any] = {
+            "trace_id": trace_id,
+            "operation": operation,
+            "stage": session.stage,
+            "training_difficulty": session.training_difficulty,
+            "error_type": type(exc).__name__,
+            "message": _sanitize_runtime_error_text(str(exc)),
+            "stack_trace": _sanitize_runtime_error_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__))),
+        }
+        if extra_payload:
+            payload.update({key: _sanitize_runtime_error_value(value) for key, value in extra_payload.items()})
+        self._append_event(session, "session_runtime_error", payload)
+        return trace_id
+
 
 def load_case_node(case_id: str) -> Case:
     case_path = CASES_DIR / f"{case_id}.json"
     case_payload = json.loads(case_path.read_text(encoding="utf-8"))
     return validate_case(case_payload)
+
+
+def _sanitize_runtime_error_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_runtime_error_text(value)
+    if isinstance(value, list):
+        return [_sanitize_runtime_error_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _sanitize_runtime_error_value(item) for key, item in value.items()}
+    return value
+
+
+def _sanitize_runtime_error_text(value: str) -> str:
+    sanitized = re.sub(r"https?://[^\s\"')]+", "[redacted-url]", value)
+    sanitized = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+", r"\1[redacted]", sanitized)
+    sanitized = re.sub(r"(?i)(api[_-]?key['\"]?\s*[:=]\s*['\"]?)[^,'\"\s}]+", r"\1[redacted]", sanitized)
+    sanitized = re.sub(r"\b(sk|tp)-[A-Za-z0-9._\-]{8,}\b", "[redacted-secret]", sanitized)
+    return sanitized[:MAX_RUNTIME_ERROR_FIELD_LENGTH]
 
 
 def input_router_node(message: str) -> str:
@@ -1148,9 +1262,17 @@ def _personal_skill_payload_for_report(
             event_store=service.training_event_store,
         )
     except TrainingSkillCandidateGenerationError:
-        return build_generation_failed_personal_skill_payload(report=session.feedback_report, case=case)
+        return build_generation_failed_personal_skill_payload(
+            report=session.feedback_report,
+            case=case,
+            teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+        )
     except Exception as exc:
-        payload = build_generation_failed_personal_skill_payload(report=session.feedback_report, case=case)
+        payload = build_generation_failed_personal_skill_payload(
+            report=session.feedback_report,
+            case=case,
+            teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+        )
         payload["generation_warnings"] = _append_report_generation_warning(
             session.feedback_report,
             module="personal_skill_generation",
@@ -1673,6 +1795,132 @@ def _build_standardized_procedure_results(
                 }
             )
     return results
+
+
+def _normalize_routed_unmatched_requests(routing_response: Any, unmatched_requests: list[str]) -> list[dict[str, Any]]:
+    if hasattr(routing_response, "model_dump"):
+        routing_response = routing_response.model_dump()
+    if not isinstance(routing_response, dict):
+        return []
+    routed_items = routing_response.get("routed_items", [])
+    if not isinstance(routed_items, list):
+        return []
+    normalized_items: list[dict[str, Any]] = []
+    for item in routed_items:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if not isinstance(item, dict):
+            continue
+        raw_text = str(item.get("raw_text") or "").strip()
+        if not raw_text or not _route_item_matches_any_unmatched(raw_text, unmatched_requests):
+            continue
+        decision = str(item.get("decision") or "clarify").strip()
+        if decision not in {"generate", "clarify", "block"}:
+            decision = "clarify"
+        kind = str(item.get("kind") or "other").strip()
+        if kind not in {"physical_exam", "auxiliary_test", "patient_profile", "vital_sign", "other"}:
+            kind = "other"
+        name_cn = str(item.get("name_cn") or raw_text).strip()
+        rationale = str(item.get("rationale") or "").strip()
+        safety_issues = [
+            str(safety_issue).strip()
+            for safety_issue in item.get("safety_issues", [])
+            if str(safety_issue).strip()
+        ]
+        normalized_items.append(
+            {
+                "raw_text": raw_text,
+                "decision": decision,
+                "kind": kind,
+                "name_cn": name_cn,
+                "rationale": rationale,
+                "safety_issues": safety_issues,
+            }
+        )
+    return normalized_items
+
+
+def _build_routed_unmatched_procedure_results(routed_unmatched_requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for item in routed_unmatched_requests:
+        if item.get("decision") != "generate":
+            continue
+        kind = str(item.get("kind") or "other")
+        raw_text = str(item.get("raw_text") or "")
+        name_cn = str(item.get("name_cn") or raw_text or "未命名申请")
+        code = _generated_procedure_code(kind, raw_text, name_cn)
+        results.append(
+            {
+                "id": f"generated:{kind}:{code}",
+                "kind": kind,
+                "code": code,
+                "name_cn": name_cn,
+                "label": f"{_routed_procedure_label_prefix(kind)}：{name_cn}",
+                "result": "该项目已记录，但本训练站点未提供预置结果。",
+                "availability_status": "not_available_for_case",
+                "generated_by_ai": False,
+                "approval_status": "requires_simulation",
+                "approval_agent_review": {
+                    "agent_id": "procedure_request_router",
+                    "decision": str(item.get("decision") or "generate"),
+                    "approval_mode": "request_routing",
+                    "rationale": str(item.get("rationale") or ""),
+                    "safety_issues": list(item.get("safety_issues") or []),
+                    "revised_result": "",
+                },
+                "source_context_references": [],
+                "scoring_eligible": False,
+            }
+        )
+    return results
+
+
+def _remaining_unmatched_requests(
+    unmatched_requests: list[str],
+    routed_unmatched_requests: list[dict[str, Any]],
+) -> list[str]:
+    generated_raw_texts = [
+        str(item.get("raw_text") or "")
+        for item in routed_unmatched_requests
+        if item.get("decision") == "generate"
+    ]
+    return [
+        unmatched_request
+        for unmatched_request in unmatched_requests
+        if not any(_route_item_matches_unmatched(raw_text, unmatched_request) for raw_text in generated_raw_texts)
+    ]
+
+
+def _route_item_matches_any_unmatched(raw_text: str, unmatched_requests: list[str]) -> bool:
+    return any(_route_item_matches_unmatched(raw_text, unmatched_request) for unmatched_request in unmatched_requests)
+
+
+def _route_item_matches_unmatched(raw_text: str, unmatched_request: str) -> bool:
+    normalized_raw_text = _normalize_procedure_request_text(raw_text)
+    normalized_unmatched_request = _normalize_procedure_request_text(unmatched_request)
+    return (
+        normalized_raw_text == normalized_unmatched_request
+        or normalized_raw_text in normalized_unmatched_request
+        or normalized_unmatched_request in normalized_raw_text
+    )
+
+
+def _generated_procedure_code(kind: str, raw_text: str, name_cn: str) -> str:
+    digest = hashlib.sha1(f"{kind}:{raw_text}:{name_cn}".encode("utf-8")).hexdigest()[:12]
+    normalized_kind = re.sub(r"[^a-z0-9_]+", "_", kind.lower()).strip("_") or "other"
+    return f"{normalized_kind}.{digest}"
+
+
+def _routed_procedure_label_prefix(kind: str) -> str:
+    if kind == "physical_exam":
+        return "查体"
+    if kind == "auxiliary_test":
+        return "检查"
+    if kind == "vital_sign":
+        return "生命体征"
+    if kind == "patient_profile":
+        return "信息"
+    return "申请"
 
 
 def _procedure_simulation_audit_items_from_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

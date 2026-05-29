@@ -150,19 +150,43 @@ def _skill_selection(state: dict[str, Any]) -> dict[str, Any]:
     selected_skills = active_skill_context.get("selected_skills", [])
     if not isinstance(selected_skills, list):
         selected_skills = []
+    skill_index_items = active_skill_context.get("skill_index", [])
+    if not isinstance(skill_index_items, list):
+        skill_index_items = []
+    index_by_skill_id = {
+        str(item.get("skill_id") or ""): item
+        for item in skill_index_items
+        if isinstance(item, dict) and str(item.get("skill_id") or "")
+    }
+    candidate_skills = [
+        _compact_skill_selection_payload(
+            skill,
+            index_by_skill_id.get(str(skill.get("skill_id") or ""), {}),
+        )
+        for skill in selected_skills
+        if isinstance(skill, dict)
+    ]
     return {
         "selected_count": len([item for item in selected_skills if isinstance(item, dict)]),
-        "selected_skills": [
-            {
-                "skill_id": str(skill.get("skill_id") or ""),
-                "title": str(skill.get("title") or ""),
-                "why_selected_label": str(skill.get("why_selected_label") or skill.get("why_candidate") or ""),
-                "trigger_item_labels": _string_list(skill.get("trigger_item_labels", [])),
-            }
-            for skill in selected_skills
-            if isinstance(skill, dict)
-        ],
+        "available_skill_ids": [skill["skill_id"] for skill in candidate_skills if skill["skill_id"]],
+        "candidate_skills": candidate_skills,
+        "selected_skills": candidate_skills,
     }
+
+
+def _compact_skill_selection_payload(skill: dict[str, Any], indexed_skill: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "skill_id": str(skill.get("skill_id") or ""),
+        "title": str(skill.get("title") or ""),
+        "why_selected_label": str(skill.get("why_selected_label") or skill.get("why_candidate") or ""),
+        "trigger_item_labels": _string_list(skill.get("trigger_item_labels", [])),
+        "stage_scope": _string_list(skill.get("stage_scope", [])),
+    }
+    for field_name in ("summary", "when_to_use", "when_not_to_use", "risk"):
+        field_value = str(skill.get(field_name) or indexed_skill.get(field_name) or "").strip()
+        if field_value:
+            payload[field_name] = field_value
+    return payload
 
 
 def _recent_turns(messages: Any, limit: int = 8) -> list[dict[str, str]]:

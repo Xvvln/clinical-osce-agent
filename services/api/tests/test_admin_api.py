@@ -49,13 +49,9 @@ def authenticated_admin_client(
     *,
     raise_server_exceptions: bool = True,
 ) -> Iterator[TestClient]:
-    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
     with TestClient(main.app, raise_server_exceptions=raise_server_exceptions) as client:
-        response = client.post(
-            "/api/auth/register",
-            json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
-        )
+        response = client.post("/api/auth/login", json={"email": "admin@osce.test", "password": "admin"})
         assert response.status_code == 200
         yield client
 
@@ -140,6 +136,22 @@ def expected_training_skill_success_metrics() -> list[str]:
     ]
 
 
+def without_skill_memory_fields(skill: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in skill.items()
+        if key
+        not in {
+            "memory_layer",
+            "skill_memory_version",
+            "problem_pattern",
+            "router_index",
+            "intervention",
+            "effect_tracking",
+        }
+    }
+
+
 def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 
@@ -191,15 +203,11 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
 
 
 def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 
     with TestClient(main.app) as client:
-        register_response = client.post(
-            "/api/auth/register",
-            json={"email": "student@example.test", "password": "safe-student-password", "display_name": "学生"},
-        )
-        assert register_response.status_code == 200
+        login_response = client.post("/api/auth/login", json={"email": "student@osce.test", "password": "student"})
+        assert login_response.status_code == 200
 
         responses = [
             client.get("/api/admin/evolution/candidates"),
@@ -265,12 +273,12 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["student"] == {
-        "email": "student-demo@example.test",
-        "password": "safe-student-password",
+        "email": "student@osce.test",
+        "password": "student",
         "display_name": "演示学生",
     }
-    assert payload["admin"]["email"] == "admin-demo@example.test"
-    assert payload["admin"]["password"] == "safe-admin-password"
+    assert payload["admin"]["email"] == "admin@osce.test"
+    assert payload["admin"]["password"] == "admin"
     assert payload["session_count"] == 3
     assert payload["report_count"] == 2
     assert len(payload["sessions"]) == 3
@@ -319,7 +327,7 @@ def test_admin_can_toggle_training_skill_auto_approval_settings(tmp_path, monkey
     updated_settings = update_response.json()["settings"]
     assert updated_settings["auto_apply_enabled"] is True
     assert updated_settings["approval_agent_id"] == "skill_auto_approval_agent"
-    assert updated_settings["updated_by"] == "admin@example.test"
+    assert updated_settings["updated_by"] == "admin@osce.test"
     assert isinstance(updated_settings["updated_at"], str)
     assert persisted_response.json()["settings"] == updated_settings
 
@@ -354,7 +362,7 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
         **payload,
         "case_title": "右下腹痛教学病例",
         "source_title": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
-        "updated_by": "admin@example.test",
+        "updated_by": "admin@osce.test",
         "updated_at": created_item["updated_at"],
     }
     assert created_item["updated_at"]
@@ -746,10 +754,10 @@ def test_demo_admin_can_login_with_hardcoded_credentials_without_env(tmp_path, m
     with TestClient(main.app) as client:
         login_response = client.post(
             "/api/auth/login",
-            json={"email": "admin-demo@example.test", "password": "safe-admin-password"},
+            json={"email": "admin@osce.test", "password": "admin"},
         )
         assert login_response.status_code == 200
-        assert login_response.json()["user"]["email"] == "admin-demo@example.test"
+        assert login_response.json()["user"]["email"] == "admin@osce.test"
         admin_response = client.get("/api/admin/model-config")
 
     assert admin_response.status_code == 200
@@ -763,7 +771,7 @@ def test_demo_admin_hardcoded_credentials_can_be_disabled(tmp_path, monkeypatch)
     with TestClient(main.app) as client:
         response = client.post(
             "/api/auth/login",
-            json={"email": "admin-demo@example.test", "password": "safe-admin-password"},
+            json={"email": "admin@osce.test", "password": "admin"},
         )
 
     assert response.status_code == 401
@@ -792,6 +800,7 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     response_text = response.text
     assert "gemini-secret-value" not in response_text
     assert "openai-secret-value" not in response_text
+    assert "https://api.openai.example/v1" not in response_text
     payload = response.json()
     assert payload["policy"] == {
         "secrets_persisted": False,
@@ -821,7 +830,7 @@ def test_admin_can_read_model_config_without_secret_values(tmp_path, monkeypatch
     assert providers["openai_compatible"]["enabled"] is True
     assert providers["openai_compatible"]["configured"] is True
     assert providers["openai_compatible"]["model"] == "openai-demo-model"
-    assert providers["openai_compatible"]["base_url"] == "https://api.openai.example/v1"
+    assert providers["openai_compatible"]["base_url"] == ""
     assert providers["openai_compatible"]["integration_status"] == "wired"
 
 
@@ -2455,6 +2464,12 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
+    monkeypatch.setattr(
+        main,
+        "training_skill_candidate_service",
+        TrainingSkillCandidateService(generator=TemplateTrainingSkillCandidateGenerator()),
+        raising=False,
+    )
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
     monkeypatch.setattr(main, "run_evaluation_cases", fake_run_evaluation_cases, raising=False)
 
@@ -2620,13 +2635,34 @@ def test_admin_auto_approval_agent_revises_and_enables_generated_skill(tmp_path,
     assert {
         changed_field["field"]
         for changed_field in candidate["approval_agent_review"]["changed_fields"]
-    } >= {"title", "description", "suggested_strategy", "teaching_action_plan"}
+    } >= {"title", "description", "suggested_strategy", "teaching_action_plan", "intervention", "router_index"}
+    assert "intervention" in candidate["approval_agent_review"]["reviewed_fields"]
     assert "candidate_id" in candidate["approval_agent_review"]["protected_fields"]
+    assert "用药剂量" not in candidate["router_index"]["summary"]
+    assert "用药剂量" not in candidate["router_index"]["when_to_use"]
+    assert "用药剂量" not in candidate["intervention"]["coach_strategy"]
+    assert "用药剂量" not in " ".join(candidate["intervention"]["hint_ladder"])
+    assert candidate["intervention"]["coach_strategy"] == candidate["suggested_strategy"]
+    assert candidate["intervention"]["teaching_sop"]["version"] == "teaching_sop_v1"
+    quality_review = candidate["approval_agent_review"]["quality_review"]
+    assert quality_review["passed"] is True
+    assert {
+        check["check_id"]
+        for check in quality_review["checks"]
+    } >= {
+        "protected_fields_preserved",
+        "unsafe_terms_removed",
+        "skill_body_complete",
+        "teaching_sop_complete",
+        "rag_visibility_filtered",
+    }
+    assert all(check["passed"] for check in quality_review["checks"])
 
     enabled_skill = skill_store.get_skill("skill_training_pattern_reasoning_core")
     assert enabled_skill is not None
     assert enabled_skill["status"] == "enabled"
     assert "用药剂量" not in enabled_skill["suggested_strategy"]
+    assert "用药剂量" not in enabled_skill["intervention"]["coach_strategy"]
 
     audit_events = event_store.list_session_events("skill_candidate_training_pattern_reasoning_core")
     assert [event["event_type"] for event in audit_events] == [
@@ -3398,8 +3434,9 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "status": "approved",
         "skill_id": "skill_reasoning_core",
     }
-    assert candidate_store.get_candidate("skill_candidate_reasoning_core")["review"]["reviewer_id"] == "admin@example.test"
-    assert skill_store.get_skill("skill_reasoning_core") == {
+    assert candidate_store.get_candidate("skill_candidate_reasoning_core")["review"]["reviewer_id"] == "admin@osce.test"
+    enabled_skill = skill_store.get_skill("skill_reasoning_core")
+    assert without_skill_memory_fields(enabled_skill) == {
         "skill_id": "skill_reasoning_core",
         "source_candidate_id": "skill_candidate_reasoning_core",
         "trigger_item_id": "reasoning_core",
@@ -3436,20 +3473,21 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
         "support_count": 2,
         "related_recommendations": [],
     }
+    assert enabled_skill["memory_layer"] == "procedural_teaching_skill"
+    assert enabled_skill["router_index"]["summary"] == "临床推理链纠偏提示：2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。"
     audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
     assert len(audit_events) == 1
     assert audit_events[0]["case_id"] == "reasoning_core"
-    assert audit_events[0]["student_id"] == "admin@example.test"
+    assert audit_events[0]["student_id"] == "admin@osce.test"
     assert audit_events[0]["event_type"] == "admin_skill_candidate_approved"
     assert audit_events[0]["payload"] == {
         "candidate_id": "skill_candidate_reasoning_core",
-        "reviewer_email": "admin@example.test",
+        "reviewer_email": "admin@osce.test",
         "skill_id": "skill_reasoning_core",
     }
 
 
 def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
     auth_store = AuthStore(tmp_path / "auth.sqlite3")
     event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     session_service = OsceSessionService(
@@ -3469,11 +3507,8 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
 
     with TestClient(main.app) as client:
-        student_register = client.post(
-            "/api/auth/register",
-            json={"email": "student-loop@example.test", "password": "safe-student-password", "display_name": "学生"},
-        )
-        assert student_register.status_code == 200
+        student_login = client.post("/api/auth/login", json={"email": "student@osce.test", "password": "student"})
+        assert student_login.status_code == 200
 
         for _ in range(2):
             session_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
@@ -3490,11 +3525,8 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
             assert report["source_reference_items"]
             assert report["explanation_source_items"]
 
-        admin_register = client.post(
-            "/api/auth/register",
-            json={"email": "admin@example.test", "password": "safe-admin-password", "display_name": "管理员"},
-        )
-        assert admin_register.status_code == 200
+        admin_login = client.post("/api/auth/login", json={"email": "admin@osce.test", "password": "admin"})
+        assert admin_login.status_code == 200
 
         insights_response = client.get("/api/admin/insights")
         assert insights_response.status_code == 200
@@ -3523,7 +3555,7 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
 
         student_login = client.post(
             "/api/auth/login",
-            json={"email": "student-loop@example.test", "password": "safe-student-password"},
+            json={"email": "student@osce.test", "password": "student"},
         )
         assert student_login.status_code == 200
         later_session_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
@@ -3532,9 +3564,17 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         later_session_id = later_session["session_id"]
         assert f"{candidate['title']}：{candidate['suggested_strategy']}" in later_session["evolution_candidates"]
 
+        opening_hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
+        assert opening_hint_response.status_code == 200
+        assert "本轮训练重点" not in opening_hint_response.json()["hint"]
+        assert opening_hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"] == []
+
+        message_response = client.post(f"/api/sessions/{later_session_id}/message", json={"message": "什么时候开始疼的？"})
+        assert message_response.status_code == 200
         hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert hint_response.status_code == 200
         assert "本轮训练重点" in hint_response.json()["hint"]
+        assert hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"]
         profile_response = client.get("/api/me/profile")
         assert profile_response.status_code == 200
         skill_accumulation = profile_response.json()["profile"]["skill_accumulation"]
@@ -3547,7 +3587,7 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
 
         admin_login = client.post(
             "/api/auth/login",
-            json={"email": "admin@example.test", "password": "safe-admin-password"},
+            json={"email": "admin@osce.test", "password": "admin"},
         )
         assert admin_login.status_code == 200
         later_events_response = client.get(f"/api/admin/sessions/{later_session_id}/events")
@@ -3605,16 +3645,16 @@ def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, mo
         "candidate_id": "skill_candidate_reasoning_core",
         "status": "rejected",
     }
-    assert candidate_store.get_candidate("skill_candidate_reasoning_core")["review"]["reviewer_id"] == "admin@example.test"
+    assert candidate_store.get_candidate("skill_candidate_reasoning_core")["review"]["reviewer_id"] == "admin@osce.test"
     assert skill_store.list_enabled_skills() == []
     audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
     assert len(audit_events) == 1
     assert audit_events[0]["case_id"] == "reasoning_core"
-    assert audit_events[0]["student_id"] == "admin@example.test"
+    assert audit_events[0]["student_id"] == "admin@osce.test"
     assert audit_events[0]["event_type"] == "admin_skill_candidate_rejected"
     assert audit_events[0]["payload"] == {
         "candidate_id": "skill_candidate_reasoning_core",
-        "reviewer_email": "admin@example.test",
+        "reviewer_email": "admin@osce.test",
     }
 
 
@@ -3627,7 +3667,7 @@ def test_admin_review_returns_404_for_missing_candidate(tmp_path, monkeypatch) -
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post(
             "/api/admin/evolution/approve",
-            json={"candidate_id": "missing_candidate", "reviewer_id": "admin@example.test"},
+            json={"candidate_id": "missing_candidate", "reviewer_id": "admin@osce.test"},
         )
 
     assert response.status_code == 404

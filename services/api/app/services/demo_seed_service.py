@@ -7,8 +7,8 @@ from app.services.osce_session_service import OsceSessionService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_policy import build_prohibited_content_policy, build_success_metrics, build_teaching_action_plan
 
-DEMO_STUDENT_EMAIL = "student-demo@example.test"
-DEMO_STUDENT_PASSWORD = "safe-student-password"
+DEMO_STUDENT_EMAIL = "student@osce.test"
+DEMO_STUDENT_PASSWORD = "student"
 DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
 DEMO_CANDIDATE_ID = "demo_skill_candidate_abdominal_pain_history_bundle"

@@ -16,7 +16,7 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 高级训练中的受控检查结果模拟 Agent。
 
 任务：
-- 当学生自由申请的查体或辅助检查项目能被标准目录识别、但当前病例没有预置结果时，生成一个“训练用模拟结果”。
+- 当学生自由申请的查体或辅助检查项目能被标准目录识别，或已经被自由申请路由 Agent 判定为可生成，但当前病例没有预置结果时，生成一个“训练用模拟结果”。
 - 你可以参考病例私有上下文、已配置结果、学生请求和教学知识库片段，使结果与病例情境一致。
 
 硬性边界：

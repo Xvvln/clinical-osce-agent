@@ -7,7 +7,9 @@ from typing import Any
 
 from app.services import personal_training_skill_service as personal_skill_module
 from app.services.personal_training_skill_service import PersonalTrainingSkillService, build_teacher_reflection_review_payload
+from app.services.teacher_agent import DeterministicTeacherAgent
 from app.services.training_event_store import TrainingEventStore
+from app.services.training_skill_candidate_service import TrainingSkillCandidateGenerationError
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_store import TrainingSkillStore
 from app.validators.case_validator import validate_case
@@ -31,6 +33,59 @@ class CapturingGenerator:
             "description": "围绕本轮暴露出的临床思维模式训练。",
             "suggested_strategy": "下一轮先建立问题表征，再决定查体和检查顺序。",
             "status": "draft",
+        }
+
+
+class FailingGenerator:
+    def generate_candidate(self, context: Any) -> dict[str, Any]:
+        raise TrainingSkillCandidateGenerationError("configured provider unavailable")
+
+
+class FakeTeacherAgent:
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def __call__(self, request: Any) -> dict[str, Any]:
+        self.requests.append(request)
+        return {
+            "agent_id": "teacher_agent",
+            "analysis_mode": "post_session_teacher_analysis",
+            "analysis_summary": "学生没有把疼痛迁移、关键查体和鉴别排除连成验证链。",
+            "overall_comment": "这次训练的问题不是单个漏项，而是假设形成后缺少验证路径。",
+            "major_issues": [
+                {
+                    "title": "假设验证链断裂",
+                    "observed_behavior": "学生较早提出诊断方向，但没有先补齐迁移痛和局部腹膜刺激征。",
+                    "why_it_matters": "没有验证链，诊断表达会像结论先行。",
+                    "correct_approach": "先建立疼痛演变时间线，再用查体和检查验证或排除。",
+                    "next_action": "下一轮每申请一个查体或检查前，先说它要验证什么。",
+                    "linked_items": ["追问疼痛部位及转移特征", "检查腹部压痛"],
+                }
+            ],
+            "teacher_coaching_review": [
+                {
+                    "section_id": "case_framing",
+                    "title": "病例表征",
+                    "teacher_comment": "先把主诉压缩成有时间线和部位变化的临床问题。",
+                    "why_it_matters": "病例表征决定后续验证路径。",
+                    "next_move": "下一轮先说清起病、部位变化和伴随症状。",
+                    "evidence_labels": ["追问疼痛部位及转移特征"],
+                }
+            ],
+            "reasoning_chain_review": "推理链断在假设形成后的验证步骤。",
+            "next_practice_plan": ["下一轮先补病史时间线，再进入查体。"],
+            "teacher_note": "这是 TeacherAgent 基于本轮材料生成的教学分析。",
+            "student_thinking_hypothesis": "学生过早进入结论，尚未把病史、查体和排除依据组织成验证链。",
+            "clinical_thinking_profile": {
+                "problem_representation": "主诉和疼痛演变尚未压缩成稳定问题表征。",
+                "hypothesis_management": "诊断假设形成偏早，验证动作不足。",
+                "verification_strategy": "查体和检查没有围绕假设形成支持与排除证据。",
+                "next_teacher_move": "用反问要求学生先说明下一步证据要验证什么。",
+            },
+            "skill_memory_focus": {
+                "problem_pattern_summary": "假设形成后缺少验证路径",
+                "recommended_intervention": "Coach 后续用反问提醒学生说明下一步验证目的。",
+            },
         }
 
 
@@ -153,6 +208,160 @@ def test_personal_skill_uses_reasoning_trace_patterns_for_candidate_and_reflecti
     assert reflection["teaching_prompt_version"] == "teacher_reflection_v3"
     assert reflection["major_issues"][0]["title"] == "问题表征薄弱"
     assert reflection["reasoning_trace_summary"]["dominant_patterns"][0]["pattern_id"] == "weak_problem_representation"
+
+
+def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_context(tmp_path) -> None:
+    case = _load_case()
+    generator = CapturingGenerator()
+    teacher_agent = FakeTeacherAgent()
+    service = PersonalTrainingSkillService(
+        generator=generator,
+        approval_agent=ApprovingAgent(),
+        regression_gate=PassingGate(),
+        teacher_agent=teacher_agent,
+    )
+    session = SimpleNamespace(
+        session_id="personal-teacher-agent-session",
+        case_id=case.case_id,
+        student_id="student-a",
+    )
+    report = {
+        "report_id": "personal-teacher-agent-report",
+        "case_id": case.case_id,
+        "total_score": 21,
+        "max_score": 60,
+        "missed_items": ["ht_migration", "pe_tenderness", "rs_exclude"],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_hypothesis_testing",
+                    "label": "假设验证不足",
+                    "category": "hypothesis_testing",
+                    "severity": "high",
+                    "evidence": "提出诊断方向后缺少关键查体和排除依据。",
+                    "why_it_matters": "验证不足会让最终诊断像猜测。",
+                    "remediation": "下一轮先说明每个查体和检查要验证什么。",
+                    "source_signal_ids": ["ht_migration", "pe_tenderness", "rs_exclude"],
+                }
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    payload = service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=report,
+        candidate_store=TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3"),
+        skill_store=TrainingSkillStore(tmp_path / "skills.sqlite3"),
+        event_store=TrainingEventStore(tmp_path / "events.sqlite3"),
+    )
+
+    assert teacher_agent.requests
+    assert teacher_agent.requests[0].case_id == case.case_id
+    assert teacher_agent.requests[0].clinical_reasoning_trace["trace_version"] == "clinical_reasoning_trace_v1"
+    context = generator.contexts[0]
+    assert context.teacher_analysis_context["analysis_summary"] == "学生没有把疼痛迁移、关键查体和鉴别排除连成验证链。"
+    assert context.teacher_analysis_context["skill_memory_focus"]["problem_pattern_summary"] == "假设形成后缺少验证路径"
+    assert context.teacher_analysis_context["student_thinking_hypothesis"] == "学生过早进入结论，尚未把病史、查体和排除依据组织成验证链。"
+    assert context.teacher_analysis_context["clinical_thinking_profile"]["hypothesis_management"] == "诊断假设形成偏早，验证动作不足。"
+    reflection = payload["ai_reflection_review"]
+    assert reflection["generated_by"] == "teacher_agent"
+    assert reflection["overall_comment"] == "这次训练的问题不是单个漏项，而是假设形成后缺少验证路径。"
+    assert reflection["major_issues"][0]["title"] == "假设验证链断裂"
+    assert reflection["teacher_analysis_context"]["skill_memory_focus"]["recommended_intervention"].startswith("Coach 后续用反问")
+    assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["verification_strategy"] == "查体和检查没有围绕假设形成支持与排除证据。"
+
+
+def test_personal_skill_generator_failure_falls_back_to_template_candidate(tmp_path) -> None:
+    case = _load_case()
+    service = PersonalTrainingSkillService(
+        generator=FailingGenerator(),
+        approval_agent=ApprovingAgent(),
+        regression_gate=PassingGate(),
+        teacher_agent=FakeTeacherAgent(),
+    )
+    session = SimpleNamespace(
+        session_id="personal-fallback-session",
+        case_id=case.case_id,
+        student_id="student-a",
+    )
+    report = {
+        "report_id": "personal-fallback-report",
+        "case_id": case.case_id,
+        "total_score": 18,
+        "max_score": 60,
+        "missed_items": ["ht_migration", "pe_tenderness", "rs_exclude"],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_hypothesis_testing",
+                    "label": "假设验证不足",
+                    "category": "hypothesis_testing",
+                    "severity": "high",
+                    "source_signal_ids": ["ht_migration", "pe_tenderness", "rs_exclude"],
+                }
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    payload = service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=report,
+        candidate_store=TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3"),
+        skill_store=TrainingSkillStore(tmp_path / "skills.sqlite3"),
+        event_store=TrainingEventStore(tmp_path / "events.sqlite3"),
+    )
+
+    candidate = payload["personal_skill_candidate"]
+    assert candidate["status"] == "approved"
+    assert candidate["title"] == "个人复盘训练 Skill"
+    assert candidate["candidate_id"] == "personal_skill_candidate_personal-fallback-session"
+    assert candidate["teacher_analysis_context"]["student_thinking_hypothesis"]
+    assert payload["ai_reflection_review"]["teacher_analysis_context"]["clinical_thinking_profile"]
+
+
+def test_deterministic_teacher_agent_still_writes_analysis_context() -> None:
+    case = _load_case()
+    report = {
+        "report_id": "deterministic-teacher-context-report",
+        "case_id": case.case_id,
+        "total_score": 18,
+        "max_score": 60,
+        "missed_items": ["ht_migration", "pe_tenderness", "rs_exclude"],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_problem_representation",
+                    "label": "问题表征薄弱",
+                    "category": "problem_representation",
+                    "severity": "high",
+                    "source_signal_ids": ["ht_migration"],
+                }
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    reflection = build_teacher_reflection_review_payload(
+        report,
+        case,
+        teacher_agent=DeterministicTeacherAgent(),
+    )
+
+    context = reflection["teacher_analysis_context"]
+    assert reflection["generated_by"] == "teacher_agent_deterministic"
+    assert context["analysis_mode"] == "deterministic_baseline"
+    assert context["student_thinking_hypothesis"]
+    assert context["clinical_thinking_profile"]["verification_strategy"]
 
 
 def test_teacher_reflection_uses_sequence_flags_and_evidence_chain_breakpoints() -> None:

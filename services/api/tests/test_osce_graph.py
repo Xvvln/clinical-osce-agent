@@ -88,6 +88,10 @@ def active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "trigger_item_ids": ["ht_migration"],
                 "priority": 12,
                 "why_candidate": "当前缺口命中 ht_migration",
+                "summary": "腹痛迁移追问训练：近期反复遗漏迁移痛追问。",
+                "when_to_use": "学生问诊已开始但未形成腹痛演变时间线时使用。",
+                "when_not_to_use": "空白开局或学生已经覆盖疼痛演变时间线时不要使用。",
+                "risk": "不得透露标准诊断或隐藏事实。",
             }
         ],
         "selected_skills": [
@@ -95,6 +99,13 @@ def active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "skill_id": "skill_selected_history",
                 "title": "腹痛迁移追问训练",
                 "suggested_strategy": "先围绕疼痛迁移和加重过程做聚焦追问。",
+                "intervention": {
+                    "teaching_goal": "帮助学生先建立疼痛演变时间线。",
+                    "coach_strategy": "先围绕疼痛迁移和加重过程做聚焦追问。",
+                    "hint_ladder": ["先追问起病部位。", "再追问是否迁移。"],
+                    "reflection_prompt": "复盘本轮是否先建立腹痛演变时间线。",
+                    "avoid": ["不得透露标准诊断。"],
+                },
                 "stage_scope": ["history_taking"],
                 "trigger_item_ids": ["ht_migration"],
                 "priority": 12,
@@ -1680,6 +1691,14 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
     ]
     assert agent_turn["knowledge_references"] == agent_turn["source_references"]
     assert agent_turn["retrieved_knowledge_context"]
+    assert [step["step_id"] for step in agent_turn["processing_trace"]] == [
+        "case_context",
+        "rag",
+        "skill",
+        "coach",
+        "response",
+    ]
+    assert isinstance(agent_turn["processing_duration_ms"], int)
 
 
 def test_osce_graph_socratic_hint_falls_back_to_base_hint_when_coach_agent_fails() -> None:
@@ -1690,7 +1709,7 @@ def test_osce_graph_socratic_hint_falls_back_to_base_hint_when_coach_agent_fails
 
     result = graph.invoke(base_hint_state())
 
-    assert result["hint"] == "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
+    assert result["hint"] == "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
     assert result["messages"][-1] == {"role": "coach", "content": result["hint"]}
     agent_turn = result["agent_turn_memory"][-1]
     assert agent_turn["turn_policy"] == "teaching_hint_unavailable"
@@ -1712,17 +1731,67 @@ def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:
         base_hint_state(
             active_skill_context=active_skill_context(),
             evolution_candidates=["旧技能：旧策略不应再进入 Coach 提示。"],
+            messages=[
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始。"},
+            ],
+            asked_questions=["什么时候开始疼的？"],
+            revealed_facts=["appendicitis_001.hf_01"],
         )
     )
 
-    assert len(captured_requests) == 1
-    assert getattr(captured_requests[0], "skill_context") == ["腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"]
-    assert "腹痛迁移追问训练" in getattr(captured_requests[0], "base_hint")
-    assert "旧技能" not in getattr(captured_requests[0], "base_hint")
+    assert len(captured_requests) == 2
+    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    assert getattr(captured_requests[0], "skill_context") == []
+    assert getattr(captured_requests[0], "hint_context")["skill_selection"]["available_skill_ids"] == [
+        "skill_selected_history"
+    ]
+    assert getattr(captured_requests[1], "prompt_kind") == "socratic_hint"
+    assert getattr(captured_requests[1], "skill_context") == [
+        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。\n"
+        "教学目标：帮助学生先建立疼痛演变时间线。\n"
+        "分层提示：先追问起病部位。 / 再追问是否迁移。\n"
+        "复盘提示：复盘本轮是否先建立腹痛演变时间线。\n"
+        "避免事项：不得透露标准诊断。"
+    ]
+    assert "腹痛迁移追问训练" in getattr(captured_requests[1], "base_hint")
+    assert "旧技能" not in getattr(captured_requests[1], "base_hint")
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
     assert result["agent_turn_memory"][-1]["skill_context"] == [
-        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"
+        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。\n"
+        "教学目标：帮助学生先建立疼痛演变时间线。\n"
+        "分层提示：先追问起病部位。 / 再追问是否迁移。\n"
+        "复盘提示：复盘本轮是否先建立腹痛演变时间线。\n"
+        "避免事项：不得透露标准诊断。"
     ]
+    assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selection_policy"] == (
+        "deterministic_fallback"
+    )
+
+
+def test_osce_graph_socratic_hint_does_not_inject_skill_before_student_action() -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    result = graph.invoke(base_hint_state(active_skill_context=active_skill_context()))
+
+    assert len(captured_requests) == 2
+    request_payload = captured_requests[0].model_dump()
+    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    assert getattr(captured_requests[0], "skill_context") == []
+    assert request_payload["hint_context"]["skill_selection"]["available_skill_ids"] == ["skill_selected_history"]
+    assert getattr(captured_requests[1], "prompt_kind") == "socratic_hint"
+    assert getattr(captured_requests[1], "skill_context") == []
+    assert result["hint"] == "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
+    assert "本轮训练重点" not in result["hint"]
+    assert result["agent_turn_memory"][-1]["selected_skill_ids"] == []
+    assert "skill_context" not in result["agent_turn_memory"][-1]
+    assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selected_skill_ids"] == []
 
 
 def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -> None:
@@ -1753,8 +1822,9 @@ def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -
         )
     )
 
-    assert len(captured_requests) == 1
-    payload = captured_requests[0].model_dump()
+    assert len(captured_requests) == 2
+    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    payload = captured_requests[1].model_dump()
     hint_context = payload["hint_context"]
     assert payload["training_difficulty"] == "advanced"
     assert hint_context["session"]["training_difficulty"] == "advanced"
@@ -1763,12 +1833,15 @@ def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -
     assert hint_context["evidence_coverage"]["history"]["collected"][0]["id"] == "hf_01"
     assert hint_context["evidence_coverage"]["physical_exam"]["collected"][0]["id"] == "abd.palpation.tenderness"
     assert hint_context["evidence_coverage"]["auxiliary_test"]["collected"][0]["id"] == "lab.cbc"
-    assert hint_context["next_step"]["base_hint"] == payload["base_hint"]
+    assert hint_context["next_step"]["base_hint"] == "整理已获得的病史、查体和检查证据，再提交主要诊断和推理依据。"
+    assert "腹痛迁移追问训练" in payload["base_hint"]
     assert hint_context["next_step"]["clinical_reasoning_state"]["pedagogical_phase"]
     assert hint_context["difficulty_policy"]["mode"] == "advanced"
     assert "自由文本" in hint_context["difficulty_policy"]["student_action_boundary"]
     assert hint_context["skill_selection"]["selected_skills"][0]["skill_id"] == "skill_selected_history"
     assert hint_context["skill_selection"]["selected_skills"][0]["why_selected_label"]
+    assert hint_context["skill_selection"]["selected_skills"][0]["when_to_use"] == "学生问诊已开始但未形成腹痛演变时间线时使用。"
+    assert "suggested_strategy" not in hint_context["skill_selection"]["selected_skills"][0]
     assert "急性阑尾炎" not in str(payload)
 
 
@@ -1795,13 +1868,19 @@ def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() ->
         )
     )
 
-    assert len(captured_requests) == 1
-    assert getattr(captured_requests[0], "prompt_kind") == "passive_turn_review"
-    assert getattr(captured_requests[0], "skill_context") == ["腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"]
-    assert "旧技能" not in str(getattr(captured_requests[0], "model_dump")())
+    assert len(captured_requests) == 2
+    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    assert getattr(captured_requests[0], "skill_context") == []
+    assert getattr(captured_requests[1], "prompt_kind") == "passive_turn_review"
+    assert "教学目标：帮助学生先建立疼痛演变时间线。" in getattr(captured_requests[1], "skill_context")[0]
+    assert "旧技能" not in str(getattr(captured_requests[1], "model_dump")())
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
-    assert result["agent_turn_memory"][-1]["skill_context"] == [
-        "腹痛迁移追问训练：先围绕疼痛迁移和加重过程做聚焦追问。"
+    assert "分层提示：先追问起病部位。 / 再追问是否迁移。" in result["agent_turn_memory"][-1]["skill_context"][0]
+    assert result["agent_turn_memory"][-1]["agent_path"] == [
+        "input_router_node",
+        "patient_response_node",
+        "skill_router",
+        "coach_agent",
     ]
 
 

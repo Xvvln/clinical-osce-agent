@@ -294,8 +294,6 @@ def _openai_compatible_config() -> dict[str, Any]:
     enabled = _truthy_env("OSCE_OPENAI_ENABLED")
     secret_configured = bool(_env("OSCE_OPENAI_API_KEY"))
     model = _env("OSCE_OPENAI_MODEL")
-    base_url = _env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1")
-    proxy_url = _env("OSCE_OPENAI_PROXY_URL", "http://127.0.0.1:7897")
     configured = enabled and secret_configured and bool(model)
     return _provider_config(
         provider_id="openai_compatible",
@@ -306,12 +304,12 @@ def _openai_compatible_config() -> dict[str, Any]:
         secret_configured=secret_configured,
         auth_mode="api_key",
         model=model,
-        base_url=base_url,
-        proxy_url=proxy_url,
+        base_url="",
+        proxy_url="",
         required_env=["OSCE_OPENAI_ENABLED=true", "OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"],
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_OPENAI_API_KEY", "configured" if secret_configured else ""), ("OSCE_OPENAI_MODEL", model)]),
         integration_status="wired",
-        notes="这里只展示服务端环境变量默认能力；学生或管理员账号自行保存的 API 配置在对应账号的 API 设置中查看。",
+        notes="这里只展示服务端环境变量默认能力和配置状态；私有网关地址、代理地址和密钥不通过管理端回显。",
     )
 
 
