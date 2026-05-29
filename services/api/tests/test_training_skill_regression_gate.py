@@ -169,6 +169,42 @@ def test_training_skill_regression_gate_blocks_case_incompatible_candidate_conte
     assert "ectopic" in review["candidate_context_violations"][0]["terms"]
 
 
+def test_training_skill_regression_gate_prefers_explicit_case_ids_over_related_recommendations() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_hyperthyroid_personal",
+        "trigger_item_id": "personal_hyperthyroid",
+        "trigger_item_ids": ["ht_family_history"],
+        "case_ids": ["hyperthyroid_001"],
+        "related_recommendations": ["case:appendicitis_001"],
+        "title": "甲状腺病史采集训练",
+        "description": "女性甲状腺病例中需要追问月经变化和家族史。",
+        "suggested_strategy": "追问月经变化、怕热多汗和家族史，但不透露诊断答案。",
+        "status": "draft",
+    }
+    batch_result = EvaluationBatchResult(
+        total_cases=1,
+        passed_cases=1,
+        failed_cases=0,
+        results=[
+            EvaluationResult(
+                session_id="session_one",
+                actual_total_score=55,
+                expected_total_score=55,
+                forbidden_term_violations=[],
+                passed=True,
+                duration_ms=10,
+            )
+        ],
+        passed=True,
+        total_duration_ms=10,
+    )
+
+    review = TrainingSkillRegressionGate().review_candidate(candidate, batch_result)
+
+    assert review["status"] == "ready_for_review"
+    assert "candidate_context_violations" not in review
+
+
 def test_training_skill_regression_gate_blocks_candidate_when_batch_fails() -> None:
     candidate = {
         "candidate_id": "skill_candidate_reasoning_core",

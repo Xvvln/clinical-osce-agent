@@ -127,6 +127,15 @@ const scoreDimensionLabels: Readonly<Record<string, string>> = {
   reasoning: "推理链",
 };
 
+const cognitivePatternLabels: Readonly<Record<string, string>> = {
+  weak_problem_representation: "问题表征薄弱",
+  premature_testing_before_exam: "检查申请早于关键查体",
+  delayed_hypothesis_generation: "诊断假设生成偏晚",
+  thin_differential_reasoning: "鉴别诊断过窄",
+  weak_evidence_synthesis: "证据整合不足",
+  premature_closure_risk: "过早闭合风险",
+};
+
 const REPORT_BRAND_COLOR = "var(--brand)";
 const REPORT_BRAND_SCORE_TRACK_COLOR = "color-mix(in srgb, var(--brand) 12%, transparent)";
 const REPORT_BRAND_GRID_OPACITY = 0.16;
@@ -252,6 +261,27 @@ function getPersonalSkillStatusLabel(status: string): string {
   return status;
 }
 
+function getPersonalSkillScopeLabel(scope: string): string {
+  if (scope === "personal") {
+    return "个人训练策略";
+  }
+  if (scope === "training_mode") {
+    return "训练模式策略";
+  }
+  return scope || "未记录";
+}
+
+function getPersonalSkillSourceReportText(candidate: PersonalTrainingSkillCandidate): string {
+  const sourceReportCount = candidate.source_report_ids?.length ?? 0;
+  if (sourceReportCount > 0) {
+    return `${sourceReportCount} 份完整训练`;
+  }
+  if (candidate.source_session_id) {
+    return "当前训练报告";
+  }
+  return "尚未形成来源报告";
+}
+
 function getPersonalSkillCompletionNoticeText(status: string): string | null {
   if (status === "approved") {
     return "个人训练 Skill 已生成，报告内容已自动刷新。";
@@ -291,6 +321,10 @@ function createTrainingPointLabelResolver(report: FeedbackReport): (itemId: stri
   });
 
   return (itemId: string) => {
+    const cognitivePatternLabel = cognitivePatternLabels[itemId];
+    if (cognitivePatternLabel) {
+      return cognitivePatternLabel;
+    }
     for (const key of getTrainingPointLookupKeys(itemId)) {
       const label = labelById.get(key);
       if (label) {
@@ -1404,6 +1438,15 @@ function formatTeacherAnalysisKey(key: string): string {
   return labels[key] ?? key.replaceAll("_", " ");
 }
 
+function formatTeacherAnalysisMode(mode: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    post_session_teacher_analysis: "训练后教师分析",
+    skill_generation_teacher_analysis: "Skill 生成分析",
+    skill_approval_teacher_analysis: "Skill 审批分析",
+  };
+  return labels[mode] ?? mode.replaceAll("_", " ");
+}
+
 function getCoverageMapStats(coverageMap: ReportCoverageMapPayload) {
   const items = [
     ...coverageMap.history,
@@ -1636,7 +1679,7 @@ function TeacherAnalysisContextSection({
         </div>
         {context.analysis_mode ? (
           <span className="w-fit rounded-full border border-brand/20 bg-background px-2.5 py-1 text-[11px] text-brand">
-            {context.analysis_mode}
+            {formatTeacherAnalysisMode(context.analysis_mode)}
           </span>
         ) : null}
       </div>
@@ -1764,16 +1807,16 @@ function PersonalTrainingSkillSection({
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border border-border bg-muted/25 p-3">
-          <p className="text-xs text-muted-foreground">候选</p>
-          <p className="mt-1 break-all font-mono text-[11px] text-foreground">{candidate.candidate_id ?? "尚未生成"}</p>
+          <p className="text-xs text-muted-foreground">生成结果</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{getPersonalSkillStatusLabel(candidate.status)}</p>
         </div>
         <div className="rounded-xl border border-border bg-muted/25 p-3">
-          <p className="text-xs text-muted-foreground">Skill</p>
-          <p className="mt-1 break-all font-mono text-[11px] text-foreground">{candidate.skill_id ?? "尚未启用"}</p>
+          <p className="text-xs text-muted-foreground">适用范围</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{getPersonalSkillScopeLabel(candidate.scope)}</p>
         </div>
         <div className="rounded-xl border border-border bg-muted/25 p-3">
-          <p className="text-xs text-muted-foreground">联网核查状态</p>
-          <p className="mt-1 text-sm font-semibold text-foreground">{candidate.web_check_status}</p>
+          <p className="text-xs text-muted-foreground">来源报告</p>
+          <p className="mt-1 text-sm font-semibold text-foreground">{getPersonalSkillSourceReportText(candidate)}</p>
         </div>
       </div>
       {candidate.title ? <p className="mt-3 text-sm font-semibold text-foreground">{candidate.title}</p> : null}

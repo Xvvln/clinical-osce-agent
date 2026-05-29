@@ -401,6 +401,8 @@ test("student report shows readable personal skill content, not only ids", () =>
   assert.match(reportSource, /教学策略/);
   assert.match(reportSource, /candidate\.description/);
   assert.match(reportSource, /candidate\.suggested_strategy/);
+  assert.doesNotMatch(reportSource, /candidate\.candidate_id \?\?/);
+  assert.doesNotMatch(reportSource, /candidate\.skill_id \?\?/);
 });
 
 test("home page keeps agent pedagogy data available without showing a student-facing debug panel", () => {
@@ -773,16 +775,21 @@ test("report page renders AI reflection review and personal training skill statu
   assert.match(reportSource, /个人训练 Skill/);
   assert.match(reportSource, /review\.source_reference_items\.map/);
   assert.match(reportSource, /candidate\.rag_evidence_items\.map/);
-  assert.match(reportSource, /candidate\.web_check_status/);
-  assert.match(reportSource, /联网核查状态/);
+  assert.match(reportSource, /function getPersonalSkillScopeLabel/);
+  assert.match(reportSource, /function getPersonalSkillSourceReportText/);
+  assert.match(reportSource, /生成结果/);
+  assert.match(reportSource, /适用范围/);
+  assert.match(reportSource, /来源报告/);
   assert.match(reportModelSource, /export type TeacherAnalysisContext = Readonly<\{/);
   assert.match(reportModelSource, /clinical_thinking_profile: Readonly<Record<string, unknown>>;/);
   assert.match(reportModelSource, /teacher_analysis_context: TeacherAnalysisContext;/);
   assert.match(reportSource, /function TeacherAnalysisContextSection/);
+  assert.match(reportSource, /function formatTeacherAnalysisMode/);
   assert.match(reportSource, /教师智能体分析/);
   assert.match(reportSource, /学生思维假设/);
   assert.match(reportSource, /临床思维画像/);
   assert.match(reportSource, /Skill 记忆来源/);
+  assert.doesNotMatch(reportSource, /\{context\.analysis_mode\}/);
 });
 
 test("report page notifies when a pending personal skill finishes in the background", () => {
@@ -816,6 +823,10 @@ test("report page derives training point labels from report metadata instead of 
   assert.match(reportSource, /Object\.entries\(report\.rubric_scores\)\.forEach/);
   assert.match(reportSource, /collectCoverageMapLabels\(report\.training_progress_snapshot\?\.coverage_map, labelById\);/);
   assert.match(reportSource, /report\.llm_reasoning_feedback\.forEach/);
+  assert.match(reportSource, /const cognitivePatternLabels: Readonly<Record<string, string>> = \{/);
+  assert.match(reportSource, /weak_problem_representation: "问题表征薄弱"/);
+  assert.match(reportSource, /premature_closure_risk: "过早闭合风险"/);
+  assert.match(reportSource, /const cognitivePatternLabel = cognitivePatternLabels\[itemId\]/);
   assert.match(reportSource, /const trainingPointLabelResolver = useMemo\(\(\) => report \? createTrainingPointLabelResolver\(report\) : formatTrainingPointIdentifier/);
   assert.doesNotMatch(reportSource, /const TRAINING_POINT_LABELS/);
   assert.doesNotMatch(reportSource, /ht_onset: "起病时间"/);
@@ -998,6 +1009,19 @@ test("profile page exposes readable Skill profile orchestration summary", () => 
   assert.match(profileSource, /state\.state_label/);
   assert.match(profileSource, /state\.effect_status_label/);
   assert.match(profileSource, /暂无近期漏项/);
+});
+
+test("profile page exposes teaching effect observation summary", () => {
+  assert.match(profileSource, /type TeachingEffectAbilityAxis = Readonly<\{/);
+  assert.match(profileSource, /type TeachingEffectSummary = Readonly<\{/);
+  assert.match(profileSource, /teaching_effect_summary: TeachingEffectSummary;/);
+  assert.match(profileSource, /function TeachingEffectSummarySection\(\{ summary \}: Readonly<\{ summary: TeachingEffectSummary \}>\)/);
+  assert.match(profileSource, /<TeachingEffectSummarySection summary=\{profile\.skillProfileSummary\.teaching_effect_summary\} \/>/);
+  assert.match(profileSource, /教学效果观察/);
+  assert.match(profileSource, /summary\.ability_axes\.map/);
+  assert.match(profileSource, /summary\.observed_changes\.map/);
+  assert.match(profileSource, /summary\.next_teaching_objectives\.map/);
+  assert.match(profileSource, /不把小样本观察写成已证明提升/);
 });
 
 test("training chat exposes readable selected Skill reasons on coach turns", () => {

@@ -67,6 +67,23 @@ def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
     assert report["feedback_summary"] == "已完成规则评分，LLM 评分维度将在后续阶段补充。"
 
 
+def test_intent_keyword_item_scores_when_expected_fact_was_revealed() -> None:
+    session = OsceSession(
+        session_id="session_demo",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        asked_questions=["一开始疼在哪里，后来有没有换地方？"],
+        revealed_facts=["appendicitis_001.hf_02"],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["rubric_scores"]["ht_migration"]["score"] == 6
+    assert "appendicitis_001.hf_02" in report["dimension_traces"]["history_taking"][1]["matched_evidence"]
+    assert "ht_migration" not in report["missed_items"]
+
+
 def test_diagnosis_concept_scores_differential_concepts_from_structured_reasoning() -> None:
     session = OsceSession(
         session_id="session_demo",
@@ -356,7 +373,7 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
         "awarded_score": 3,
         "max_score": 3,
         "match_kind": "intent_keyword",
-        "matched_evidence": ["什么时候开始疼的？"],
+        "matched_evidence": ["什么时候开始疼的？", "appendicitis_001.hf_01"],
         "llm_rationale": None,
         "fallback_reason": None,
     }

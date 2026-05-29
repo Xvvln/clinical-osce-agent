@@ -78,6 +78,90 @@ def test_training_skill_approval_agent_removes_dose_and_drug_variants() -> None:
     assert reviewed_candidate["trigger_item_ids"] == candidate["trigger_item_ids"]
 
 
+def test_training_skill_approval_agent_rewrites_protected_diagnosis_without_answer_placeholder() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_answer_probe",
+        "trigger_item_id": "training_pattern_answer_probe",
+        "trigger_item_ids": ["reasoning_core"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["diagnosis_submission"],
+        "applies_when": {},
+        "effect_status": "insufficient_samples",
+        "title": "急性阑尾炎证据链训练",
+        "description": "学生需要围绕急性阑尾炎建立证据链。",
+        "suggested_strategy": "如果假设是本病例标准答案或急性阑尾炎，请补充支持与排除证据。",
+        "source_report_count": 1,
+        "support_count": 1,
+        "related_recommendations": [],
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {},
+        "success_metrics": [],
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(
+        candidate,
+        protected_terms=["急性阑尾炎"],
+    )
+    reviewed_text = " ".join(
+        [
+            reviewed_candidate["title"],
+            reviewed_candidate["description"],
+            reviewed_candidate["suggested_strategy"],
+            str(reviewed_candidate["teaching_action_plan"]),
+        ]
+    )
+
+    assert "急性阑尾炎" not in reviewed_text
+    assert "本病例标准答案" not in reviewed_text
+    assert "当前主要诊断假设" in reviewed_text
+
+
+def test_training_skill_approval_agent_sanitizes_memory_and_analysis_fields() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_memory_probe",
+        "trigger_item_id": "training_pattern_memory_probe",
+        "trigger_item_ids": ["reasoning_core"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["history_taking", "diagnosis_submission"],
+        "applies_when": {},
+        "effect_status": "insufficient_samples",
+        "title": "证据链训练",
+        "description": "围绕假设验证训练。",
+        "suggested_strategy": "不要提前锁定急性阑尾炎。",
+        "source_report_count": 1,
+        "support_count": 1,
+        "reasoning_pattern_ids": ["premature_closure"],
+        "reasoning_pattern_labels": ["学生过早锁定急性阑尾炎。"],
+        "teacher_analysis_context": {
+            "clinical_thinking_profile": {
+                "hypothesis_management": "学生直接围绕急性阑尾炎寻找阳性证据。",
+            }
+        },
+        "problem_pattern": {
+            "summary": "急性阑尾炎单向证实。",
+            "reasoning_pattern_labels": ["急性阑尾炎证实偏差"],
+        },
+        "router_index": {
+            "summary": "急性阑尾炎相关训练。",
+        },
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {},
+        "success_metrics": [],
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(
+        candidate,
+        protected_terms=["急性阑尾炎"],
+    )
+    reviewed_text = str(reviewed_candidate)
+
+    assert "急性阑尾炎" not in reviewed_text
+    assert "本病例标准答案" not in reviewed_text
+    assert "当前主要诊断假设" in reviewed_text
+
+
 def test_training_skill_approval_agent_records_filtered_rag_knowledge_context(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(

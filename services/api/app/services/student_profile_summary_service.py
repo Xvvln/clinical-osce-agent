@@ -51,8 +51,302 @@ def build_skill_profile_summary(
         "current_focus_items": current_focus_items,
         "reasoning_profile_summary": reasoning_profile_summary,
         "skill_states": skill_states,
+        "teaching_effect_summary": build_teaching_effect_summary(
+            report_list,
+            skill_states=skill_states,
+            reasoning_profile_summary=reasoning_profile_summary,
+        ),
         "last_updated_from_report_count": len(report_list),
     }
+
+
+TEACHING_EFFECT_AXIS_DEFINITIONS: dict[str, dict[str, str]] = {
+    "problem_representation": {
+        "label": "问题表征",
+        "objective": "先把主诉整理成起病、部位、性质、程度、伴随症状和背景，再进入查体或检查。",
+    },
+    "hypothesis_testing": {
+        "label": "假设验证",
+        "objective": "提出初步诊断假设后，用查体和检查去验证支持证据、反证和危险排除点。",
+    },
+    "workflow_sequencing": {
+        "label": "诊疗顺序",
+        "objective": "按病史主线、重点查体、必要检查和诊断表达的顺序推进，避免用检查替代问诊。",
+    },
+    "differential_reasoning": {
+        "label": "鉴别诊断",
+        "objective": "至少说清一个相似诊断和一个危险诊断的支持点、排除点和仍不确定点。",
+    },
+    "evidence_synthesis": {
+        "label": "证据整合",
+        "objective": "把病史、查体和检查组织为支持证据、反证和待补证据，而不是只列结论。",
+    },
+    "evidence_chain": {
+        "label": "证据链",
+        "objective": "围绕诊断假设补齐关键证据链断点，先解释证据为什么支持或排除某个判断。",
+    },
+    "metacognition": {
+        "label": "元认知监控",
+        "objective": "在提交诊断前主动检查是否过早闭合，确认是否还有关键反证、危险诊断或不确定点未处理。",
+    },
+    "clinical_reasoning": {
+        "label": "临床推理",
+        "objective": "下一轮先说明自己的推理路径，再决定要补问、补查或提交诊断。",
+    },
+}
+
+
+def build_teaching_effect_summary(
+    reports: Iterable[Mapping[str, Any]],
+    *,
+    skill_states: Mapping[str, Mapping[str, Any]] | None = None,
+    reasoning_profile_summary: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    report_list = list(reports)
+    skill_states = skill_states or {}
+    reasoning_profile_summary = reasoning_profile_summary or {}
+    axis_snapshots = [_axis_snapshot_from_report(report) for report in report_list]
+    axes = _teaching_effect_axes(axis_snapshots)
+
+    if not report_list:
+        return {
+            "status": "not_started",
+            "status_label": "尚未开始",
+            "summary": "完成一次完整训练并生成报告后，系统会开始观察临床思维训练效果。",
+            "ability_axes": [],
+            "observed_changes": [],
+            "next_teaching_objectives": ["先完成一次完整训练，形成可复盘的问诊、查体、检查和诊断轨迹。"],
+            "evidence_boundary": _teaching_effect_boundary(),
+            "skill_state_counts": _skill_state_counts(skill_states),
+            "reasoning_focus_count": len(reasoning_profile_summary.get("recent_pattern_ids", []) or []),
+        }
+
+    if len(report_list) < 2:
+        return {
+            "status": "insufficient_samples",
+            "status_label": "样本不足",
+            "summary": "样本不足：目前只有 1 份训练报告，只能记录本轮暴露的临床思维问题，不能判断趋势。",
+            "ability_axes": [
+                {**axis, "state": "needs_observation", "state_label": "继续观察"} for axis in axes
+            ],
+            "observed_changes": [],
+            "next_teaching_objectives": _next_teaching_objectives(axes),
+            "evidence_boundary": _teaching_effect_boundary(),
+            "skill_state_counts": _skill_state_counts(skill_states),
+            "reasoning_focus_count": len(reasoning_profile_summary.get("recent_pattern_ids", []) or []),
+        }
+
+    persistent_axes = [axis for axis in axes if axis["state"] in {"persistent_gap", "emerging_gap"}]
+    improving_axes = [axis for axis in axes if axis["state"] == "improving_signal"]
+    if persistent_axes:
+        status = "needs_practice"
+        status_label = "仍需训练"
+        summary = "近期仍能观察到反复出现的临床思维问题，应继续围绕同一能力轴做短目标训练。"
+    elif improving_axes:
+        status = "improving_observed"
+        status_label = "观察到改善"
+        summary = "近期报告中部分既往问题暂未再次出现，属于观察到改善信号；这不等于统计学证明，仍需后续病例验证。"
+    else:
+        status = "stable_or_unobserved"
+        status_label = "继续观察"
+        summary = "近期报告暂未形成明确反复问题或改善趋势，建议继续积累不同病例下的训练样本。"
+
+    return {
+        "status": status,
+        "status_label": status_label,
+        "summary": summary,
+        "ability_axes": axes,
+        "observed_changes": _observed_teaching_changes(axes),
+        "next_teaching_objectives": _next_teaching_objectives(persistent_axes or improving_axes or axes),
+        "evidence_boundary": _teaching_effect_boundary(),
+        "skill_state_counts": _skill_state_counts(skill_states),
+        "reasoning_focus_count": len(reasoning_profile_summary.get("recent_pattern_ids", []) or []),
+    }
+
+
+def _axis_snapshot_from_report(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    trace = report.get("clinical_reasoning_trace")
+    if not isinstance(trace, Mapping):
+        return {}
+    axes: dict[str, list[dict[str, Any]]] = {}
+
+    cognitive_patterns = trace.get("cognitive_patterns", [])
+    if isinstance(cognitive_patterns, list):
+        for pattern in cognitive_patterns:
+            if not isinstance(pattern, Mapping):
+                continue
+            pattern_id = str(pattern.get("pattern_id") or "").strip()
+            if not pattern_id:
+                continue
+            axis_id = str(pattern.get("category") or "clinical_reasoning").strip() or "clinical_reasoning"
+            axes.setdefault(axis_id, []).append(
+                {
+                    "signal_id": pattern_id,
+                    "label": str(pattern.get("label") or pattern_id),
+                    "severity": str(pattern.get("severity") or "medium"),
+                }
+            )
+
+    hypothesis_testing = trace.get("hypothesis_testing")
+    if isinstance(hypothesis_testing, Mapping):
+        sequence_flags = hypothesis_testing.get("sequence_flags", [])
+        if isinstance(sequence_flags, list):
+            for flag in sequence_flags:
+                if not isinstance(flag, Mapping):
+                    continue
+                flag_id = str(flag.get("flag_id") or "").strip()
+                if not flag_id:
+                    continue
+                axes.setdefault("workflow_sequencing", []).append(
+                    {
+                        "signal_id": flag_id,
+                        "label": str(flag.get("label") or flag_id),
+                        "severity": str(flag.get("severity") or "medium"),
+                    }
+                )
+
+    breakpoints = trace.get("evidence_chain_breakpoints", [])
+    if isinstance(breakpoints, list):
+        for breakpoint in breakpoints:
+            if not isinstance(breakpoint, Mapping):
+                continue
+            status = str(breakpoint.get("status") or "").strip()
+            if status and status not in {"broken", "missing", "weak"}:
+                continue
+            breakpoint_id = str(breakpoint.get("breakpoint_id") or breakpoint.get("statement") or "").strip()
+            if not breakpoint_id:
+                continue
+            axes.setdefault("evidence_chain", []).append(
+                {
+                    "signal_id": breakpoint_id,
+                    "label": str(breakpoint.get("statement") or breakpoint_id),
+                    "severity": "medium",
+                }
+            )
+
+    return axes
+
+
+def _teaching_effect_axes(axis_snapshots: list[dict[str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+    if not axis_snapshots:
+        return []
+    latest_snapshot = axis_snapshots[0]
+    historical_snapshots = axis_snapshots[1:]
+    axis_ids = sorted(
+        {
+            axis_id
+            for snapshot in axis_snapshots
+            for axis_id, signals in snapshot.items()
+            if signals
+        },
+        key=_axis_sort_key,
+    )
+    axes = []
+    for axis_id in axis_ids:
+        latest_signals = latest_snapshot.get(axis_id, [])
+        historical_signals = [
+            signal for snapshot in historical_snapshots for signal in snapshot.get(axis_id, [])
+        ]
+        latest_count = len(latest_signals)
+        historical_count = len(historical_signals)
+        state = _axis_state(latest_count, historical_count, has_history=bool(historical_snapshots))
+        labels = _unique_strings([str(signal.get("label") or "") for signal in latest_signals + historical_signals])
+        axes.append(
+            {
+                "axis_id": axis_id,
+                "axis_label": _axis_definition(axis_id)["label"],
+                "state": state,
+                "state_label": _axis_state_label(state),
+                "latest_count": latest_count,
+                "historical_count": historical_count,
+                "labels": labels[:5],
+                "teaching_objective": _axis_definition(axis_id)["objective"],
+            }
+        )
+    return axes
+
+
+def _axis_sort_key(axis_id: str) -> tuple[int, str]:
+    ordered_axis_ids = list(TEACHING_EFFECT_AXIS_DEFINITIONS)
+    try:
+        return (ordered_axis_ids.index(axis_id), axis_id)
+    except ValueError:
+        return (len(ordered_axis_ids), axis_id)
+
+
+def _axis_state(latest_count: int, historical_count: int, *, has_history: bool) -> str:
+    if not has_history:
+        return "needs_observation"
+    if latest_count > 0 and historical_count > 0:
+        return "persistent_gap"
+    if latest_count > 0:
+        return "emerging_gap"
+    if historical_count > 0:
+        return "improving_signal"
+    return "stable_or_unobserved"
+
+
+def _axis_state_label(state: str) -> str:
+    return {
+        "needs_observation": "继续观察",
+        "persistent_gap": "反复出现",
+        "emerging_gap": "新近出现",
+        "improving_signal": "近期暂未再现",
+        "stable_or_unobserved": "暂无明显信号",
+    }.get(state, "继续观察")
+
+
+def _axis_definition(axis_id: str) -> dict[str, str]:
+    if axis_id in TEACHING_EFFECT_AXIS_DEFINITIONS:
+        return TEACHING_EFFECT_AXIS_DEFINITIONS[axis_id]
+    return {
+        "label": axis_id,
+        "objective": "下一轮围绕该能力轴做一次短目标训练，并在报告中观察是否反复出现。",
+    }
+
+
+def _observed_teaching_changes(axes: list[Mapping[str, Any]]) -> list[dict[str, str]]:
+    changes: list[dict[str, str]] = []
+    for axis in axes:
+        state = str(axis.get("state") or "")
+        if state == "improving_signal":
+            changes.append(
+                {
+                    "axis_id": str(axis.get("axis_id") or ""),
+                    "axis_label": str(axis.get("axis_label") or ""),
+                    "direction": "improved_recently",
+                    "description": f"{axis.get('axis_label')}相关问题在最新报告中暂未再次出现，需要后续病例继续验证。",
+                }
+            )
+        elif state in {"persistent_gap", "emerging_gap"}:
+            changes.append(
+                {
+                    "axis_id": str(axis.get("axis_id") or ""),
+                    "axis_label": str(axis.get("axis_label") or ""),
+                    "direction": "needs_practice",
+                    "description": f"{axis.get('axis_label')}仍是当前训练重点，下一轮应采用更小的步骤练习。",
+                }
+            )
+    return changes
+
+
+def _next_teaching_objectives(axes: list[Mapping[str, Any]], *, limit: int = 2) -> list[str]:
+    objectives = _unique_strings([str(axis.get("teaching_objective") or "") for axis in axes])
+    if objectives:
+        return objectives[:limit]
+    return ["下一轮先完整完成一次病史、查体、检查和诊断表达，再根据报告观察可训练能力轴。"]
+
+
+def _teaching_effect_boundary() -> str:
+    return "教学效果观察只来自训练报告、临床思维轨迹和 Skill 应用痕迹；不改变病例事实、rubric、标准诊断或评分裁判，也不把小样本观察写成已证明提升。"
+
+
+def _skill_state_counts(skill_states: Mapping[str, Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for state in skill_states.values():
+        state_id = str(state.get("state") or "unknown")
+        counts[state_id] = counts.get(state_id, 0) + 1
+    return counts
 
 
 def _recent_error_items(reports: Iterable[Mapping[str, Any]], *, limit: int) -> list[dict[str, str]]:
@@ -312,6 +606,18 @@ def _normalized_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in (str(raw_item).strip() for raw_item in value) if item]
+
+
+def _unique_strings(values: Iterable[str]) -> list[str]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_values.append(normalized)
+    return unique_values
 
 
 def _reasoning_profile_summary(reports: list[Mapping[str, Any]], *, limit: int) -> dict[str, Any]:

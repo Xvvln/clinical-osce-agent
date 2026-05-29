@@ -871,6 +871,7 @@ def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[
     latest_case_id = str(latest_report.get("case_id") or "appendicitis_001")
     target_items = _get_top_missed_profile_items(reports)
     target_item_ids = [item["item_id"] for item in target_items]
+    target_item_refs = [dict(item) for item in target_items]
     weakest_label = str(weakest_dimension.get("label")) if weakest_dimension else "当前薄弱维度"
     source_report_count = len(reports)
 
@@ -881,6 +882,7 @@ def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[
                 "case_id": latest_case_id,
                 "objective": f"复训{_get_case_title(latest_case_id)}，优先补强{weakest_label}并补齐本轮反复缺失的评分项。",
                 "target_rubric_items": target_item_ids,
+                "target_rubric_item_refs": target_item_refs,
                 "source_report_count": source_report_count,
                 "source_references": [
                     f"rubric:{item['case_id']}_rubric.item.{item['item_id']}"
@@ -890,7 +892,7 @@ def _build_learning_path(reports: list[dict[str, Any]], weakest_dimension: dict[
             rubric_label_case_id=latest_case_id,
         )
     ]
-    contrast_task = _build_contrast_learning_task(reports, latest_case_id, target_item_ids, source_report_count)
+    contrast_task = _build_contrast_learning_task(reports, latest_case_id, target_item_refs, source_report_count)
     if contrast_task is not None:
         learning_path.append(_enrich_learning_path_task(contrast_task, rubric_label_case_id=latest_case_id))
     return learning_path
@@ -904,15 +906,44 @@ def _enrich_learning_path_task(
     case_id = str(task.get("case_id") or "")
     task_type = str(task.get("task_type") or "")
     target_rubric_items = [str(item_id) for item_id in task.get("target_rubric_items", []) if str(item_id)]
+    target_rubric_item_refs = [
+        {
+            "case_id": str(item.get("case_id") or ""),
+            "item_id": str(item.get("item_id") or ""),
+        }
+        for item in task.get("target_rubric_item_refs", [])
+        if isinstance(item, dict) and str(item.get("item_id") or "")
+    ]
     source_references = [str(reference) for reference in task.get("source_references", []) if str(reference)]
     label_case_id = rubric_label_case_id or case_id
+    target_rubric_item_labels = (
+        _rubric_item_labels_for_refs(target_rubric_item_refs, fallback_case_id=label_case_id)
+        if target_rubric_item_refs
+        else rubric_item_labels(target_rubric_items, [label_case_id])
+    )
+    public_task = dict(task)
+    public_task.pop("target_rubric_item_refs", None)
     return {
-        **task,
+        **public_task,
         "task_type_label": LEARNING_TASK_TYPE_LABELS.get(task_type, task_type or "训练任务"),
         "case_title": _get_case_title(case_id),
-        "target_rubric_item_labels": rubric_item_labels(target_rubric_items, [label_case_id]),
+        "target_rubric_item_labels": target_rubric_item_labels,
         "source_reference_labels": reference_labels(source_references),
     }
+
+
+def _rubric_item_labels_for_refs(
+    item_refs: list[dict[str, str]],
+    *,
+    fallback_case_id: str,
+) -> list[str]:
+    labels: list[str] = []
+    for item_ref in item_refs:
+        item_id = item_ref["item_id"]
+        case_id = item_ref.get("case_id") or fallback_case_id
+        resolved = rubric_item_labels([item_id], [case_id])
+        labels.append(resolved[0] if resolved else item_id)
+    return labels
 
 
 def _get_top_missed_profile_items(reports: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, str]]:
@@ -944,17 +975,19 @@ def _report_has_pending_optional_agent_enrichment(report: dict[str, Any]) -> boo
 def _build_contrast_learning_task(
     reports: list[dict[str, Any]],
     latest_case_id: str,
-    target_item_ids: list[str],
+    target_item_refs: list[dict[str, str]],
     source_report_count: int,
 ) -> dict[str, object] | None:
     contrast_case_id = _find_recommended_contrast_case_id(reports, latest_case_id)
     if contrast_case_id is None:
         return None
+    target_item_ids = [item["item_id"] for item in target_item_refs]
     return {
         "task_type": "contrast_case",
         "case_id": contrast_case_id,
         "objective": f"对照{_get_case_title(contrast_case_id)}，迁移本轮薄弱维度的问诊、检查选择和证据链表达。",
         "target_rubric_items": target_item_ids,
+        "target_rubric_item_refs": [dict(item) for item in target_item_refs],
         "source_report_count": source_report_count,
         "source_references": [f"case:{contrast_case_id}"],
     }

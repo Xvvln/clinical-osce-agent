@@ -275,3 +275,157 @@ def test_profile_summary_aggregates_sequence_and_evidence_chain_breakpoints() ->
     assert state["matched_recent_reasoning_patterns"] == [
         {"pattern_id": "evidence_chain_rp_migration_support", "label": "迁移痛推理点"}
     ]
+
+
+def test_teaching_effect_summary_reports_insufficient_samples_without_claiming_improvement() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["ht_migration"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        }
+                    ],
+                },
+            }
+        ],
+        enabled_skills=[],
+    )
+
+    teaching_effect = summary["teaching_effect_summary"]
+
+    assert teaching_effect["status"] == "insufficient_samples"
+    assert "样本不足" in teaching_effect["summary"]
+    assert "证明" not in teaching_effect["summary"]
+    assert teaching_effect["ability_axes"][0]["axis_id"] == "problem_representation"
+    assert teaching_effect["ability_axes"][0]["state"] == "needs_observation"
+
+
+def test_teaching_effect_summary_marks_repeated_reasoning_gap_as_needs_practice() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["ht_migration"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        }
+                    ],
+                },
+            },
+            {
+                "case_id": "acs_001",
+                "missed_items": ["ht_onset"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        }
+                    ],
+                },
+            },
+        ],
+        enabled_skills=[],
+    )
+
+    teaching_effect = summary["teaching_effect_summary"]
+
+    assert teaching_effect["status"] == "needs_practice"
+    assert teaching_effect["ability_axes"][0]["axis_id"] == "problem_representation"
+    assert teaching_effect["ability_axes"][0]["state"] == "persistent_gap"
+    assert teaching_effect["ability_axes"][0]["latest_count"] == 1
+    assert teaching_effect["ability_axes"][0]["historical_count"] == 1
+    assert teaching_effect["next_teaching_objectives"][0] == "先把主诉整理成起病、部位、性质、程度、伴随症状和背景，再进入查体或检查。"
+
+
+def test_teaching_effect_summary_observes_recent_improvement_without_claiming_proof() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": [],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [],
+                },
+            },
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": ["ht_migration"],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        }
+                    ],
+                },
+            },
+        ],
+        enabled_skills=[],
+    )
+
+    teaching_effect = summary["teaching_effect_summary"]
+
+    assert teaching_effect["status"] == "improving_observed"
+    assert "不等于统计学证明" in teaching_effect["summary"]
+    assert teaching_effect["ability_axes"][0]["axis_id"] == "problem_representation"
+    assert teaching_effect["ability_axes"][0]["state"] == "improving_signal"
+    assert teaching_effect["observed_changes"][0]["direction"] == "improved_recently"
+
+
+def test_teaching_effect_summary_labels_metacognition_axis_for_students() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": [],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "premature_closure_risk",
+                            "label": "过早闭合风险",
+                            "category": "metacognition",
+                            "severity": "medium",
+                        }
+                    ],
+                },
+            },
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": [],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [],
+                },
+            },
+        ],
+        enabled_skills=[],
+    )
+
+    teaching_effect = summary["teaching_effect_summary"]
+    metacognition_axis = next(axis for axis in teaching_effect["ability_axes"] if axis["axis_id"] == "metacognition")
+
+    assert metacognition_axis["axis_label"] == "元认知监控"
+    assert "metacognition" not in teaching_effect["observed_changes"][0]["description"]

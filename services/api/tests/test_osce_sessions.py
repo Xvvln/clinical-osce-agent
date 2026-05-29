@@ -733,6 +733,11 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         "ht_ice",
     ]
     assert profile["skill_profile_summary"]["skill_states"][personal_skill_id]["priority"] >= 8
+    teaching_effect = profile["skill_profile_summary"]["teaching_effect_summary"]
+    assert teaching_effect["status"] == "insufficient_samples"
+    assert teaching_effect["status_label"] == "样本不足"
+    assert "不能判断趋势" in teaching_effect["summary"]
+    assert teaching_effect["evidence_boundary"].startswith("教学效果观察只来自训练报告")
     assert profile["learning_path"][0] == {
         "task_type": "redo_same_case",
         "task_type_label": "复训当前病例",
@@ -793,6 +798,33 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         "source_references": ["case:acs_001"],
         "source_reference_labels": ["病例：胸痛伴出汗教学病例"],
     }
+
+
+def test_learning_path_labels_mixed_case_missed_items_with_readable_text() -> None:
+    reports = [
+        {
+            "case_id": "acs_001",
+            "missed_items": ["dd_aortic_dissection", "dd_gerd", "reasoning_core"],
+            "knowledge_recommendations": [],
+        },
+        {
+            "case_id": "hyperthyroid_001",
+            "missed_items": ["ht_family_history", "at_thyroid_us"],
+            "knowledge_recommendations": [],
+        },
+    ]
+
+    learning_path = main._build_learning_path(
+        reports,
+        {"key": "differential_diagnosis", "label": "鉴别诊断", "average": 0},
+    )
+
+    for task in learning_path:
+        labels = task["target_rubric_item_labels"]
+        assert "追问甲状腺相关家族史" in labels
+        assert "申请甲状腺超声" in labels
+        assert "ht_family_history" not in labels
+        assert "at_thyroid_us" not in labels
 
 
 def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_path) -> None:

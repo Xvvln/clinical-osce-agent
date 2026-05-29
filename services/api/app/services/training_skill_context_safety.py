@@ -64,6 +64,8 @@ def _candidate_case_ids(candidate: dict[str, Any]) -> list[str]:
     applies_when = candidate.get("applies_when")
     if isinstance(applies_when, dict):
         case_ids.update(str(case_id) for case_id in applies_when.get("case_ids", []) if str(case_id))
+    if case_ids:
+        return sorted(case_ids)
 
     for reference in candidate.get("related_recommendations", []):
         reference_text = str(reference)

@@ -62,6 +62,7 @@ MEMORY_FIELD_KEYS = [
 
 SAFETY_SUFFIX = "仅提示训练步骤和证据链复盘，不透露病例答案或隐藏事实，不提供真实诊疗信息。"
 SKILL_APPROVAL_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
+PROTECTED_DIAGNOSIS_PLACEHOLDER = "当前主要诊断假设"
 
 
 class TrainingSkillAutoApprovalSettingsStore:
@@ -217,7 +218,7 @@ class TrainingSkillApprovalAgent:
                 "rag_visibility_filtered",
             ],
         }
-        return reviewed_candidate
+        return _sanitize_nested_training_text(reviewed_candidate, protected_terms or [])
 
 
 def _sanitize_training_text(text: str, protected_terms: list[str] | None = None) -> str:
@@ -226,10 +227,24 @@ def _sanitize_training_text(text: str, protected_terms: list[str] | None = None)
         sanitized = sanitized.replace(forbidden_term, SAFE_TERM_REPLACEMENTS[forbidden_term])
     for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items():
         sanitized = re.sub(pattern, SAFE_PATTERN_REPLACEMENTS[violation_id], sanitized)
+    sanitized = sanitized.replace("本病例标准答案", PROTECTED_DIAGNOSIS_PLACEHOLDER)
     for protected_term in protected_terms or []:
         if protected_term:
-            sanitized = sanitized.replace(protected_term, "本病例标准答案")
+            sanitized = sanitized.replace(protected_term, PROTECTED_DIAGNOSIS_PLACEHOLDER)
     return sanitized.strip()
+
+
+def _sanitize_nested_training_text(value: Any, protected_terms: list[str] | None = None) -> Any:
+    if isinstance(value, str):
+        return _sanitize_training_text(value, protected_terms)
+    if isinstance(value, list):
+        return [_sanitize_nested_training_text(item, protected_terms) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_nested_training_text(nested_value, protected_terms)
+            for key, nested_value in value.items()
+        }
+    return value
 
 
 def _ensure_safety_suffix(text: str) -> str:

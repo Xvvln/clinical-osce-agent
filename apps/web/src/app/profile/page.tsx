@@ -93,6 +93,36 @@ type SkillProfileSkillState = Readonly<{
   selection_reason: string;
 }>;
 
+type TeachingEffectAbilityAxis = Readonly<{
+  axis_id: string;
+  axis_label: string;
+  state: string;
+  state_label: string;
+  latest_count: number;
+  historical_count: number;
+  labels: readonly string[];
+  teaching_objective: string;
+}>;
+
+type TeachingEffectObservedChange = Readonly<{
+  axis_id: string;
+  axis_label: string;
+  direction: string;
+  description: string;
+}>;
+
+type TeachingEffectSummary = Readonly<{
+  status: string;
+  status_label: string;
+  summary: string;
+  ability_axes: readonly TeachingEffectAbilityAxis[];
+  observed_changes: readonly TeachingEffectObservedChange[];
+  next_teaching_objectives: readonly string[];
+  evidence_boundary: string;
+  skill_state_counts: Readonly<Record<string, number>>;
+  reasoning_focus_count: number;
+}>;
+
 type SkillProfileSummary = Readonly<{
   recent_error_item_ids: readonly string[];
   recent_error_items: readonly SkillProfileItem[];
@@ -100,6 +130,7 @@ type SkillProfileSummary = Readonly<{
   current_focus_items: readonly SkillProfileItem[];
   reasoning_profile_summary: SkillProfileReasoningSummary;
   skill_states: Readonly<Record<string, SkillProfileSkillState>>;
+  teaching_effect_summary: TeachingEffectSummary;
   last_updated_from_report_count: number;
 }>;
 
@@ -166,6 +197,18 @@ const EMPTY_SKILL_PROFILE_REASONING_SUMMARY: SkillProfileReasoningSummary = {
   evidence_chain_focus: [],
 };
 
+const EMPTY_TEACHING_EFFECT_SUMMARY: TeachingEffectSummary = {
+  status: "not_started",
+  status_label: "尚未开始",
+  summary: "完成一次完整训练并生成报告后，系统会开始观察临床思维训练效果。",
+  ability_axes: [],
+  observed_changes: [],
+  next_teaching_objectives: ["先完成一次完整训练，形成可复盘的问诊、查体、检查和诊断轨迹。"],
+  evidence_boundary: "教学效果观察只来自训练报告、临床思维轨迹和 Skill 应用痕迹；不改变病例事实、rubric、标准诊断或评分裁判，也不把小样本观察写成已证明提升。",
+  skill_state_counts: {},
+  reasoning_focus_count: 0,
+};
+
 const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = {
   recent_error_item_ids: [],
   recent_error_items: [],
@@ -173,6 +216,7 @@ const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = {
   current_focus_items: [],
   reasoning_profile_summary: EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
   skill_states: {},
+  teaching_effect_summary: EMPTY_TEACHING_EFFECT_SUMMARY,
   last_updated_from_report_count: 0,
 };
 
@@ -243,6 +287,10 @@ function normalizeSkillProfileSummary(summary?: Partial<SkillProfileSummary>): S
       ...EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
       ...(summary?.reasoning_profile_summary ?? {}),
     },
+    teaching_effect_summary: {
+      ...EMPTY_TEACHING_EFFECT_SUMMARY,
+      ...(summary?.teaching_effect_summary ?? {}),
+    },
     skill_states: skillStates,
   };
 }
@@ -293,6 +341,102 @@ function formatSkillEffectSummary(skill: EnabledSkillSummary): string {
     return `当前效果：${effectStatusLabel}。`;
   }
   return "";
+}
+
+function TeachingEffectSummarySection({ summary }: Readonly<{ summary: TeachingEffectSummary }>) {
+  return (
+    <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-medium text-brand">教学效果观察</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">临床思维改变信号</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{summary.summary}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+            {summary.status_label}
+          </span>
+          <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
+            {summary.reasoning_focus_count} 个思维信号
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+        <div className="rounded-xl border border-border bg-background p-4">
+          <h3 className="text-sm font-semibold">能力轴观察</h3>
+          {summary.ability_axes.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {summary.ability_axes.map((axis) => (
+                <article className="rounded-lg border border-border bg-muted/30 p-3" key={axis.axis_id}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold">{axis.axis_label}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{axis.teaching_objective}</p>
+                    </div>
+                    <span className="rounded-full border border-brand/20 bg-background px-2 py-1 text-[11px] font-medium text-brand">
+                      {axis.state_label}
+                    </span>
+                  </div>
+                  {axis.labels.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {axis.labels.map((label) => (
+                        <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground" key={`${axis.axis_id}-${label}`}>
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    最新报告 {axis.latest_count} 个信号 · 历史报告 {axis.historical_count} 个信号
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-muted/30 p-3 text-sm leading-6 text-muted-foreground">
+              暂无可观察能力轴。完成一次带报告的训练后，这里会显示临床思维训练信号。
+            </p>
+          )}
+        </div>
+
+        <div className="grid content-start gap-3">
+          <div className="rounded-xl border border-border bg-background p-4">
+            <h3 className="text-sm font-semibold">观察到的变化</h3>
+            {summary.observed_changes.length > 0 ? (
+              <div className="mt-3 grid gap-2">
+                {summary.observed_changes.map((change) => (
+                  <article className="rounded-lg border border-border bg-muted/30 p-3" key={`${change.axis_id}-${change.direction}`}>
+                    <p className="text-sm font-semibold">{change.axis_label}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{change.description}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 rounded-lg border border-dashed border-border bg-muted/30 p-3 text-sm leading-6 text-muted-foreground">
+                暂无稳定变化信号。样本不足时只展示观察，不把小样本观察写成已证明提升。
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-border bg-background p-4">
+            <h3 className="text-sm font-semibold">下一轮教学目标</h3>
+            <div className="mt-3 grid gap-2">
+              {summary.next_teaching_objectives.map((objective) => (
+                <p className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-6 text-muted-foreground" key={objective}>
+                  {objective}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <p className="rounded-xl border border-dashed border-brand/20 bg-background p-4 text-xs leading-5 text-muted-foreground">
+            {summary.evidence_boundary}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfileSummary }>) {
@@ -703,6 +847,8 @@ export default function ProfilePage() {
             </section>
           </aside>
         </section>
+
+        <TeachingEffectSummarySection summary={profile.skillProfileSummary.teaching_effect_summary} />
 
         <SkillProfileSummarySection summary={profile.skillProfileSummary} />
 

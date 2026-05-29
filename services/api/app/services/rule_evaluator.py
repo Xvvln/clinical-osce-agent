@@ -118,8 +118,10 @@ def evaluate_rubric_item(
     if kind == "intent_keyword":
         matched_keywords = [keyword for keyword in spec["any_of_keywords"] if keyword in "\n".join(session.asked_questions)]
         matched_questions = [question for question in session.asked_questions if any(keyword in question for keyword in matched_keywords)]
-        score = max_score if matched_keywords else 0
-        return {"trace": _build_score_trace(item, score, matched_questions)}
+        matched_revealed_facts = _matched_revealed_expected_evidence(session, item)
+        matched_evidence = [*matched_questions, *matched_revealed_facts]
+        score = max_score if matched_keywords or matched_revealed_facts else 0
+        return {"trace": _build_score_trace(item, score, matched_evidence)}
     if kind == "exam_code":
         matched_evidence = [spec["exam_code"]] if spec["exam_code"] in session.requested_exams else []
         score = max_score if matched_evidence else 0
@@ -164,6 +166,17 @@ def _build_score_trace(
         llm_rationale=llm_rationale,
         fallback_reason=fallback_reason,
     )
+
+
+def _matched_revealed_expected_evidence(
+    session: RuleEvaluationSession,
+    item: dict[str, Any],
+) -> list[str]:
+    expected_evidence = item.get("evidence_expected", [])
+    if not isinstance(expected_evidence, list):
+        return []
+    revealed_fact_ids = set(session.revealed_facts)
+    return [str(evidence) for evidence in expected_evidence if str(evidence) in revealed_fact_ids]
 
 
 def _matched_diagnosis_concept_evidence(
