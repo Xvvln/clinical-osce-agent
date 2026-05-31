@@ -17,6 +17,11 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     runtime_model_config_store.clear()
     for env_name in [
         "CLINICAL_OSCE_DEPLOYMENT_MODE",
+        "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG",
+        "CLINICAL_OSCE_ADMIN_EMAILS",
+        "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
+        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
         "OSCE_OPENAI_ENABLED",
         "OSCE_OPENAI_API_KEY",
         "OSCE_OPENAI_BASE_URL",
@@ -52,6 +57,13 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_VERTEX_EMBEDDING_LOCATION",
         "OSCE_VERTEX_EMBEDDING_PROXY_URL",
         "OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY",
+        "OSCE_LOCAL_EMBEDDING_ENABLED",
+        "OSCE_LOCAL_EMBEDDING_MODEL",
+        "OSCE_LOCAL_EMBEDDING_DEVICE",
+        "OSCE_LOCAL_EMBEDDING_CACHE_DIR",
+        "OSCE_CHROMA_ENABLED",
+        "CHROMA_PERSIST_DIRECTORY",
+        "OSCE_CHROMA_COLLECTION",
         "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING",
     ]:
         monkeypatch.delenv(env_name, raising=False)

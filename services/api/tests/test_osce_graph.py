@@ -409,21 +409,15 @@ def test_osce_graph_keeps_keyword_intents_when_model_returns_unknown_for_multi_q
 
 def test_osce_graph_routes_patient_identity_unknown_kind_without_forced_coach_hint() -> None:
     captured_patient_requests: list[object] = []
-    captured_coach_requests: list[object] = []
 
     def fake_patient_responder(request: object) -> str:
         captured_patient_requests.append(request)
         return str(getattr(request, "canonical_answer"))
 
-    def fake_coach_agent(request: object) -> dict[str, object]:
-        captured_coach_requests.append(request)
-        return {
-            "should_emit": True,
-            "hint": "可以先从起病时间、疼痛部位、性质、程度和伴随症状开始问。",
-            "trigger_kind": "off_topic_redirect",
-        }
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise AssertionError("identity clarification should not call coach, skill router, or RAG-dependent review")
 
-    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=fake_coach_agent)
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=failing_coach_agent)
 
     result = graph.invoke(
         {
@@ -472,14 +466,81 @@ def test_osce_graph_routes_patient_identity_unknown_kind_without_forced_coach_hi
     assert getattr(captured_patient_requests[0], "current_intents") == []
     assert getattr(captured_patient_requests[0], "deterministic_hints")["keyword_intent"] == "unknown_history_intent"
     assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "patient_identity_unclear"
-    assert len(captured_coach_requests) == 1
-    assert getattr(captured_coach_requests[0], "prompt_kind") == "passive_turn_review"
-    assert getattr(captured_coach_requests[0], "base_hint") == ""
     assert result["agent_turn_memory"][0]["reply_role"] == "patient"
     assert result["agent_turn_memory"][0]["turn_policy"] == "patient_identity_redirect"
-    assert result["agent_turn_memory"][1]["reply_role"] == "coach"
-    assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_silent"
-    assert result["agent_turn_memory"][1]["agent_path"] == ["input_router_node", "patient_response_node", "coach_agent"]
+    assert result["agent_turn_memory"][0]["agent_path"] == ["input_router_node", "patient_response_node"]
+    assert len(result["agent_turn_memory"]) == 1
+    assert [step["step_id"] for step in result["processing_trace"]] == ["intent", "case_context", "patient_reply", "response"]
+
+
+def test_osce_graph_skips_heavy_agents_for_social_greeting_without_revealing_case_fact() -> None:
+    captured_patient_requests: list[object] = []
+
+    def fake_turn_intent_agent(request: object) -> dict[str, object]:
+        return {
+            "current_intents": [],
+            "confidence": 0.91,
+            "is_off_topic": False,
+            "unknown_kind": "social_greeting",
+            "possible_intents": [],
+            "rationale": "学生只是寒暄，没有提出具体问诊问题。",
+        }
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return "医生您好，我是因为肚子疼来看的。"
+
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise AssertionError("social greeting should not call coach, skill router, or RAG-dependent review")
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        turn_intent_agent=fake_turn_intent_agent,
+        coach_agent=failing_coach_agent,
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "哈",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["current_intents"] == []
+    assert result["reply"] == "医生您好，我是因为肚子疼来看的。"
+    assert result["messages"] == [
+        {"role": "student", "content": "哈"},
+        {"role": "patient", "content": "医生您好，我是因为肚子疼来看的。"},
+    ]
+    assert result["revealed_facts"] == []
+    assert len(captured_patient_requests) == 1
+    assert getattr(captured_patient_requests[0], "turn_policy") == "social_greeting_response"
+    assert getattr(captured_patient_requests[0], "answerable_fact_candidates") == []
+    assert result["agent_turn_memory"][0]["turn_analysis"]["unknown_kind"] == "social_greeting"
+    assert result["agent_turn_memory"][0]["turn_policy"] == "social_greeting_response"
+    assert result["agent_turn_memory"][0]["agent_path"] == ["input_router_node", "patient_response_node"]
+    assert len(result["agent_turn_memory"]) == 1
+    assert [step["step_id"] for step in result["processing_trace"]] == ["intent", "case_context", "patient_reply", "response"]
 
 
 def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint() -> None:
@@ -547,21 +608,15 @@ def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint
 
 def test_osce_graph_routes_unclassified_unknown_kind_without_claiming_missing_case_info() -> None:
     captured_patient_requests: list[object] = []
-    captured_coach_requests: list[object] = []
 
     def fake_patient_responder(request: object) -> str:
         captured_patient_requests.append(request)
-        return str(getattr(request, "canonical_answer"))
+        return "医生，您刚才说的我没太听明白，可以再问得具体一点吗？"
 
-    def fake_coach_agent(request: object) -> dict[str, object]:
-        captured_coach_requests.append(request)
-        return {
-            "should_emit": False,
-            "hint": "",
-            "trigger_kind": "none",
-        }
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise AssertionError("unclassified inputs should not call coach, skill router, or RAG-dependent review")
 
-    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=fake_coach_agent)
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=failing_coach_agent)
 
     result = graph.invoke(
         {
@@ -592,20 +647,21 @@ def test_osce_graph_routes_unclassified_unknown_kind_without_claiming_missing_ca
 
     assert "current_intent" not in result
     assert result["current_intents"] == []
-    assert result["reply"] == "我没太听明白您具体想问哪方面，可以再问得具体一点吗？"
-    assert result["messages"][-1] == {
-        "role": "coach",
-        "content": "本轮输入未能稳定识别为具体问诊意图。请换成更具体的问法，例如起病时间、疼痛部位、性质、程度或伴随症状。",
-    }
+    assert result["reply"] == "医生，您刚才说的我没太听明白，可以再问得具体一点吗？"
+    assert result["messages"] == [
+        {"role": "student", "content": "嗯"},
+        {"role": "patient", "content": "医生，您刚才说的我没太听明白，可以再问得具体一点吗？"},
+    ]
     assert result["revealed_facts"] == []
+    assert len(captured_patient_requests) == 1
     assert getattr(captured_patient_requests[0], "turn_policy") == "unclassified_input"
-    assert getattr(captured_patient_requests[0], "deterministic_hints")["unknown_kind"] == "unclassified_input"
-    assert getattr(captured_coach_requests[0], "base_hint") == (
-        "本轮输入未能稳定识别为具体问诊意图。请换成更具体的问法，例如起病时间、疼痛部位、性质、程度或伴随症状。"
-    )
+    assert getattr(captured_patient_requests[0], "current_intents") == []
+    assert getattr(captured_patient_requests[0], "answerable_fact_candidates") == []
     assert result["agent_turn_memory"][0]["turn_analysis"]["unknown_kind"] == "unclassified_input"
     assert result["agent_turn_memory"][0]["turn_policy"] == "unclassified_input"
-    assert result["agent_turn_memory"][1]["turn_policy"] == "passive_review_hint"
+    assert result["agent_turn_memory"][0]["agent_path"] == ["input_router_node", "patient_response_node"]
+    assert len(result["agent_turn_memory"]) == 1
+    assert [step["step_id"] for step in result["processing_trace"]] == ["intent", "case_context", "patient_reply", "response"]
 
 
 def test_osce_graph_answers_patient_profile_gender_without_falling_back_to_unknown() -> None:
@@ -1076,14 +1132,14 @@ def test_osce_graph_passive_coach_suppresses_unforced_model_hint_after_successfu
     assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_silent"
 
 
-def test_osce_graph_forces_passive_coach_hint_when_backend_detects_off_topic_even_if_model_suppresses_it() -> None:
-    captured_coach_requests: list[object] = []
+def test_osce_graph_short_circuits_off_topic_after_intent_without_heavy_agents() -> None:
+    def failing_patient_responder(request: object) -> str:
+        raise AssertionError("off-topic turns should not call the patient responder")
 
-    def fake_coach_agent(request: object) -> dict[str, object]:
-        captured_coach_requests.append(request)
-        return {"should_emit": False, "hint": "", "trigger_kind": "none"}
+    def failing_coach_agent(request: object) -> dict[str, object]:
+        raise AssertionError("off-topic turns should not call coach, skill router, or RAG-dependent review")
 
-    graph = build_osce_graph(patient_responder=canonical_patient_responder, coach_agent=fake_coach_agent)
+    graph = build_osce_graph(patient_responder=failing_patient_responder, coach_agent=failing_coach_agent)
 
     result = graph.invoke(
         {
@@ -1112,15 +1168,22 @@ def test_osce_graph_forces_passive_coach_hint_when_backend_detects_off_topic_eve
         }
     )
 
-    assert len(captured_coach_requests) == 1
-    assert getattr(captured_coach_requests[0], "base_hint") == (
-        "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。"
-    )
-    assert result["messages"][-1] == {
-        "role": "coach",
-        "content": "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。",
-    }
-    assert result["agent_turn_memory"][-1]["turn_policy"] == "passive_review_hint"
+    assert result["reply"] == "这个我不太了解，我这次主要是肚子疼来看的。"
+    assert result["messages"] == [
+        {"role": "student", "content": "你喜欢打游戏吗？"},
+        {"role": "patient", "content": result["reply"]},
+        {
+            "role": "coach",
+            "content": "这轮训练先回到腹痛问诊。可以从起病时间、疼痛部位、性质、程度和伴随症状继续问。",
+        },
+    ]
+    assert result["revealed_facts"] == []
+    assert result["current_intents"] == []
+    assert result["agent_turn_memory"][0]["agent_path"] == ["input_router_node", "unknown_history_redirect_node"]
+    assert result["agent_turn_memory"][0]["turn_policy"] == "off_topic_redirect"
+    assert result["agent_turn_memory"][1]["agent_path"] == ["input_router_node", "unknown_history_redirect_node"]
+    assert result["agent_turn_memory"][1]["turn_policy"] == "intent_short_circuit_hint"
+    assert [step["step_id"] for step in result["processing_trace"]] == ["intent", "response"]
 
 
 def test_osce_graph_does_not_fallback_when_patient_responder_fails() -> None:
@@ -1536,7 +1599,7 @@ def test_osce_graph_uses_injected_llm_scorer_for_llm_rubric_items() -> None:
         }
     )
 
-    assert result["feedback_report"]["total_score"] == 37
+    assert result["feedback_report"]["total_score"] == sum(result["feedback_report"]["dimension_scores"].values()) == 43
     assert result["feedback_report"]["dimension_scores"]["differential_diagnosis"] == 0
     assert result["feedback_report"]["dimension_scores"]["reasoning"] == 9
     assert result["rubric_scores"]["rs_support"]["score"] == 4
@@ -1882,6 +1945,16 @@ def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() ->
         "skill_router",
         "coach_agent",
     ]
+    patient_turn = result["agent_turn_memory"][0]
+    assert patient_turn["reply_role"] == "patient"
+    assert [step["step_id"] for step in patient_turn["processing_trace"]] == [
+        "intent",
+        "case_context",
+        "patient_reply",
+        "response",
+    ]
+    assert "selected_skill_ids" not in patient_turn
+    assert "knowledge_references" not in patient_turn
 
 
 def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, monkeypatch) -> None:
@@ -1960,6 +2033,11 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
         "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     )
     assert result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0]["visibility"] == "pre_submit_safe"
+    rag_step = next(step for step in result["agent_turn_memory"][-1]["processing_trace"] if step["step_id"] == "rag")
+    assert rag_step["metadata"]["retrieved_count"] == 1
+    assert rag_step["metadata"]["knowledge_references"] == [
+        "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
+    ]
 
 
 def test_osce_graph_socratic_hint_sanitizes_private_case_terms_from_coach_output() -> None:

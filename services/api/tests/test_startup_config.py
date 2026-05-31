@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -172,3 +173,29 @@ def test_documented_test_stage_model_defaults_match_current_policy() -> None:
         assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in source
         assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in source
         assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview" not in source
+
+
+def test_api_env_file_loader_applies_services_env_without_overriding_existing_env(tmp_path, monkeypatch) -> None:
+    from app.services.env_file_loader import load_api_env_file
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo",
+                "OSCE_OPENAI_MODEL=gemini-3.5-flash",
+                "OSCE_OPENAI_API_KEY=from-env-file",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CLINICAL_OSCE_DEPLOYMENT_MODE", raising=False)
+    monkeypatch.delenv("OSCE_OPENAI_MODEL", raising=False)
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "already-set")
+
+    loaded = load_api_env_file(env_file)
+
+    assert loaded is True
+    assert os.environ["CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-demo"
+    assert os.environ["OSCE_OPENAI_MODEL"] == "gemini-3.5-flash"
+    assert os.environ["OSCE_OPENAI_API_KEY"] == "already-set"

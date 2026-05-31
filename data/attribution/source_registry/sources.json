@@ -97,5 +97,49 @@
     "transformation": "manual web review; paraphrase acute abdomen evaluation and red-flag triage principles into OSCE-safe teaching notes",
     "attribution_required": true,
     "risk_note": "仅用于识别危险信号和训练边界提示，不输出真实处置、用药剂量或治疗方案。"
+  },
+  {
+    "source_id": "aafp_acute_chest_pain_2020",
+    "source_name": "AAFP Acute Chest Pain in Adults: Outpatient Evaluation",
+    "source_url": "https://www.aafp.org/afp/2020/1215/p721",
+    "license": "AAFP article; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase chest pain history, risk factor, exam and initial testing principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于胸痛教学模拟中的问诊、查体和检查选择提示，不输出真实急救处置或治疗建议。"
+  },
+  {
+    "source_id": "aafp_chronic_heart_failure_2007",
+    "source_name": "AAFP Diagnosis and Management of Chronic Heart Failure in Adults",
+    "source_url": "https://www.aafp.org/afp/2007/0301/p742",
+    "license": "AAFP article; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase dyspnea, edema, cardiac examination and echocardiography-oriented diagnostic principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于心源性气短和容量状态教学模拟，不输出真实治疗方案。"
+  },
+  {
+    "source_id": "aafp_hyperthyroidism_2016",
+    "source_name": "AAFP Hyperthyroidism: Diagnosis and Treatment",
+    "source_url": "https://www.aafp.org/pubs/afp/issues/2016/0301/p363.html",
+    "license": "AAFP article; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase symptom cluster, physical signs and thyroid function test principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于心悸、消瘦和代谢症状教学模拟，不输出真实内分泌治疗建议。"
+  },
+  {
+    "source_id": "aafp_cap_adults_2016",
+    "source_name": "AAFP Community-Acquired Pneumonia in Adults: Diagnosis and Management",
+    "source_url": "https://www.aafp.org/afp/2016/1101/p698",
+    "license": "AAFP article; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_teaching_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual web review; paraphrase fever, cough, respiratory examination, oxygenation and imaging principles into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于发热咳嗽教学模拟中的问诊、查体和检查选择提示，不输出抗感染处方或真实诊疗建议。"
   }
 ]

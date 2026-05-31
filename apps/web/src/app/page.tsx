@@ -509,6 +509,7 @@ type AgentProcessingStep = Readonly<{
   label: string;
   status: AgentProcessingStepStatus;
   durationMs?: number;
+  metadata?: Readonly<Record<string, unknown>>;
 }>;
 
 type AgentProcessingTimeline = Readonly<{
@@ -831,6 +832,7 @@ const defaultCaseOption: CaseOption = {
 const STUDENT_ID = "web_demo";
 const DEFAULT_AUTH_EMAIL = "student@osce.test";
 const DEFAULT_AUTH_PASSWORD = "student";
+const ADMIN_AUTH_EMAIL = "admin@osce.test";
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
 const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
@@ -859,6 +861,7 @@ const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: 
   { id: "coach", label: "教师智能体正在复核边界" },
   { id: "response", label: "正在生成可见回复" },
 ];
+const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set(["intent", "case_context", "patient_reply", "response"]);
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1231,14 +1234,15 @@ function mapApiMessage(
   }
 
   if (message.role === "coach") {
+    const coachLabel = getCoachMessageLabel(message.content);
     return {
       id,
       speaker: "coach",
-      label: getCoachMessageLabel(message.content),
+      label: coachLabel,
       text: message.content,
       apiMessageIndex: index,
-      skillSelectionReasons: getSkillSelectionReasonsForReply(session, message.content),
-      processingTimeline: session ? buildCompletedCoachProcessingTimeline(session, message.content) : undefined,
+      skillSelectionReasons: coachLabel === "安全边界" ? undefined : getSkillSelectionReasonsForReply(session, message.content),
+      processingTimeline: coachLabel === "安全边界" ? undefined : session ? buildCompletedCoachProcessingTimeline(session, message.content) : undefined,
     };
   }
 
@@ -1280,22 +1284,41 @@ function formatAgentProcessingElapsed(elapsedMs: number | undefined): string {
   return elapsedSeconds < 10 ? `${elapsedSeconds.toFixed(1)} 秒` : `${Math.round(elapsedSeconds)} 秒`;
 }
 
+function getPatientReplyProcessingSteps<TStep extends Readonly<{ id: string }>>(steps: readonly TStep[]): readonly TStep[] {
+  return steps.filter((step) => PATIENT_REPLY_PROCESSING_STEP_IDS.has(step.id));
+}
+
+function getPendingPatientProcessingSummary(
+  processingStatus: SessionProcessingStatus | null | undefined,
+  patientSteps: readonly AgentProcessingStep[],
+): string {
+  if (!processingStatus) {
+    return "当前：正在建立后端流程连接。";
+  }
+  if (PATIENT_REPLY_PROCESSING_STEP_IDS.has(processingStatus.current_step_id)) {
+    return processingStatus.summary;
+  }
+  const latestPatientStep = [...patientSteps].reverse().find((step) => step.status === "completed" || step.status === "active");
+  return latestPatientStep ? `当前：${getAgentProcessingStepLabel(latestPatientStep)}。` : "当前：正在组织标准化病人回复。";
+}
+
 function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessingStatus | null): AgentProcessingTimeline {
   const statusSteps = processingStatus?.steps.map((step) => ({
     id: step.step_id,
     label: step.label,
     status: normalizeAgentProcessingStepStatus(step.status),
   })) ?? [];
+  const patientSteps = getPatientReplyProcessingSteps(statusSteps);
   const currentStepLabel = processingStatus?.current_label || "建立后端流程连接";
   return {
     state: "pending",
     isOpen: false,
     title: "智能体处理中",
-    summary: processingStatus?.summary ?? "当前：正在建立后端流程连接。",
-    steps: statusSteps.length > 0 ? statusSteps : [
+    summary: getPendingPatientProcessingSummary(processingStatus, patientSteps),
+    steps: patientSteps.length > 0 ? patientSteps : [
       {
         id: processingStatus?.current_step_id || "backend_connect",
-        label: currentStepLabel,
+        label: PATIENT_REPLY_PROCESSING_STEP_IDS.has(processingStatus?.current_step_id ?? "") ? currentStepLabel : "正在组织标准化病人回复",
         status: "active",
       },
     ],
@@ -1335,6 +1358,7 @@ function getTimelineStepsFromBackendProcessingTrace(trace: readonly BackendProce
     label: step.label || AGENT_PROCESSING_STEP_DEFINITIONS.find((definition) => definition.id === step.step_id)?.label || step.step_id,
     status: normalizeAgentProcessingStepStatus(step.status),
     durationMs: step.duration_ms,
+    metadata: step.metadata,
   }));
 }
 
@@ -1345,10 +1369,27 @@ function normalizeAgentProcessingStepStatus(status: string): AgentProcessingStep
   return "completed";
 }
 
+function getAgentProcessingStepRetrievedCount(step: AgentProcessingStep): number | undefined {
+  const retrievedCount = step.metadata?.retrieved_count ?? step.metadata?.retrievedCount;
+  if (typeof retrievedCount !== "number" || !Number.isFinite(retrievedCount)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(retrievedCount));
+}
+
+function getKnowledgeReferenceCountFromProcessingSteps(steps: readonly AgentProcessingStep[]): number {
+  return steps.reduce((totalCount, step) => {
+    if (step.id !== "rag") {
+      return totalCount;
+    }
+    return totalCount + (getAgentProcessingStepRetrievedCount(step) ?? 0);
+  }, 0);
+}
+
 function buildCompletedAgentProcessingTimeline(session: OsceSession, replyText: string): AgentProcessingTimeline {
   const patientTurn = getLatestAgentTurnForReply(session, replyText, "patient");
-  const coachTurn = getLatestPassiveCoachReviewTurn(session, patientTurn?.student_message ?? "");
   const backendTraceSteps = getTimelineStepsFromBackendProcessingTrace(patientTurn?.processing_trace);
+  const patientTraceSteps = getPatientReplyProcessingSteps(backendTraceSteps);
   const elapsedMs = getBackendProcessingTraceElapsedMs(patientTurn);
   const hasCurrentIntents = Boolean(session.current_intents?.length || (patientTurn?.current_intents?.length ?? 0) > 0);
   const hasCaseReferences = Boolean(
@@ -1356,19 +1397,10 @@ function buildCompletedAgentProcessingTimeline(session: OsceSession, replyText: 
     || patientTurn?.revealed_fact_ids?.length
     || (patientTurn?.source_references ?? []).some((reference) => reference.startsWith("case:")),
   );
-  const selectedSkillCount = patientTurn?.selected_skill_ids?.length
-    ?? patientTurn?.selected_skill_reasons?.length
-    ?? coachTurn?.selected_skill_ids?.length
-    ?? coachTurn?.selected_skill_reasons?.length
-    ?? 0;
-  const knowledgeReferenceCount = (patientTurn?.knowledge_references?.length ?? 0) + (coachTurn?.knowledge_references?.length ?? 0);
-  const coachReviewed = Boolean(coachTurn);
   const completedParts = [
     hasCurrentIntents ? "意图解析" : "",
     hasCaseReferences ? "病例事实" : "",
-    selectedSkillCount > 0 ? `Skill ${selectedSkillCount} 条` : "",
-    knowledgeReferenceCount > 0 ? "知识库检索" : "",
-    coachReviewed ? "教师复核" : "",
+    replyText ? "标准化病人回复" : "",
   ].filter(Boolean);
 
   return {
@@ -1377,14 +1409,13 @@ function buildCompletedAgentProcessingTimeline(session: OsceSession, replyText: 
     title: "智能体处理了",
     summary: completedParts.length > 0 ? `已完成：${completedParts.join(" · ")}` : "已完成本轮安全生成流程",
     elapsedMs,
-    steps: backendTraceSteps.length > 0 ? backendTraceSteps : AGENT_PROCESSING_STEP_DEFINITIONS.map((stepDefinition) => {
+    steps: patientTraceSteps.length > 0 ? patientTraceSteps : AGENT_PROCESSING_STEP_DEFINITIONS
+      .filter((stepDefinition) => PATIENT_REPLY_PROCESSING_STEP_IDS.has(stepDefinition.id))
+      .map((stepDefinition) => {
       const statusByStepId: Readonly<Record<string, AgentProcessingStepStatus>> = {
         intent: hasCurrentIntents ? "completed" : "skipped",
         case_context: hasCaseReferences ? "completed" : "skipped",
-        skill: selectedSkillCount > 0 ? "completed" : "skipped",
-        rag: knowledgeReferenceCount > 0 ? "completed" : "skipped",
         patient_reply: replyText ? "completed" : "error",
-        coach: coachReviewed ? "completed" : "skipped",
         response: "completed",
       };
       return {
@@ -1403,11 +1434,14 @@ function buildCompletedCoachProcessingTimeline(session: OsceSession, replyText: 
   const backendTraceSteps = getTimelineStepsFromBackendProcessingTrace(coachTurn.processing_trace);
   const elapsedMs = getBackendProcessingTraceElapsedMs(coachTurn);
   const selectedSkillCount = coachTurn.selected_skill_ids?.length ?? coachTurn.selected_skill_reasons?.length ?? 0;
-  const knowledgeReferenceCount = coachTurn.knowledge_references?.length ?? 0;
+  const knowledgeReferenceCount = Math.max(
+    getKnowledgeReferenceCountFromProcessingSteps(backendTraceSteps),
+    coachTurn.knowledge_references?.length ?? 0,
+  );
   const completedParts = [
     "教师复核",
     selectedSkillCount > 0 ? `Skill ${selectedSkillCount} 条` : "",
-    knowledgeReferenceCount > 0 ? "知识库检索" : "",
+    knowledgeReferenceCount > 0 ? `知识库 ${knowledgeReferenceCount} 条` : "",
   ].filter(Boolean);
 
   return {
@@ -1479,6 +1513,12 @@ function getAgentProcessingStepLabel(step: AgentProcessingStep): string {
   };
 
   if (step.status === "completed") {
+    if (step.id === "rag") {
+      const retrievedCount = getAgentProcessingStepRetrievedCount(step);
+      if (retrievedCount !== undefined) {
+        return `已检索教学知识库：命中 ${retrievedCount} 条`;
+      }
+    }
     return completedLabels[step.id] ?? step.label;
   }
   if (step.status === "skipped") {
@@ -2015,6 +2055,10 @@ function getTrainingDifficultyModeFromSearchParams(searchParams: SearchParamRead
   return normalizeTrainingDifficultyMode(searchParams.get("difficulty"));
 }
 
+function canViewAdminCoverageMap(authUser: AuthUser | null): boolean {
+  return authUser?.email.trim().toLowerCase() === ADMIN_AUTH_EMAIL;
+}
+
 function getTrainingDifficultyLabel(trainingDifficultyMode: TrainingDifficultyMode): string {
   if (trainingDifficultyMode === "intermediate") {
     return "中级";
@@ -2486,6 +2530,7 @@ function HomeContent() {
   const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
   const clientChatMessageSequenceRef = useRef(0);
   const isNextStepRequired = trainingDifficultyMode !== "beginner";
+  const canOpenAdminCoverageMap = canViewAdminCoverageMap(authUser);
 
   function createClientChatMessageId(prefix: string): string {
     clientChatMessageSequenceRef.current += 1;
@@ -2560,6 +2605,12 @@ function HomeContent() {
       isMounted = false;
     };
   }, [authUser, isCheckingAuth]);
+
+  useEffect(() => {
+    if (!canOpenAdminCoverageMap && isCoverageMapOpen) {
+      setIsCoverageMapOpen(false);
+    }
+  }, [canOpenAdminCoverageMap, isCoverageMapOpen]);
 
   useEffect(() => {
     if (!isApiConfigHelpOpen || !authUser) {
@@ -3266,26 +3317,30 @@ function HomeContent() {
     [procedureResults, requestedItems],
   );
 
+  const advancedProcedureRequestItemsToShow = useMemo<readonly ProcedureResult[]>(
+    () => isAdvancedTrainingMode ? procedureItems : [],
+    [isAdvancedTrainingMode, procedureItems],
+  );
+
   const advancedProcedureRequestSummaryToShow = useMemo<AdvancedProcedureRequestSummary | null>(() => {
-    if (advancedProcedureRequestSummary) {
-      return advancedProcedureRequestSummary;
-    }
     if (!isAdvancedTrainingMode) {
       return null;
     }
     const draftRequest = advancedProcedureRequestText.trim();
-    if (!draftRequest && advancedProcedureUnmatchedRequests.length === 0 && procedureResults.length === 0) {
+    if (!draftRequest && advancedProcedureUnmatchedRequests.length === 0 && advancedProcedureRequestItemsToShow.length === 0) {
       return null;
     }
+    const simulatedResultCount = advancedProcedureRequestItemsToShow.filter((procedureItem) => procedureItem.generatedByAi).length;
+    const unavailableResultCount = advancedProcedureRequestItemsToShow.filter((procedureItem) => procedureItem.availabilityStatus === "not_available_for_case").length;
     return {
-      rawRequest: draftRequest || "最近一次申请",
-      matchedLabels: procedureResults.map((procedureResult) => procedureResult.label),
-      unmatchedRequests: advancedProcedureUnmatchedRequests,
-      returnedResultCount: procedureResults.length,
-      simulatedResultCount: procedureResults.filter((procedureResult) => procedureResult.generatedByAi).length,
-      unavailableResultCount: procedureResults.filter((procedureResult) => procedureResult.availabilityStatus === "not_available_for_case").length,
+      rawRequest: advancedProcedureRequestSummary?.rawRequest || draftRequest || "全部已申请项目",
+      matchedLabels: advancedProcedureRequestItemsToShow.map((procedureItem) => procedureItem.label),
+      unmatchedRequests: advancedProcedureRequestSummary?.unmatchedRequests ?? advancedProcedureUnmatchedRequests,
+      returnedResultCount: advancedProcedureRequestItemsToShow.length,
+      simulatedResultCount,
+      unavailableResultCount,
     };
-  }, [advancedProcedureRequestSummary, advancedProcedureRequestText, advancedProcedureUnmatchedRequests, isAdvancedTrainingMode, procedureResults]);
+  }, [advancedProcedureRequestItemsToShow, advancedProcedureRequestSummary, advancedProcedureRequestText, advancedProcedureUnmatchedRequests, isAdvancedTrainingMode]);
 
   function getProcedureResultById(procedureId: string): ProcedureResult | null {
     return procedureItems.find((item) => item.id === procedureId) ?? null;
@@ -4273,18 +4328,29 @@ function HomeContent() {
               {chatMessages.map((message) => {
                 const isStudent = message.speaker === "student";
                 const isCoach = message.speaker === "coach";
+                const isSafetyBoundary = isCoach && message.label === "安全边界";
                 const processingTimeline = message.processingTimeline;
                 const isPendingProcessingTimeline = message.processingTimeline?.state === "pending";
                 const messageRowClass = isStudent ? "justify-end" : isCoach ? "justify-center" : "justify-start";
                 const messageBubbleClass = isStudent
                   ? "max-w-[76%] rounded-xl border border-brand bg-brand px-4 py-3 text-sm leading-6 text-white shadow-xs"
                   : isCoach
-                    ? "w-full max-w-lg rounded-xl border border-[#A8BA91]/45 bg-[#F5F8EF] px-4 py-3 text-sm leading-6 text-foreground shadow-xs"
+                    ? isSafetyBoundary
+                      ? "w-full max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-foreground shadow-xs"
+                      : "w-full max-w-lg rounded-xl border border-[#D8C3AF]/70 bg-[#F8F3EA] px-4 py-3 text-sm leading-6 text-foreground shadow-xs"
                     : "max-w-[76%] rounded-xl border border-border bg-muted px-4 py-3 text-sm leading-6 text-foreground shadow-xs";
                 return (
                   <div className={`flex ${messageRowClass}`} key={message.id}>
                     <div className={messageBubbleClass}>
-                      <p className={isStudent ? "text-white/80" : isCoach ? "text-[#5F734C]" : "text-muted-foreground"}>
+                      <p className={isStudent ? "text-white/80" : isSafetyBoundary ? "flex items-center gap-2 font-medium text-red-700" : isCoach ? "text-[#8A5A00]" : "text-muted-foreground"}>
+                        {isSafetyBoundary ? (
+                          <span
+                            aria-label="安全边界提示"
+                            className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold leading-none text-white"
+                          >
+                            !
+                          </span>
+                        ) : null}
                         {message.label}
                       </p>
                       {message.isPending && !message.finalText && isPendingProcessingTimeline ? (
@@ -4322,8 +4388,10 @@ function HomeContent() {
               })}
             </div>
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10">
-              <div className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 isolate px-3 pb-4 pt-10">
+              <div aria-hidden="true" className="absolute inset-x-0 bottom-0 z-0 h-20 bg-background" />
+              <div aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background/75 backdrop-blur-md [mask-image:linear-gradient(to_top,black,black_52%,transparent)]" />
+              <div className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
                 <button
                   className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingHint || isHintRequestLocked}
@@ -4339,23 +4407,23 @@ function HomeContent() {
                   患者信息
                 </button>
                 {isAdvancedTrainingMode ? (
-                  <div className="flex min-w-[18rem] max-w-xl flex-1 items-center gap-2 rounded-full border border-border bg-background px-2 py-1 shadow-xs">
+                  <div className="flex w-fit max-w-full flex-none items-center gap-1.5 rounded-full border border-border bg-background p-1 shadow-xs">
                     <input
                       autoComplete="off"
-                      className="h-8 min-w-0 flex-1 bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground"
+                      className="h-7 w-52 min-w-0 bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground sm:w-60"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingAdvancedProcedure}
                       onChange={(event) => setAdvancedProcedureRequestText(event.target.value)}
                       placeholder="输入想申请的查体或检查"
                       value={advancedProcedureRequestText}
                     />
                     <button
-                      className="rounded-full border border-brand bg-brand px-3 py-1.5 text-xs font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      className="h-7 rounded-full border border-brand bg-brand px-3 text-xs font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingAdvancedProcedure || !advancedProcedureRequestText.trim()}
                       onClick={() => void handleAdvancedProcedureRequest()}
                       type="button"
                     >{isRequestingAdvancedProcedure ? "解析中" : "提交申请"}</button>
                     <button
-                      className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-50"
+                      className="h-7 rounded-full border border-border bg-background px-3 text-xs font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-50"
                       disabled={advancedProcedureRequestSummaryToShow === null}
                       onClick={openAdvancedProcedureRequestSummary}
                       type="button"
@@ -4657,7 +4725,7 @@ function HomeContent() {
                   </>
                 ) : null}
               </div>
-              <form className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]" onSubmit={handleSubmit}>
+              <form className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]" onSubmit={handleSubmit}>
                 <label className="sr-only" htmlFor="history-question">
                   输入下一句问诊问题
                 </label>
@@ -5004,20 +5072,22 @@ function HomeContent() {
                 </div>
               ) : null}
             </CollapsiblePanel>
-            <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
-              <p className="font-medium text-foreground">管理员图谱</p>
-              <p className="mt-1 text-muted-foreground">
-                查看本次训练素材覆盖状态；会展示结构化素材内容，方便答辩和调试训练路径。
-              </p>
-              <button
-                className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!session}
-                onClick={() => setIsCoverageMapOpen(true)}
-                type="button"
-              >
-                查看素材覆盖图谱
-              </button>
-            </div>
+            {canOpenAdminCoverageMap ? (
+              <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
+                <p className="font-medium text-foreground">管理员图谱</p>
+                <p className="mt-1 text-muted-foreground">
+                  查看本次训练素材覆盖状态；会展示结构化素材内容，方便答辩和调试训练路径。
+                </p>
+                <button
+                  className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!session}
+                  onClick={() => setIsCoverageMapOpen(true)}
+                  type="button"
+                >
+                  查看素材覆盖图谱
+                </button>
+              </div>
+            ) : null}
           </aside>
         </div>
       </section>
@@ -5178,7 +5248,7 @@ function HomeContent() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-brand">申请内容</p>
-                <h2 className="mt-1 text-base font-semibold">本次查体 / 检查申请</h2>
+                <h2 className="mt-1 text-base font-semibold">全部已申请项目</h2>
               </div>
               <button
                 aria-label="关闭申请内容"
@@ -5190,15 +5260,32 @@ function HomeContent() {
               </button>
             </div>
             <div className="mt-4 space-y-3 text-sm leading-6">
+              {advancedProcedureRequestSummaryToShow.rawRequest !== "全部已申请项目" ? (
+                <div className="rounded-xl border border-border bg-muted/40 p-3">
+                  <p className="text-xs font-medium text-muted-foreground">最近一次原始输入</p>
+                  <p className="mt-1 text-foreground">{advancedProcedureRequestSummaryToShow.rawRequest}</p>
+                </div>
+              ) : null}
               <div className="rounded-xl border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-muted-foreground">原始输入</p>
-                <p className="mt-1 text-foreground">{advancedProcedureRequestSummaryToShow.rawRequest}</p>
-              </div>
-              <div className="rounded-xl border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-muted-foreground">已识别项目</p>
-                <p className="mt-1 text-foreground">
-                  {advancedProcedureRequestSummaryToShow.matchedLabels.length > 0 ? advancedProcedureRequestSummaryToShow.matchedLabels.join("、") : "暂无已识别项目"}
-                </p>
+                <p className="text-xs font-medium text-muted-foreground">全部已申请项目</p>
+                <div className="mt-2 grid gap-2">
+                  {advancedProcedureRequestItemsToShow.length > 0 ? (
+                    advancedProcedureRequestItemsToShow.map((procedureItem) => (
+                      <div className="rounded-lg border border-border bg-background px-3 py-2" key={procedureItem.id}>
+                        <p className="font-medium text-foreground">{procedureItem.label}</p>
+                        {procedureItem.generatedByAi ? (
+                          <p className="mt-1 text-xs text-muted-foreground">教学模拟补充，不计入评分。</p>
+                        ) : procedureItem.availabilityStatus === "not_available_for_case" ? (
+                          <p className="mt-1 text-xs text-muted-foreground">病例未配置结果，已记录申请。</p>
+                        ) : (
+                          <p className="mt-1 text-xs text-muted-foreground">已记录申请。</p>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-muted-foreground">暂无已申请项目。</p>
+                  )}
+                </div>
               </div>
               {advancedProcedureRequestSummaryToShow.unmatchedRequests.length > 0 ? (
                 <div className="rounded-xl border border-[#D7A455]/40 bg-[#FFF8E8] p-3 text-[#8A5A00]">
@@ -5214,7 +5301,7 @@ function HomeContent() {
           </div>
         </div>
       ) : null}
-      {isCoverageMapOpen && session ? (
+      {isCoverageMapOpen && canOpenAdminCoverageMap && session ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsCoverageMapOpen(false)}>
           <div className="max-h-[82vh] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">

@@ -211,23 +211,72 @@ def _keyword_intents_for_message(message: str) -> list[str]:
 
 
 def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
+    case = _load_case(state["case_id"])
     student_message = state.get("student_message", "")
+    current_intents = _current_intents_from_state(state)
+    primary_intent = _primary_intent_from_current_intents(current_intents)
+    turn_analysis = state.get("turn_analysis", {})
+    unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
+    reply = _unknown_patient_context_answer(case, unknown_kind)
+    coach_hint = _build_passive_coach_hint(
+        state,
+        primary_intent=primary_intent,
+        revealed_fact_id=None,
+    ).strip()
     messages = [*state.get("messages", [])]
     if student_message:
-        messages.extend(
-            [
-                {"role": "student", "content": student_message},
-                {"role": "coach", "content": UNKNOWN_HISTORY_REDIRECT_REPLY},
-            ]
+        messages.append({"role": "student", "content": student_message})
+    if reply:
+        messages.append({"role": "patient", "content": reply})
+    if coach_hint:
+        messages.append({"role": "coach", "content": coach_hint})
+    response_started_at, response_started_perf = _start_processing_step()
+    processing_trace = _append_processing_trace_step(
+        state.get("processing_trace", []),
+        "response",
+        "completed",
+        response_started_at,
+        response_started_perf,
+        metadata={"intent_short_circuit": True, "unknown_kind": unknown_kind},
+    )
+    turn_policy = _turn_policy_for_patient_response(primary_intent, None, unknown_kind=unknown_kind)
+    agent_turn_memory = _append_agent_turn_memory(
+        state,
+        student_message=student_message,
+        reply=reply,
+        reply_role="patient",
+        current_intents=current_intents,
+        turn_policy=turn_policy,
+        turn_analysis=turn_analysis,
+        agent_path=["input_router_node", "unknown_history_redirect_node"],
+        revealed_fact_id=None,
+        safety_flags=list(state.get("safety_flags", [])),
+        processing_trace=processing_trace,
+    )
+    if coach_hint:
+        agent_turn_memory = _append_agent_turn_memory(
+            {**dict(state), "agent_turn_memory": agent_turn_memory},
+            student_message=student_message,
+            reply=coach_hint,
+            reply_role="coach",
+            current_intents=current_intents,
+            turn_policy="intent_short_circuit_hint",
+            turn_analysis=turn_analysis,
+            agent_path=["input_router_node", "unknown_history_redirect_node"],
+            revealed_fact_id=None,
+            safety_flags=list(state.get("safety_flags", [])),
+            processing_trace=processing_trace,
         )
     return {
         "stage": "history_taking",
-        "current_intents": [],
-        "reply": UNKNOWN_HISTORY_REDIRECT_REPLY,
+        "current_intents": current_intents,
+        "reply": reply or coach_hint or UNKNOWN_HISTORY_REDIRECT_REPLY,
         "messages": messages,
         "asked_questions": list(state.get("asked_questions", [])),
-        "intent_history": [*state.get("intent_history", []), "unknown_history_intent"],
+        "intent_history": [*state.get("intent_history", []), *(current_intents or [primary_intent])],
         "revealed_facts": list(state.get("revealed_facts", [])),
+        "agent_turn_memory": agent_turn_memory,
+        "processing_trace": processing_trace,
     }
 
 
@@ -353,6 +402,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         safety_flags=list(state.get("safety_flags", [])),
         processing_trace=processing_trace,
     )
+    patient_processing_trace = list(processing_trace)
     messages, agent_turn_memory, processing_trace = _apply_passive_coach_review(
         state,
         case=case,
@@ -376,12 +426,19 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         response_started_at,
         response_started_perf,
     )
+    patient_processing_trace = _append_processing_trace_step(
+        patient_processing_trace,
+        "response",
+        "completed",
+        response_started_at,
+        response_started_perf,
+    )
     agent_turn_memory = _attach_processing_trace_to_latest_turn(
         agent_turn_memory,
         student_message=student_message,
         reply=reply,
         reply_role="patient",
-        processing_trace=processing_trace,
+        processing_trace=patient_processing_trace,
     )
     new_revealed_fact_ids = [fact_id for fact_id in revealed_fact_ids if fact_id not in previously_revealed_facts]
     action_timeline = _append_action_timeline_events(
@@ -584,7 +641,10 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         "completed" if retrieved_knowledge_context else "skipped",
         rag_step_started_at,
         rag_step_started_perf,
-        metadata={"retrieved_count": len(retrieved_knowledge_context)},
+        metadata={
+            "retrieved_count": len(retrieved_knowledge_context),
+            "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
+        },
     )
     hint_context = build_coach_hint_context(
         state=dict(state),
@@ -1976,6 +2036,13 @@ def _apply_passive_coach_review(
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
     if not student_message:
         return messages, agent_turn_memory, processing_trace
+    unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
+    if primary_intent == "unknown_history_intent" and unknown_kind in {
+        "social_greeting",
+        "patient_identity_unclear",
+        "unclassified_input",
+    }:
+        return messages, agent_turn_memory, processing_trace
     forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
     base_hint = _build_passive_coach_hint(
         state,
@@ -2039,7 +2106,10 @@ def _apply_passive_coach_review(
         "completed" if retrieved_knowledge_context else "skipped",
         rag_started_at,
         rag_started_perf,
-        metadata={"knowledge_references": [item["reference"] for item in retrieved_knowledge_context]},
+        metadata={
+            "retrieved_count": len(retrieved_knowledge_context),
+            "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
+        },
     )
     hint_context = build_coach_hint_context(
         state={**dict(state), "messages": messages},
@@ -2413,7 +2483,16 @@ def _boundary_turn_analysis(intent: str, rationale: str) -> dict[str, Any]:
 
 
 def _route_after_input_router(state: OsceGraphState) -> str:
+    if _should_short_circuit_after_input_router(state):
+        return "unknown_history_redirect_node"
     return "patient_response_node"
+
+
+def _should_short_circuit_after_input_router(state: OsceGraphState) -> bool:
+    if _current_intents_from_state(state):
+        return False
+    unknown_kind = _unknown_kind_from_turn_analysis(state.get("turn_analysis", {}))
+    return unknown_kind in {"off_topic", "unsupported_case_question"}
 
 
 def _route_after_load_case(state: OsceGraphState) -> str:
@@ -2488,6 +2567,7 @@ def build_osce_graph(
         "input_router_node",
         _route_after_input_router,
         {
+            "unknown_history_redirect_node": "unknown_history_redirect_node",
             "patient_response_node": "patient_response_node",
         },
     )

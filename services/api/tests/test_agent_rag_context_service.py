@@ -316,3 +316,35 @@ def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_
     )
     assert results[0]["source_id"] == "aafp_acute_abdominal_pain_2023"
     assert "急性阑尾炎" not in str(results)
+
+
+def test_retrieve_agent_context_reads_seeded_recommended_case_knowledge(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit: [
+            RetrievalDocument(
+                reference="rag_knowledge:case:acs_001:coach:chest_pain_history_sequence",
+                source_type="rag_knowledge",
+                title="vector hit",
+                snippet="vector hit",
+                score=0.99,
+            )
+        ],
+        raising=False,
+    )
+
+    results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["acs_001"],
+        query_terms=["胸痛 放射 大汗 呼吸困难 心电图"],
+        allowed_visibilities={"pre_submit_safe"},
+        forbidden_terms=["急性冠脉综合征"],
+        store=store,
+    )
+
+    assert results
+    assert results[0]["reference"] == "rag_knowledge:case:acs_001:coach:chest_pain_history_sequence"
+    assert "胸痛" in results[0]["title"]
+    assert "急性冠脉综合征" not in str(results)

@@ -54,11 +54,13 @@ test("app theme uses Claude-like paper palette with Chinese font fallbacks", () 
   assert.match(globalsSource, /--border: #E8E6DA;/);
   assert.match(globalsSource, /--brand: #AE5630;/);
   assert.match(globalsSource, /--brand-hover: #C4633A;/);
+  assert.match(globalsSource, /--destructive: #B42318;/);
   assert.match(globalsSource, /--font-ui: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;/);
   assert.match(globalsSource, /--font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;/);
   assert.match(globalsSource, /--font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;/);
   assert.match(globalsSource, /--color-brand: var\(--brand\);/);
   assert.match(globalsSource, /--color-brand-hover: var\(--brand-hover\);/);
+  assert.match(globalsSource, /--color-destructive: var\(--destructive\);/);
   assert.match(globalsSource, /body \{[\s\S]*?font-family: var\(--font-ui\);/);
   assert.match(layoutSource, /<body className="font-ui">/);
   assert.doesNotMatch(layoutSource, /next\/font\/google/);
@@ -115,6 +117,7 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /processing_trace\?: readonly BackendProcessingTraceItem\[];/);
   assert.match(pageSource, /processing_duration_ms\?: number;/);
   assert.match(pageSource, /type AgentProcessingTimeline = Readonly<\{/);
+  assert.match(pageSource, /type AgentProcessingStep = Readonly<\{[\s\S]*?metadata\?: Readonly<Record<string, unknown>>;/);
   assert.match(pageSource, /const AGENT_PROCESSING_STEP_DEFINITIONS/);
   assert.match(pageSource, /正在解析问诊意图/);
   assert.match(pageSource, /正在匹配病例事实/);
@@ -130,12 +133,17 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /type SessionProcessingStatus = Readonly<\{/);
   assert.match(pageSource, /function fetchSessionProcessingStatus\(sessionId: string\): Promise<SessionProcessingStatus>/);
   assert.match(pageSource, /function buildPendingAgentProcessingTimeline\(processingStatus\?: SessionProcessingStatus \| null\): AgentProcessingTimeline/);
-  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: false,[\s\S]*?summary: processingStatus\?\.summary \?\? "当前：正在建立后端流程连接。"/);
+  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: false,[\s\S]*?summary: getPendingPatientProcessingSummary\(processingStatus, patientSteps\)/);
   assert.match(pageSource, /const currentStepLabel = processingStatus\?\.current_label \|\| "建立后端流程连接";/);
-  assert.match(pageSource, /label: currentStepLabel/);
+  assert.match(pageSource, /label: PATIENT_REPLY_PROCESSING_STEP_IDS\.has\(processingStatus\?\.current_step_id \?\? ""\) \? currentStepLabel : "正在组织标准化病人回复"/);
   assert.doesNotMatch(pageSource, /当前：等待后端返回真实流程。/);
   assert.match(pageSource, /function getBackendProcessingTraceElapsedMs\(turn: AgentTurnMemoryItem \| undefined\): number \| undefined/);
   assert.match(pageSource, /function getTimelineStepsFromBackendProcessingTrace\(trace: readonly BackendProcessingTraceItem\[] \| undefined\): readonly AgentProcessingStep\[]/);
+  assert.match(pageSource, /metadata: step\.metadata/);
+  assert.match(pageSource, /function getAgentProcessingStepRetrievedCount\(step: AgentProcessingStep\): number \| undefined/);
+  assert.match(pageSource, /`已检索教学知识库：命中 \$\{retrievedCount\} 条`/);
+  assert.match(pageSource, /`知识库 \$\{knowledgeReferenceCount\} 条`/);
+  assert.match(pageSource, /const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set\(\["intent", "case_context", "patient_reply", "response"\]\);/);
   assert.match(pageSource, /function buildCompletedAgentProcessingTimeline\(session: OsceSession, replyText: string\): AgentProcessingTimeline/);
   assert.match(pageSource, /function AgentProcessingTimelineView/);
   assert.match(pageSource, /open=\{timeline\.isOpen\}/);
@@ -161,6 +169,27 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.doesNotMatch(pageSource, /rounded-\[22px\] border border-\[#E5D7C3\] bg-\[#FFFCF5\]/);
   assert.match(globalsSource, /@keyframes clinical-osce-agent-process-pulse/);
   assert.match(globalsSource, /\.clinical-osce-agent-process-dot-active/);
+});
+
+test("home patient reply processing timeline excludes coach Skill and RAG work", () => {
+  const completedTimelineStart = pageSource.indexOf("function buildCompletedAgentProcessingTimeline");
+  const completedTimelineEnd = pageSource.indexOf("function buildCompletedCoachProcessingTimeline");
+  assert.ok(completedTimelineStart >= 0, "should define completed patient timeline builder");
+  assert.ok(completedTimelineEnd > completedTimelineStart, "should define coach timeline after patient timeline");
+
+  const completedTimelineSource = pageSource.slice(completedTimelineStart, completedTimelineEnd);
+  assert.match(completedTimelineSource, /getPatientReplyProcessingSteps\(backendTraceSteps\)/);
+  assert.doesNotMatch(completedTimelineSource, /getLatestPassiveCoachReviewTurn/);
+  assert.doesNotMatch(completedTimelineSource, /coachTurn/);
+  assert.doesNotMatch(completedTimelineSource, /selectedSkillCount|knowledgeReferenceCount|`Skill|`知识库/);
+
+  const pendingTimelineStart = pageSource.indexOf("function buildPendingAgentProcessingTimeline");
+  const pendingTimelineEnd = pageSource.indexOf("function buildPendingHintProcessingTimeline");
+  assert.ok(pendingTimelineStart >= 0, "should define pending patient timeline builder");
+  assert.ok(pendingTimelineEnd > pendingTimelineStart, "should define hint timeline after patient timeline");
+
+  const pendingTimelineSource = pageSource.slice(pendingTimelineStart, pendingTimelineEnd);
+  assert.match(pendingTimelineSource, /getPatientReplyProcessingSteps\(statusSteps\)/);
 });
 
 test("home history input disables browser autofill history", () => {
@@ -263,7 +292,7 @@ test("home evidence panel scrolls to the newest revealed clue and highlights it"
 });
 
 test("home dialogue speaker labels render as plain text labels", () => {
-  assert.match(pageSource, /<p className=\{isStudent \? "text-white\/80" : isCoach \? "text-\[#5F734C\]" : "text-muted-foreground"\}>[\s\S]*?\{message\.label\}/);
+  assert.match(pageSource, /<p className=\{isStudent \? "text-white\/80" : isSafetyBoundary \? "flex items-center gap-2 font-medium text-red-700" : isCoach \? "text-\[#8A5A00\]" : "text-muted-foreground"\}>[\s\S]*?\{message\.label\}/);
   assert.doesNotMatch(pageSource, /const messageLabelClass = isStudent/);
   assert.doesNotMatch(pageSource, /border-white\/45 bg-transparent/);
   assert.doesNotMatch(pageSource, /border-border bg-transparent/);
@@ -1276,11 +1305,13 @@ test("home workspace keeps the composer sticky and moves final diagnosis into th
   assert.match(pageSource, /className="flex-1 space-y-4 overflow-y-scroll p-5 pb-40 student-chat-scrollbar"/);
   assert.match(pageSource, /ref=\{chatScrollContainerRef\}/);
   assert.match(pageSource, /const \[isDiagnosisComposerOpen, setIsDiagnosisComposerOpen\] = useState\(false\);/);
-  assert.match(pageSource, /className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-4 pt-10"/);
-  assert.match(pageSource, /className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
-  assert.match(pageSource, /className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"/);
-  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
-  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  assert.match(pageSource, /className="pointer-events-none absolute inset-x-0 bottom-0 z-20 isolate px-3 pb-4 pt-10"/);
+  assert.match(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-0 z-0 h-20 bg-background"/);
+  assert.match(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background\/75 backdrop-blur-md \[mask-image:linear-gradient\(to_top,black,black_52%,transparent\)\]"/);
+  assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
+  assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"/);
+  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
   assert.notEqual(quickActionRowIndex, -1);
   assert.notEqual(inputComposerIndex, -1);
   assert.ok(quickActionRowIndex < inputComposerIndex);
@@ -1373,10 +1404,17 @@ test("home supports intermediate procedure catalog and batch procedure requests"
   assert.match(pageSource, />提交所选查体<\/button>/);
   assert.match(pageSource, />提交所选检查<\/button>/);
   assert.doesNotMatch(pageSource, /提交自由申请/);
+  assert.match(pageSource, /className="flex w-fit max-w-full flex-none items-center gap-1\.5 rounded-full border border-border bg-background p-1 shadow-xs"/);
+  assert.match(pageSource, /className="h-7 w-52 min-w-0 bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground sm:w-60"/);
+  assert.match(pageSource, /className="h-7 rounded-full border border-brand bg-brand px-3 text-xs font-medium whitespace-nowrap text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"/);
   assert.match(pageSource, /提交申请/);
   assert.match(pageSource, /查看申请内容/);
   assert.match(pageSource, /onClick=\{openAdvancedProcedureRequestSummary\}/);
   assert.match(pageSource, /disabled=\{advancedProcedureRequestSummaryToShow === null\}/);
+  assert.match(pageSource, /const advancedProcedureRequestItemsToShow = useMemo<readonly ProcedureResult\[\]>/);
+  assert.match(pageSource, /matchedLabels: advancedProcedureRequestItemsToShow\.map\(\(procedureItem\) => procedureItem\.label\)/);
+  assert.match(pageSource, /advancedProcedureRequestItemsToShow\.map\(\(procedureItem\) => \(/);
+  assert.match(pageSource, /全部已申请项目/);
   assert.doesNotMatch(pageSource, /openProcedureResultGroup\(procedureItems\)/);
   assert.doesNotMatch(pageSource, /procedureItems\.length === 0/);
   assert.match(pageSource, /未识别项目/);
@@ -1384,7 +1422,7 @@ test("home supports intermediate procedure catalog and batch procedure requests"
   assert.match(pageSource, /ai_simulated_for_training/);
   assert.match(pageSource, /AI 模拟结果 · 不计分/);
   assert.match(pageSource, /formatProcedureResultText\(procedureResult\)/);
-  assert.match(pageSource, /本次查体 \/ 检查申请/);
+  assert.doesNotMatch(pageSource, /本次查体 \/ 检查申请/);
   assert.doesNotMatch(pageSource, /门禁状态：/);
   assert.doesNotMatch(pageSource, /依据：\{procedureResult\.sourceContextReferences/);
 });
@@ -1490,7 +1528,8 @@ test("home workspace can request socratic hints and render coach messages", () =
   assert.match(pageSource, /const hintButtonLabel = isRequestingHint[\s\S]*?"提示生成中"[\s\S]*?: isHintRequestLocked[\s\S]*?\? "开始问诊"[\s\S]*?: "请求提示";/);
   assert.match(pageSource, /setLastHintContextSignature\(buildHintContextSignature\(updatedSession, selectedCaseId, trainingDifficultyMode\)\);/);
   assert.match(pageSource, /message\.role === "coach"/);
-  assert.match(pageSource, /label: getCoachMessageLabel\(message\.content\)/);
+  assert.match(pageSource, /const coachLabel = getCoachMessageLabel\(message\.content\);/);
+  assert.match(pageSource, /label: coachLabel/);
   assert.match(pageSource, /"过程提示"/);
   assert.match(pageSource, /const pendingCoachHintId = createClientChatMessageId\("pending-coach-hint"\);/);
   assert.match(pageSource, /function buildPendingHintProcessingTimeline\(processingStatus\?: SessionProcessingStatus \| null\): AgentProcessingTimeline/);
@@ -1509,6 +1548,11 @@ test("home workspace highlights safety guardrail replies", () => {
   assert.match(pageSource, /content\.includes\("本系统仅用于 OSCE 教学模拟训练"\)[\s\S]*?return "安全边界";/);
   assert.match(pageSource, /content\.includes\("不能直接告诉你标准答案"\)[\s\S]*?return "答题边界";/);
   assert.match(pageSource, /content\.includes\("病例脚本没有提供这方面信息"\)[\s\S]*?return "问诊引导";/);
+  assert.match(pageSource, /const coachLabel = getCoachMessageLabel\(message\.content\);/);
+  assert.match(pageSource, /processingTimeline: coachLabel === "安全边界" \? undefined : session \? buildCompletedCoachProcessingTimeline\(session, message\.content\) : undefined,/);
+  assert.match(pageSource, /skillSelectionReasons: coachLabel === "安全边界" \? undefined : getSkillSelectionReasonsForReply\(session, message\.content\),/);
+  assert.match(pageSource, /const isSafetyBoundary = isCoach && message\.label === "安全边界";/);
+  assert.match(pageSource, /aria-label="安全边界提示"/);
   assert.match(pageSource, /`安全边界：\$\{session\?\.safety_flags\.length \?\? 0\} 次`/);
 });
 
@@ -1598,8 +1642,8 @@ test("home current case card can show student-visible patient profile modal", ()
   const leftAsideIndex = pageSource.indexOf('<aside className="hidden w-72 shrink-0 border-r border-border bg-background p-4 shadow-inner-right lg:flex lg:flex-col">');
   const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
   const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
-  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
-  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
   const quickActionRowSource = pageSource.slice(quickActionRowIndex, inputComposerIndex);
   assert.doesNotMatch(leftAsideSource, />\s*患者信息\s*<\/button>/);
   assert.match(quickActionRowSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);
@@ -1659,14 +1703,14 @@ test("home workspace renders opening task card and keeps teaching guidance in co
 
 test("home workspace centers compact coach hint cards inside the dialogue stream", () => {
   assert.match(pageSource, /const messageRowClass = isStudent \? "justify-end" : isCoach \? "justify-center" : "justify-start";/);
-  assert.match(pageSource, /const messageBubbleClass = isStudent[\s\S]*?isCoach[\s\S]*?w-full max-w-lg[\s\S]*?border-\[#A8BA91\]\/45[\s\S]*?bg-\[#F5F8EF\][\s\S]*?text-foreground/);
+  assert.match(pageSource, /const messageBubbleClass = isStudent[\s\S]*?isCoach[\s\S]*?w-full max-w-lg[\s\S]*?border-\[#D8C3AF\]\/70[\s\S]*?bg-\[#F8F3EA\][\s\S]*?text-foreground/);
   assert.match(pageSource, /className=\{`flex \$\{messageRowClass\}`\}/);
   assert.match(pageSource, /className=\{messageBubbleClass\}/);
   assert.doesNotMatch(pageSource, /isCoach\s*\?\s*"border-\[#B5812A\]\/30 bg-\[#FFF8E8\] text-foreground"/);
   assert.doesNotMatch(pageSource, /isCoach[\s\S]{0,160}bg-\[#FFF8E8\]/);
 });
 
-test("home workspace keeps backend progress data and exposes compact admin coverage map", () => {
+test("home workspace keeps backend progress data and gates compact admin coverage map to admins", () => {
   assert.match(pageSource, /type TrainingProgress = Readonly<\{/);
   assert.match(pageSource, /training_progress: TrainingProgress;/);
   assert.match(pageSource, /type CoverageMapItem = Readonly<\{/);
@@ -1680,14 +1724,18 @@ test("home workspace keeps backend progress data and exposes compact admin cover
   assert.match(pageSource, /function CoverageMap\(/);
   assert.match(pageSource, /function CoverageMapSection\(/);
   assert.match(pageSource, /const \[isCoverageMapOpen, setIsCoverageMapOpen\] = useState\(false\);/);
+  assert.match(pageSource, /function canViewAdminCoverageMap\(authUser: AuthUser \| null\): boolean/);
+  assert.match(pageSource, /const canOpenAdminCoverageMap = canViewAdminCoverageMap\(authUser\);/);
   assert.doesNotMatch(pageSource, /<Panel title="训练进度与素材覆盖"/);
   assert.doesNotMatch(pageSource, />问诊线索<\/p>/);
   assert.doesNotMatch(pageSource, />推理证据<\/p>/);
   assert.doesNotMatch(pageSource, /\{session\.training_progress\.next_focus\}/);
   assert.doesNotMatch(pageSource, /rounded-lg border border-brand\/20 bg-brand\/5 p-3 text-xs leading-5 text-brand/);
+  assert.match(pageSource, /\{canOpenAdminCoverageMap \? \([\s\S]*?>\s*管理员图谱\s*<\/p>/);
   assert.match(pageSource, />\s*管理员图谱\s*<\/p>/);
   assert.match(pageSource, />\s*查看素材覆盖图谱\s*<\/button>/);
   assert.match(pageSource, /onClick=\{\(\) => setIsCoverageMapOpen\(true\)\}/);
+  assert.match(pageSource, /\{isCoverageMapOpen && canOpenAdminCoverageMap && session \? \(/);
   assert.match(pageSource, /管理员图谱 · 素材覆盖/);
   assert.match(pageSource, /aria-label="关闭素材覆盖图谱"/);
   assert.match(pageSource, /const visibleLabel = item\.label;/);

@@ -22,6 +22,10 @@ try:
 except Exception:  # pragma: no cover - optional provider package guard.
     google_genai_errors = None
 
+from app.services.env_file_loader import load_api_env_file
+
+load_api_env_file()
+
 from app.graph.osce_graph import build_osce_graph
 from app.services import retrieval_index, source_retriever
 from app.services.admin_display_resolver import (

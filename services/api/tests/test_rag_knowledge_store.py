@@ -77,6 +77,25 @@ def test_rag_knowledge_store_can_seed_public_appendicitis_teaching_items(tmp_pat
     assert "急性阑尾炎" in reflection_item["text"]
 
 
+def test_rag_knowledge_store_seeds_coach_notes_for_each_demo_case(tmp_path) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
+
+    expected_case_ids = {
+        "appendicitis_001",
+        "acs_001",
+        "heart_failure_001",
+        "hyperthyroid_001",
+        "pneumonia_001",
+    }
+    seeded_case_ids = {
+        item["case_id"]
+        for item in store.list_items(visibility="pre_submit_safe")
+        if item["scope"] == "case" and "coach" in item["allowed_agents"]
+    }
+
+    assert expected_case_ids <= seeded_case_ids
+
+
 def test_rag_knowledge_store_refreshes_default_seed_without_overwriting_admin_edits(tmp_path) -> None:
     seed_path = tmp_path / "default_items.json"
     seed_path.write_text(
