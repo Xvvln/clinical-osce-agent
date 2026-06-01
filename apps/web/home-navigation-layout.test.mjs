@@ -117,6 +117,7 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /processing_trace\?: readonly BackendProcessingTraceItem\[];/);
   assert.match(pageSource, /processing_duration_ms\?: number;/);
   assert.match(pageSource, /type AgentProcessingTimeline = Readonly<\{/);
+  assert.match(pageSource, /startedAtMs\?: number;/);
   assert.match(pageSource, /type AgentProcessingStep = Readonly<\{[\s\S]*?metadata\?: Readonly<Record<string, unknown>>;/);
   assert.match(pageSource, /const AGENT_PROCESSING_STEP_DEFINITIONS/);
   assert.match(pageSource, /正在解析问诊意图/);
@@ -133,9 +134,12 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /type SessionProcessingStatus = Readonly<\{/);
   assert.match(pageSource, /function fetchSessionProcessingStatus\(sessionId: string\): Promise<SessionProcessingStatus>/);
   assert.match(pageSource, /function buildPendingAgentProcessingTimeline\(processingStatus\?: SessionProcessingStatus \| null\): AgentProcessingTimeline/);
-  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: false,[\s\S]*?summary: getPendingPatientProcessingSummary\(processingStatus, patientSteps\)/);
-  assert.match(pageSource, /const currentStepLabel = processingStatus\?\.current_label \|\| "建立后端流程连接";/);
-  assert.match(pageSource, /label: PATIENT_REPLY_PROCESSING_STEP_IDS\.has\(processingStatus\?\.current_step_id \?\? ""\) \? currentStepLabel : "正在组织标准化病人回复"/);
+  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: false,[\s\S]*?summary: getPendingPatientProcessingSummary\(processingStatus, timelineSteps\)/);
+  assert.doesNotMatch(pageSource, /if \(processingStatus\.summary\)/);
+  assert.match(pageSource, /return latestVisibleStep \? `当前：\$\{stripTerminalChinesePunctuation\(getAgentProcessingStepLabel\(latestVisibleStep\)\)\}` : "当前：正在组织标准化病人回复";/);
+  assert.match(pageSource, /const isPatientFallbackStep = PATIENT_REPLY_PROCESSING_STEP_IDS\.has\(currentStepId\);/);
+  assert.match(pageSource, /const fallbackStepId = isPatientFallbackStep \? currentStepId : "response_wait";/);
+  assert.match(pageSource, /: "正在等待标准化病人回复";/);
   assert.doesNotMatch(pageSource, /当前：等待后端返回真实流程。/);
   assert.match(pageSource, /function getBackendProcessingTraceElapsedMs\(turn: AgentTurnMemoryItem \| undefined\): number \| undefined/);
   assert.match(pageSource, /function getTimelineStepsFromBackendProcessingTrace\(trace: readonly BackendProcessingTraceItem\[] \| undefined\): readonly AgentProcessingStep\[]/);
@@ -149,18 +153,19 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /open=\{timeline\.isOpen\}/);
   assert.doesNotMatch(pageSource, /AGENT_PROCESSING_STEP_INTERVAL_MS/);
   assert.doesNotMatch(pageSource, /setAgentProcessingStepIndex/);
-  assert.doesNotMatch(pageSource, /Date\.now\(\) - processingStartedAtMs/);
   assert.doesNotMatch(pageSource, /agentProcessingDurationsByMessageKey/);
-  assert.match(pageSource, /processingTimeline: buildPendingAgentProcessingTimeline\(\)/);
+  assert.match(pageSource, /processingTimeline: \{[\s\S]*?\.\.\.buildPendingAgentProcessingTimeline\(\),[\s\S]*?startedAtMs: patientReplyProcessingStartedAtMs,[\s\S]*?\}/);
   assert.match(pageSource, /refreshPendingProcessingTimeline\(activeSession\.session_id, pendingPatientReplyId\)/);
   assert.match(pageSource, /window\.setInterval\(pollProcessingStatus, AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS\)/);
   assert.match(pageSource, /if \(processingStatus\.state !== "running"\) \{[\s\S]*?return;[\s\S]*?\}/);
-  assert.match(pageSource, /processingTimeline: buildCompletedAgentProcessingTimeline\(updatedSession, replyText\)/);
+  assert.match(pageSource, /const completedTimeline = buildCompletedAgentProcessingTimeline\(updatedSession, replyText\);/);
+  assert.match(pageSource, /elapsedMs: Math\.max\(completedTimeline\.elapsedMs \?\? 0, patientReplyProcessingElapsedMs\)/);
   assert.match(pageSource, /message\.processingTimeline\?\.state === "pending"/);
   assert.match(pageSource, /智能体处理中/);
   assert.match(pageSource, /智能体处理了/);
   assert.match(pageSource, /formatAgentProcessingElapsed\(timeline\.elapsedMs\)/);
-  assert.match(pageSource, /`\$\{timeline\.title\} · \$\{timeline\.summary\}`/);
+  assert.match(pageSource, /const pendingElapsedMs = timeline\.state === "pending" && pendingStartedAtMs !== undefined/);
+  assert.match(pageSource, /`\$\{timeline\.title\} · \$\{timeline\.summary\}\$\{pendingElapsedMs === undefined \? "" : ` · \$\{formatAgentProcessingTimerElapsed\(pendingElapsedMs\)\}`\}`/);
   assert.doesNotMatch(pageSource, /formatAgentProcessingTimestamp/);
   assert.doesNotMatch(pageSource, /step\.startedAt/);
   assert.doesNotMatch(pageSource, /step\.completedAt/);
@@ -220,10 +225,12 @@ test("home message failure status is not limited to backend downtime", () => {
 });
 
 test("home diagnosis submit does not report submit failure when only report retrieval fails", () => {
+  assert.match(pageSource, /import \{ useRouter, useSearchParams \} from "next\/navigation";/);
+  assert.match(pageSource, /const router = useRouter\(\);/);
   assert.match(pageSource, /const submittedSession = await submitDiagnosis\(activeSession\.session_id, diagnosis, reasoning\);/);
   assert.match(pageSource, /setSession\(submittedSession\);/);
   assert.match(pageSource, /setStatusText\("诊断已提交，正在生成评分报告\.\.\."\);/);
-  assert.match(pageSource, /try \{[\s\S]*?const report = await getSessionReport\(submittedSession\.session_id\);[\s\S]*?setFeedbackReport\(report\);[\s\S]*?\} catch \(reportError\) \{/);
+  assert.match(pageSource, /try \{[\s\S]*?const report = await getSessionReport\(submittedSession\.session_id\);[\s\S]*?setFeedbackReport\(report\);[\s\S]*?router\.push\(`\/report\?session_id=\$\{encodeURIComponent\(report\.session_id \|\| submittedSession\.session_id\)\}`\);[\s\S]*?\} catch \(reportError\) \{/);
   assert.match(pageSource, /setErrorText\(`诊断已提交，但报告暂时未取回：\$\{reportMessage\}`\);/);
   assert.match(pageSource, /setStatusText\("诊断已提交；评分报告暂时未取回，可稍后从训练记录打开。"\);/);
   assert.match(pageSource, /setStatusText\("诊断提交失败，请确认后端仍在运行。"\);/);
@@ -1534,7 +1541,7 @@ test("home workspace can request socratic hints and render coach messages", () =
   assert.match(pageSource, /"过程提示"/);
   assert.match(pageSource, /const pendingCoachHintId = createClientChatMessageId\("pending-coach-hint"\);/);
   assert.match(pageSource, /function buildPendingHintProcessingTimeline\(processingStatus\?: SessionProcessingStatus \| null\): AgentProcessingTimeline/);
-  assert.match(pageSource, /speaker: "coach",[\s\S]*?label: "过程提示",[\s\S]*?isPending: true,[\s\S]*?processingTimeline: buildPendingHintProcessingTimeline/);
+  assert.match(pageSource, /speaker: "coach",[\s\S]*?label: "过程提示",[\s\S]*?isPending: true,[\s\S]*?processingTimeline: \{[\s\S]*?\.\.\.buildPendingHintProcessingTimeline\(\),[\s\S]*?startedAtMs: coachHintProcessingStartedAtMs,[\s\S]*?\}/);
   assert.match(pageSource, /refreshPendingProcessingTimeline\(activeSession\.session_id, pendingCoachHintId\)/);
   assert.match(pageSource, /setPendingCoachHintMessage\(\(currentMessage\) => currentMessage\?\.id === pendingCoachHintId \? null : currentMessage\);/);
   assert.match(pageSource, /onClick=\{handleHintRequest\}/);
@@ -1589,7 +1596,7 @@ test("home inquiry submit shows optimistic student message and neutral streaming
   assert.match(pageSource, /window\.setTimeout\(resolve, PATIENT_REPLY_TYPEWRITER_DELAY_MS\)/);
   assert.match(pageSource, /replyText\.slice\(0, index\)/);
   assert.match(pageSource, /setOptimisticHistoryMessage\(\{[\s\S]*?id: optimisticQuestionId,[\s\S]*?speaker: "student",[\s\S]*?label: "学生",[\s\S]*?text: message,[\s\S]*?\}\);/);
-  assert.match(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "patient",[\s\S]*?label: "标准化病人",[\s\S]*?text: "",[\s\S]*?processingTimeline: buildPendingAgentProcessingTimeline\(\),[\s\S]*?\}\);/);
+  assert.match(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "patient",[\s\S]*?label: "标准化病人",[\s\S]*?text: "",[\s\S]*?processingTimeline: \{[\s\S]*?\.\.\.buildPendingAgentProcessingTimeline\(\),[\s\S]*?startedAtMs: patientReplyProcessingStartedAtMs,[\s\S]*?\},[\s\S]*?\}\);/);
   assert.doesNotMatch(pageSource, /setPendingPatientMessage\(\{[\s\S]*?id: pendingPatientReplyId,[\s\S]*?speaker: "coach",[\s\S]*?label: "判断中"/);
   assert.doesNotMatch(pageSource, /text: "判断中"/);
   assert.match(pageSource, /message\.processingTimeline\?\.state === "pending"/);
@@ -1599,7 +1606,8 @@ test("home inquiry submit shows optimistic student message and neutral streaming
   assert.match(pageSource, /const replyStatusLabel = replyMessageMetadata\.speaker === "coach" \? replyMessageMetadata\.label : "标准化病人回复";/);
   assert.match(pageSource, /if \(replyMessageMetadata\.speaker === "coach"\) \{[\s\S]*?setPendingPatientMessage\(\(currentMessage\) => currentMessage\?\.id === pendingPatientReplyId \? null : currentMessage\);[\s\S]*?setSession\(updatedSession\);/);
   assert.match(pageSource, /\.\.\.replyMessageMetadata,[\s\S]*?finalText: replyText,/);
-  assert.match(pageSource, /processingTimeline: buildCompletedAgentProcessingTimeline\(updatedSession, replyText\),/);
+  assert.match(pageSource, /const completedTimeline = buildCompletedAgentProcessingTimeline\(updatedSession, replyText\);/);
+  assert.match(pageSource, /processingTimeline: \{[\s\S]*?\.\.\.completedTimeline,[\s\S]*?elapsedMs: Math\.max\(completedTimeline\.elapsedMs \?\? 0, patientReplyProcessingElapsedMs\),[\s\S]*?\}/);
   assert.match(pageSource, /await animatePendingPatientReply\(pendingPatientReplyId, updatedSession\.reply \?\? ""\);/);
   assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{formatIntentList\(updatedSession\.current_intents\)\}`\);/);
   assert.doesNotMatch(pageSource, /updatedSession\.current_intent(?!s)/);

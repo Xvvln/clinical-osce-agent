@@ -2057,60 +2057,10 @@ def _apply_passive_coach_review(
             "messages": messages,
         }
     )
-    preliminary_hint_context = build_coach_hint_context(
-        state={**dict(state), "messages": messages},
-        case=case,
-        pedagogy_state=pedagogy_state,
-        base_hint=base_hint,
-        retrieved_knowledge_context=[],
-    )
-    _emit_processing_progress(state, "skill", status="active")
-    skill_started_at, skill_started_perf = _start_processing_step()
-    selected_skill_ids, selected_skill_context, routed_skill_context, router_turn_analysis = _route_skill_context_for_coach(
-        state,
-        case=case,
-        coach_agent=coach_agent,
-        base_hint=base_hint,
-        prior_messages=messages,
-        pedagogy_state=pedagogy_state,
-        retrieved_knowledge_context=[],
-        hint_context=preliminary_hint_context,
-    )
-    if routed_skill_context is not None:
-        turn_analysis = {**turn_analysis, "routed_skill_context": routed_skill_context}
-    if router_turn_analysis:
-        turn_analysis = {**turn_analysis, **router_turn_analysis}
     passive_agent_path = ["input_router_node", "patient_response_node"]
-    if routed_skill_context is not None:
-        passive_agent_path.append("skill_router")
     passive_agent_path.append("coach_agent")
-    processing_trace = _append_processing_trace_step(
-        processing_trace,
-        "skill",
-        "completed" if selected_skill_ids else "skipped",
-        skill_started_at,
-        skill_started_perf,
-        metadata={"selected_skill_ids": selected_skill_ids, "routed_skill_context": routed_skill_context},
-    )
-    _emit_processing_progress(state, "rag", status="active")
-    rag_started_at, rag_started_perf = _start_processing_step()
-    retrieved_knowledge_context = _retrieve_coach_knowledge_context(
-        state,
-        case=case,
-        query=" ".join([base_hint, student_message, patient_reply]),
-        forbidden_terms=forbidden_terms,
-    )
-    processing_trace = _append_processing_trace_step(
-        processing_trace,
-        "rag",
-        "completed" if retrieved_knowledge_context else "skipped",
-        rag_started_at,
-        rag_started_perf,
-        metadata={
-            "retrieved_count": len(retrieved_knowledge_context),
-            "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
-        },
-    )
+    selected_skill_context: list[str] = []
+    retrieved_knowledge_context: list[dict[str, Any]] = []
     hint_context = build_coach_hint_context(
         state={**dict(state), "messages": messages},
         case=case,
@@ -2177,8 +2127,6 @@ def _apply_passive_coach_review(
             agent_path=[*passive_agent_path[:-1], "coach_agent_unavailable"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
-            selected_skill_ids=selected_skill_ids,
-            skill_context=selected_skill_context,
             processing_trace=processing_trace,
         ), processing_trace
     forced_hint = base_hint.strip()
@@ -2208,8 +2156,6 @@ def _apply_passive_coach_review(
         safety_flags=list(state.get("safety_flags", [])),
         source_references=[item["reference"] for item in retrieved_knowledge_context] if should_emit else [],
         retrieved_knowledge_context=retrieved_knowledge_context if should_emit else [],
-        selected_skill_ids=selected_skill_ids,
-        skill_context=selected_skill_context,
         processing_trace=processing_trace,
     )
     return next_messages, next_agent_turn_memory, processing_trace

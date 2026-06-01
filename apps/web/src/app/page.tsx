@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, PointerEvent, ReactNode, UIEvent } from "react";
 import { getCurrentUser, loginUser, logoutUser } from "./auth-client";
@@ -518,6 +518,7 @@ type AgentProcessingTimeline = Readonly<{
   title: string;
   summary: string;
   elapsedMs?: number;
+  startedAtMs?: number;
   steps: readonly AgentProcessingStep[];
 }>;
 
@@ -862,7 +863,6 @@ const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: 
   { id: "response", label: "正在生成可见回复" },
 ];
 const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set(["intent", "case_context", "patient_reply", "response"]);
-const PENDING_AGENT_PROCESSING_STEP_IDS = new Set(AGENT_PROCESSING_STEP_DEFINITIONS.map((step) => step.id));
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1294,8 +1294,8 @@ function getPatientReplyProcessingSteps<TStep extends Readonly<{ id: string }>>(
   return steps.filter((step) => PATIENT_REPLY_PROCESSING_STEP_IDS.has(step.id));
 }
 
-function getPendingAgentProcessingSteps<TStep extends Readonly<{ id: string }>>(steps: readonly TStep[]): readonly TStep[] {
-  return steps.filter((step) => PENDING_AGENT_PROCESSING_STEP_IDS.has(step.id));
+function stripTerminalChinesePunctuation(text: string): string {
+  return text.trim().replace(/[。.!！?？]+$/u, "");
 }
 
 function getPendingPatientProcessingSummary(
@@ -1303,13 +1303,10 @@ function getPendingPatientProcessingSummary(
   visibleSteps: readonly AgentProcessingStep[],
 ): string {
   if (!processingStatus) {
-    return "当前：正在建立后端流程连接。";
-  }
-  if (processingStatus.summary) {
-    return processingStatus.summary;
+    return "当前：正在建立后端流程连接";
   }
   const latestVisibleStep = [...visibleSteps].reverse().find((step) => step.status === "completed" || step.status === "active");
-  return latestVisibleStep ? `当前：${getAgentProcessingStepLabel(latestVisibleStep)}。` : "当前：正在组织标准化病人回复。";
+  return latestVisibleStep ? `当前：${stripTerminalChinesePunctuation(getAgentProcessingStepLabel(latestVisibleStep))}` : "当前：正在组织标准化病人回复";
 }
 
 function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessingStatus | null): AgentProcessingTimeline {
@@ -1318,20 +1315,24 @@ function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessin
     label: step.label,
     status: normalizeAgentProcessingStepStatus(step.status),
   })) ?? [];
-  const visibleSteps = getPendingAgentProcessingSteps(statusSteps);
-  const hasActiveVisibleStep = visibleSteps.some((step) => step.status === "active");
-  const timelineSteps = processingStatus?.state === "running" && visibleSteps.length > 0 && !hasActiveVisibleStep
+  const patientSteps = getPatientReplyProcessingSteps(statusSteps);
+  const hasActiveVisibleStep = patientSteps.some((step) => step.status === "active");
+  const timelineSteps = processingStatus?.state === "running" && patientSteps.length > 0 && !hasActiveVisibleStep
     ? [
-        ...visibleSteps,
+        ...patientSteps,
         {
           id: "response_wait",
           label: "正在等待可见回复返回",
           status: "active" as const,
         },
       ]
-    : visibleSteps;
-  const fallbackStepId = processingStatus?.current_step_id || "backend_connect";
-  const fallbackStepLabel = processingStatus?.current_label || "正在组织标准化病人回复";
+    : patientSteps;
+  const currentStepId = processingStatus?.current_step_id ?? "backend_connect";
+  const isPatientFallbackStep = PATIENT_REPLY_PROCESSING_STEP_IDS.has(currentStepId);
+  const fallbackStepId = isPatientFallbackStep ? currentStepId : "response_wait";
+  const fallbackStepLabel = isPatientFallbackStep
+    ? processingStatus?.current_label || "正在组织标准化病人回复"
+    : "正在等待标准化病人回复";
   return {
     state: "pending",
     isOpen: false,
@@ -1353,7 +1354,7 @@ function buildPendingHintProcessingTimeline(processingStatus?: SessionProcessing
     ...baseTimeline,
     isOpen: true,
     title: "教师智能体处理中",
-    summary: processingStatus?.summary ?? "当前：正在生成过程提示。",
+    summary: stripTerminalChinesePunctuation(processingStatus?.summary ?? "当前：正在生成过程提示。"),
   };
 }
 
@@ -2299,6 +2300,7 @@ function handleStudentRailScroll(event: UIEvent<HTMLElement>): void {
 function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentProcessingTimeline }>) {
   const activeStepStartedAtRef = useRef<Map<string, number>>(new Map());
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const pendingStartedAtMs = timeline.state === "pending" ? timeline.startedAtMs : undefined;
   const activeStepSignature = timeline.state === "pending"
     ? timeline.steps
       .filter((step) => step.status === "active")
@@ -2328,14 +2330,14 @@ function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentPro
   }, [activeStepSignature, timeline.state]);
 
   useEffect(() => {
-    if (timeline.state !== "pending" || !activeStepSignature) {
+    if (timeline.state !== "pending" || (!activeStepSignature && pendingStartedAtMs === undefined)) {
       return;
     }
     const intervalId = window.setInterval(() => {
       setTimerNowMs(Date.now());
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [activeStepSignature, timeline.state]);
+  }, [activeStepSignature, pendingStartedAtMs, timeline.state]);
 
   const getActiveStepElapsedMs = (stepId: string) => {
     const startedAtMs = activeStepStartedAtRef.current.get(stepId) ?? timerNowMs;
@@ -2344,8 +2346,11 @@ function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentPro
   const activeStepElapsedMs = timeline.state === "pending" && activeStepIds.length > 0
     ? Math.max(...activeStepIds.map((stepId) => getActiveStepElapsedMs(stepId)))
     : undefined;
+  const pendingElapsedMs = timeline.state === "pending" && pendingStartedAtMs !== undefined
+    ? Math.max(0, timerNowMs - pendingStartedAtMs)
+    : activeStepElapsedMs;
   const thoughtLine = timeline.state === "pending"
-    ? `${timeline.title} · ${timeline.summary}${activeStepElapsedMs === undefined ? "" : ` · ${formatAgentProcessingTimerElapsed(activeStepElapsedMs)}`}`
+    ? `${timeline.title} · ${timeline.summary}${pendingElapsedMs === undefined ? "" : ` · ${formatAgentProcessingTimerElapsed(pendingElapsedMs)}`}`
     : timeline.elapsedMs === undefined
       ? "智能体流程"
       : `智能体处理了 ${formatAgentProcessingElapsed(timeline.elapsedMs)}`;
@@ -2518,6 +2523,7 @@ function OpeningTaskCardMessage({ openingTaskCard }: Readonly<{ openingTaskCard:
 }
 
 function HomeContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const requestedSessionId = searchParams.get("session_id");
   const initialCaseId = searchParams.get("case_id");
@@ -3732,7 +3738,10 @@ function HomeContent() {
           currentMessage?.id === messageId && currentMessage.isPending
             ? {
                 ...currentMessage,
-                processingTimeline: buildPendingAgentProcessingTimeline(processingStatus),
+                processingTimeline: {
+                  ...buildPendingAgentProcessingTimeline(processingStatus),
+                  startedAtMs: currentMessage.processingTimeline?.startedAtMs ?? Date.now(),
+                },
               }
             : currentMessage,
         );
@@ -3740,7 +3749,10 @@ function HomeContent() {
           currentMessage?.id === messageId && currentMessage.isPending
             ? {
                 ...currentMessage,
-                processingTimeline: buildPendingHintProcessingTimeline(processingStatus),
+                processingTimeline: {
+                  ...buildPendingHintProcessingTimeline(processingStatus),
+                  startedAtMs: currentMessage.processingTimeline?.startedAtMs ?? Date.now(),
+                },
               }
             : currentMessage,
         );
@@ -3788,6 +3800,7 @@ function HomeContent() {
 
       const optimisticQuestionId = createClientChatMessageId("optimistic-student");
       pendingPatientReplyId = createClientChatMessageId("pending-patient");
+      const patientReplyProcessingStartedAtMs = Date.now();
       setInputValue("");
       setPendingCoachHintMessage(null);
       setOptimisticHistoryMessage({
@@ -3802,7 +3815,10 @@ function HomeContent() {
         label: "标准化病人",
         text: "",
         isPending: true,
-        processingTimeline: buildPendingAgentProcessingTimeline(),
+        processingTimeline: {
+          ...buildPendingAgentProcessingTimeline(),
+          startedAtMs: patientReplyProcessingStartedAtMs,
+        },
       });
       setStatusText("正在处理问诊");
 
@@ -3821,13 +3837,18 @@ function HomeContent() {
         setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
         return;
       }
+      const completedTimeline = buildCompletedAgentProcessingTimeline(updatedSession, replyText);
+      const patientReplyProcessingElapsedMs = Math.max(0, Date.now() - patientReplyProcessingStartedAtMs);
       setPendingPatientMessage((currentMessage) =>
         currentMessage?.id === pendingPatientReplyId
           ? {
               ...currentMessage,
               ...replyMessageMetadata,
               finalText: replyText,
-              processingTimeline: buildCompletedAgentProcessingTimeline(updatedSession, replyText),
+              processingTimeline: {
+                ...completedTimeline,
+                elapsedMs: Math.max(completedTimeline.elapsedMs ?? 0, patientReplyProcessingElapsedMs),
+              },
             }
           : currentMessage,
       );
@@ -4141,13 +4162,17 @@ function HomeContent() {
 
       const pendingCoachHintId = createClientChatMessageId("pending-coach-hint");
       activePendingCoachHintId = pendingCoachHintId;
+      const coachHintProcessingStartedAtMs = Date.now();
       setPendingCoachHintMessage({
         id: pendingCoachHintId,
         speaker: "coach",
         label: "过程提示",
         text: "",
         isPending: true,
-        processingTimeline: buildPendingHintProcessingTimeline(),
+        processingTimeline: {
+          ...buildPendingHintProcessingTimeline(),
+          startedAtMs: coachHintProcessingStartedAtMs,
+        },
       });
       setStatusText("正在生成过程提示");
 
@@ -4225,7 +4250,8 @@ function HomeContent() {
         const updatedSession = await getSession(submittedSession.session_id);
         setSession(updatedSession);
         setFeedbackReport(report);
-        setStatusText(`已提交诊断并生成评分报告：${report.total_score} 分。`);
+        setStatusText(`已提交诊断并生成评分报告：${report.total_score} 分，正在打开报告页面。`);
+        router.push(`/report?session_id=${encodeURIComponent(report.session_id || submittedSession.session_id)}`);
       } catch (reportError) {
         try {
           const updatedSession = await getSession(submittedSession.session_id);

@@ -1908,7 +1908,7 @@ def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -
     assert "急性阑尾炎" not in str(payload)
 
 
-def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() -> None:
+def test_osce_graph_passive_coach_review_does_not_route_skill_or_retrieve_rag() -> None:
     captured_requests: list[object] = []
 
     def silent_capturing_coach_agent(request: object) -> dict[str, object]:
@@ -1931,19 +1931,24 @@ def test_osce_graph_passive_coach_review_uses_active_selected_skill_context() ->
         )
     )
 
-    assert len(captured_requests) == 2
-    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "prompt_kind") == "passive_turn_review"
     assert getattr(captured_requests[0], "skill_context") == []
-    assert getattr(captured_requests[1], "prompt_kind") == "passive_turn_review"
-    assert "教学目标：帮助学生先建立疼痛演变时间线。" in getattr(captured_requests[1], "skill_context")[0]
-    assert "旧技能" not in str(getattr(captured_requests[1], "model_dump")())
-    assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
-    assert "分层提示：先追问起病部位。 / 再追问是否迁移。" in result["agent_turn_memory"][-1]["skill_context"][0]
+    assert getattr(captured_requests[0], "retrieved_knowledge_context") == []
+    assert "旧技能" not in str(getattr(captured_requests[0], "model_dump")())
+    assert "selected_skill_ids" not in result["agent_turn_memory"][-1]
+    assert "skill_context" not in result["agent_turn_memory"][-1]
+    assert "knowledge_references" not in result["agent_turn_memory"][-1]
     assert result["agent_turn_memory"][-1]["agent_path"] == [
         "input_router_node",
         "patient_response_node",
-        "skill_router",
         "coach_agent",
+    ]
+    assert [step["step_id"] for step in result["agent_turn_memory"][-1]["processing_trace"]] == [
+        "intent",
+        "case_context",
+        "patient_reply",
+        "coach",
     ]
     patient_turn = result["agent_turn_memory"][0]
     assert patient_turn["reply_role"] == "patient"
