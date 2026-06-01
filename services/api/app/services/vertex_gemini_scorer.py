@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
+from app.services.api_call_log_service import call_with_api_logging
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -50,13 +51,19 @@ class VertexGeminiRubricScorer:
             )
 
     def __call__(self, request: LlmRubricRequest) -> LlmRubricResponse:
-        response = self._client.models.generate_content(
+        response = call_with_api_logging(
+            provider="vertex_gemini_rubric_scorer",
+            operation="generate_content",
             model=self._settings.model,
-            contents=json.dumps(request.model_dump(), ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT_TEMPLATE,
-                response_mime_type="application/json",
-                response_schema=LlmRubricResponse,
+            endpoint="vertex://generate_content",
+            call=lambda: self._client.models.generate_content(
+                model=self._settings.model,
+                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT_TEMPLATE,
+                    response_mime_type="application/json",
+                    response_schema=LlmRubricResponse,
+                ),
             ),
         )
         return LlmRubricResponse.model_validate_json(response.text)

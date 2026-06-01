@@ -86,6 +86,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /type AdminTeachingFocusPatternsResponse = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelProviderConfig = Readonly<\{/);
   assert.match(adminPageSource, /type AdminModelConfigResponse = Readonly<\{/);
+  assert.match(adminPageSource, /type AdminModelApiLogsResponse = Readonly<\{/);
   assert.match(adminPageSource, /deployment_mode: string;/);
   assert.match(adminPageSource, /account_runtime_scope: string;/);
   assert.match(adminPageSource, /account_runtime_visible: boolean;/);
@@ -112,6 +113,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /fetch\("\/api\/admin\/teaching-focus\/patterns"/);
   assert.match(adminPageSource, /fetch\(`\/api\/admin\/teaching-focus\/patterns\/\$\{encodeURIComponent\(focusId\)\}`/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/model-config"/);
+  assert.match(adminPageSource, /fetch\("\/api\/admin\/model-api-logs\?limit=80"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/retrieval-eval"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge"/);
   assert.match(adminPageSource, /fetch\("\/api\/admin\/rag\/knowledge", \{/);
@@ -123,13 +125,14 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /临境 OSCE 智能体（TraceOSCE）管理后台/);
   assert.doesNotMatch(adminPageSource, /id="admin-overview"/);
   assert.match(adminPageSource, /训练 Session/);
+  assert.match(adminPageSource, /API 调用成功率/);
+  assert.match(adminPageSource, /模型 API 日志/);
   assert.match(adminPageSource, /评分报告/);
   assert.match(adminPageSource, /跨 Session 报告列表/);
   assert.match(adminPageSource, /reports\.length > 0/);
   assert.match(adminPageSource, /setReports\(nextReportPage\.reports\)/);
   assert.match(adminPageSource, /错误模式统计/);
   assert.match(adminPageSource, /动态教学重点模式/);
-  assert.match(adminPageSource, /由病例结构、Rubric 和当前会话进度派生/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_ids/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.source_reference_ids/);
   assert.match(adminPageSource, /selectedTeachingFocusPattern\.trigger_item_labels/);
@@ -225,8 +228,10 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /服务端模型/);
   assert.match(adminPageSource, /部署模式/);
   assert.match(adminPageSource, /modelConfig\.policy\.deployment_mode/);
-  assert.match(adminPageSource, /账号 Runtime/);
-  assert.match(adminPageSource, /modelConfig\.policy\.runtime_write_supported \? "账号可自配置" : "仅服务端环境变量"/);
+  assert.match(adminPageSource, /模型通道明细/);
+  assert.match(adminPageSource, /对话模型/);
+  assert.match(adminPageSource, /检索能力/);
+  assert.match(adminPageSource, /账号配置边界/);
   assert.match(adminPageSource, /RAG 检索评测/);
   assert.match(adminPageSource, /结构化追溯覆盖/);
   assert.match(adminPageSource, /RAG 知识库/);
@@ -276,7 +281,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.doesNotMatch(adminPageSource, /用标注查询验证反馈解释来源覆盖/);
   assert.doesNotMatch(adminPageSource, /RAG 引用覆盖/);
   assert.doesNotMatch(adminPageSource, /评分项 → 证据 → 来源/);
-  assert.match(adminPageSource, /服务端默认能力，不代表每个账号当前使用的模型/);
+  assert.match(adminPageSource, /模型与检索能力/);
   assert.match(adminPageSource, /provider\.label/);
   assert.match(adminPageSource, /provider\.integration_status/);
   assert.match(adminPageSource, /provider\.persist_directory/);
@@ -286,7 +291,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /需重建/);
   assert.match(adminPageSource, /文档数/);
   assert.match(adminPageSource, /覆盖病例/);
-  assert.match(adminPageSource, /密钥不落库/);
+  assert.match(adminPageSource, /服务端密钥持久化/);
   assert.match(adminPageSource, /样本不足/);
   assert.match(adminPageSource, /skillEffects\.status === "insufficient_samples"/);
   assert.match(adminPageSource, /事件类型/);
@@ -306,6 +311,25 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /setAuditEvents\(nextAuditPage\.events\)/);
   assert.match(adminPageSource, /getTrainingSkillCandidateEvents\(candidateId\)/);
   assert.match(adminPageSource, /setCandidateAuditEvents\(nextCandidateAuditEvents\)/);
+});
+
+test("admin dashboard keeps main content readable by folding raw technical fields", () => {
+  assert.match(adminPageSource, /function AdminTechDetails/);
+  assert.match(adminPageSource, /adminContentPanelClassName/);
+  assert.match(adminPageSource, /adminMetricCardClassName/);
+  assert.match(adminPageSource, /技术细节/);
+  assert.match(adminPageSource, /function getAdminProviderCapabilityLabel/);
+  assert.match(adminPageSource, /<AdminTechDetails[\s\S]*?document\.document_id/);
+  assert.match(adminPageSource, /<AdminTechDetails[\s\S]*?item\.knowledge_id/);
+  assert.match(adminPageSource, /<AdminTechDetails[\s\S]*?selectedSessionSummary\.session_id/);
+  assert.match(adminPageSource, /<AdminTechDetails[\s\S]*?selectedReport\.report_id/);
+  assert.doesNotMatch(adminPageSource, />hidden_facts</);
+  assert.doesNotMatch(adminPageSource, />reasoning_points</);
+  assert.doesNotMatch(adminPageSource, /source_attribution：/);
+  assert.doesNotMatch(adminPageSource, /schema_version：/);
+  assert.doesNotMatch(adminPageSource, /match_rule：\{item\.match_rule\.kind\}/);
+  assert.doesNotMatch(adminPageSource, /evidence_expected：/);
+  assert.doesNotMatch(adminPageSource, /原始 ID：病例/);
 });
 
 test("admin dashboard exposes procedure simulation audit workspace", () => {
@@ -339,7 +363,7 @@ test("admin dashboard organizes the long workspace with a report-style side navi
   assert.match(adminPageSource, /function AdminWorkspaceSubnav/);
   assert.match(adminPageSource, /id="admin-workspace-frame"/);
   assert.match(adminPageSource, /const adminWorkspaceLayoutClassName = \[/);
-  assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-4"/);
+  assert.match(adminPageSource, /const adminWorkspaceFrameClassName = "min-w-0 space-y-5"/);
   assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName =/);
   assert.match(adminPageSource, /const adminWidePanelCardClassName = `\$\{adminPanelCardClassName\} xl:col-span-2`/);
   assert.doesNotMatch(adminPageSource, /<section className=\{getAdminWorkspaceGroupClassName\(activeAdminWorkspaceSectionId, adminModuleShellClassName\)\}>/);
@@ -453,7 +477,7 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
 
   for (const chineseHeading of [
     "系统状态",
-    "服务端默认模型与检索能力",
+    "模型与检索能力",
     "RAG 检索评测",
     "病例与来源台账",
     "训练记录",
@@ -472,12 +496,12 @@ test("admin dashboard keeps module content compact and student-facing copy Chine
   assert.match(adminPageSource, /const adminDrawerPanelClassName =/);
   assert.doesNotMatch(adminPageSource, /const adminEvidenceGridClassName =/);
   assert.match(adminPageSource, /max-h-\[28rem\]/);
-  assert.match(adminPageSource, /<details className="mt-3 rounded-xl/);
-  assert.match(adminPageSource, />查看连接与索引细节</);
+  assert.match(adminPageSource, /<details className="mt-3 rounded-\[18px\]/);
+  assert.match(adminPageSource, /连接与索引细节/);
   assert.match(adminPageSource, />查看检索使用边界</);
   assert.match(adminPageSource, /展开原始数据/);
-  assert.match(adminPageSource, /服务端默认能力，不代表每个账号当前使用的模型/);
-  assert.match(adminPageSource, /账号级 API 配置请在对应账号的 API 设置中查看/);
+  assert.match(adminPageSource, /模型通道明细/);
+  assert.match(adminPageSource, /账号配置边界/);
   assert.doesNotMatch(adminPageSource, /查看当前服务商、模型、密钥状态和运行时配置来源。/);
 });
 
@@ -501,8 +525,10 @@ test("admin workspace subsection tabs render distinct panes", () => {
 });
 
 test("admin workspace keeps module cards with navigator-like radius and fills session tab details", () => {
-  assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6 rounded-\[28px\] border border-white\/70 bg-white\/75 p-4 shadow-\[0_18px_50px_rgb\(73_49_34_\/_0\.10\)\] backdrop-blur-xl";/);
-  assert.match(adminPageSource, /const adminPanelCardClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white\/85 p-4 shadow-sm";/);
+  assert.match(adminPageSource, /const adminModuleShellClassName = "scroll-mt-6 rounded-\[30px\] border border-\[#E6DFD2\] bg-white p-5 shadow-\[0_10px_28px_rgb\(73_49_34_\/_0\.045\)\]";/);
+  assert.match(adminPageSource, /const adminContentPanelClassName = "rounded-\[26px\] border border-\[#E6DFD2\] bg-white p-5 shadow-\[0_12px_30px_rgb\(73_49_34_\/_0\.06\)\]";/);
+  assert.match(adminPageSource, /const adminPanelCardClassName = adminContentPanelClassName;/);
+  assert.match(adminPageSource, /const adminMetricCardClassName = "rounded-\[22px\] border border-\[#E6DFD2\] bg-\[#FAF9F5\] p-4";/);
   assert.match(adminPageSource, /const adminDrawerPanelClassName = "rounded-\[24px\] border border-\[#E6DFD2\] bg-white p-4 shadow-lg";/);
   assert.match(adminPageSource, /<section className=\{getAdminWorkspacePanelClassName\("training", activeAdminWorkspaceSectionId, adminModuleShellClassName\)\} id="admin-training">/);
   assert.match(adminPageSource, /const adminTrainingColumnClassName = activeTrainingSubsectionId === "training-sessions"/);
@@ -553,7 +579,7 @@ test("admin dashboard renders readable display labels before technical ids", () 
     assert.match(adminPageSource, new RegExp(displayField.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(adminPageSource, /技术 ID/);
-  assert.match(adminPageSource, /原始 ID/);
+  assert.doesNotMatch(adminPageSource, /原始 ID/);
   assert.match(adminPageSource, /展开教学重点技术 ID/);
   assert.match(adminPageSource, /展开话轮模式技术 ID/);
   assert.doesNotMatch(adminPageSource, /<span className="mt-1 block font-mono text-\[11px\] text-\[#AE5630\]">\{pattern\.focus_id\}<\/span>/);

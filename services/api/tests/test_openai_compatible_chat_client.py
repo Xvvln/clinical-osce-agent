@@ -9,6 +9,7 @@ from pydantic import BaseModel
 import httpx
 
 from app.services import openai_compatible_chat_client as module
+from app.services.api_call_log_service import ApiCallLogStore
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 
 
@@ -172,6 +173,41 @@ def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_
     assert FakeFallbackHttpxClient.calls[0]["headers"]["Authorization"] == "Bearer primary-secret-value"
     assert FakeFallbackHttpxClient.calls[1]["headers"]["Authorization"] == "Bearer mimo-secret-value"
     assert "proxy" not in FakeFallbackHttpxClient.calls[1]["kwargs"]
+
+
+def test_openai_compatible_chat_client_records_primary_failure_and_fallback_success(tmp_path, monkeypatch) -> None:
+    FakeFallbackHttpxClient.calls = []
+    log_store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
+    monkeypatch.setattr(module, "api_call_log_store", log_store)
+    monkeypatch.setattr(module.httpx, "Client", FakeFallbackHttpxClient)
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "mimo-secret-value")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_BASE_URL", "https://fallback-gateway.example/v1")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="primary-secret-value",
+            base_url="https://primary.example/v1",
+            model="gemini-primary",
+            proxy_url="direct",
+        )
+    )
+
+    result = client.complete_json(
+        system_prompt="只输出 JSON。",
+        payload={"case_id": "appendicitis_001"},
+        response_model=DemoJsonResponse,
+    )
+
+    assert result == DemoJsonResponse(message="备用 MiMo 模型返回的结构化内容")
+    payload = log_store.build_admin_payload(limit=10)
+    assert [(item["provider"], item["success"], item["status_code"]) for item in payload["logs"]] == [
+        ("openai_compatible_fallback", True, 200),
+        ("openai_compatible", False, 503),
+    ]
 
 
 def test_openai_compatible_chat_client_normalizes_mimo_model_case_without_provider_specific_url(monkeypatch) -> None:

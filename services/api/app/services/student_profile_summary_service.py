@@ -309,25 +309,56 @@ def _observed_teaching_changes(axes: list[Mapping[str, Any]]) -> list[dict[str, 
     changes: list[dict[str, str]] = []
     for axis in axes:
         state = str(axis.get("state") or "")
+        axis_id = str(axis.get("axis_id") or "")
+        axis_label = str(axis.get("axis_label") or _axis_definition(axis_id)["label"])
+        latest_count = int(axis.get("latest_count") or 0)
+        historical_count = int(axis.get("historical_count") or 0)
+        objective = str(axis.get("teaching_objective") or _axis_definition(axis_id)["objective"])
+        signal_text = _observed_signal_text(axis)
         if state == "improving_signal":
             changes.append(
                 {
-                    "axis_id": str(axis.get("axis_id") or ""),
-                    "axis_label": str(axis.get("axis_label") or ""),
+                    "axis_id": axis_id,
+                    "axis_label": axis_label,
                     "direction": "improved_recently",
-                    "description": f"{axis.get('axis_label')}相关问题在最新报告中暂未再次出现，需要后续病例继续验证。",
+                    "description": (
+                        f"最新报告暂未再出现{axis_label}相关信号，历史累计 {historical_count} 个；"
+                        f"后续病例仍要验证是否能保持：{objective}{signal_text}"
+                    ),
                 }
             )
-        elif state in {"persistent_gap", "emerging_gap"}:
+        elif state == "persistent_gap":
             changes.append(
                 {
-                    "axis_id": str(axis.get("axis_id") or ""),
-                    "axis_label": str(axis.get("axis_label") or ""),
+                    "axis_id": axis_id,
+                    "axis_label": axis_label,
                     "direction": "needs_practice",
-                    "description": f"{axis.get('axis_label')}仍是当前训练重点，下一轮应采用更小的步骤练习。",
+                    "description": (
+                        f"{axis_label}在最新报告仍出现 {latest_count} 个信号，历史累计 {historical_count} 个，"
+                        f"属于反复问题；下一轮重点：{objective}{signal_text}"
+                    ),
+                }
+            )
+        elif state == "emerging_gap":
+            changes.append(
+                {
+                    "axis_id": axis_id,
+                    "axis_label": axis_label,
+                    "direction": "needs_practice",
+                    "description": (
+                        f"{axis_label}是最新报告新暴露的问题，出现 {latest_count} 个信号；"
+                        f"下一轮先按这个目标拆小练习：{objective}{signal_text}"
+                    ),
                 }
             )
     return changes
+
+
+def _observed_signal_text(axis: Mapping[str, Any], *, limit: int = 2) -> str:
+    labels = _unique_strings([str(label) for label in axis.get("labels", []) if str(label).strip()])
+    if not labels:
+        return ""
+    return f" 重点信号：{'、'.join(labels[:limit])}。"
 
 
 def _next_teaching_objectives(axes: list[Mapping[str, Any]], *, limit: int = 2) -> list[str]:

@@ -9,6 +9,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
+from app.services.api_call_log_service import call_with_api_logging
 from app.services.gemini_patient_responder import GeminiPatientSettings, _apply_process_proxy
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -166,14 +167,20 @@ class GeminiTeacherAgent:
             self._client = genai.Client(api_key=settings.api_key)
 
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
-        response = self._client.models.generate_content(
+        response = call_with_api_logging(
+            provider="vertex_gemini_teacher" if self._settings.use_vertex else "gemini_teacher",
+            operation="generate_content",
             model=self._settings.model,
-            contents=json.dumps(request.model_dump(), ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=TEACHER_ANALYSIS_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                response_schema=TeacherAnalysisResponse,
-                temperature=0.2,
+            endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
+            call=lambda: self._client.models.generate_content(
+                model=self._settings.model,
+                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                config=types.GenerateContentConfig(
+                    system_instruction=TEACHER_ANALYSIS_SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    response_schema=TeacherAnalysisResponse,
+                    temperature=0.2,
+                ),
             ),
         )
         return TeacherAnalysisResponse.model_validate_json(response.text)

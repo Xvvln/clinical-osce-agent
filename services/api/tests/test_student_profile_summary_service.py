@@ -180,6 +180,79 @@ def test_profile_summary_aggregates_reasoning_patterns_beyond_missed_items() -> 
     assert "思维模式" in state["selection_reason"]
 
 
+def test_teaching_effect_change_descriptions_are_axis_specific() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": [],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        },
+                        {
+                            "pattern_id": "thin_differential_reasoning",
+                            "label": "鉴别诊断过窄",
+                            "category": "differential_reasoning",
+                            "severity": "medium",
+                        },
+                    ],
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_migration_support",
+                            "statement": "迁移痛推理点",
+                            "status": "broken",
+                        }
+                    ],
+                },
+            },
+            {
+                "case_id": "appendicitis_001",
+                "missed_items": [],
+                "clinical_reasoning_trace": {
+                    "trace_version": "clinical_reasoning_trace_v1",
+                    "cognitive_patterns": [
+                        {
+                            "pattern_id": "weak_problem_representation",
+                            "label": "问题表征薄弱",
+                            "category": "problem_representation",
+                            "severity": "high",
+                        },
+                        {
+                            "pattern_id": "thin_differential_reasoning",
+                            "label": "鉴别诊断过窄",
+                            "category": "differential_reasoning",
+                            "severity": "medium",
+                        },
+                    ],
+                    "evidence_chain_breakpoints": [
+                        {
+                            "breakpoint_id": "rp_migration_support",
+                            "statement": "迁移痛推理点",
+                            "status": "broken",
+                        }
+                    ],
+                },
+            },
+        ],
+        enabled_skills=[],
+    )
+
+    changes = summary["teaching_effect_summary"]["observed_changes"]
+    descriptions = [change["description"] for change in changes]
+
+    assert len(descriptions) >= 3
+    assert len(set(descriptions)) == len(descriptions)
+    assert any("起病、部位、性质" in description for description in descriptions)
+    assert any("相似诊断" in description for description in descriptions)
+    assert any("关键证据链断点" in description for description in descriptions)
+
+
 def test_profile_summary_aggregates_sequence_and_evidence_chain_breakpoints() -> None:
     summary = build_skill_profile_summary(
         reports=[

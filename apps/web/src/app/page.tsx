@@ -862,6 +862,7 @@ const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: 
   { id: "response", label: "正在生成可见回复" },
 ];
 const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set(["intent", "case_context", "patient_reply", "response"]);
+const PENDING_AGENT_PROCESSING_STEP_IDS = new Set(AGENT_PROCESSING_STEP_DEFINITIONS.map((step) => step.id));
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1284,22 +1285,31 @@ function formatAgentProcessingElapsed(elapsedMs: number | undefined): string {
   return elapsedSeconds < 10 ? `${elapsedSeconds.toFixed(1)} 秒` : `${Math.round(elapsedSeconds)} 秒`;
 }
 
+function formatAgentProcessingTimerElapsed(elapsedMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  return `${elapsedSeconds} 秒`;
+}
+
 function getPatientReplyProcessingSteps<TStep extends Readonly<{ id: string }>>(steps: readonly TStep[]): readonly TStep[] {
   return steps.filter((step) => PATIENT_REPLY_PROCESSING_STEP_IDS.has(step.id));
 }
 
+function getPendingAgentProcessingSteps<TStep extends Readonly<{ id: string }>>(steps: readonly TStep[]): readonly TStep[] {
+  return steps.filter((step) => PENDING_AGENT_PROCESSING_STEP_IDS.has(step.id));
+}
+
 function getPendingPatientProcessingSummary(
   processingStatus: SessionProcessingStatus | null | undefined,
-  patientSteps: readonly AgentProcessingStep[],
+  visibleSteps: readonly AgentProcessingStep[],
 ): string {
   if (!processingStatus) {
     return "当前：正在建立后端流程连接。";
   }
-  if (PATIENT_REPLY_PROCESSING_STEP_IDS.has(processingStatus.current_step_id)) {
+  if (processingStatus.summary) {
     return processingStatus.summary;
   }
-  const latestPatientStep = [...patientSteps].reverse().find((step) => step.status === "completed" || step.status === "active");
-  return latestPatientStep ? `当前：${getAgentProcessingStepLabel(latestPatientStep)}。` : "当前：正在组织标准化病人回复。";
+  const latestVisibleStep = [...visibleSteps].reverse().find((step) => step.status === "completed" || step.status === "active");
+  return latestVisibleStep ? `当前：${getAgentProcessingStepLabel(latestVisibleStep)}。` : "当前：正在组织标准化病人回复。";
 }
 
 function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessingStatus | null): AgentProcessingTimeline {
@@ -1308,17 +1318,29 @@ function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessin
     label: step.label,
     status: normalizeAgentProcessingStepStatus(step.status),
   })) ?? [];
-  const patientSteps = getPatientReplyProcessingSteps(statusSteps);
-  const currentStepLabel = processingStatus?.current_label || "建立后端流程连接";
+  const visibleSteps = getPendingAgentProcessingSteps(statusSteps);
+  const hasActiveVisibleStep = visibleSteps.some((step) => step.status === "active");
+  const timelineSteps = processingStatus?.state === "running" && visibleSteps.length > 0 && !hasActiveVisibleStep
+    ? [
+        ...visibleSteps,
+        {
+          id: "response_wait",
+          label: "正在等待可见回复返回",
+          status: "active" as const,
+        },
+      ]
+    : visibleSteps;
+  const fallbackStepId = processingStatus?.current_step_id || "backend_connect";
+  const fallbackStepLabel = processingStatus?.current_label || "正在组织标准化病人回复";
   return {
     state: "pending",
     isOpen: false,
     title: "智能体处理中",
-    summary: getPendingPatientProcessingSummary(processingStatus, patientSteps),
-    steps: patientSteps.length > 0 ? patientSteps : [
+    summary: getPendingPatientProcessingSummary(processingStatus, timelineSteps),
+    steps: timelineSteps.length > 0 ? timelineSteps : [
       {
-        id: processingStatus?.current_step_id || "backend_connect",
-        label: PATIENT_REPLY_PROCESSING_STEP_IDS.has(processingStatus?.current_step_id ?? "") ? currentStepLabel : "正在组织标准化病人回复",
+        id: fallbackStepId,
+        label: fallbackStepLabel,
         status: "active",
       },
     ],
@@ -2275,8 +2297,55 @@ function handleStudentRailScroll(event: UIEvent<HTMLElement>): void {
 }
 
 function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentProcessingTimeline }>) {
+  const activeStepStartedAtRef = useRef<Map<string, number>>(new Map());
+  const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const activeStepSignature = timeline.state === "pending"
+    ? timeline.steps
+      .filter((step) => step.status === "active")
+      .map((step) => step.id)
+      .join("|")
+    : "";
+  const activeStepIds = activeStepSignature ? activeStepSignature.split("|") : [];
+
+  useEffect(() => {
+    if (timeline.state !== "pending" || !activeStepSignature) {
+      activeStepStartedAtRef.current.clear();
+      return;
+    }
+    const nowMs = Date.now();
+    const nextActiveStepIds = activeStepSignature.split("|");
+    for (const stepId of nextActiveStepIds) {
+      if (!activeStepStartedAtRef.current.has(stepId)) {
+        activeStepStartedAtRef.current.set(stepId, nowMs);
+      }
+    }
+    for (const stepId of Array.from(activeStepStartedAtRef.current.keys())) {
+      if (!nextActiveStepIds.includes(stepId)) {
+        activeStepStartedAtRef.current.delete(stepId);
+      }
+    }
+    setTimerNowMs(nowMs);
+  }, [activeStepSignature, timeline.state]);
+
+  useEffect(() => {
+    if (timeline.state !== "pending" || !activeStepSignature) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setTimerNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeStepSignature, timeline.state]);
+
+  const getActiveStepElapsedMs = (stepId: string) => {
+    const startedAtMs = activeStepStartedAtRef.current.get(stepId) ?? timerNowMs;
+    return Math.max(0, timerNowMs - startedAtMs);
+  };
+  const activeStepElapsedMs = timeline.state === "pending" && activeStepIds.length > 0
+    ? Math.max(...activeStepIds.map((stepId) => getActiveStepElapsedMs(stepId)))
+    : undefined;
   const thoughtLine = timeline.state === "pending"
-    ? `${timeline.title} · ${timeline.summary}`
+    ? `${timeline.title} · ${timeline.summary}${activeStepElapsedMs === undefined ? "" : ` · ${formatAgentProcessingTimerElapsed(activeStepElapsedMs)}`}`
     : timeline.elapsedMs === undefined
       ? "智能体流程"
       : `智能体处理了 ${formatAgentProcessingElapsed(timeline.elapsedMs)}`;
@@ -2300,6 +2369,11 @@ function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentPro
       <ol className="ml-1 mt-2 border-l border-[#DDD4C6] pl-4 text-xs leading-5 text-[#6F6257]">
         {timeline.steps.map((step, stepIndex) => {
           const isLastStep = stepIndex === timeline.steps.length - 1;
+          const displayDurationMs = step.durationMs ?? (
+            timeline.state === "pending" && step.status === "active"
+              ? getActiveStepElapsedMs(step.id)
+              : undefined
+          );
           const dotClassName = [
             "absolute -left-[1.42rem] top-0.5 z-10 flex size-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none transition-colors",
             step.status === "completed"
@@ -2329,9 +2403,9 @@ function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentPro
                 }
               >
                 {getAgentProcessingStepLabel(step)}
-                {step.durationMs !== undefined ? (
+                {displayDurationMs !== undefined ? (
                   <span className="ml-1 text-[11px] text-[#9A9186]">
-                    · {formatAgentProcessingElapsed(step.durationMs)}
+                    · {step.status === "active" ? formatAgentProcessingTimerElapsed(displayDurationMs) : formatAgentProcessingElapsed(displayDurationMs)}
                   </span>
                 ) : null}
               </span>

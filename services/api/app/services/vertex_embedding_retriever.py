@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from google import genai
 from google.genai import types
 
+from app.services.api_call_log_service import api_call_log_store
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 DEFAULT_VERTEX_EMBEDDING_LOCATION = "global"
@@ -46,10 +48,31 @@ class VertexTextEmbeddingClient:
             task_type=task_type,
             output_dimensionality=self._settings.output_dimensionality,
         )
-        response = self._client.models.embed_content(
+        started_at = time.perf_counter()
+        try:
+            response = self._client.models.embed_content(
+                model=self._settings.model,
+                contents=normalized_texts,
+                config=config,
+            )
+        except Exception as exc:
+            api_call_log_store.record(
+                provider="vertex_gemini_embedding",
+                operation="embed_content",
+                model=self._settings.model,
+                endpoint="vertex://embed_content",
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider="vertex_gemini_embedding",
+            operation="embed_content",
             model=self._settings.model,
-            contents=normalized_texts,
-            config=config,
+            endpoint="vertex://embed_content",
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
         )
         if not response.embeddings:
             raise RuntimeError("Vertex embedding response did not include embeddings")

@@ -16,6 +16,7 @@ from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.auth_store import AuthStore
+from app.services.api_call_log_service import ApiCallLogStore
 from app.services.evaluation_result_store import EvaluationResultStore
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
 from app.services.osce_session_service import OsceSession, OsceSessionService, osce_session_service
@@ -180,6 +181,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             unauthenticated_client.get("/api/admin/sources"),
             unauthenticated_client.get("/api/admin/model-config"),
+            unauthenticated_client.get("/api/admin/model-api-logs"),
             unauthenticated_client.get("/api/admin/retrieval-eval"),
             unauthenticated_client.get("/api/admin/rag/knowledge"),
             unauthenticated_client.post("/api/admin/rag/knowledge", json={}),
@@ -233,6 +235,7 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             client.get("/api/admin/sources"),
             client.get("/api/admin/model-config"),
+            client.get("/api/admin/model-api-logs"),
             client.get("/api/admin/retrieval-eval"),
             client.get("/api/admin/rag/knowledge"),
             client.post("/api/admin/rag/knowledge", json={}),
@@ -253,6 +256,39 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
 
     assert [response.status_code for response in responses] == [403] * len(responses)
     assert all(response.json() == {"detail": "admin access required"} for response in responses)
+
+
+def test_admin_can_read_model_api_logs(tmp_path, monkeypatch) -> None:
+    log_store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
+    log_store.record(
+        provider="openai_compatible",
+        operation="chat.completions",
+        model="gemini-3.5-flash",
+        endpoint="https://gateway.example/v1/chat/completions",
+        success=True,
+        duration_ms=100,
+        status_code=200,
+    )
+    log_store.record(
+        provider="openai_compatible",
+        operation="chat.completions",
+        model="gemini-3.5-flash",
+        endpoint="https://gateway.example/v1/chat/completions",
+        success=False,
+        duration_ms=200,
+        status_code=500,
+    )
+    monkeypatch.setattr(main, "api_call_log_store", log_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/model-api-logs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["total_calls"] == 2
+    assert payload["summary"]["success_rate"] == 0.5
+    assert payload["summary_by_provider"][0]["provider"] == "openai_compatible"
+    assert [item["success"] for item in payload["logs"]] == [False, True]
 
 
 def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:

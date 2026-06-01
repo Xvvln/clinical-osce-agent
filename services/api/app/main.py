@@ -38,6 +38,7 @@ from app.services.admin_display_resolver import (
     reference_labels,
     rubric_item_labels,
 )
+from app.services.api_call_log_service import api_call_log_store
 from app.services.auth_store import auth_store
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
@@ -1761,6 +1762,15 @@ def get_admin_model_config(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return build_admin_model_config()
+
+
+@app.get("/api/admin/model-api-logs")
+def get_admin_model_api_logs(
+    limit: int = Query(default=80, ge=1, le=200),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return api_call_log_store.build_admin_payload(limit=limit)
 
 
 @app.get("/api/admin/retrieval-eval")

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.api_call_log_service import api_call_log_store
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
@@ -74,9 +77,32 @@ class AnthropicChatClient:
             "x-api-key": self._settings.api_key,
         }
 
-        with httpx.Client(**client_options) as client:
-            response = client.post(_messages_url(self._settings.base_url), headers=headers, json=payload)
-        response.raise_for_status()
+        endpoint = _messages_url(self._settings.base_url)
+        started_at = time.perf_counter()
+        try:
+            with httpx.Client(**client_options) as client:
+                response = client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            api_call_log_store.record(
+                provider="anthropic",
+                operation="messages",
+                model=str(payload.get("model") or self._settings.model),
+                endpoint=endpoint,
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider="anthropic",
+            operation="messages",
+            model=str(payload.get("model") or self._settings.model),
+            endpoint=endpoint,
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            status_code=response.status_code,
+        )
         return response
 
 

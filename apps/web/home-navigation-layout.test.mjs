@@ -1028,6 +1028,7 @@ test("profile page exposes readable Skill profile orchestration summary", () => 
   assert.match(profileSource, /reasoningSummary\.current_reasoning_focus\.map/);
   assert.match(profileSource, /reasoningSummary\.sequence_issue_counts\.map/);
   assert.match(profileSource, /reasoningSummary\.evidence_chain_focus\.map/);
+  assert.match(profileSource, /className="mt-4 grid items-start gap-3 xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1\.2fr\)\]"/);
   assert.match(profileSource, /focus\.missing_evidence_labels/);
   assert.match(profileSource, /summary\.current_focus_items\.map/);
   assert.match(profileSource, /focusItem\.label/);

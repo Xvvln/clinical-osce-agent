@@ -458,7 +458,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
         </span>
       </div>
 
-      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="mt-4 grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <div className="rounded-xl border border-border bg-muted/30 p-4">
           <h3 className="text-sm font-semibold">近期漏项</h3>
           {summary.current_focus_items.length > 0 ? (

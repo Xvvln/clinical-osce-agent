@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.agent_rag_context_service import retrieve_agent_context
+from app.services.api_call_log_service import call_with_api_logging
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -118,27 +119,33 @@ class VertexGeminiTrainingSkillCandidateGenerator:
 
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         try:
-            response = self._client.models.generate_content(
+            response = call_with_api_logging(
+                provider="vertex_gemini_skill_candidate",
+                operation="generate_content",
                 model=self._settings.skill_candidate_model,
-                contents=json.dumps(
-                    {
-                        "pattern_id": context.pattern_id,
-                        "missed_items": _missed_item_payloads(context.missed_items),
-                        "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
-                        "support_count": context.support_count,
-                        "case_ids": context.case_ids,
-                        "source_report_count": context.source_report_count,
-                        "source_report_ids": _context_source_report_ids(context),
-                        "related_recommendations": context.related_recommendations,
-                        "retrieved_knowledge_context": context.retrieved_knowledge_context,
-                        "teacher_analysis_context": context.teacher_analysis_context,
-                    },
-                    ensure_ascii=False,
-                ),
-                config=types.GenerateContentConfig(
-                    system_instruction=SKILL_CANDIDATE_SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=GeneratedTrainingSkillCandidateContent,
+                endpoint="vertex://generate_content",
+                call=lambda: self._client.models.generate_content(
+                    model=self._settings.skill_candidate_model,
+                    contents=json.dumps(
+                        {
+                            "pattern_id": context.pattern_id,
+                            "missed_items": _missed_item_payloads(context.missed_items),
+                            "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
+                            "support_count": context.support_count,
+                            "case_ids": context.case_ids,
+                            "source_report_count": context.source_report_count,
+                            "source_report_ids": _context_source_report_ids(context),
+                            "related_recommendations": context.related_recommendations,
+                            "retrieved_knowledge_context": context.retrieved_knowledge_context,
+                            "teacher_analysis_context": context.teacher_analysis_context,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    config=types.GenerateContentConfig(
+                        system_instruction=SKILL_CANDIDATE_SYSTEM_PROMPT,
+                        response_mime_type="application/json",
+                        response_schema=GeneratedTrainingSkillCandidateContent,
+                    ),
                 ),
             )
             content = GeneratedTrainingSkillCandidateContent.model_validate_json(response.text)

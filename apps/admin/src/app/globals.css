@@ -22,6 +22,9 @@ body {
   overflow-x: clip;
   background: radial-gradient(circle at top left, rgba(174, 86, 48, 0.12), transparent 32rem), var(--admin-paper);
   color: var(--admin-ink);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,

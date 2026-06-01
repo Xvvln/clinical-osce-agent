@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.api_call_log_service import api_call_log_store
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
@@ -90,6 +93,7 @@ class OpenAICompatibleChatClient:
                 settings=self._settings,
                 payload=request_payload,
                 response_model=response_model,
+                provider_label="openai_compatible",
             )
         except Exception:
             if not self._fallback_settings.is_configured:
@@ -104,6 +108,7 @@ class OpenAICompatibleChatClient:
                 settings=fallback_settings,
                 payload=fallback_payload,
                 response_model=response_model,
+                provider_label="openai_compatible_fallback",
             )
 
     def _complete_json_with_settings(
@@ -112,12 +117,13 @@ class OpenAICompatibleChatClient:
         settings: OpenAICompatibleSettings,
         payload: dict[str, Any],
         response_model: type[ResponseModelT],
+        provider_label: str,
     ) -> ResponseModelT:
-        response = self._post_chat_completion(payload, settings=settings)
+        response = self._post_chat_completion(payload, settings=settings, provider_label=provider_label)
         content = _extract_message_content(response.json())
         return _validate_response_content(content, response_model=response_model)
 
-    def _post_chat_completion(self, payload: dict[str, Any], *, settings: OpenAICompatibleSettings) -> httpx.Response:
+    def _post_chat_completion(self, payload: dict[str, Any], *, settings: OpenAICompatibleSettings, provider_label: str) -> httpx.Response:
         client_options: dict[str, Any] = {
             "timeout": settings.timeout_seconds,
             "follow_redirects": True,
@@ -130,9 +136,32 @@ class OpenAICompatibleChatClient:
         if settings.api_key:
             headers["Authorization"] = f"Bearer {settings.api_key}"
 
-        with httpx.Client(**client_options) as client:
-            response = client.post(_chat_completions_url(settings.base_url), headers=headers, json=payload)
-        response.raise_for_status()
+        endpoint = _chat_completions_url(settings.base_url)
+        started_at = time.perf_counter()
+        try:
+            with httpx.Client(**client_options) as client:
+                response = client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            api_call_log_store.record(
+                provider=provider_label,
+                operation="chat.completions",
+                model=str(payload.get("model") or settings.model),
+                endpoint=endpoint,
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider=provider_label,
+            operation="chat.completions",
+            model=str(payload.get("model") or settings.model),
+            endpoint=endpoint,
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            status_code=response.status_code,
+        )
         return response
 
 

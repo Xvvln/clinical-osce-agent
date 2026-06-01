@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
+from app.services.api_call_log_service import api_call_log_store
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -95,15 +97,37 @@ class GeminiPatientResponder:
             self._client = genai.Client(api_key=settings.api_key)
 
     def __call__(self, request: PatientResponderRequest) -> str:
-        response = self._client.models.generate_content(
+        provider = "vertex_gemini_patient" if self._settings.use_vertex else "gemini_patient"
+        started_at = time.perf_counter()
+        try:
+            response = self._client.models.generate_content(
+                model=self._settings.model,
+                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT_TEMPLATE,
+                    response_mime_type="application/json",
+                    response_schema=PatientResponderResponse,
+                    temperature=self._settings.temperature,
+                ),
+            )
+        except Exception as exc:
+            api_call_log_store.record(
+                provider=provider,
+                operation="generate_content",
+                model=self._settings.model,
+                endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider=provider,
+            operation="generate_content",
             model=self._settings.model,
-            contents=json.dumps(request.model_dump(), ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT_TEMPLATE,
-                response_mime_type="application/json",
-                response_schema=PatientResponderResponse,
-                temperature=self._settings.temperature,
-            ),
+            endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
         )
         return _validated_patient_reply(
             PatientResponderResponse.model_validate_json(response.text),
