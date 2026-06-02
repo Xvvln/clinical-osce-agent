@@ -92,6 +92,13 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
                     ]
                 return results_by_query
         except Exception as exc:
+            if _is_embedding_quota_error(exc):
+                LOGGER.warning(
+                    "ChromaDB retrieval failed for embedding model %s because embedding quota is exhausted; trying next embedding client: %s",
+                    embedding_model,
+                    exc,
+                )
+                continue
             LOGGER.warning(
                 "ChromaDB retrieval failed for embedding model %s; falling back to in-memory vector search: %s",
                 embedding_model,
@@ -381,3 +388,8 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
+
+
+def _is_embedding_quota_error(error: BaseException) -> bool:
+    message = str(error)
+    return "RESOURCE_EXHAUSTED" in message or "quota exceeded" in message.lower()

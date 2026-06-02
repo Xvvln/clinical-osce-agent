@@ -62,6 +62,15 @@ class CountingFakeEmbeddingClient(FakeEmbeddingClient):
         return super().embed_texts(texts, task_type=task_type)
 
 
+class ResourceExhaustedEmbeddingClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
+        self.calls.append((task_type, len(texts)))
+        raise RuntimeError("429 RESOURCE_EXHAUSTED quota exceeded for gemini-embedding")
+
+
 class ExactPhraseFakeEmbeddingClient:
     def __init__(self, phrase: str) -> None:
         self.phrase = phrase
@@ -174,6 +183,32 @@ def test_search_retrieval_documents_falls_back_to_local_embedding_when_vertex_fa
     assert results
     assert results[0].reference == "case:appendicitis_001"
     assert results[0].source_type == "case"
+
+
+def test_search_retrieval_documents_skips_same_vertex_in_memory_fallback_after_quota_error(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    vertex_client = ResourceExhaustedEmbeddingClient()
+    local_client = CountingFakeEmbeddingClient()
+    monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: vertex_client,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: local_client,
+    )
+
+    search_retrieval_documents("右下腹痛", limit=3)
+
+    assert len(vertex_client.calls) == 1
+    assert local_client.calls
 
 
 def test_search_retrieval_documents_skips_unavailable_local_embedding_client(monkeypatch) -> None:

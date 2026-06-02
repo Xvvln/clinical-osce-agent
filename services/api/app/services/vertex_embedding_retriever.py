@@ -15,6 +15,8 @@ DEFAULT_VERTEX_EMBEDDING_LOCATION = "global"
 DEFAULT_VERTEX_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY = 3072
 DEFAULT_VERTEX_EMBEDDING_PROXY_URL = "http://127.0.0.1:7897"
+DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS = 90
+_vertex_embedding_quota_cooldown_until = 0.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,8 @@ class VertexTextEmbeddingClient:
                 config=config,
             )
         except Exception as exc:
+            if _is_resource_exhausted_error(exc):
+                mark_vertex_embedding_quota_exhausted()
             api_call_log_store.record(
                 provider="vertex_gemini_embedding",
                 operation="embed_content",
@@ -83,6 +87,9 @@ class VertexTextEmbeddingClient:
 
 
 def build_vertex_embedding_client_from_environment() -> VertexTextEmbeddingClient | None:
+    if _vertex_embedding_quota_cooldown_active():
+        return None
+
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_config()
     if runtime_vertex_config is not None:
         settings = VertexEmbeddingSettings(
@@ -118,6 +125,19 @@ def build_vertex_embedding_client_from_environment() -> VertexTextEmbeddingClien
     return VertexTextEmbeddingClient(settings)
 
 
+def mark_vertex_embedding_quota_exhausted(*, cooldown_seconds: int = DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS) -> None:
+    global _vertex_embedding_quota_cooldown_until
+    _vertex_embedding_quota_cooldown_until = max(
+        _vertex_embedding_quota_cooldown_until,
+        time.time() + max(cooldown_seconds, 1),
+    )
+
+
+def clear_vertex_embedding_quota_cooldown() -> None:
+    global _vertex_embedding_quota_cooldown_until
+    _vertex_embedding_quota_cooldown_until = 0.0
+
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -137,6 +157,15 @@ def _truthy_env(name: str) -> bool:
     return _env(name).lower() in {"1", "true", "yes", "on"}
 
 
+def _vertex_embedding_quota_cooldown_active() -> bool:
+    return _vertex_embedding_quota_cooldown_until > time.time()
+
+
+def _is_resource_exhausted_error(error: BaseException) -> bool:
+    message = str(error)
+    return "RESOURCE_EXHAUSTED" in message or "quota exceeded" in message.lower()
+
+
 def _apply_process_proxy(proxy_url: str) -> None:
     if not _should_use_proxy(proxy_url):
         return
@@ -151,9 +180,12 @@ def _should_use_proxy(proxy_url: str) -> bool:
 
 
 __all__ = [
+    "DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS",
     "DEFAULT_VERTEX_EMBEDDING_MODEL",
     "DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY",
     "VertexEmbeddingSettings",
     "VertexTextEmbeddingClient",
     "build_vertex_embedding_client_from_environment",
+    "clear_vertex_embedding_quota_cooldown",
+    "mark_vertex_embedding_quota_exhausted",
 ]

@@ -65,3 +65,41 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
             "output_dimensionality": 3072,
         }
     ]
+
+
+def test_vertex_embedding_quota_error_opens_cooldown(monkeypatch) -> None:
+    class FakeModels:
+        def embed_content(self, **kwargs: object):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED quota exceeded for gemini-embedding")
+
+    class FakeClient:
+        created_count = 0
+
+        def __init__(self, **kwargs: object) -> None:
+            FakeClient.created_count += 1
+            self.models = FakeModels()
+
+    now = {"value": 1000.0}
+    monkeypatch.setattr(vertex_embedding_retriever.time, "time", lambda: now["value"])
+    monkeypatch.setattr(vertex_embedding_retriever.genai, "Client", FakeClient)
+    vertex_embedding_retriever.clear_vertex_embedding_quota_cooldown()
+
+    settings = vertex_embedding_retriever.VertexEmbeddingSettings(
+        project="demo-project",
+        model="gemini-embedding-001",
+        proxy_url="direct",
+    )
+    client = vertex_embedding_retriever.VertexTextEmbeddingClient(settings)
+    try:
+        client.embed_texts(["腹痛问诊"], task_type="RETRIEVAL_QUERY")
+    except RuntimeError:
+        pass
+
+    assert vertex_embedding_retriever.build_vertex_embedding_client_from_environment() is None
+    assert FakeClient.created_count == 1
+
+    now["value"] += vertex_embedding_retriever.DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS + 1
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
+
+    assert vertex_embedding_retriever.build_vertex_embedding_client_from_environment() is not None
