@@ -19,7 +19,8 @@ test("admin v2 is an independent dashboard route and leaves the current admin pa
   assert.doesNotMatch(pageSource, /from "\.\.\/page"/);
   assert.doesNotMatch(dashboardSource, /from "\.\.\/page"/);
   assert.doesNotMatch(oldPageSource, /AdminV2Dashboard/);
-  assert.match(dashboardSource, /旧版调试入口/);
+  assert.doesNotMatch(dashboardSource, /旧版/);
+  assert.doesNotMatch(dashboardSource, /href="\/"/);
 });
 
 test("admin v2 documents the Dashboard Blocks adaptation and migration boundary", () => {
@@ -40,9 +41,10 @@ test("admin v2 exposes the core management modules with clean Chinese labels", (
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should show ${label}`);
   }
 
-  assert.match(dashboardSource, /TraceOSCE Admin v2/);
   assert.match(dashboardSource, /管理员登录/);
-  assert.match(dashboardSource, /账号信息不在前端预填或展示/);
+  assert.doesNotMatch(dashboardSource, /Dashboard Blocks Adaptation/);
+  assert.doesNotMatch(dashboardSource, /shadcn\/ui Dashboard Blocks 布局模式的新工作台/);
+  assert.doesNotMatch(dashboardSource, /把训练、资源、Skill、评测和模型日志重组为表格化管理视图/);
 });
 
 test("admin v2 reads the existing backend APIs without adding a new backend contract", () => {
@@ -51,17 +53,47 @@ test("admin v2 reads the existing backend APIs without adding a new backend cont
     "/api/admin/model-api-logs?limit=60",
     "/api/admin/sessions?limit=20",
     "/api/admin/reports?limit=20",
+    "/api/admin/sessions/${sessionId}/report",
+    "/api/admin/sessions/${sessionId}/events",
     "/api/admin/evolution/candidates?limit=20&review_status=all",
+    "/api/admin/evolution/candidates/${candidateId}",
+    "/api/admin/evolution/candidates/${candidateId}/events",
+    "/api/admin/evolution/approve",
+    "/api/admin/evolution/reject",
+    "/api/admin/evolution/settings",
     "/api/admin/evaluations?limit=20",
+    "/api/admin/evaluations/${batchId}",
     "/api/cases",
     "/api/admin/sources",
     "/api/admin/rag/documents",
+    "/api/admin/rag/documents/${encodeURIComponent(documentId)}/enabled",
     "/api/admin/insights",
     "/api/admin/evolution/skill-effects",
     "/api/admin/evals/run",
     "/api/admin/evolution/candidates/generate",
   ]) {
     assert.match(dashboardSource, new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `v2 dashboard should use ${endpoint}`);
+  }
+});
+
+test("admin v2 keeps necessary management actions but avoids raw debug surfaces", () => {
+  for (const label of [
+    "读取报告",
+    "读取日志",
+    "查看评测详情",
+    "查看详情",
+    "批准并启用",
+    "拒绝候选",
+    "开启自动应用",
+    "关闭自动应用",
+    "启用文档",
+    "停用文档",
+  ]) {
+    assert.match(dashboardSource, new RegExp(label), `v2 dashboard should provide ${label}`);
+  }
+
+  for (const forbidden of ["导出当前 Session 页 JSON", "导出当前候选页 JSON", "原始 JSON", "技术 ID 和原始 JSON"]) {
+    assert.doesNotMatch(dashboardSource, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
 
