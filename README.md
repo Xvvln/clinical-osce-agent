@@ -1,270 +1,181 @@
-# TraceOSCE
+# 临境 OSCE 智能体（TraceOSCE）
 
-TraceOSCE（临境 OSCE 智能体）是一个用于医学教育的 OSCE 训练平台。学生可以在结构化病例中完成问诊、查体申请、辅助检查选择、诊断提交和复盘；教师或管理员可以维护病例、评分量表、知识库和训练记录。
+**临境 OSCE 智能体（TraceOSCE）** 是一个面向医学教育场景的诊断学 OSCE 训练系统。项目围绕“问诊、查体、辅助检查、诊断推理、评分反馈、教师复盘和个性化再训练”构建闭环，目标是帮助医学生在可重复的模拟病例中训练临床思维。
 
-本项目用于教学模拟和系统研究，不用于真实诊断、治疗、用药或急救决策。
+本项目定位于 **临床技能训练智能体**：它不是医学问答机器人，也不提供真实诊断、治疗、用药或急救建议。
 
-## 当前状态
+## 核心亮点
 
-- 已实现学生端、管理端和后端 API 的本地演示闭环。
-- 已内置 5 个教学病例及对应评分量表。
-- 已支持标准化病人对话、查体/检查结果查询、诊断提交、规则评分、报告生成、RAG 引用、学生画像和 Skill 教学策略管理。
-- 当前更适合作为课程设计、比赛答辩、教学原型和研究原型；还不是生产级医疗教学平台。
+- **标准化病人对话**：学生用自然语言问诊，PatientAgent 只根据病例事实和当前可披露范围回答。
+- **三档训练难度**：初级提供核心查体与检查入口；中级要求学生批量选择项目；高级支持自由申请查体或辅助检查，缺失结果可由 AI 模拟但不参与评分。
+- **TeacherAgent 教学引导**：结合当前对话、已收集线索、病例结构、学生画像、Skill 记忆和知识库，给出下一步提示与训练后复盘。
+- **RAG 教学知识库**：教师可维护全局或病例知识库，知识检索用于提示、复盘、Skill 生成 / 审批和来源追溯，不参与诊断裁判或 rubric 评分。
+- **Skill 自学习闭环**：训练报告沉淀为学生画像和候选 Skill，经审批后成为后续训练可调用的教学记忆。
+- **可追溯训练报告**：报告展示评分、证据覆盖、未覆盖线索、教师式复盘、训练建议和可追溯来源。
+- **管理端 v2**：面向教师和管理员，管理病例、Rubric、知识库、训练记录、报告、模型调用日志、Skill 审核和系统评测。
 
-## 功能概览
+## 使用场景
 
-### 学生端
+TraceOSCE 适合用于：
 
-路径：`apps/web`
+- 医学生诊断学问诊与临床思维训练。
+- OSCE 课程或比赛作品演示。
+- 医学教育中“教、学、评、改”闭环原型验证。
+- RAG、Agent、学生画像和教学 Skill 机制的研究型系统实验。
 
-- 浏览病例并创建训练会话。
-- 与虚拟标准化病人进行自然语言问诊。
-- 申请体格检查和辅助检查。
-- 记录诊断假设，提交最终诊断与推理依据。
-- 查看训练报告，包括分项得分、遗漏项、教师式复盘、知识建议和来源引用。
-- 查看个人学习画像和历史训练记录。
+不适合用于：
 
-### 管理端
+- 真实患者诊断或治疗。
+- 用药剂量、急救处置或临床决策支持。
+- 未经医学教师审核的正式课程评价。
 
-路径：`apps/admin`
+## 学生端
 
-- 管理病例、Rubric（评分量表）、来源台账和 RAG 知识。
-- 查看训练会话、报告、事件日志和教学洞察。
-- 运行检索评测和报告评测。
-- 审核系统生成的 Skill 教学策略候选。
-- 查看 Skill 使用记录和效果统计。
+学生端覆盖完整训练路径：
 
-### 后端
+1. 选择病例和训练难度。
+2. 与标准化病人进行问诊。
+3. 申请查体和辅助检查。
+4. 形成诊断假设。
+5. 提交最终诊断、鉴别诊断、证据和不确定点。
+6. 查看训练报告和教师复盘。
+7. 在学习画像中查看近期问题、Skill 积累和后续训练方向。
 
-路径：`services/api`
+训练中，系统会记录已披露线索、已申请项目、诊断推理轨迹和 TeacherAgent 的教学提示。学生提交诊断后，系统才展示完整报告和更深入的复盘内容。
 
-- FastAPI 提供训练、报告、认证、管理端和模型配置接口。
-- LangGraph 负责 OSCE 训练流程编排。
-- SQLite 保存本地运行期数据。
-- Chroma、fastembed 和 Vertex embedding 可用于 RAG 检索。
-- 规则评分器负责主要评分逻辑，LLM 只在受控位置参与表达、提示或可选语义辅助。
+## 管理端
 
-## 架构概览
+管理端 v2 采用更接近教学后台的工作台结构，主要包括：
 
-![TraceOSCE architecture](docs/architecture/traceosce-agent-architecture-biorender.png)
+- **病例工坊**：查看、新建和维护结构化病例。
+- **Rubric 管理**：维护评分维度、评分项和命中规则。
+- **知识库**：上传或编辑全局 / 病例知识文档，并控制可见性和可用 Agent。
+- **训练管理**：查看 Session、报告、日志、AI 模拟审计和 Agent 轨迹。
+- **教学洞察**：聚合高频漏项、训练重点和来源热度。
+- **Skill 进化**：生成候选 Skill、查看审批 Agent 记录、人工审核或启用自动应用。
+- **质量评测**：查看报告评测、RAG 检索评测和回归状态。
+- **模型日志**：查看模型调用成功率、耗时、失败原因和调用人。
 
-一次训练大致由以下模块完成：
+管理端用于答辩时展示“病例与来源台账、训练证据、教师复盘、Skill 审批、后续生效痕迹和系统边界”。
 
-| 模块 | 作用 |
+## 智能体边界
+
+项目对外采用三类核心智能体口径：
+
+| 智能体 | 职责 |
 | --- | --- |
-| Student Web | 学生训练界面 |
-| Admin Web | 教师和管理员界面 |
-| FastAPI | 统一 API 入口 |
-| OSCE Graph | 训练流程编排，包括问诊、查体、检查、提示、提交和反馈 |
-| Patient Responder | 扮演标准化病人，只回答当前可披露的病例事实 |
-| Coach Agent | 在训练过程中给出教学提示 |
-| Rule Evaluator | 根据 Rubric 生成分项得分和评分证据 |
-| RAG Services | 提供训练提示、复盘和来源引用所需的知识检索 |
-| Skill Services | 从训练结果中积累可复用教学策略，并根据学生画像选择合适策略 |
-| Runtime Stores | 保存会话、报告、事件、Skill、RAG 知识和用户配置 |
+| PatientAgent | 扮演标准化病人，只回答当前允许披露的病例事实 |
+| TeacherAgent | 负责训练提示、上下文评估、Skill Router、RAG 教学知识辅助和训练后复盘 |
+| ApprovalAgent | 审核 Skill 候选、AI 模拟查体 / 检查结果和安全边界 |
 
-### Agent 与规则服务的边界
+以下部分保持确定性或工具层实现：
 
-项目里不是所有模块都叫 Agent。当前主要 LLM 驱动模块包括：
-
-- `TurnIntentAgent`：判断学生输入属于病史、问候、离题、索要答案等类型。
-- `PatientResponder`：根据病例事实扮演标准化病人。
-- `CoachAgent`：生成苏格拉底式训练提示。
-- Skill 生成与审批相关服务：生成、审核和清洗教学策略候选。
-
-以下模块是确定性服务：
-
-- 查体结果和辅助检查结果查询。
+- 病例事实加载和隐藏事实保护。
+- 查体 / 辅助检查已有结果查询。
 - Rubric 规则评分。
-- RAG 可见性过滤和检索。
-- Skill 选择与学生画像更新。
-- 会话、报告和事件存储。
+- RAG 可见性过滤。
+- Skill 写入门禁和学生画像更新。
+- 会话、报告、事件和审计存储。
 
-这个边界很重要：诊断评分、病例事实披露和隐藏答案保护不能完全交给大模型自由决定。
+这个边界的核心原则是：**大模型可以参与理解、表达、教学引导和复盘，但不能直接修改病例事实、标准诊断、Rubric 或评分裁判。**
 
-## 训练流程
+## RAG 与 Skill
 
-1. 学生选择病例并创建会话。
-2. 后端加载病例、Rubric、学生画像和可用 Skill。
-3. 学生输入问诊内容。
-4. 系统识别输入意图，并决定进入病人回答、查体、检查、提示或安全重定向。
-5. 标准化病人只基于允许披露的事实作答。
-6. 学生补充查体、辅助检查和诊断假设。
-7. 学生提交最终诊断和推理。
-8. 评分器根据 Rubric 生成分项得分、遗漏项和证据追踪。
-9. 系统生成报告，并更新学生画像和 Skill 相关记录。
+### RAG 的用途
 
-## 数据
+RAG 在本项目中用于教学辅助：
 
-主要数据目录：
+- TeacherAgent 生成提示时查找相关教学知识。
+- 训练后复盘时补充可追溯解释。
+- Skill 生成和审批时提供参考上下文。
+- 管理端展示知识来源、文档片段和检索评测。
 
-| 路径 | 说明 |
-| --- | --- |
-| `data/cases/` | 结构化教学病例 |
-| `data/rubrics/` | 病例对应的评分量表 |
-| `data/schemas/` | Case 和 Rubric 的 JSON Schema |
-| `data/rag_knowledge/` | 默认 RAG 知识条目 |
-| `data/attribution/` | 数据来源和归因信息 |
-| `data/runtime/` | 本地运行期数据库、索引和缓存 |
+RAG 不用于：
 
-当前内置病例：
+- 判断标准诊断是否正确。
+- 决定 Rubric 分数。
+- 证明学生“确实漏了某项”。
+- 替代病例结构化事实。
 
-| Case ID | 模块 | 难度 | 训练主题 |
+### Skill 的用途
+
+Skill 是学生训练后的可复用教学记忆。它不是医学事实库，而是记录“这个学生在某类病例或某类思维环节上反复出现的问题，以及下次训练时 TeacherAgent 应该如何引导”。
+
+当前 Skill 闭环包括：
+
+1. 训练完成后生成报告。
+2. 报告进入学生画像和教学洞察。
+3. 高频问题或本轮关键问题生成候选 Skill。
+4. 审批 Agent 和回归门禁检查候选内容。
+5. 管理员审核或自动应用。
+6. enabled Skill 在后续训练中由 TeacherAgent 按上下文选择性调用。
+
+当样本不足时，系统只展示“样本不足”或应用痕迹，不伪造能力提升。
+
+## 内置病例与数据来源
+
+当前仓库内置 5 个结构化教学病例：
+
+| 病例 | 模块 | 难度 | 训练主题 |
 | --- | --- | --- | --- |
-| `appendicitis_001` | 腹痛 | 初级 | 急性阑尾炎 |
-| `pneumonia_001` | 发热 / 呼吸系统 | 初级 | 社区获得性肺炎 |
-| `hyperthyroid_001` | 心悸 / 内分泌 | 中级 | 甲状腺功能亢进症 |
-| `acs_001` | 胸痛 / 心血管 | 中级 | 急性冠脉综合征 |
-| `heart_failure_001` | 呼吸困难 / 心血管 | 中级 | 慢性心力衰竭急性加重 |
+| 右下腹痛教学病例 | 腹痛 | 初级 | 急腹症问诊、查体和阑尾炎证据链 |
+| 发热咳嗽伴胸痛教学病例 | 呼吸系统 | 初级 | 感染线索、肺部查体和胸痛鉴别 |
+| 心慌、手抖与消瘦教学病例 | 内分泌 | 中级 | 高代谢症状、甲状腺查体和甲功证据 |
+| 胸痛伴出汗教学病例 | 心血管 | 中级 | 高危胸痛、心电图和心肌损伤证据 |
+| 活动后气短伴夜间憋醒教学病例 | 心血管 | 中级 | 心衰容量负荷、肺部体征和 BNP / 超声证据 |
 
-来源说明见：
+数据来源与知识来源采用公开资料改写和结构化加工，主要包括：
+
+- Fareez OSCE 公开数据：用于问诊风格和部分病例结构参考。
+- MedCaseReasoning：用于诊断推理和证据链素材参考。
+- EasyMED / SPBench：用于公开教学病例结构参考。
+- AAFP、Merck Manual Professional、NCBI StatPearls：用于短文本教学知识条目和 RAG 默认种子。
+
+详细来源和合规说明见：
 
 - [`data/README.md`](data/README.md)
 - [`docs/数据来源说明.md`](docs/数据来源说明.md)
 - [`data/attribution/source_registry/sources.json`](data/attribution/source_registry/sources.json)
 
-## 本地运行
+## 技术栈
 
-### 环境要求
+- 前端：Next.js、React、TypeScript。
+- 管理端：Next.js + shadcn/ui 风格 Dashboard Blocks 改造。
+- 后端：FastAPI、Pydantic、SQLite。
+- 训练流程：LangGraph 编排 OSCE 会话节点。
+- RAG：ChromaDB、Vertex Gemini Embedding、本地 embedding fallback。
+- 测试：pytest、Node test、TypeScript typecheck。
+
+## 本地体验
+
+环境建议：
 
 - Python 3.11+
 - Node.js 20+
 - `uv`
-- `pnpm` 10.x，推荐通过 `corepack` 使用
-- 可选：Docker / Docker Compose
+- `pnpm`，推荐通过 `corepack` 使用
 
-### 后端 API
-
-```powershell
-Set-Location 'services/api'
-uv sync
-uv run uvicorn app.main:app --host '127.0.0.1' --port 8000 --reload
-```
-
-常用地址：
-
-- API: `http://127.0.0.1:8000`
-- Health: `http://127.0.0.1:8000/health`
-- OpenAPI: `http://127.0.0.1:8000/docs`
-
-### 学生端
-
-```powershell
-corepack pnpm --dir 'apps/web' install
-corepack pnpm --dir 'apps/web' dev --hostname '127.0.0.1' --port 3000
-```
-
-访问：`http://127.0.0.1:3000`
-
-### 管理端
-
-```powershell
-$env:CLINICAL_OSCE_ADMIN_API_URL = 'http://127.0.0.1:8000'
-corepack pnpm --dir 'apps/admin' install
-corepack pnpm --dir 'apps/admin' dev --hostname '127.0.0.1' --port 3001
-```
-
-访问：`http://127.0.0.1:3001`
-
-本地 demo 管理员可参考 `.env.example` 中的配置：
-
-```env
-CLINICAL_OSCE_DEMO_ADMIN_EMAIL=admin@osce.test
-CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=admin
-```
-
-### Docker Compose
-
-```powershell
-docker compose up --build
-```
-
-如果当前 Docker 版本只支持旧命令：
-
-```powershell
-docker-compose up --build
-```
-
-默认端口：
-
-| 服务 | 地址 |
-| --- | --- |
-| API | `http://127.0.0.1:8000` |
-| 学生端 | `http://127.0.0.1:3000` |
-| 管理端 | `http://127.0.0.1:3001` |
-
-### 本地便捷脚本
-
-仓库还提供两个 Windows 本地联调脚本：
+便捷启动：
 
 ```powershell
 python '.\start-dev.py'
+```
+
+如需单独启动管理端，可参考：
+
+```powershell
 python '.\start-admin.py'
 ```
 
-这两个脚本包含当前开发机的本地环境假设。换机器时，优先使用上面的手动启动命令。
+这两个脚本包含当前本地开发机的联调假设。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md` 和 `apps/admin/README.md` 为准。
 
-## 配置
+## 常用验证
 
-复制示例环境变量：
-
-```powershell
-Copy-Item '.env.example' '.env'
-```
-
-常用部署模式：
-
-| 模式 | 说明 |
-| --- | --- |
-| `local-dev` | 本地开发 |
-| `local-demo` | 本地演示，默认启用 demo admin |
-| `single-node-prod` | 单机生产基线，禁用公开注册和运行时模型配置写入 |
-| `vertex-prod` | 偏向 Vertex / 云平台身份认证的部署方式 |
-
-测试阶段模型配置说明：
-
-- 学生端 API 配置页只展示托管模型说明，不再允许学生自填 API Key。
-- 主对话模型统一走 Gemini 3.5 Flash；如果上游失败，后端回落到 MiMo V2.5 Pro。
-- RAG 向量检索优先使用 Gemini Embedding；如果不可用，回落到本地 `BAAI/bge-small-zh-v1.5`。
-- 当前上游 API 有速率限制，演示时避免高并发连续请求。
-
-```env
-CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
-OSCE_OPENAI_ENABLED=true
-OSCE_OPENAI_BASE_URL=https://your-managed-gateway.example/v1
-OSCE_OPENAI_MODEL=gemini-3.5-flash
-OSCE_OPENAI_FALLBACK_ENABLED=true
-OSCE_OPENAI_FALLBACK_BASE_URL=https://your-fallback-gateway.example/v1
-OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
-OSCE_VERTEX_EMBEDDING_ENABLED=true
-OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
-OSCE_LOCAL_EMBEDDING_ENABLED=true
-OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-```
-
-- 生产环境不建议把 API Key 写入本地 SQLite，应使用环境变量、密钥服务或云平台身份。
-
-RAG 配置说明：
-
-- `.env.example` 默认启用 Chroma、Gemini embedding 和本地 embedding fallback，便于测试阶段演示。
-- `docker-compose.yml` 默认启用本地 embedding 与 Chroma，便于演示。
-- RAG 用于提示、复盘、知识推荐和来源引用，不作为诊断标准答案或评分裁判。
-
-## 测试
-
-后端：
+后端测试：
 
 ```powershell
 Set-Location 'services/api'
 uv run pytest -q
-```
-
-后端定向测试：
-
-```powershell
-uv run pytest tests/test_osce_graph.py tests/test_osce_sessions.py tests/test_rule_evaluator.py -q
-uv run pytest tests/test_training_skill_orchestrator_service.py tests/test_training_skill_regression_gate.py -q
-uv run pytest tests/test_agent_rag_context_service.py tests/test_retrieval_index.py -q
 ```
 
 学生端：
@@ -272,70 +183,31 @@ uv run pytest tests/test_agent_rag_context_service.py tests/test_retrieval_index
 ```powershell
 corepack pnpm --dir 'apps/web' typecheck
 node --test 'apps/web/home-navigation-layout.test.mjs'
-node --test 'apps/web/report-model-normalization.test.mjs'
 ```
 
 管理端：
 
 ```powershell
 corepack pnpm --dir 'apps/admin' typecheck
-node --test 'apps/admin/admin-skill-review.test.mjs'
+node --test 'apps/admin/admin-v2-dashboard.test.mjs'
 ```
 
-检索评测样例：
+## 当前边界
 
-- `services/api/evals/retrieval/gold_queries.json`
+- 当前病例数量有限，医学内容仍需要教师持续审核和扩展。
+- 认证、权限、密钥托管和审计仍是演示级或单机部署基线，不是完整生产安全方案。
+- 高级模式中的 AI 模拟查体 / 检查结果仅作训练参考，不写入病例标准事实，也不参与评分。
+- Skill 效果统计需要足够样本后才能判断趋势；样本不足时不会显示虚假的提升。
+- RAG 当前用于教学知识辅助和来源追溯，不是诊断或评分裁判。
+- 外部医学事实核验、混合检索、reranker、大规模评测和生产监控仍是后续扩展方向。
 
-## 安全边界
+## 项目文档
 
-- 只用于医学教育模拟。
-- 不提供真实诊断、治疗、用药剂量或急救建议。
-- 标准化病人不能主动泄露标准诊断、Rubric、隐藏事实或治疗方案。
-- Coach 只能提供训练提示，不能直接替学生完成诊断。
-- RAG 内容按角色和可见性过滤。
-- Skill 候选需要经过安全检查和审批后才能启用。
-
-更完整说明见 [`docs/安全边界说明.md`](docs/安全边界说明.md)。
-
-## 已知限制
-
-- 病例数量有限，医学内容仍需要教师持续审查和扩展。
-- 当前认证、权限、审计和密钥管理主要面向本地演示，不是完整生产方案。
-- Skill 效果统计目前更适合做教学观察，不能直接解释为因果提升。
-- 外部医学事实核验还没有接入完整线上流程。
-- RAG 尚未包含完整的混合检索、reranker、大规模评测和生产监控。
-
-## 目录结构
-
-```text
-.
-├── apps/
-│   ├── web/                 # 学生端
-│   └── admin/               # 管理端
-├── services/
-│   └── api/                 # FastAPI 后端
-│       ├── app/
-│       │   ├── graph/       # OSCE 训练流程
-│       │   ├── models/      # 数据模型
-│       │   └── services/    # Agent、评分、RAG、Skill、画像和存储
-│       ├── evals/           # 评测数据
-│       └── tests/           # 后端测试
-├── data/                    # 病例、Rubric、来源和运行期数据
-├── docs/                    # 项目文档和架构图
-├── docker-compose.yml
-├── start-dev.py
-└── start-admin.py
-```
-
-## 相关文档
-
-- [`apps/web/README.md`](apps/web/README.md)
-- [`apps/admin/README.md`](apps/admin/README.md)
-- [`data/README.md`](data/README.md)
+- [`项目开发文档.md`](项目开发文档.md)
+- [`docs/admin-v2-dashboard.md`](docs/admin-v2-dashboard.md)
 - [`docs/安全边界说明.md`](docs/安全边界说明.md)
 - [`docs/数据来源说明.md`](docs/数据来源说明.md)
-- [`docs/病例校验报告_首批.md`](docs/病例校验报告_首批.md)
-- [`项目开发文档.md`](项目开发文档.md)
+- [`data/README.md`](data/README.md)
 
 ## License
 
