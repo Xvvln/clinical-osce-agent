@@ -12,13 +12,14 @@ const dashboardSource = existsSync(dashboardUrl) ? readFileSync(dashboardUrl, "u
 const oldPageSource = existsSync(oldPageUrl) ? readFileSync(oldPageUrl, "utf8") : "";
 const docsSource = existsSync(docsUrl) ? readFileSync(docsUrl, "utf8") : "";
 
-test("admin v2 is an independent dashboard route and leaves the current admin page as the legacy entry", () => {
+test("admin v2 replaces the root admin entry while keeping the /v2 route available", () => {
   assert.ok(existsSync(pageUrl), "v2 page should exist");
   assert.ok(existsSync(dashboardUrl), "v2 dashboard client should exist");
   assert.match(pageSource, /AdminV2Dashboard/);
   assert.doesNotMatch(pageSource, /from "\.\.\/page"/);
   assert.doesNotMatch(dashboardSource, /from "\.\.\/page"/);
-  assert.doesNotMatch(oldPageSource, /AdminV2Dashboard/);
+  assert.match(oldPageSource, /AdminV2Dashboard/);
+  assert.match(oldPageSource, /from "\.\/v2\/admin-v2-dashboard"/);
   assert.doesNotMatch(dashboardSource, /旧版/);
   assert.doesNotMatch(dashboardSource, /href="\/"/);
 });
@@ -26,10 +27,10 @@ test("admin v2 is an independent dashboard route and leaves the current admin pa
 test("admin v2 documents the Dashboard Blocks adaptation and migration boundary", () => {
   assert.ok(existsSync(docsUrl), "admin v2 design document should exist");
   assert.match(docsSource, /shadcn\/ui Dashboard Blocks/);
-  assert.match(docsSource, /不改动现有管理端首页 `\/`/);
-  assert.match(docsSource, /v2 不删除、不覆盖旧管理端 `\/`/);
+  assert.match(docsSource, /根路径 `\/` 已切换为 v2 工作台/);
+  assert.match(docsSource, /`\/v2` 继续保留为兼容入口/);
   assert.match(docsSource, /技术 ID 和原始 JSON 不作为主界面阅读内容/);
-  assert.match(docsSource, /http:\/\/127\.0\.0\.1:3100\/v2/);
+  assert.match(docsSource, /http:\/\/127\.0\.0\.1:3001/);
 });
 
 test("admin v2 exposes the core management modules with clean Chinese labels", () => {
