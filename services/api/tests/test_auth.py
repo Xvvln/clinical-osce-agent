@@ -50,13 +50,30 @@ def test_fixed_student_login_creates_user_and_logout_clears_session(client: Test
     assert login_response.status_code == 200
     assert login_response.json()["user"]["email"] == "student@osce.test"
     assert login_response.json()["user"]["display_name"] == "演示学生"
-    assert client.get("/api/auth/me").status_code == 200
+    current_user_response = client.get("/api/auth/me")
+    assert current_user_response.status_code == 200
+    assert current_user_response.json()["user"]["is_admin"] is False
 
     logout_response = client.post("/api/auth/logout")
 
     assert logout_response.status_code == 200
     assert logout_response.json() == {"status": "ok"}
     assert client.get("/api/auth/me").status_code == 401
+
+
+def test_fixed_admin_login_marks_current_user_as_admin(client: TestClient) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"email": "admin@osce.test", "password": "admin"},
+    )
+
+    assert login_response.status_code == 200
+    assert login_response.json()["user"]["email"] == "admin@osce.test"
+    assert login_response.json()["user"]["display_name"] == "演示管理员"
+    assert login_response.json()["user"]["is_admin"] is True
+    current_user_response = client.get("/api/auth/me")
+    assert current_user_response.status_code == 200
+    assert current_user_response.json()["user"]["is_admin"] is True
 
 
 def test_login_rejects_wrong_password(client: TestClient) -> None:

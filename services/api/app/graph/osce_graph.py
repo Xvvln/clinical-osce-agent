@@ -51,7 +51,7 @@ PROCESSING_STEP_LABELS = {
     "patient_reply": "组织标准化病人回复",
     "skill": "评估是否调用 Skill",
     "rag": "检索教学知识库",
-    "coach": "Coach 复核边界",
+    "coach": "教师智能体复核边界",
     "response": "生成可见回复",
 }
 

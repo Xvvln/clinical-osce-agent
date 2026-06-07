@@ -3,6 +3,7 @@ export type AuthUser = Readonly<{
   email: string;
   display_name: string;
   created_at: string;
+  is_admin: boolean;
 }>;
 
 type AuthResponse = Readonly<{

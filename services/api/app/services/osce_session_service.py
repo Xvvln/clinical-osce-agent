@@ -898,8 +898,15 @@ class OsceSessionService:
                     self.report_store.save_report(report)
                 return report
             case = load_case_node(session.case_id)
+            stored_report_had_training_snapshot = bool(stored_report.get("training_progress_snapshot"))
             report = _ensure_report_training_progress_snapshot(report, session, case)
             report = _ensure_report_procedure_simulation_audit_items(report, session)
+            if (
+                not include_optional_agents
+                and stored_report_had_training_snapshot
+                and _report_only_waits_for_personal_skill_enrichment(report)
+            ):
+                return report
             if session.final_submission is not None and _report_needs_completed_session_hydration(report):
                 session.feedback_report = report
                 agent_update = _refresh_agent_state(session, use_reflection=True)
@@ -1353,6 +1360,18 @@ def _report_needs_completed_session_hydration(report: dict[str, Any]) -> bool:
         ai_status != "generated"
         or _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review)
         or skill_status in {None, "legacy_report", "not_complete", "generation_pending"}
+    )
+
+
+def _report_only_waits_for_personal_skill_enrichment(report: dict[str, Any]) -> bool:
+    ai_reflection_review = report.get("ai_reflection_review")
+    personal_skill_candidate = report.get("personal_skill_candidate")
+    ai_status = ai_reflection_review.get("status") if isinstance(ai_reflection_review, dict) else None
+    skill_status = personal_skill_candidate.get("status") if isinstance(personal_skill_candidate, dict) else None
+    return (
+        skill_status == "generation_pending"
+        and ai_status == "generated"
+        and not _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review)
     )
 
 

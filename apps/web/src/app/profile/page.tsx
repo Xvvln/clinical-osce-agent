@@ -450,7 +450,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
           <p className="text-xs font-medium text-brand">Skill 编排依据</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">当前训练问题</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-            由最近评分报告中的未覆盖训练点、顺序问题和证据链断点派生，Coach 会优先参考这些问题选择少量相关 Skill。
+            由最近评分报告中的未覆盖训练点、顺序问题和证据链断点派生，TeacherAgent 会优先参考这些问题选择少量相关 Skill。
           </p>
         </div>
         <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
@@ -579,7 +579,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
             </div>
           ) : (
             <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
-              暂无可编排 Skill。管理员审核启用 Skill 后，这里会显示 Coach 的选择依据。
+              暂无可编排 Skill。管理员审核启用 Skill 后，这里会显示 TeacherAgent 的选择依据。
             </p>
           )}
         </div>
@@ -596,7 +596,7 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
           <p className="text-xs font-medium text-brand">Skill 积累</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">个人训练 Skill</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-            已审核的教学策略会在后续训练中按病例、阶段和当前缺口注入 Coach 提示；样本不足时只展示应用痕迹，不伪造提升。
+            已审核的教学策略会在后续训练中按病例、阶段和当前缺口注入 TeacherAgent 提示；样本不足时只展示应用痕迹，不伪造提升。
           </p>
         </div>
         <div className="grid w-full gap-2 sm:grid-cols-2 lg:w-80">
@@ -651,7 +651,7 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
                 ) : null}
                 <div className="mt-4 grid gap-3 text-sm leading-6">
                   <SkillDetailRow label="训练目标" value={skill.description} />
-                  <SkillDetailRow label="Coach 应用方式" value={skill.learning_action} />
+                  <SkillDetailRow label="TeacherAgent 应用方式" value={skill.learning_action} />
                   <SkillDetailRow label="生效条件" value={skill.activation_summary} />
                   <SkillDetailRow label="来源与效果" value={formatSkillEffectSummary(skill)} />
                 </div>

@@ -252,7 +252,7 @@ test("admin dashboard reads management data and exposes review actions", () => {
   assert.match(adminPageSource, /手工条目列表（高级）/);
   assert.match(adminPageSource, /仅展示手工录入的短知识条目/);
   assert.match(adminPageSource, /可使用模块/);
-  assert.match(adminPageSource, /教练提示/);
+  assert.match(adminPageSource, /教师智能体提示/);
   assert.match(adminPageSource, /训练后复盘/);
   assert.match(adminPageSource, /Skill 生成/);
   assert.match(adminPageSource, /Skill 审批/);
@@ -685,16 +685,17 @@ test("admin dashboard shows dedicated prompts for authentication and authorizati
 
 test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /type AuthUser = Readonly<\{/);
+  assert.match(adminPageSource, /is_admin: boolean;/);
   assert.match(adminPageSource, /type AuthLoginResponse = Readonly<\{/);
   assert.match(adminPageSource, /async function loginAdminUser\(email: string, password: string\): Promise<AuthUser>/);
   assert.match(adminPageSource, /async function logoutAdminUser\(\): Promise<void>/);
   assert.match(adminPageSource, /fetch\("\/api\/auth\/login"/);
   assert.match(adminPageSource, /fetch\("\/api\/auth\/logout"/);
   assert.match(adminPageSource, /credentials: "same-origin"/);
-  assert.match(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin@osce.test"/);
-  assert.match(adminPageSource, /const DEMO_ADMIN_PASSWORD = "admin"/);
-  assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\(DEMO_ADMIN_EMAIL\)/);
-  assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(DEMO_ADMIN_PASSWORD\)/);
+  assert.doesNotMatch(adminPageSource, /const DEMO_ADMIN_EMAIL = "admin@osce.test"/);
+  assert.doesNotMatch(adminPageSource, /const DEMO_ADMIN_PASSWORD = "admin"/);
+  assert.match(adminPageSource, /const \[adminEmail, setAdminEmail\] = useState\(""\)/);
+  assert.match(adminPageSource, /const \[adminPassword, setAdminPassword\] = useState\(""\)/);
   assert.match(adminPageSource, /const \[isAdminLoginDialogOpen, setIsAdminLoginDialogOpen\] = useState\(false\)/);
   assert.match(adminPageSource, /const \[isAdminAccountMenuOpen, setIsAdminAccountMenuOpen\] = useState\(false\)/);
   assert.match(adminPageSource, /async function handleAdminLogin\(event: FormEvent<HTMLFormElement>\)/);
@@ -716,7 +717,11 @@ test("admin dashboard provides a modal login dialog for admin users", () => {
   assert.match(adminPageSource, /id="admin-email-input"/);
   assert.match(adminPageSource, /id="admin-password-input"/);
   assert.match(adminPageSource, /type="password"/);
-  assert.match(adminPageSource, /演示账号已预填/);
+  assert.match(adminPageSource, /<form autoComplete="off" className="mt-5 space-y-4" onSubmit=\{\(event\) => void handleAdminLogin\(event\)\}>/);
+  assert.match(adminPageSource, /autoComplete="off"[\s\S]*?id="admin-email-input"/);
+  assert.match(adminPageSource, /autoComplete="new-password"[\s\S]*?id="admin-password-input"/);
+  assert.doesNotMatch(adminPageSource, /演示账号已预填/);
+  assert.match(adminPageSource, /placeholder="输入管理员邮箱"/);
   assert.match(adminPageSource, /await loadDashboard\(\)/);
 });
 

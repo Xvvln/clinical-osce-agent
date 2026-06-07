@@ -29,6 +29,8 @@ class FakeGeminiClient:
 
 
 class FakeOpenAICompatibleCoachResponse:
+    status_code = 200
+
     def raise_for_status(self) -> None:
         return None
 
@@ -54,6 +56,8 @@ class FakeOpenAICompatibleHttpClient:
 
 
 class FakeAnthropicCoachResponse:
+    status_code = 200
+
     def raise_for_status(self) -> None:
         return None
 
@@ -81,6 +85,14 @@ class FakeAnthropicHttpClient:
 class FailingCoachAgent:
     def __call__(self, request: object) -> object:
         raise RuntimeError("provider unavailable")
+
+
+class FakeExamStyleCoachClient:
+    def complete_json(self, **_: object) -> module.CoachResponse:
+        return module.CoachResponse(
+            hint="患者提到起初是上腹部痛。请说明你的问诊目的。",
+            trigger_kind="manual_hint",
+        )
 
 
 def _request() -> module.CoachRequest:
@@ -124,6 +136,41 @@ def test_coach_request_carries_difficulty_and_hint_context() -> None:
     assert payload["training_difficulty"] == "advanced"
     assert payload["hint_context"]["session"]["training_difficulty"] == "advanced"
     assert payload["hint_context"]["next_step"]["base_hint"] == "先解释下一步为什么要补病史。"
+
+
+def test_active_hint_does_not_turn_into_exam_style_question() -> None:
+    request = _request().model_copy(update={"base_hint": "先追问疼痛部位变化、疼痛性质和伴随症状，再决定查体重点。"})
+    response = module.CoachResponse(
+        hint="患者提到起初是上腹部痛。为了避免过早下结论，请说明你的问诊目的。",
+        trigger_kind="manual_hint",
+    )
+
+    normalized = module._normalize_coach_response_for_request(request, response)
+
+    assert normalized.hint == "先追问疼痛部位变化、疼痛性质和伴随症状，再决定查体重点。"
+    assert "问诊目的" not in normalized.hint
+    assert "请说明" not in normalized.hint
+
+
+def test_llm_coach_agent_normalizes_exam_style_active_hint() -> None:
+    request = _request().model_copy(update={"base_hint": "先追问疼痛部位变化、疼痛性质和伴随症状，再决定查体重点。"})
+    agent = module.OpenAICompatibleCoachAgent(object(), client=FakeExamStyleCoachClient())
+
+    response = agent(request)
+
+    assert response.hint == "先追问疼痛部位变化、疼痛性质和伴随症状，再决定查体重点。"
+
+
+def test_active_hint_keeps_actionable_guidance() -> None:
+    request = _request()
+    response = module.CoachResponse(
+        hint="下一步先追问疼痛是否转移、性质和伴随恶心发热，因为这些能帮助完善问题表征。",
+        trigger_kind="manual_hint",
+    )
+
+    normalized = module._normalize_coach_response_for_request(request, response)
+
+    assert normalized.hint == "下一步先追问疼痛是否转移、性质和伴随恶心发热，因为这些能帮助完善问题表征。"
 
 
 def test_create_configured_coach_agent_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:

@@ -831,9 +831,6 @@ const defaultCaseOption: CaseOption = {
   auxiliaryTestOptions: appendicitisAuxiliaryTestOptions,
 };
 const STUDENT_ID = "web_demo";
-const DEFAULT_AUTH_EMAIL = "student@osce.test";
-const DEFAULT_AUTH_PASSWORD = "student";
-const ADMIN_AUTH_EMAIL = "admin@osce.test";
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
 const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
@@ -852,9 +849,12 @@ const OSCE_DOCK_DRAG_THRESHOLD = 4;
 const PATIENT_REPLY_TYPEWRITER_DELAY_MS = 14;
 const BACKEND_HEALTH_CHECK_INTERVAL_MS = 30000;
 const AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS = 600;
+const TEACHER_CONTEXT_EVALUATION_STEP_ID = "dialogue_context";
+const TEACHER_CONTEXT_EVALUATION_STEP_LABEL = "正在评估当前对话上下文";
 
 const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: string }>[] = [
   { id: "intent", label: "正在解析问诊意图" },
+  { id: TEACHER_CONTEXT_EVALUATION_STEP_ID, label: TEACHER_CONTEXT_EVALUATION_STEP_LABEL },
   { id: "case_context", label: "正在匹配病例事实" },
   { id: "skill", label: "正在评估是否调用 Skill" },
   { id: "rag", label: "正在检索教学知识库" },
@@ -1349,13 +1349,45 @@ function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessin
 }
 
 function buildPendingHintProcessingTimeline(processingStatus?: SessionProcessingStatus | null): AgentProcessingTimeline {
-  const baseTimeline = buildPendingAgentProcessingTimeline(processingStatus);
+  const statusSteps = processingStatus?.steps.map((step) => ({
+    id: step.step_id,
+    label: step.step_id === "response" ? "正在生成过程提示" : step.label,
+    status: normalizeAgentProcessingStepStatus(step.status),
+  })) ?? [];
+  const hasActiveStep = statusSteps.some((step) => step.status === "active");
+  const currentStepId = processingStatus?.current_step_id ?? "backend_connect";
+  const hasCurrentStep = statusSteps.some((step) => step.id === currentStepId);
+  const fallbackStep = {
+    id: currentStepId || "hint_response_wait",
+    label: currentStepId === "response" ? "正在生成过程提示" : processingStatus?.current_label || "正在生成过程提示",
+    status: "active" as const,
+  };
+  const timelineSteps = processingStatus?.state === "running" && !hasActiveStep && !hasCurrentStep
+    ? [...statusSteps, fallbackStep]
+    : statusSteps;
+  const displaySteps = withTeacherContextEvaluationStep(timelineSteps);
   return {
-    ...baseTimeline,
+    state: "pending",
     isOpen: true,
     title: "教师智能体处理中",
-    summary: stripTerminalChinesePunctuation(processingStatus?.summary ?? "当前：正在生成过程提示。"),
+    summary: stripTerminalChinesePunctuation(processingStatus?.summary ?? "当前：正在评估当前对话上下文。"),
+    steps: displaySteps,
   };
+}
+
+function withTeacherContextEvaluationStep(steps: readonly AgentProcessingStep[]): readonly AgentProcessingStep[] {
+  if (steps.some((step) => step.id === TEACHER_CONTEXT_EVALUATION_STEP_ID)) {
+    return steps;
+  }
+  const contextStepStatus: AgentProcessingStepStatus = steps.length > 0 ? "completed" : "active";
+  return [
+    {
+      id: TEACHER_CONTEXT_EVALUATION_STEP_ID,
+      label: TEACHER_CONTEXT_EVALUATION_STEP_LABEL,
+      status: contextStepStatus,
+    },
+    ...steps,
+  ];
 }
 
 function getBackendProcessingTraceElapsedMs(turn: AgentTurnMemoryItem | undefined): number | undefined {
@@ -1473,12 +1505,12 @@ function buildCompletedCoachProcessingTimeline(session: OsceSession, replyText: 
     title: "教师智能体处理了",
     summary: completedParts.length > 0 ? `已完成：${completedParts.join(" · ")}` : "已完成过程提示生成",
     elapsedMs,
-    steps: backendTraceSteps.length > 0 ? backendTraceSteps : AGENT_PROCESSING_STEP_DEFINITIONS
+    steps: withTeacherContextEvaluationStep(backendTraceSteps.length > 0 ? backendTraceSteps : AGENT_PROCESSING_STEP_DEFINITIONS
       .filter((stepDefinition) => stepDefinition.id !== "patient_reply")
       .map((stepDefinition) => ({
         ...stepDefinition,
         status: "completed",
-      })),
+      }))),
   };
 }
 
@@ -1512,8 +1544,23 @@ function getLatestPassiveCoachReviewTurn(
 }
 
 function getAgentProcessingStepLabel(step: AgentProcessingStep): string {
+  const isCoachResponseStep = step.id === "response" && (
+    step.metadata?.reply_role === "coach" || step.label.includes("过程提示")
+  );
+  if (isCoachResponseStep) {
+    if (step.status === "completed") {
+      return "已生成过程提示";
+    }
+    if (step.status === "skipped") {
+      return "本轮无过程提示";
+    }
+    if (step.status === "error") {
+      return "过程提示生成失败";
+    }
+  }
   const completedLabels: Readonly<Record<string, string>> = {
     intent: "已解析问诊意图",
+    [TEACHER_CONTEXT_EVALUATION_STEP_ID]: "已评估当前对话上下文",
     case_context: "已匹配病例事实",
     skill: "已评估 Skill 调用",
     rag: "已检索教学知识库",
@@ -1523,6 +1570,7 @@ function getAgentProcessingStepLabel(step: AgentProcessingStep): string {
   };
   const skippedLabels: Readonly<Record<string, string>> = {
     intent: "未识别具体问诊意图",
+    [TEACHER_CONTEXT_EVALUATION_STEP_ID]: "本轮未评估当前对话上下文",
     case_context: "未命中新增病例事实",
     skill: "本轮未调用 Skill",
     rag: "本轮未使用知识库",
@@ -2079,7 +2127,7 @@ function getTrainingDifficultyModeFromSearchParams(searchParams: SearchParamRead
 }
 
 function canViewAdminCoverageMap(authUser: AuthUser | null): boolean {
-  return authUser?.email.trim().toLowerCase() === ADMIN_AUTH_EMAIL;
+  return authUser?.is_admin === true;
 }
 
 function getTrainingDifficultyLabel(trainingDifficultyMode: TrainingDifficultyMode): string {
@@ -2588,8 +2636,8 @@ function HomeContent() {
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
-  const [authEmail, setAuthEmail] = useState(DEFAULT_AUTH_EMAIL);
-  const [authPassword, setAuthPassword] = useState(DEFAULT_AUTH_PASSWORD);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [authErrorText, setAuthErrorText] = useState<string | null>(null);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
@@ -3282,7 +3330,6 @@ function HomeContent() {
     [intermediateAuxiliaryTestOptions],
   );
   const preparedOpeningTaskCard = session?.opening_task_card ?? selectedCase?.openingTaskCard ?? null;
-  const preparedPatientOpeningUtterance = session?.patient_opening_utterance ?? selectedCase?.patientOpeningUtterance ?? null;
   const preparedPatientProfile = session?.patient_profile ?? selectedCase?.patientProfile ?? null;
   const selectedApiConfigProviderOption = getApiConfigProviderOption(studentApiConfig.provider);
   const isVertexGeminiAdcConfig = studentApiConfig.provider === "vertex_gemini_adc";
@@ -3303,16 +3350,7 @@ function HomeContent() {
   const backendStatusHaloClass = getBackendStatusHaloClass(backendConnectionStatus);
 
   const chatMessages = useMemo<readonly ChatMessage[]>(() => {
-    let baseMessages: ChatMessage[] = preparedPatientOpeningUtterance
-      ? [
-          {
-            id: "patient-opening",
-            speaker: "patient",
-            label: "标准化病人",
-            text: preparedPatientOpeningUtterance,
-          },
-        ]
-      : [];
+    let baseMessages: ChatMessage[] = [];
     if (session) {
       baseMessages = [
         ...baseMessages,
@@ -3349,7 +3387,7 @@ function HomeContent() {
     }
 
     return nextMessages;
-  }, [optimisticHistoryMessage, pendingCoachHintMessage, pendingPatientMessage, preparedPatientOpeningUtterance, session]);
+  }, [optimisticHistoryMessage, pendingCoachHintMessage, pendingPatientMessage, session]);
 
   useEffect(() => {
     const chatScrollContainer = chatScrollContainerRef.current;
@@ -3541,8 +3579,8 @@ function HomeContent() {
     try {
       await logoutUser();
       setAuthUser(null);
-      setAuthEmail(DEFAULT_AUTH_EMAIL);
-      setAuthPassword(DEFAULT_AUTH_PASSWORD);
+      setAuthEmail("");
+      setAuthPassword("");
       setIsAuthDialogOpen(true);
       setStatusText("已退出登录，请重新登录后继续保存训练。");
     } catch (error) {
@@ -4490,7 +4528,7 @@ function HomeContent() {
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 isolate px-3 pb-4 pt-10">
               <div aria-hidden="true" className="absolute inset-x-0 bottom-0 z-0 h-20 bg-background" />
-              <div aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background/75 backdrop-blur-md [mask-image:linear-gradient(to_top,black,black_52%,transparent)]" />
+              <div aria-hidden="true" className="absolute bottom-20 left-1/2 z-0 h-10 w-full max-w-3xl -translate-x-1/2 bg-background/75 backdrop-blur-md [mask-image:linear-gradient(to_top,black,black_52%,transparent)]" />
               <div className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2" ref={procedureActionContainerRef}>
                 <button
                   className="rounded-full border border-[#B5812A]/30 bg-[#FFF8E8] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[#8A5A00] shadow-xs transition hover:bg-[#FFF1CC] disabled:cursor-not-allowed disabled:opacity-50"
@@ -5540,17 +5578,17 @@ function HomeContent() {
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">登录</h2>
             </div>
-            <form className="mt-6 space-y-4" onSubmit={handleAuthSubmit}>
+            <form autoComplete="off" className="mt-6 space-y-4" onSubmit={handleAuthSubmit}>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="auth-email-input">
                   邮箱
                 </label>
                 <input
-                  autoComplete="email"
+                  autoComplete="off"
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                   id="auth-email-input"
                   onChange={(event) => setAuthEmail(event.target.value)}
-                  placeholder="student@osce.test"
+                  placeholder="输入登录邮箱"
                   type="email"
                   value={authEmail}
                 />
@@ -5560,7 +5598,7 @@ function HomeContent() {
                   密码
                 </label>
                 <input
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                   id="auth-password-input"
                   onChange={(event) => setAuthPassword(event.target.value)}

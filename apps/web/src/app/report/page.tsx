@@ -419,7 +419,7 @@ function getApprovalFieldSummary(field: string): string {
     title: "调整 Skill 标题，避免标题里直接出现答案或不适合学生端展示的措辞。",
     description: "清理 Skill 说明，让它只描述训练问题和教学目标。",
     suggested_strategy: "清理教学策略，并补充不得泄露标准答案或隐藏事实的边界。",
-    teaching_action_plan: "把策略拆成 Coach 可执行动作，供后续训练提示和复盘调用。",
+    teaching_action_plan: "把策略拆成 TeacherAgent 可执行动作，供后续训练提示和复盘调用。",
   };
   return summaries[field] ?? "审批 Agent 调整了这个字段，让候选 Skill 更适合教学使用。";
 }
@@ -428,8 +428,8 @@ function getApprovalFieldExplanation(field: string): string {
   const explanations: Readonly<Record<string, string>> = {
     title: "标题会出现在学生端和管理员端，所以审批 Agent 会删掉可能泄露答案或过度医疗化的表述。",
     description: "说明用于解释这个 Skill 要训练什么，应该聚焦学习行为，不能写病例隐藏信息、治疗方案或标准答案。",
-    suggested_strategy: "教学策略会进入后续 Coach 上下文，因此审批 Agent 会把它限制在提示方式、训练步骤和复盘方法内。",
-    teaching_action_plan: "这是系统内部给 Coach 使用的执行计划，不是新的医学事实；它只说明何时提示、如何复盘和围绕哪些训练点提醒。",
+    suggested_strategy: "教学策略会进入后续 TeacherAgent 上下文，因此审批 Agent 会把它限制在提示方式、训练步骤和复盘方法内。",
+    teaching_action_plan: "这是系统内部给 TeacherAgent 使用的执行计划，不是新的医学事实；它只说明何时提示、如何复盘和围绕哪些训练点提醒。",
   };
   return explanations[field] ?? "审批 Agent 只允许修改教学表达和训练策略，不允许修改病例事实、rubric 或标准诊断。";
 }
@@ -847,7 +847,7 @@ export default function ReportPage() {
 
     async function pollPersonalSkillCandidate() {
       try {
-        const nextReportPayload = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${sessionId}/report`, {
+        const nextReportPayload = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${sessionId}/report?enrich=true`, {
           timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
         });
         if (isCancelled) {
@@ -1254,7 +1254,7 @@ function ConversationDetailsSection({
         <div>
               <h2 className={sectionHeadingClassName}>原始对话记录</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            从后端训练 session 读取医患对话、教练提示和已返回的查体/检查结果；默认折叠，可展开查看完整训练过程。
+            从后端训练 session 读取医患对话、教师提示和已返回的查体/检查结果；默认折叠，可展开查看完整训练过程。
           </p>
         </div>
         <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
@@ -2015,7 +2015,6 @@ function CaseRecommendations({ items }: Readonly<{ items: readonly KnowledgeReco
                   下一病例训练
                 </span>
               </div>
-              <p className="mt-2 text-xs font-mono text-muted-foreground">{item.reference}</p>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">{item.reason}</p>
             </article>
           ))}

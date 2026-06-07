@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Query, Response, status
+from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -38,7 +38,7 @@ from app.services.admin_display_resolver import (
     reference_labels,
     rubric_item_labels,
 )
-from app.services.api_call_log_service import api_call_log_store
+from app.services.api_call_log_service import api_call_log_store, reset_api_call_context, set_api_call_context
 from app.services.auth_store import auth_store
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
@@ -297,6 +297,20 @@ app = FastAPI(
     version="0.1.0",
     description="临境 OSCE 智能体（TraceOSCE）的 OSCE 训练后端服务。",
 )
+
+
+@app.middleware("http")
+async def bind_api_call_log_context(request: Request, call_next: Any) -> Response:
+    user = auth_store.get_user_by_session_token(request.cookies.get(AUTH_COOKIE_NAME, ""))
+    token = set_api_call_context(
+        caller=str(user.get("email", "")) if user else "",
+        user_id=str(user.get("user_id", "")) if user else "",
+        student_id=str(user.get("user_id", "")) if user else "",
+    )
+    try:
+        return await call_next(request)
+    finally:
+        reset_api_call_context(token)
 
 
 class AuthRegisterRequest(BaseModel):
@@ -719,6 +733,13 @@ def _get_demo_student_password() -> str:
     return DEFAULT_DEMO_STUDENT_PASSWORD
 
 
+def _build_auth_user_payload(user: dict[str, str]) -> dict[str, object]:
+    return {
+        **user,
+        "is_admin": user["email"].strip().lower() in _get_admin_email_set(),
+    }
+
+
 def _matches_demo_admin_credentials(email: str, password: str) -> bool:
     return _is_demo_admin_enabled() and email.strip().lower() == _get_demo_admin_email() and password == _get_demo_admin_password()
 
@@ -756,6 +777,16 @@ def _require_owned_session(session_id: str, auth_token: str | None) -> dict[str,
     if session is None or session.get("student_id") != user["user_id"]:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+def _require_readable_session(session_id: str, auth_token: str | None) -> dict[str, object]:
+    user = _require_current_user(auth_token)
+    session = osce_session_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if session.get("student_id") == user["user_id"] or user["email"].lower() in _get_admin_email_set():
+        return session
+    raise HTTPException(status_code=404, detail="session not found")
 
 
 def _require_open_owned_session(session_id: str, auth_token: str | None) -> dict[str, object]:
@@ -1305,7 +1336,7 @@ def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     _set_auth_cookie(response, auth_store.create_session(user["user_id"]))
-    return {"user": user}
+    return {"user": _build_auth_user_payload(user)}
 
 
 @app.post("/api/auth/logout")
@@ -1318,7 +1349,7 @@ def logout(response: Response, auth_token: str | None = Cookie(default=None, ali
 
 @app.get("/api/auth/me")
 def get_current_user(auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)) -> dict[str, object]:
-    return {"user": _require_current_user(auth_token)}
+    return {"user": _build_auth_user_payload(_require_current_user(auth_token))}
 
 
 @app.get("/")
@@ -1510,6 +1541,7 @@ def _build_admin_case_import_response(request: AdminCaseImportRequest) -> dict[s
             "rubric_id": rubric_id,
             "errors": [f"import write failed: {exc}"],
         }
+    _clear_admin_case_asset_caches()
     return {"imported": True, "case_id": case_id, "rubric_id": rubric_id, "errors": []}
 
 
@@ -2289,7 +2321,7 @@ def get_current_user_session(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    return _require_owned_session(session_id, auth_token)
+    return _require_readable_session(session_id, auth_token)
 
 
 @app.delete("/api/me/sessions/{session_id}")
@@ -2306,16 +2338,17 @@ def delete_current_user_session(
 def get_current_user_session_report(
     session_id: str,
     background_tasks: BackgroundTasks,
+    enrich: bool = Query(default=False),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    _require_readable_session(session_id, auth_token)
     try:
-        report = osce_session_service.get_report(session_id, include_optional_agents=False)
+        report = osce_session_service.get_report(session_id, include_optional_agents=enrich)
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
-    if _report_has_pending_optional_agent_enrichment(report):
+    if not enrich and _report_has_pending_optional_agent_enrichment(report):
         background_tasks.add_task(osce_session_service.enrich_report_optional_agents, session_id)
     return report
 
@@ -2528,7 +2561,7 @@ def get_session_report(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    _require_readable_session(session_id, auth_token)
     try:
         report = osce_session_service.get_report(session_id)
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:

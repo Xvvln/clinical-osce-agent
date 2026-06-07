@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  PlusCircle,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -135,7 +136,7 @@ type TrainingSkillCandidateReview = Readonly<{
 type TrainingSkillApprovalAgentReview = Readonly<{
   decision?: string;
   revision_status?: string;
-  changed_fields?: readonly string[];
+  changed_fields?: unknown;
   regression_status?: string;
   regression_passed?: boolean;
 }>;
@@ -152,16 +153,16 @@ type TrainingSkillTeachingAction = Readonly<{
 type TrainingSkillCandidateDetail = TrainingSkillCandidateSummary &
   Readonly<{
     skill_type?: string;
-    stage_scope_labels?: readonly string[];
-    applies_when?: readonly string[];
+    stage_scope_labels?: unknown;
+    applies_when?: unknown;
     effect_status?: string;
     effect_status_label?: string;
     suggested_strategy?: string;
     teaching_action_plan?: readonly TrainingSkillTeachingAction[];
-    success_metrics?: readonly string[];
+    success_metrics?: unknown;
     related_recommendation_labels?: readonly string[];
-    source_report_ids?: readonly string[];
-    source_session_ids?: readonly string[];
+    source_report_ids?: unknown;
+    source_session_ids?: unknown;
     review?: TrainingSkillCandidateReview;
     approval_agent_review?: TrainingSkillApprovalAgentReview;
   }>;
@@ -199,6 +200,8 @@ type AdminCaseSummary = Readonly<{
   difficulty?: string;
 }>;
 
+type AdminCaseRaw = Record<string, unknown>;
+
 type AdminSourceSummary = Readonly<{
   source_id: string;
   title?: string;
@@ -209,6 +212,7 @@ type AdminRagDocument = Readonly<{
   document_id: string;
   title?: string;
   filename?: string;
+  file_name?: string;
   scope: string;
   case_id?: string;
   case_title?: string;
@@ -219,6 +223,121 @@ type AdminRagDocument = Readonly<{
   allowed_agents?: readonly string[];
   updated_at?: string;
 }>;
+
+type AdminRagKnowledgeItem = Readonly<{
+  knowledge_id: string;
+  document_id?: string;
+  document_name?: string;
+  title?: string;
+  text?: string;
+  scope?: string;
+  case_id?: string;
+  case_title?: string;
+  source_id?: string;
+  source_title?: string;
+  content_kind?: string;
+  visibility?: string;
+  allowed_agents?: readonly string[] | string;
+  tags?: readonly string[] | string;
+  version?: number;
+  chunk_index?: number | null;
+  chunk_count?: number | null;
+  section_title?: string;
+  page_number?: number | null;
+  source_location?: string;
+  enabled?: boolean;
+  updated_at?: string;
+}>;
+
+type AdminRagKnowledgeItemPayload = Readonly<{
+  knowledge_id: string;
+  scope: string;
+  case_id: string;
+  content_kind: string;
+  visibility: string;
+  allowed_agents: readonly string[];
+  source_id: string;
+  title: string;
+  text: string;
+  tags: readonly string[];
+  version: number;
+}>;
+
+type AdminRagDocumentUploadPayload = Readonly<{
+  allowed_agents: readonly string[];
+  case_id: string;
+  content_base64: string;
+  enabled: boolean;
+  file_name: string;
+  scope: string;
+  source_id: string;
+  tags: readonly string[];
+  visibility: string;
+}>;
+
+type AdminRagDocumentUploadResponse = Readonly<{
+  document: AdminRagDocument;
+  knowledge_items?: readonly AdminRagKnowledgeItem[];
+}>;
+
+type AdminCaseCreationPayload = Readonly<{
+  case: Record<string, unknown>;
+  rubric: Record<string, unknown>;
+}>;
+
+type AdminCaseImportStatus = Readonly<{
+  valid?: boolean;
+  imported?: boolean;
+  case_id?: string | null;
+  rubric_id?: string | null;
+  errors?: readonly string[];
+}>;
+
+type CaseCreationTextRow = Readonly<{
+  id: string;
+  value: string;
+}>;
+
+type CaseCreationProcedureRow = Readonly<{
+  code: string;
+  id: string;
+  name: string;
+  result: string;
+}>;
+
+type CaseCreationDifferentialRow = Readonly<{
+  description: string;
+  id: string;
+  name: string;
+}>;
+
+type CaseCreationDraft = Readonly<{
+  ageValue: string;
+  caseId: string;
+  caseTitle: string;
+  chiefComplaint: string;
+  courseModule: string;
+  differentialDiagnoses: readonly CaseCreationDifferentialRow[];
+  difficulty: string;
+  examItems: readonly CaseCreationProcedureRow[];
+  gender: string;
+  historyFacts: readonly CaseCreationTextRow[];
+  hospitalDepartment: string;
+  mainDiagnosis: string;
+  occupation: string;
+  patientConcern: string;
+  patientExpectation: string;
+  patientIdea: string;
+  presentIllnessSummary: string;
+  reasoningPoints: readonly CaseCreationTextRow[];
+  safetyNotes: string;
+  sourceId: string;
+  testItems: readonly CaseCreationProcedureRow[];
+}>;
+
+type CaseCreationTextField = {
+  [Key in keyof CaseCreationDraft]: CaseCreationDraft[Key] extends string ? Key : never;
+}[keyof CaseCreationDraft];
 
 type AdminModelProvider = Readonly<{
   provider_id: string;
@@ -239,12 +358,58 @@ type AdminModelConfig = Readonly<{
   providers: readonly AdminModelProvider[];
 }>;
 
+type AdminCaseFieldUpdatePayload = Readonly<{
+  case_title?: string;
+  chief_complaint?: string;
+  course_module?: string;
+  difficulty?: string;
+  safety_notes?: string;
+}>;
+
+type AdminCaseUpdateResponse = Readonly<{
+  case: AdminCaseRaw;
+  updated_fields?: readonly string[];
+}>;
+
+type AdminRubricItem = Readonly<{
+  item_id: string;
+  description: string;
+  max_score: number;
+  match_rule?: Readonly<{ kind?: string; spec?: Record<string, unknown> }>;
+  evidence_expected?: readonly string[];
+}>;
+
+type AdminRubricDimension = Readonly<{
+  dimension_id: string;
+  weight: number;
+  scoring_mode: string;
+  items: readonly AdminRubricItem[];
+}>;
+
+type AdminRubricDetail = Readonly<{
+  rubric_id: string;
+  case_id: string;
+  version: string;
+  total_score: number;
+  schema_version?: string;
+  dimensions: readonly AdminRubricDimension[];
+}>;
+
+type AdminRubricItemUpdateResponse = Readonly<{
+  item: AdminRubricItem;
+  rubric: AdminRubricDetail;
+}>;
+
 type ApiCallLog = Readonly<{
   created_at: string;
   provider: string;
   operation: string;
   model: string;
   endpoint: string;
+  caller?: string;
+  user_id?: string;
+  student_id?: string;
+  session_id?: string;
   success: boolean;
   status_code?: number | null;
   duration_ms: number;
@@ -278,6 +443,81 @@ type TrainingInsights = Readonly<{
   frequent_turn_patterns?: readonly unknown[];
 }>;
 
+type ProcedureSimulationAuditItem = Readonly<{
+  approval_decision?: string;
+  approval_mode?: string;
+  approval_rationale?: string;
+  approval_status?: string;
+  case_id?: string;
+  case_title?: string;
+  code?: string;
+  kind?: string;
+  label?: string;
+  procedure_id?: string;
+  result?: string;
+  safety_boundary?: string;
+  safety_issues?: readonly string[];
+  scoring_eligible?: boolean;
+  session_id?: string;
+  source_context_references?: readonly string[];
+  student_id?: string;
+}>;
+
+type ProcedureSimulationAuditSummary = Readonly<{
+  by_approval_status?: Record<string, number>;
+  by_case_title?: Record<string, number>;
+  total?: number;
+}>;
+
+type AdminTeachingFocusPattern = Readonly<{
+  case_titles?: readonly string[];
+  description?: string;
+  focus_id: string;
+  pattern?: string;
+  severity_label?: string;
+  source_report_count?: number;
+  support_count?: number;
+  title?: string;
+  training_suggestion?: string;
+  trigger_item_labels?: readonly string[];
+  visibility_level_label?: string;
+  why_now?: string;
+}>;
+
+type InsightDisplayItem = Readonly<{
+  title: string;
+  description: string;
+  meta: string;
+  count: number;
+}>;
+
+type AdminRetrievalEval = Readonly<{
+  boundary?: Readonly<{
+    chroma_scope?: string;
+    rag_usage?: string;
+    scoring_boundary?: string;
+  }>;
+  gold_set?: Readonly<{
+    path?: string;
+    query_count?: number;
+  }>;
+  metrics?: Readonly<{
+    mrr_at_5?: number;
+    ndcg_at_5?: number;
+    query_count?: number;
+    recall_at_3?: number;
+    recall_at_5?: number;
+    source_coverage?: number;
+  }>;
+  results?: readonly Readonly<{
+    expected_references?: readonly string[];
+    hits_at_5?: readonly string[];
+    query?: string;
+    query_id?: string;
+    retrieved_references?: readonly string[];
+  }>[];
+}>;
+
 type TrainingSkillEffects = Readonly<{
   status: string;
   label?: string;
@@ -300,7 +540,13 @@ type DashboardData = Readonly<{
   cases: readonly AdminCaseSummary[];
   sources: readonly AdminSourceSummary[];
   documents: readonly AdminRagDocument[];
+  knowledgeItems: readonly AdminRagKnowledgeItem[];
   insights: TrainingInsights | null;
+  procedureAudits: readonly ProcedureSimulationAuditItem[];
+  procedureAuditSummary: ProcedureSimulationAuditSummary | null;
+  teachingFocusPatterns: readonly AdminTeachingFocusPattern[];
+  auditEvents: readonly TrainingEventRecord[];
+  retrievalEval: AdminRetrievalEval | null;
   skillEffects: TrainingSkillEffects | null;
   autoApprovalSettings: TrainingSkillAutoApprovalSettings | null;
 }>;
@@ -321,7 +567,13 @@ const emptyDashboardData: DashboardData = {
   cases: [],
   sources: [],
   documents: [],
+  knowledgeItems: [],
   insights: null,
+  procedureAudits: [],
+  procedureAuditSummary: null,
+  teachingFocusPatterns: [],
+  auditEvents: [],
+  retrievalEval: null,
   skillEffects: null,
   autoApprovalSettings: null,
 };
@@ -368,7 +620,12 @@ async function loadDashboardData(): Promise<DashboardData> {
     casesPayload,
     sourcesPayload,
     documentsPayload,
+    knowledgePayload,
     insightsPayload,
+    procedureAuditPayload,
+    teachingFocusPayload,
+    auditEventsPayload,
+    retrievalEvalPayload,
     skillEffectsPayload,
     autoApprovalSettingsPayload,
   ] = await Promise.all([
@@ -381,7 +638,12 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"),
     fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"),
     fetchJson<{ documents: readonly AdminRagDocument[] }>("/api/admin/rag/documents"),
+    fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[] }>("/api/admin/rag/knowledge"),
     fetchJson<{ insights: TrainingInsights }>("/api/admin/insights"),
+    fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
+    fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"),
+    fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"),
+    fetchJson<{ retrieval_eval: AdminRetrievalEval }>("/api/admin/retrieval-eval"),
     fetchJson<{ skill_effects: TrainingSkillEffects }>("/api/admin/evolution/skill-effects"),
     fetchJson<{ settings: TrainingSkillAutoApprovalSettings }>("/api/admin/evolution/settings"),
   ]);
@@ -399,7 +661,13 @@ async function loadDashboardData(): Promise<DashboardData> {
     cases: casesPayload.cases,
     sources: sourcesPayload.sources,
     documents: documentsPayload.documents,
+    knowledgeItems: knowledgePayload.knowledge_items,
     insights: insightsPayload.insights,
+    procedureAudits: procedureAuditPayload.procedure_simulation_audits,
+    procedureAuditSummary: procedureAuditPayload.summary ?? null,
+    teachingFocusPatterns: teachingFocusPayload.patterns,
+    auditEvents: auditEventsPayload.events,
+    retrievalEval: retrievalEvalPayload.retrieval_eval,
     skillEffects: skillEffectsPayload.skill_effects,
     autoApprovalSettings: autoApprovalSettingsPayload.settings,
   };
@@ -413,6 +681,32 @@ async function getSessionReport(sessionId: string): Promise<AdminSessionReport> 
 async function getSessionEvents(sessionId: string): Promise<readonly TrainingEventRecord[]> {
   const payload = await fetchJson<{ events: readonly TrainingEventRecord[] }>(`/api/admin/sessions/${sessionId}/events`);
   return payload.events;
+}
+
+async function getAdminCaseRaw(caseId: string): Promise<AdminCaseRaw> {
+  const payload = await fetchJson<{ case: AdminCaseRaw }>(`/api/admin/cases/${encodeURIComponent(caseId)}/raw`);
+  return payload.case;
+}
+
+async function updateAdminCaseFields(caseId: string, payload: AdminCaseFieldUpdatePayload): Promise<AdminCaseRaw> {
+  const response = await fetchJson<AdminCaseUpdateResponse>(`/api/admin/cases/${encodeURIComponent(caseId)}/raw`, {
+    body: JSON.stringify(payload),
+    method: "PATCH",
+  });
+  return response.case;
+}
+
+async function getAdminRubric(rubricId: string): Promise<AdminRubricDetail> {
+  const payload = await fetchJson<{ rubric: AdminRubricDetail }>(`/api/admin/rubrics/${rubricId}`);
+  return payload.rubric;
+}
+
+async function updateAdminRubricItemDescription(rubricId: string, itemId: string, description: string): Promise<AdminRubricDetail> {
+  const payload = await fetchJson<AdminRubricItemUpdateResponse>(`/api/admin/rubrics/${rubricId}/items/${itemId}`, {
+    body: JSON.stringify({ description }),
+    method: "PATCH",
+  });
+  return payload.rubric;
 }
 
 async function getEvaluationDetail(batchId: string): Promise<EvaluationBatchDetail> {
@@ -436,6 +730,36 @@ async function setRagDocumentEnabled(documentId: string, enabled: boolean): Prom
     method: "PATCH",
   });
   return payload.document;
+}
+
+async function upsertRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload): Promise<AdminRagKnowledgeItem> {
+  const response = await fetchJson<{ knowledge_item: AdminRagKnowledgeItem }>("/api/admin/rag/knowledge", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+  return response.knowledge_item;
+}
+
+async function uploadRagDocument(payload: AdminRagDocumentUploadPayload): Promise<AdminRagDocumentUploadResponse> {
+  const response = await fetchJson<AdminRagDocumentUploadResponse>("/api/admin/rag/documents", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+  return response;
+}
+
+async function validateAdminCaseCreation(payload: AdminCaseCreationPayload): Promise<AdminCaseImportStatus> {
+  return fetchJson<AdminCaseImportStatus>("/api/admin/cases/validate", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+}
+
+async function importAdminCaseCreation(payload: AdminCaseCreationPayload): Promise<AdminCaseImportStatus> {
+  return fetchJson<AdminCaseImportStatus>("/api/admin/cases/import", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
 }
 
 async function updateAutoApproval(autoApplyEnabled: boolean): Promise<TrainingSkillAutoApprovalSettings> {
@@ -471,7 +795,10 @@ export function AdminV2Dashboard() {
   const [isDetailBusy, setIsDetailBusy] = useState(false);
   const [isSkillBusy, setIsSkillBusy] = useState(false);
   const [isDocumentBusy, setIsDocumentBusy] = useState(false);
+  const [isCaseCreationBusy, setIsCaseCreationBusy] = useState(false);
+  const [isCaseCreationOpen, setIsCaseCreationOpen] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [statusText, setStatusText] = useState("");
   const [loginErrorText, setLoginErrorText] = useState("");
 
   const selectedSession = useMemo(
@@ -506,15 +833,22 @@ export function AdminV2Dashboard() {
     };
   }, []);
 
-  async function refreshDashboard() {
+  async function refreshDashboard(successMessage = "") {
     setIsDataLoading(true);
     setErrorText("");
+    if (successMessage) {
+      setStatusText("");
+    }
     try {
       const nextData = await loadDashboardData();
       setData(nextData);
       setSelectedSessionId((current) => current || nextData.sessions[0]?.session_id || "");
+      if (successMessage) {
+        setStatusText(successMessage);
+      }
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "读取管理端数据失败");
+      setStatusText("");
     } finally {
       setIsDataLoading(false);
     }
@@ -590,7 +924,14 @@ export function AdminV2Dashboard() {
       setSelectedReport(report);
       setSelectedSessionId(sessionId);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : "读取报告失败");
+      const message = error instanceof Error ? error.message : "读取报告失败";
+      if (message.toLowerCase().includes("report not found")) {
+        setSelectedReport(null);
+        setSelectedSessionId(sessionId);
+        setStatusText("该 Session 还没有生成评分报告，可先读取日志或等待学生提交诊断。");
+      } else {
+        setErrorText(message);
+      }
     } finally {
       setIsDetailBusy(false);
     }
@@ -666,16 +1007,154 @@ export function AdminV2Dashboard() {
   async function handleSetDocumentEnabled(documentId: string, enabled: boolean) {
     setIsDocumentBusy(true);
     setErrorText("");
+    setStatusText("");
     try {
       const nextDocument = await setRagDocumentEnabled(documentId, enabled);
       setData((current) => ({
         ...current,
         documents: current.documents.map((document) => (document.document_id === documentId ? nextDocument : document)),
       }));
+      setStatusText(nextDocument.enabled ? "知识库文档已启用。" : "知识库文档已停用。");
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : enabled ? "启用文档失败" : "停用文档失败");
     } finally {
       setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleSaveKnowledgeItem(item: AdminRagKnowledgeItem): Promise<AdminRagKnowledgeItem> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const savedItem = await upsertRagKnowledgeItem(buildRagKnowledgePayload(item));
+      setData((current) => {
+        const exists = current.knowledgeItems.some((currentItem) => currentItem.knowledge_id === savedItem.knowledge_id);
+        return {
+          ...current,
+          knowledgeItems: exists
+            ? current.knowledgeItems.map((currentItem) => (currentItem.knowledge_id === savedItem.knowledge_id ? savedItem : currentItem))
+            : [savedItem, ...current.knowledgeItems],
+        };
+      });
+      setStatusText(`已保存知识片段：${savedItem.title || savedItem.knowledge_id}`);
+      return savedItem;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存知识库内容失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleUploadRagDocument(payload: AdminRagDocumentUploadPayload): Promise<AdminRagDocumentUploadResponse> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const response = await uploadRagDocument(payload);
+      setData((current) => {
+        const exists = current.documents.some((document) => document.document_id === response.document.document_id);
+        const nextKnowledgeItems = [
+          ...(response.knowledge_items ?? []),
+          ...current.knowledgeItems.filter(
+            (item) => !item.document_id || item.document_id !== response.document.document_id,
+          ),
+        ];
+        return {
+          ...current,
+          documents: exists
+            ? current.documents.map((document) => (document.document_id === response.document.document_id ? response.document : document))
+            : [response.document, ...current.documents],
+          knowledgeItems: nextKnowledgeItems,
+        };
+      });
+      setStatusText(`已上传文档：${response.document.title || response.document.file_name || response.document.filename || response.document.document_id}`);
+      return response;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "上传文档失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleUpdateCaseFields(caseId: string, payload: AdminCaseFieldUpdatePayload): Promise<AdminCaseRaw> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const updatedCase = await updateAdminCaseFields(caseId, payload);
+      setData((current) => ({
+        ...current,
+        cases: current.cases.map((caseItem) =>
+          caseItem.case_id === caseId
+            ? {
+                ...caseItem,
+                chief_complaint: getStringField(updatedCase, "chief_complaint", caseItem.chief_complaint ?? ""),
+                difficulty: getStringField(updatedCase, "difficulty", caseItem.difficulty ?? ""),
+                title: getStringField(updatedCase, "case_title", caseItem.title ?? ""),
+              }
+            : caseItem,
+        ),
+      }));
+      setStatusText(`已保存病例：${getStringField(updatedCase, "case_title", caseId)}`);
+      return updatedCase;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存病例失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleUpdateRubricItem(rubricId: string, itemId: string, description: string): Promise<AdminRubricDetail> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const updatedRubric = await updateAdminRubricItemDescription(rubricId, itemId, description);
+      setStatusText("评分项说明已保存。");
+      return updatedRubric;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存评分项失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleValidateCaseCreation(payload: AdminCaseCreationPayload): Promise<AdminCaseImportStatus> {
+    setIsCaseCreationBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      return await validateAdminCaseCreation(payload);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "病例预检失败");
+      throw error;
+    } finally {
+      setIsCaseCreationBusy(false);
+    }
+  }
+
+  async function handleImportCaseCreation(payload: AdminCaseCreationPayload): Promise<AdminCaseImportStatus> {
+    setIsCaseCreationBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const result = await importAdminCaseCreation(payload);
+      if (result.imported) {
+        await refreshDashboard();
+        setIsCaseCreationOpen(false);
+        setStatusText(`已发布病例：${result.case_id ?? "新病例"}`);
+      }
+      return result;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "发布病例失败");
+      throw error;
+    } finally {
+      setIsCaseCreationBusy(false);
     }
   }
 
@@ -750,6 +1229,10 @@ export function AdminV2Dashboard() {
             })}
           </nav>
           <div className="mt-4 grid gap-2">
+            <Button aria-label="刷新管理数据" disabled={isDataLoading} onClick={() => void refreshDashboard("已刷新管理数据")} variant="secondary">
+              {isDataLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              刷新
+            </Button>
             <Button onClick={() => void handleLogout()} variant="ghost">
               <LogOut />
               退出登录
@@ -757,24 +1240,25 @@ export function AdminV2Dashboard() {
           </div>
         </aside>
         <section className="min-w-0 p-4 sm:p-6">
-          <header className="flex flex-col gap-4 rounded-3xl border border-[#E7E0D4] bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
-            <h2 className="text-2xl font-semibold">临境 OSCE 管理工作台</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="success">管理员已登录</Badge>
-              <Button disabled={isDataLoading} onClick={() => void refreshDashboard()} variant="secondary">
-                {isDataLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                刷新
-              </Button>
-            </div>
-          </header>
+          {errorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorText}</p> : null}
+          {statusText ? <p className={cn("rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800", errorText ? "mt-3" : "")}>{statusText}</p> : null}
 
-          {errorText ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorText}</p> : null}
-
-          <div className="mt-4">
+          <div className={cn(errorText || statusText ? "mt-4" : "")}>
             {activeSectionId === "overview" ? (
               <OverviewSection data={data} onGenerateSkillCandidates={() => void generateSkillCandidates()} onRunEvaluation={() => void runEvaluation()} isMutating={isMutating} />
             ) : null}
-            {activeSectionId === "resources" ? <ResourcesSection data={data} isDocumentBusy={isDocumentBusy} onSetDocumentEnabled={(documentId, enabled) => void handleSetDocumentEnabled(documentId, enabled)} /> : null}
+            {activeSectionId === "resources" ? (
+              <ResourcesSection
+                data={data}
+                isDocumentBusy={isDocumentBusy}
+                onOpenCaseCreation={() => setIsCaseCreationOpen(true)}
+                onSaveCaseFields={(caseId, payload) => handleUpdateCaseFields(caseId, payload)}
+                onSaveKnowledgeItem={(item) => handleSaveKnowledgeItem(item)}
+                onSaveRubricItem={(rubricId, itemId, description) => handleUpdateRubricItem(rubricId, itemId, description)}
+                onSetDocumentEnabled={(documentId, enabled) => void handleSetDocumentEnabled(documentId, enabled)}
+                onUploadDocument={(payload) => handleUploadRagDocument(payload)}
+              />
+            ) : null}
             {activeSectionId === "training" ? (
               <TrainingSection
                 data={data}
@@ -806,6 +1290,16 @@ export function AdminV2Dashboard() {
             ) : null}
             {activeSectionId === "logs" ? <LogsSection data={data} /> : null}
           </div>
+          {isCaseCreationOpen ? (
+            <CaseCreationModal
+              cases={data.cases}
+              isSaving={isCaseCreationBusy}
+              onClose={() => setIsCaseCreationOpen(false)}
+              onImport={(payload) => handleImportCaseCreation(payload)}
+              onValidate={(payload) => handleValidateCaseCreation(payload)}
+              sources={data.sources}
+            />
+          ) : null}
         </section>
       </div>
     </main>
@@ -869,15 +1363,89 @@ function OverviewSection({
 function ResourcesSection({
   data,
   isDocumentBusy,
+  onOpenCaseCreation,
+  onSaveCaseFields,
+  onSaveKnowledgeItem,
+  onSaveRubricItem,
   onSetDocumentEnabled,
+  onUploadDocument,
 }: Readonly<{
   data: DashboardData;
   isDocumentBusy: boolean;
+  onOpenCaseCreation: () => void;
+  onSaveCaseFields: (caseId: string, payload: AdminCaseFieldUpdatePayload) => Promise<AdminCaseRaw>;
+  onSaveKnowledgeItem: (item: AdminRagKnowledgeItem) => Promise<AdminRagKnowledgeItem>;
+  onSaveRubricItem: (rubricId: string, itemId: string, description: string) => Promise<AdminRubricDetail>;
   onSetDocumentEnabled: (documentId: string, enabled: boolean) => void;
+  onUploadDocument: (payload: AdminRagDocumentUploadPayload) => Promise<AdminRagDocumentUploadResponse>;
 }>) {
+  const [openDocumentId, setOpenDocumentId] = useState("");
+  const [openCaseDetail, setOpenCaseDetail] = useState<AdminCaseRaw | null>(null);
+  const [editingCase, setEditingCase] = useState<AdminCaseRaw | null>(null);
+  const [rubricDetail, setRubricDetail] = useState<AdminRubricDetail | null>(null);
+  const [caseDetailErrorText, setCaseDetailErrorText] = useState("");
+  const [loadingCaseId, setLoadingCaseId] = useState("");
+  const [loadingRubricCaseId, setLoadingRubricCaseId] = useState("");
+  const activeDocumentId = openDocumentId;
+  const openDocument = data.documents.find((document) => document.document_id === openDocumentId) ?? null;
+  const openDocumentItems = data.knowledgeItems
+    .filter((item) => item.document_id === openDocumentId)
+    .sort((left, right) => (left.chunk_index ?? 0) - (right.chunk_index ?? 0));
+
+  function handleOpenDocument(documentId: string) {
+    setOpenDocumentId(documentId);
+  }
+
+  async function handleOpenCaseDetail(caseId: string) {
+    setLoadingCaseId(caseId);
+    setCaseDetailErrorText("");
+    try {
+      setOpenCaseDetail(await getAdminCaseRaw(caseId));
+    } catch (error) {
+      setCaseDetailErrorText(error instanceof Error ? error.message : "读取病例详情失败");
+    } finally {
+      setLoadingCaseId("");
+    }
+  }
+
+  async function handleOpenCaseEditor(caseId: string) {
+    setLoadingCaseId(caseId);
+    setCaseDetailErrorText("");
+    try {
+      setEditingCase(await getAdminCaseRaw(caseId));
+    } catch (error) {
+      setCaseDetailErrorText(error instanceof Error ? error.message : "读取病例失败");
+    } finally {
+      setLoadingCaseId("");
+    }
+  }
+
+  async function handleOpenRubric(caseId: string) {
+    setLoadingRubricCaseId(caseId);
+    setCaseDetailErrorText("");
+    try {
+      const casePayload = await getAdminCaseRaw(caseId);
+      const rubricId = getStringField(getRecordField(casePayload, "rubric_ref"), "rubric_id", "");
+      if (!rubricId) {
+        throw new Error("该病例未绑定 Rubric。");
+      }
+      setRubricDetail(await getAdminRubric(rubricId));
+    } catch (error) {
+      setCaseDetailErrorText(error instanceof Error ? error.message : "读取 Rubric 失败");
+    } finally {
+      setLoadingRubricCaseId("");
+    }
+  }
+
   return (
     <div className="grid gap-4">
-      <SectionIntro eyebrow="教学资源" title="病例、来源和知识库" description="查看病例、来源和知识库启用状态。" />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <SectionIntro eyebrow="教学资源" title="病例、来源和知识库" description="管理训练病例、来源台账和教学知识库。" />
+        <Button onClick={onOpenCaseCreation}>
+          <PlusCircle />
+          新建病例
+        </Button>
+      </div>
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<BookOpen />} label="病例" value={formatCount(data.cases.length)} helper="学生可训练病例" />
         <MetricCard icon={<FileText />} label="来源" value={formatCount(data.sources.length)} helper="来源台账" />
@@ -885,10 +1453,56 @@ function ResourcesSection({
       </div>
       <Card>
         <CardHeader>
+          <CardTitle>病例台账</CardTitle>
+          <CardDescription>展示当前可训练病例；新增病例会先通过结构校验，再写入病例与 Rubric 文件。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {data.cases.map((caseItem) => (
+              <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={caseItem.case_id}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate text-base font-semibold">{caseItem.title || caseItem.case_id}</h3>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-[#6F6257]">{caseItem.chief_complaint || "未填写主诉"}</p>
+                  </div>
+                  <Badge variant="muted">{caseItem.difficulty || "未分级"}</Badge>
+                </div>
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="truncate text-xs text-[#8A7D6F]">{caseItem.case_id}</p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button disabled={loadingCaseId === caseItem.case_id} onClick={() => void handleOpenCaseDetail(caseItem.case_id)} size="sm" type="button" variant="secondary">
+                      {loadingCaseId === caseItem.case_id ? <Loader2 className="animate-spin" /> : <FileText />}
+                      查看详情
+                    </Button>
+                    <Button disabled={loadingCaseId === caseItem.case_id} onClick={() => void handleOpenCaseEditor(caseItem.case_id)} size="sm" type="button" variant="secondary">
+                      编辑病例
+                    </Button>
+                    <Button disabled={loadingRubricCaseId === caseItem.case_id} onClick={() => void handleOpenRubric(caseItem.case_id)} size="sm" type="button" variant="secondary">
+                      {loadingRubricCaseId === caseItem.case_id ? <Loader2 className="animate-spin" /> : null}
+                      查看 Rubric
+                    </Button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+          {caseDetailErrorText ? <p className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{caseDetailErrorText}</p> : null}
+          {data.cases.length === 0 ? <EmptyText>暂无病例。点击“新建病例”开始录入。</EmptyText> : null}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle>知识库文档</CardTitle>
           <CardDescription>教师上传的全局或病例知识库，启用后进入所选 Agent 的 RAG 检索。</CardDescription>
         </CardHeader>
         <CardContent>
+          <DocumentUploadPanel
+            cases={data.cases}
+            documents={data.documents}
+            isSaving={isDocumentBusy}
+            onUploadDocument={onUploadDocument}
+            sources={data.sources}
+          />
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
@@ -912,9 +1526,14 @@ function ResourcesSection({
                       <Badge variant={document.enabled ? "success" : "muted"}>{document.enabled ? "已启用" : "未启用"}</Badge>
                     </td>
                     <td className="py-3 pr-4">
-                      <Button disabled={isDocumentBusy} onClick={() => onSetDocumentEnabled(document.document_id, !document.enabled)} size="sm" variant={document.enabled ? "outline" : "secondary"}>
-                        {document.enabled ? "停用文档" : "启用文档"}
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button onClick={() => handleOpenDocument(document.document_id)} size="sm" variant={activeDocumentId === document.document_id ? "default" : "secondary"}>
+                          查看内容
+                        </Button>
+                        <Button disabled={isDocumentBusy} onClick={() => onSetDocumentEnabled(document.document_id, !document.enabled)} size="sm" variant={document.enabled ? "outline" : "secondary"}>
+                          {document.enabled ? "停用文档" : "启用文档"}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -924,6 +1543,981 @@ function ResourcesSection({
           {data.documents.length === 0 ? <EmptyText>暂无知识库文档。</EmptyText> : null}
         </CardContent>
       </Card>
+      {openDocument ? (
+        <KnowledgeContentModal
+          document={openDocument}
+          isSaving={isDocumentBusy}
+          items={openDocumentItems}
+          onClose={() => setOpenDocumentId("")}
+          onSaveKnowledgeItem={onSaveKnowledgeItem}
+        />
+      ) : null}
+      {openCaseDetail ? <CaseDetailModal casePayload={openCaseDetail} onClose={() => setOpenCaseDetail(null)} /> : null}
+      {editingCase ? (
+        <CaseEditModal
+          casePayload={editingCase}
+          isSaving={isDocumentBusy}
+          onClose={() => setEditingCase(null)}
+          onSave={async (caseId, payload) => {
+            const updatedCase = await onSaveCaseFields(caseId, payload);
+            setEditingCase(updatedCase);
+          }}
+        />
+      ) : null}
+      {rubricDetail ? (
+        <RubricEditModal
+          isSaving={isDocumentBusy}
+          onClose={() => setRubricDetail(null)}
+          onSaveItem={async (rubricId, itemId, description) => {
+            const updatedRubric = await onSaveRubricItem(rubricId, itemId, description);
+            setRubricDetail(updatedRubric);
+          }}
+          rubric={rubricDetail}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DocumentUploadPanel({
+  cases,
+  documents,
+  isSaving,
+  onUploadDocument,
+  sources,
+}: Readonly<{
+  cases: readonly AdminCaseSummary[];
+  documents: readonly AdminRagDocument[];
+  isSaving: boolean;
+  onUploadDocument: (payload: AdminRagDocumentUploadPayload) => Promise<AdminRagDocumentUploadResponse>;
+  sources: readonly AdminSourceSummary[];
+}>) {
+  const defaultCaseId = cases[0]?.case_id ?? "";
+  const defaultSourceId = sources[0]?.source_id ?? "";
+  const [scope, setScope] = useState("case");
+  const [caseId, setCaseId] = useState(defaultCaseId);
+  const [sourceId, setSourceId] = useState(defaultSourceId);
+  const [visibility, setVisibility] = useState("pre_submit_safe");
+  const [tags, setTags] = useState("teacher_document");
+  const [allowedAgents, setAllowedAgents] = useState<readonly string[]>(["coach", "reflection", "skill_generation", "skill_approval"]);
+  const [enabled, setEnabled] = useState(true);
+  const [file, setFile] = useState<File | null>(null);
+  const [localErrorText, setLocalErrorText] = useState("");
+  const [localStatusText, setLocalStatusText] = useState("");
+
+  useEffect(() => {
+    setCaseId((current) => current || defaultCaseId);
+  }, [defaultCaseId]);
+
+  useEffect(() => {
+    setSourceId((current) => current || defaultSourceId);
+  }, [defaultSourceId]);
+
+  async function handleUpload() {
+    setLocalErrorText("");
+    setLocalStatusText("");
+    if (!file) {
+      setLocalErrorText("请选择要上传的文档。");
+      return;
+    }
+    if (scope === "case" && !caseId) {
+      setLocalErrorText("病例知识库需要先选择关联病例。");
+      return;
+    }
+    try {
+      const response = await onUploadDocument({
+        allowed_agents: allowedAgents,
+        case_id: scope === "case" ? caseId : "",
+        content_base64: await readFileAsBase64(file),
+        enabled,
+        file_name: file.name,
+        scope,
+        source_id: sourceId,
+        tags: toTokenList(tags),
+        visibility,
+      });
+      setLocalStatusText(`已切分 ${response.knowledge_items?.length ?? response.document.chunk_count ?? 0} 个知识片段。`);
+      setFile(null);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "上传文档失败");
+    }
+  }
+
+  function toggleAgent(agentId: string) {
+    setAllowedAgents((current) => (current.includes(agentId) ? current.filter((item) => item !== agentId) : [...current, agentId]));
+  }
+
+  return (
+    <details className="mb-5 rounded-3xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+      <summary className="cursor-pointer select-none text-base font-semibold">上传文档</summary>
+      <div className="mt-4 grid gap-4">
+        <div className="grid gap-3 lg:grid-cols-3">
+          <FormField label="知识库范围">
+            <SelectInput optionLabels={{ case: "病例知识库", global: "全局知识库" }} options={["case", "global"]} value={scope} onChange={setScope} />
+          </FormField>
+          <FormField label="关联病例">
+            <SelectInput
+              optionLabels={Object.fromEntries(cases.map((caseItem) => [caseItem.case_id, caseItem.title || caseItem.case_id]))}
+              options={scope === "case" ? cases.map((caseItem) => caseItem.case_id) : [""]}
+              value={scope === "case" ? caseId : ""}
+              onChange={setCaseId}
+            />
+          </FormField>
+          <FormField label="可见范围">
+            <SelectInput
+              optionLabels={{
+                admin_only: "仅管理员可见",
+                post_submit_review: "提交后复盘可用",
+                pre_submit_safe: "训练前可用于提示",
+              }}
+              options={["pre_submit_safe", "post_submit_review", "admin_only"]}
+              value={visibility}
+              onChange={setVisibility}
+            />
+          </FormField>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1.2fr]">
+          <FormField label="关联来源">
+            <SelectInput
+              optionLabels={{ "": "不绑定来源", ...Object.fromEntries(sources.map((source) => [source.source_id, source.title || source.source_id])) }}
+              options={["", ...sources.map((source) => source.source_id)]}
+              value={sourceId}
+              onChange={setSourceId}
+            />
+          </FormField>
+          <FormField label="标签">
+            <Input onChange={(event) => setTags(event.target.value)} placeholder="例如 acute_abdomen,teaching" value={tags} />
+          </FormField>
+          <FormField label="文档文件">
+            <Input
+              accept=".md,.txt,.pdf,.docx,.html,.htm"
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              type="file"
+            />
+          </FormField>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {["coach", "reflection", "skill_generation", "skill_approval"].map((agentId) => (
+            <label className="flex items-center gap-2 rounded-2xl border border-[#E7E0D4] bg-white px-3 py-2 text-sm" key={agentId}>
+              <input checked={allowedAgents.includes(agentId)} onChange={() => toggleAgent(agentId)} type="checkbox" />
+              {getAgentLabel(agentId)}
+            </label>
+          ))}
+          <label className="flex items-center gap-2 rounded-2xl border border-[#E7E0D4] bg-white px-3 py-2 text-sm">
+            <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+            上传后启用
+          </label>
+          <Button disabled={isSaving} onClick={() => void handleUpload()} type="button">
+            {isSaving ? <Loader2 className="animate-spin" /> : <PlusCircle />}
+            上传文档
+          </Button>
+          <p className="text-sm text-[#6F6257]">{file ? file.name : `${documents.length} 份文档已在库中`}</p>
+        </div>
+        {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
+        {localStatusText ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{localStatusText}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function CaseEditModal({
+  casePayload,
+  isSaving,
+  onClose,
+  onSave,
+}: Readonly<{
+  casePayload: AdminCaseRaw;
+  isSaving: boolean;
+  onClose: () => void;
+  onSave: (caseId: string, payload: AdminCaseFieldUpdatePayload) => Promise<void>;
+}>) {
+  const caseId = getStringField(casePayload, "case_id", "");
+  const [caseTitle, setCaseTitle] = useState(getStringField(casePayload, "case_title", ""));
+  const [chiefComplaint, setChiefComplaint] = useState(getStringField(casePayload, "chief_complaint", ""));
+  const [courseModule, setCourseModule] = useState(getStringField(casePayload, "course_module", "腹痛"));
+  const [difficulty, setDifficulty] = useState(getStringField(casePayload, "difficulty", "初级"));
+  const [safetyNotes, setSafetyNotes] = useState(getStringField(casePayload, "safety_notes", ""));
+  const [localErrorText, setLocalErrorText] = useState("");
+
+  useEffect(() => {
+    setCaseTitle(getStringField(casePayload, "case_title", ""));
+    setChiefComplaint(getStringField(casePayload, "chief_complaint", ""));
+    setCourseModule(getStringField(casePayload, "course_module", "腹痛"));
+    setDifficulty(getStringField(casePayload, "difficulty", "初级"));
+    setSafetyNotes(getStringField(casePayload, "safety_notes", ""));
+    setLocalErrorText("");
+  }, [casePayload]);
+
+  async function handleSave() {
+    setLocalErrorText("");
+    if (!caseTitle.trim() || !chiefComplaint.trim()) {
+      setLocalErrorText("病例标题和主诉不能为空。");
+      return;
+    }
+    try {
+      await onSave(caseId, {
+        case_title: caseTitle.trim(),
+        chief_complaint: chiefComplaint.trim(),
+        course_module: courseModule.trim(),
+        difficulty: difficulty.trim(),
+        safety_notes: safetyNotes.trim(),
+      });
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "保存病例失败");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="编辑病例">
+      <div className="grid max-h-[86vh] w-full max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-[#AE5630]">病例台账</p>
+            <h3 className="mt-1 text-2xl font-semibold">编辑病例</h3>
+            <p className="mt-2 text-sm text-[#6F6257]">{caseId || "未记录病例 ID"}</p>
+          </div>
+          <Button onClick={onClose} variant="secondary">关闭</Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-6">
+          <div className="grid gap-4">
+            <FormField label="病例标题">
+              <Input onChange={(event) => setCaseTitle(event.target.value)} value={caseTitle} />
+            </FormField>
+            <FormField label="主诉">
+              <Input onChange={(event) => setChiefComplaint(event.target.value)} value={chiefComplaint} />
+            </FormField>
+            <div className="grid gap-4 md:grid-cols-2">
+              <FormField label="课程模块">
+                <SelectInput options={courseModuleOptions} value={courseModule} onChange={setCourseModule} />
+              </FormField>
+              <FormField label="训练难度">
+                <SelectInput options={["初级", "中级", "高级"]} value={difficulty} onChange={setDifficulty} />
+              </FormField>
+            </div>
+            <FormField label="边界说明">
+              <TextAreaInput onChange={setSafetyNotes} value={safetyNotes} />
+            </FormField>
+            {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-[#E7E0D4] px-6 py-4">
+          <Button onClick={onClose} variant="secondary">取消</Button>
+          <Button disabled={isSaving} onClick={() => void handleSave()}>
+            {isSaving ? <Loader2 className="animate-spin" /> : <FileText />}
+            保存基础信息
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RubricEditModal({
+  isSaving,
+  onClose,
+  onSaveItem,
+  rubric,
+}: Readonly<{
+  isSaving: boolean;
+  onClose: () => void;
+  onSaveItem: (rubricId: string, itemId: string, description: string) => Promise<void>;
+  rubric: AdminRubricDetail;
+}>) {
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => buildRubricDescriptionDrafts(rubric));
+  const [localErrorText, setLocalErrorText] = useState("");
+
+  useEffect(() => {
+    setDrafts(buildRubricDescriptionDrafts(rubric));
+    setLocalErrorText("");
+  }, [rubric]);
+
+  async function handleSaveItem(itemId: string) {
+    const description = drafts[itemId]?.trim() ?? "";
+    if (!description) {
+      setLocalErrorText("评分项说明不能为空。");
+      return;
+    }
+    try {
+      await onSaveItem(rubric.rubric_id, itemId, description);
+      setLocalErrorText("");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "保存评分项失败");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="查看 Rubric">
+      <div className="grid max-h-[88vh] w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-[#AE5630]">评分 Rubric</p>
+            <h3 className="mt-1 text-2xl font-semibold">查看 Rubric</h3>
+            <p className="mt-2 text-sm text-[#6F6257]">总分 {rubric.total_score} · {rubric.dimensions.length} 个评分维度</p>
+          </div>
+          <Button onClick={onClose} variant="secondary">关闭</Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-6">
+          <div className="grid gap-4">
+            {rubric.dimensions.map((dimension) => (
+              <section className="rounded-3xl border border-[#E7E0D4] bg-[#FAF9F5] p-5" key={dimension.dimension_id}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-lg font-semibold">{getRubricDimensionLabel(dimension.dimension_id)}</h4>
+                    <p className="mt-1 text-sm text-[#6F6257]">权重 {dimension.weight} · {dimension.items.length} 个评分项</p>
+                  </div>
+                  <Badge variant="muted">{dimension.scoring_mode}</Badge>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  {dimension.items.map((item) => (
+                    <article className="rounded-2xl border border-[#E7E0D4] bg-white p-4" key={item.item_id}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">{item.description || item.item_id}</p>
+                          <p className="mt-1 text-xs text-[#8A7D6F]">最高 {item.max_score} 分 · {item.item_id}</p>
+                        </div>
+                        <Badge variant="muted">{joinText(item.evidence_expected, "无绑定证据")}</Badge>
+                      </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto]">
+                        <Input
+                          onChange={(event) => setDrafts((current) => ({ ...current, [item.item_id]: event.target.value }))}
+                          value={drafts[item.item_id] ?? item.description}
+                        />
+                        <Button disabled={isSaving} onClick={() => void handleSaveItem(item.item_id)} type="button" variant="secondary">
+                          {isSaving ? <Loader2 className="animate-spin" /> : null}
+                          保存评分项
+                        </Button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CaseDetailModal({ casePayload, onClose }: Readonly<{ casePayload: AdminCaseRaw; onClose: () => void }>) {
+  const patientProfile = getRecordField(casePayload, "patient_profile");
+  const history = getRecordField(casePayload, "history");
+  const physicalExam = getRecordField(casePayload, "physical_exam");
+  const auxiliaryTests = getRecordField(casePayload, "auxiliary_tests");
+  const diagnosis = getRecordField(casePayload, "diagnosis");
+  const sourceAttribution = getRecordField(casePayload, "source_attribution");
+  const teachingFocus = getRecordField(casePayload, "teaching_focus");
+  const hiddenFacts = getRecordList(history?.hidden_facts);
+  const examItems = [...getRecordList(physicalExam?.must_items), ...getRecordList(physicalExam?.optional_items)];
+  const testItems = [...getRecordList(auxiliaryTests?.must_items), ...getRecordList(auxiliaryTests?.optional_items), ...getRecordList(auxiliaryTests?.forbidden_items)];
+  const differentialDiagnoses = getRecordList(diagnosis?.differential_diagnoses);
+  const reasoningPoints = getRecordList(diagnosis?.reasoning_points);
+
+  const patientMeta = [
+    getAgeGenderLabel(patientProfile),
+    getStringField(patientProfile, "occupation", ""),
+    getStringField(patientProfile, "hospital_department", ""),
+  ].filter(Boolean);
+  const iceItems = [
+    getStringField(patientProfile, "idea", "") ? `想法：${getStringField(patientProfile, "idea", "")}` : "",
+    getStringField(patientProfile, "concern", "") ? `担忧：${getStringField(patientProfile, "concern", "")}` : "",
+    getStringField(patientProfile, "expectation", "") ? `期望：${getStringField(patientProfile, "expectation", "")}` : "",
+  ].filter(Boolean);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="病例详情">
+      <div className="grid max-h-[88vh] w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-[#AE5630]">病例详情</p>
+            <h3 className="mt-1 text-2xl font-semibold">{getStringField(casePayload, "case_title", getStringField(casePayload, "case_id", "未命名病例"))}</h3>
+            <p className="mt-2 text-sm leading-6 text-[#6F6257]">
+              {getStringField(casePayload, "case_id", "未记录")} · {getStringField(casePayload, "course_module", "未记录")} · {getStringField(casePayload, "difficulty", "未分级")}
+            </p>
+          </div>
+          <Button onClick={onClose} variant="secondary">
+            关闭
+          </Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-6">
+          <div className="grid gap-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <InfoBlock title="主诉" value={getStringField(casePayload, "chief_complaint", "未记录")} />
+              <InfoBlock title="来源" value={getStringField(sourceAttribution, "source_id", "未绑定来源")} />
+              <InfoBlock title="Rubric" value={getStringField(getRecordField(casePayload, "rubric_ref"), "rubric_id", "未绑定 Rubric")} />
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <CaseDetailPanel title="病人信息">
+                <CaseDetailLine label="基本信息" value={patientMeta.join(" · ") || "未记录"} />
+                <CaseDetailLine label="现病史概要" value={getStringField(history, "present_illness_summary", "未记录")} />
+                <CaseDetailList items={iceItems} emptyText="未记录 ICE 信息。" />
+              </CaseDetailPanel>
+
+              <CaseDetailPanel title="病史线索">
+                <CaseDetailList
+                  items={hiddenFacts.map((fact, index) => {
+                    const topic = getStringField(fact, "topic", `线索 ${index + 1}`);
+                    const answer = getStringField(fact, "canonical_answer", "未记录");
+                    return `${topic}：${answer}`;
+                  })}
+                  emptyText="暂无结构化病史线索。"
+                />
+              </CaseDetailPanel>
+
+              <CaseDetailPanel title="查体结果">
+                <CaseDetailList
+                  items={examItems.map((item) => {
+                    const name = getStringField(item, "exam_name_cn", getStringField(item, "exam_code", "查体项目"));
+                    return `${name}：${getStringField(item, "result", "未记录结果")}`;
+                  })}
+                  emptyText="暂无查体项目。"
+                />
+              </CaseDetailPanel>
+
+              <CaseDetailPanel title="辅助检查结果">
+                <CaseDetailList
+                  items={testItems.map((item) => {
+                    const name = getStringField(item, "test_name_cn", getStringField(item, "test_code", "辅助检查"));
+                    const category = getStringField(item, "category", "");
+                    const result = getStringField(item, "result", "未记录结果");
+                    return `${category ? `${category} · ` : ""}${name}：${result}`;
+                  })}
+                  emptyText="暂无辅助检查。"
+                />
+              </CaseDetailPanel>
+
+              <CaseDetailPanel className="lg:col-span-2" title="诊断与推理">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <CaseDetailLine label="主要诊断" value={getStringField(diagnosis, "main_diagnosis", "未记录")} />
+                  <CaseDetailLine label="下一步建议" value={getStringField(diagnosis, "suggested_next_steps", "未记录")} />
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <CaseDetailList
+                    title="鉴别诊断"
+                    items={differentialDiagnoses.map((item) => `${getStringField(item, "disease_name", "未命名鉴别诊断")}：${getStringField(item, "key_distinction", "未记录区别")}`)}
+                    emptyText="暂无鉴别诊断。"
+                  />
+                  <CaseDetailList
+                    title="推理要点"
+                    items={reasoningPoints.map((item) => getStringField(item, "statement", "未记录推理要点"))}
+                    emptyText="暂无推理要点。"
+                  />
+                </div>
+              </CaseDetailPanel>
+
+              <CaseDetailPanel className="lg:col-span-2" title="教学设置">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <CaseDetailList title="学习目标" items={toTextList(teachingFocus?.learning_objectives)} emptyText="暂无学习目标。" />
+                  <CaseDetailList title="训练路径" items={toTextList(teachingFocus?.recommended_training_path)} emptyText="暂无训练路径。" />
+                </div>
+              </CaseDetailPanel>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CaseDetailPanel({ children, className, title }: Readonly<{ children: ReactNode; className?: string; title: string }>) {
+  return (
+    <section className={cn("rounded-3xl border border-[#E7E0D4] bg-[#FAF9F5] p-5", className)}>
+      <h4 className="text-lg font-semibold">{title}</h4>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function CaseDetailLine({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+      <p className="text-xs text-[#8A7D6F]">{label}</p>
+      <p className="mt-2 text-sm leading-6 text-[#141413]">{value}</p>
+    </div>
+  );
+}
+
+function CaseDetailList({ emptyText, items, title }: Readonly<{ emptyText: string; items: readonly string[]; title?: string }>) {
+  return (
+    <div>
+      {title ? <h5 className="mb-2 text-sm font-semibold">{title}</h5> : null}
+      <div className="grid gap-2">
+        {items.map((item, index) => (
+          <p className="rounded-2xl border border-[#E7E0D4] bg-white px-4 py-3 text-sm leading-6 text-[#141413]" key={`${item}-${index}`}>
+            {item}
+          </p>
+        ))}
+        {items.length === 0 ? <p className="rounded-2xl border border-dashed border-[#E7E0D4] bg-white px-4 py-3 text-sm text-[#6F6257]">{emptyText}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeContentModal({
+  document,
+  isSaving,
+  items,
+  onClose,
+  onSaveKnowledgeItem,
+}: Readonly<{
+  document: AdminRagDocument;
+  isSaving: boolean;
+  items: readonly AdminRagKnowledgeItem[];
+  onClose: () => void;
+  onSaveKnowledgeItem: (item: AdminRagKnowledgeItem) => Promise<AdminRagKnowledgeItem>;
+}>) {
+  const [selectedKnowledgeId, setSelectedKnowledgeId] = useState(items[0]?.knowledge_id ?? "");
+  const selectedItem = items.find((item) => item.knowledge_id === selectedKnowledgeId) ?? items[0] ?? null;
+  const [draftTitle, setDraftTitle] = useState(selectedItem?.title || selectedItem?.section_title || "");
+  const [draftText, setDraftText] = useState(selectedItem?.text || "");
+  const [localErrorText, setLocalErrorText] = useState("");
+
+  useEffect(() => {
+    setSelectedKnowledgeId(items[0]?.knowledge_id ?? "");
+  }, [document.document_id]);
+
+  useEffect(() => {
+    setDraftTitle(selectedItem?.title || selectedItem?.section_title || "");
+    setDraftText(selectedItem?.text || "");
+    setLocalErrorText("");
+  }, [selectedItem?.knowledge_id, selectedItem?.section_title, selectedItem?.text, selectedItem?.title]);
+
+  async function handleSave() {
+    if (!selectedItem) {
+      return;
+    }
+    const nextTitle = draftTitle.trim();
+    const nextText = draftText.trim();
+    if (!nextTitle || !nextText) {
+      setLocalErrorText("标题和正文不能为空。");
+      return;
+    }
+    try {
+      const savedItem = await onSaveKnowledgeItem({
+        ...selectedItem,
+        title: nextTitle,
+        text: nextText,
+      });
+      setSelectedKnowledgeId(savedItem.knowledge_id);
+      setLocalErrorText("");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "保存失败");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="编辑知识库内容">
+      <div className="grid max-h-[88vh] w-full max-w-6xl overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-[#AE5630]">编辑知识库内容</p>
+            <h3 className="mt-1 text-xl font-semibold">{document.title || document.file_name || document.filename || document.document_id}</h3>
+            <p className="mt-2 text-sm text-[#6F6257]">
+              文档内容 · {document.scope === "case" ? "病例知识库" : "全局知识库"} · {document.case_title || "全部病例"} · {items.length} 个知识片段
+            </p>
+          </div>
+          <Button onClick={onClose} variant="secondary">
+            关闭
+          </Button>
+        </div>
+        <div className="grid min-h-0 gap-0 overflow-hidden lg:grid-cols-[18rem_1fr]">
+          <aside className="min-h-0 overflow-y-auto border-b border-[#E7E0D4] bg-[#FAF9F5] p-4 lg:border-b-0 lg:border-r">
+            <h4 className="text-sm font-semibold">知识片段</h4>
+            <div className="mt-3 grid gap-2">
+              {items.map((item, index) => {
+                const isActive = selectedItem?.knowledge_id === item.knowledge_id;
+                return (
+                  <button
+                    className={cn(
+                      "rounded-2xl border px-3 py-3 text-left text-sm transition",
+                      isActive ? "border-[#141413] bg-[#141413] text-white" : "border-[#E7E0D4] bg-white text-[#6F6257] hover:border-[#AE5630] hover:text-[#141413]",
+                    )}
+                    key={item.knowledge_id}
+                    onClick={() => setSelectedKnowledgeId(item.knowledge_id)}
+                    type="button"
+                  >
+                    <span className="block font-semibold">{item.section_title || item.title || `片段 ${index + 1}`}</span>
+                    <span className={cn("mt-1 block text-xs", isActive ? "text-white/70" : "text-[#8A7D6F]")}>{item.chunk_index != null ? `第 ${item.chunk_index + 1} 段` : "知识条目"}</span>
+                  </button>
+                );
+              })}
+              {items.length === 0 ? <EmptyText>该文档暂无可编辑片段。</EmptyText> : null}
+            </div>
+          </aside>
+          <section className="min-h-0 overflow-y-auto p-5">
+            {selectedItem ? (
+              <div className="grid gap-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <MiniStat label="可见性" value={getKnowledgeVisibilityLabel(selectedItem.visibility)} />
+                  <MiniStat label="可用模块" value={joinText(toTokenList(selectedItem.allowed_agents), "未配置")} />
+                  <MiniStat label="更新时间" value={formatDateTime(selectedItem.updated_at ?? "")} />
+                </div>
+                <label className="grid gap-2 text-sm font-semibold">
+                  标题
+                  <Input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold">
+                  正文
+                  <textarea
+                    className="min-h-[18rem] resize-y rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] px-4 py-3 text-sm leading-6 outline-none transition focus:border-[#AE5630] focus:bg-white"
+                    value={draftText}
+                    onChange={(event) => setDraftText(event.target.value)}
+                  />
+                </label>
+                {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button onClick={onClose} variant="secondary">
+                    取消
+                  </Button>
+                  <Button disabled={isSaving} onClick={() => void handleSave()}>
+                    {isSaving ? <Loader2 className="animate-spin" /> : <FileText />}
+                    保存修改
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <EmptyText>请选择一个知识片段。</EmptyText>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CaseCreationModal({
+  cases,
+  isSaving,
+  onClose,
+  onImport,
+  onValidate,
+  sources,
+}: Readonly<{
+  cases: readonly AdminCaseSummary[];
+  isSaving: boolean;
+  onClose: () => void;
+  onImport: (payload: AdminCaseCreationPayload) => Promise<AdminCaseImportStatus>;
+  onValidate: (payload: AdminCaseCreationPayload) => Promise<AdminCaseImportStatus>;
+  sources: readonly AdminSourceSummary[];
+}>) {
+  const [draft, setDraft] = useState<CaseCreationDraft>(() => buildDefaultCaseCreationDraft(sources, cases));
+  const [result, setResult] = useState<AdminCaseImportStatus | null>(null);
+  const [localErrorText, setLocalErrorText] = useState("");
+
+  useEffect(() => {
+    setDraft((current) => ({
+      ...current,
+      caseId: generateSequentialCaseId(cases),
+      sourceId: current.sourceId || sources[0]?.source_id || "",
+    }));
+  }, [cases, sources]);
+
+  const draftErrors = useMemo(() => getCaseCreationDraftErrors(draft, cases), [cases, draft]);
+  const canSubmit = draftErrors.length === 0 && !isSaving;
+
+  function clearCaseCreationResult() {
+    setResult(null);
+    setLocalErrorText("");
+  }
+
+  function updateDraft(field: CaseCreationTextField, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }));
+    clearCaseCreationResult();
+  }
+
+  function addTextRow(field: "historyFacts" | "reasoningPoints") {
+    setDraft((current) => ({ ...current, [field]: [...current[field], createTextRow()] }));
+    clearCaseCreationResult();
+  }
+
+  function updateTextRow(field: "historyFacts" | "reasoningPoints", rowId: string, value: string) {
+    setDraft((current) => ({
+      ...current,
+      [field]: current[field].map((row) => (row.id === rowId ? { ...row, value } : row)),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function removeTextRow(field: "historyFacts" | "reasoningPoints", rowId: string) {
+    setDraft((current) => ({
+      ...current,
+      [field]: current[field].filter((row) => row.id !== rowId),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function addProcedureRow(field: "examItems" | "testItems") {
+    setDraft((current) => ({ ...current, [field]: [...current[field], createProcedureRow()] }));
+    clearCaseCreationResult();
+  }
+
+  function updateProcedureRow(field: "examItems" | "testItems", rowId: string, patch: Partial<Omit<CaseCreationProcedureRow, "id">>) {
+    setDraft((current) => ({
+      ...current,
+      [field]: current[field].map((row) => (row.id === rowId ? { ...row, ...patch } : row)),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function removeProcedureRow(field: "examItems" | "testItems", rowId: string) {
+    setDraft((current) => ({
+      ...current,
+      [field]: current[field].filter((row) => row.id !== rowId),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function addDifferentialRow() {
+    setDraft((current) => ({ ...current, differentialDiagnoses: [...current.differentialDiagnoses, createDifferentialRow()] }));
+    clearCaseCreationResult();
+  }
+
+  function updateDifferentialRow(rowId: string, patch: Partial<Omit<CaseCreationDifferentialRow, "id">>) {
+    setDraft((current) => ({
+      ...current,
+      differentialDiagnoses: current.differentialDiagnoses.map((row) => (row.id === rowId ? { ...row, ...patch } : row)),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function removeDifferentialRow(rowId: string) {
+    setDraft((current) => ({
+      ...current,
+      differentialDiagnoses: current.differentialDiagnoses.filter((row) => row.id !== rowId),
+    }));
+    clearCaseCreationResult();
+  }
+
+  function buildPayloadOrReport(): AdminCaseCreationPayload | null {
+    const errors = getCaseCreationDraftErrors(draft, cases);
+    if (errors.length > 0) {
+      setLocalErrorText(errors.join("；"));
+      return null;
+    }
+    try {
+      return buildCaseCreationPayload(draft);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "病例结构生成失败");
+      return null;
+    }
+  }
+
+  async function handleValidate() {
+    const payload = buildPayloadOrReport();
+    if (!payload) {
+      return;
+    }
+    try {
+      const nextResult = await onValidate(payload);
+      setResult(nextResult);
+      setLocalErrorText(nextResult.valid ? "" : joinText(nextResult.errors, "预检未通过"));
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "导入前预检失败");
+    }
+  }
+
+  async function handleImport() {
+    const payload = buildPayloadOrReport();
+    if (!payload) {
+      return;
+    }
+    try {
+      const nextResult = await onImport(payload);
+      setResult(nextResult);
+      if (!nextResult.imported) {
+        setLocalErrorText(joinText(nextResult.errors, "发布失败"));
+      }
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "发布病例失败");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="病例工坊">
+      <div className="grid h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-[#AE5630]">病例工坊</p>
+            <h3 className="mt-1 text-2xl font-semibold">新建病例</h3>
+            <p className="mt-2 text-sm leading-6 text-[#6F6257]">用中文字段录入教学病例；系统会生成结构化病例和评分 Rubric，并在发布前执行后端校验。</p>
+          </div>
+          <Button onClick={onClose} variant="secondary">
+            关闭
+          </Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-6">
+          <div className="grid gap-5">
+            <Card className="shadow-none">
+              <CardHeader>
+                <CardTitle>基础信息</CardTitle>
+                <CardDescription>这些内容会出现在病例选择页和训练工作台。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <FormField label="病例 ID">
+                  <Input readOnly value={draft.caseId} />
+                  <p className="text-xs text-[#8A7D6F]">按当前病例数量自动递增生成，发布时后端仍会校验是否冲突。</p>
+                </FormField>
+                <FormField label="病例标题">
+                  <Input value={draft.caseTitle} onChange={(event) => updateDraft("caseTitle", event.target.value)} placeholder="例如 右下腹痛教学病例" />
+                </FormField>
+                <FormField label="课程模块">
+                  <SelectInput value={draft.courseModule} onChange={(value) => updateDraft("courseModule", value)} options={courseModuleOptions} />
+                </FormField>
+                <FormField label="训练难度">
+                  <SelectInput value={draft.difficulty} onChange={(value) => updateDraft("difficulty", value)} options={["初级", "中级", "高级"]} />
+                </FormField>
+                <FormField className="md:col-span-2" label="主诉">
+                  <Input value={draft.chiefComplaint} onChange={(event) => updateDraft("chiefComplaint", event.target.value)} placeholder="例如 转移性右下腹痛 24 小时，伴恶心、低热" />
+                </FormField>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-none">
+              <CardHeader>
+                <CardTitle>标准化病人</CardTitle>
+                <CardDescription>用于病人开局、身份设定和 ICE 相关训练。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-4">
+                <FormField label="年龄">
+                  <Input value={draft.ageValue} onChange={(event) => updateDraft("ageValue", event.target.value)} inputMode="numeric" />
+                </FormField>
+                <FormField label="性别">
+                  <SelectInput value={draft.gender} onChange={(value) => updateDraft("gender", value)} options={["男", "女"]} />
+                </FormField>
+                <FormField label="职业">
+                  <Input value={draft.occupation} onChange={(event) => updateDraft("occupation", event.target.value)} />
+                </FormField>
+                <FormField label="接诊科室">
+                  <Input value={draft.hospitalDepartment} onChange={(event) => updateDraft("hospitalDepartment", event.target.value)} />
+                </FormField>
+                <FormField className="md:col-span-4" label="现病史概要">
+                  <TextAreaInput value={draft.presentIllnessSummary} onChange={(value) => updateDraft("presentIllnessSummary", value)} placeholder="概括患者如何起病、症状如何演变、当前主要表现。" />
+                </FormField>
+                <FormField label="患者想法">
+                  <Input value={draft.patientIdea} onChange={(event) => updateDraft("patientIdea", event.target.value)} />
+                </FormField>
+                <FormField label="患者担忧">
+                  <Input value={draft.patientConcern} onChange={(event) => updateDraft("patientConcern", event.target.value)} />
+                </FormField>
+                <FormField className="md:col-span-2" label="患者期望">
+                  <Input value={draft.patientExpectation} onChange={(event) => updateDraft("patientExpectation", event.target.value)} />
+                </FormField>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-none">
+              <CardHeader>
+                <CardTitle>线索与检查</CardTitle>
+                <CardDescription>每个单元对应一个可追踪事实、查体或检查结果；需要更多项目时点击加号新增。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-5">
+                <CaseCreationTextRowList
+                  addLabel="添加病史线索"
+                  description="例如起病时间、疼痛部位、症状演变、伴随症状或重要阴性病史。"
+                  fieldLabel="病史线索"
+                  onAdd={() => addTextRow("historyFacts")}
+                  onRemove={(rowId) => removeTextRow("historyFacts", rowId)}
+                  onUpdate={(rowId, value) => updateTextRow("historyFacts", rowId, value)}
+                  placeholder="例如 起病 24 小时"
+                  rows={draft.historyFacts}
+                />
+                <CaseCreationProcedureRowList
+                  addLabel="添加查体项目"
+                  description="查体名称和结果会进入查体申请结果。"
+                  namePlaceholder="例如 右下腹压痛"
+                  onAdd={() => addProcedureRow("examItems")}
+                  onRemove={(rowId) => removeProcedureRow("examItems", rowId)}
+                  onUpdate={(rowId, patch) => updateProcedureRow("examItems", rowId, patch)}
+                  resultPlaceholder="例如 McBurney 点明显压痛"
+                  rows={draft.examItems}
+                  title="查体项目"
+                />
+                <CaseCreationProcedureRowList
+                  addLabel="添加辅助检查"
+                  description="检查名称和结果会进入辅助检查申请结果。"
+                  namePlaceholder="例如 血常规"
+                  onAdd={() => addProcedureRow("testItems")}
+                  onRemove={(rowId) => removeProcedureRow("testItems", rowId)}
+                  onUpdate={(rowId, patch) => updateProcedureRow("testItems", rowId, patch)}
+                  resultPlaceholder="例如 白细胞升高"
+                  rows={draft.testItems}
+                  title="辅助检查"
+                />
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-none">
+              <CardHeader>
+                <CardTitle>评分 Rubric</CardTitle>
+                <CardDescription>填写诊断和推理要点后，系统自动生成 100 分结构化评分表。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <FormField label="主要诊断">
+                  <Input value={draft.mainDiagnosis} onChange={(event) => updateDraft("mainDiagnosis", event.target.value)} placeholder="例如 急性阑尾炎" />
+                </FormField>
+                <FormField label="来源">
+                  <SelectInput value={draft.sourceId} onChange={(value) => updateDraft("sourceId", value)} options={sources.map((source) => source.source_id)} optionLabels={Object.fromEntries(sources.map((source) => [source.source_id, source.title || source.source_id]))} />
+                </FormField>
+                <div className="md:col-span-2">
+                  <CaseCreationDifferentialRowList
+                    addLabel="添加鉴别诊断"
+                    onAdd={addDifferentialRow}
+                    onRemove={removeDifferentialRow}
+                    onUpdate={updateDifferentialRow}
+                    rows={draft.differentialDiagnoses}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <CaseCreationTextRowList
+                    addLabel="添加推理要点"
+                    description="例如病史如何支持主要诊断、查体和检查如何补强证据、需要排除哪些危险诊断。"
+                    fieldLabel="推理要点"
+                    onAdd={() => addTextRow("reasoningPoints")}
+                    onRemove={(rowId) => removeTextRow("reasoningPoints", rowId)}
+                    onUpdate={(rowId, value) => updateTextRow("reasoningPoints", rowId, value)}
+                    placeholder="例如 病史演变支持当前主要诊断"
+                    rows={draft.reasoningPoints}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
+            {result ? (
+              <p className={cn("rounded-2xl border px-4 py-3 text-sm", result.valid || result.imported ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>
+                {getCaseImportStatusText(result)}
+              </p>
+            ) : null}
+            {draftErrors.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {draftErrors.map((error) => (
+                  <Badge key={error} variant="warning">
+                    {error}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#E7E0D4] px-6 py-4">
+          <p className="text-sm text-[#6F6257]">发布后会进入病例台账，后续可继续为该病例上传知识库文档。</p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={onClose} variant="secondary">
+              取消
+            </Button>
+            <Button disabled={!canSubmit} onClick={() => void handleValidate()} variant="secondary">
+              {isSaving ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
+              导入前预检
+            </Button>
+            <Button disabled={!canSubmit || result?.valid !== true} onClick={() => void handleImport()}>
+              {isSaving ? <Loader2 className="animate-spin" /> : <PlusCircle />}
+              发布病例
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -947,6 +2541,10 @@ function TrainingSection({
   selectedReport: AdminSessionReport | null;
   onSelectSession: (sessionId: string) => void;
 }>) {
+  const hasSelectedReport = selectedSession
+    ? selectedSession.stage === "feedback" || data.reports.some((report) => report.session_id === selectedSession.session_id)
+    : false;
+
   return (
     <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
       <Card>
@@ -972,15 +2570,16 @@ function TrainingSection({
                 <p className="mt-2 text-sm text-[#6F6257]">学员：{selectedSession.student_id}</p>
                 <p className="mt-1 text-sm text-[#6F6257]">更新：{formatDateTime(selectedSession.updated_at)}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button disabled={isDetailBusy} onClick={() => onReadReport(selectedSession.session_id)} size="sm">
+                  <Button disabled={isDetailBusy || !hasSelectedReport} onClick={() => onReadReport(selectedSession.session_id)} size="sm">
                     {isDetailBusy ? <Loader2 className="animate-spin" /> : <FileText />}
-                    读取报告
+                    {hasSelectedReport ? "读取报告" : "暂无报告"}
                   </Button>
                   <Button disabled={isDetailBusy} onClick={() => onReadEvents(selectedSession.session_id)} size="sm" variant="secondary">
                     {isDetailBusy ? <Loader2 className="animate-spin" /> : <Activity />}
                     读取日志
                   </Button>
                 </div>
+                {!hasSelectedReport ? <p className="mt-3 rounded-xl border border-[#E7E0D4] bg-white px-3 py-2 text-xs text-[#6F6257]">该 Session 还没有生成评分报告，通常表示学生尚未提交诊断。</p> : null}
               </div>
               {selectedReport ? (
                 <div className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-white p-4">
@@ -1028,11 +2627,60 @@ function TrainingSection({
           )}
         </CardContent>
       </Card>
+      <ProcedureAuditList audits={data.procedureAudits} className="xl:col-span-2" summary={data.procedureAuditSummary} />
     </div>
   );
 }
 
+function ProcedureAuditList({
+  audits,
+  className,
+  summary,
+}: Readonly<{
+  audits: readonly ProcedureSimulationAuditItem[];
+  className?: string;
+  summary: ProcedureSimulationAuditSummary | null;
+}>) {
+  return (
+    <Card className={className}>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>AI 模拟审计</CardTitle>
+          <CardDescription>记录高级模式中 AI 补充查体或检查结果时的审核结论。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(summary?.total ?? audits.length)} 条</Badge>
+      </CardHeader>
+      <CardContent>
+        {audits.length > 0 ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {audits.slice(0, 8).map((audit, index) => (
+              <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={`${audit.session_id ?? ""}-${audit.procedure_id ?? ""}-${index}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="truncate text-sm font-semibold">{audit.label || audit.code || "未命名项目"}</h4>
+                    <p className="mt-1 text-xs text-[#6F6257]">{audit.case_title || audit.case_id || "未绑定病例"}</p>
+                  </div>
+                  <Badge variant={audit.approval_status === "approved" || audit.approval_decision === "approved" ? "success" : "warning"}>
+                    {getProcedureAuditStatusLabel(audit)}
+                  </Badge>
+                </div>
+                <p className="mt-3 line-clamp-2 text-sm leading-6 text-[#141413]">{audit.result || "未记录模拟结果。"}</p>
+                <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#6F6257]">{audit.approval_rationale || audit.safety_boundary || "暂无审核说明。"}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyText>暂无 AI 模拟审计记录。</EmptyText>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
+  const missedItems = toInsightDisplayItems(data.insights?.frequent_missed_items, "未覆盖训练点");
+  const turnPatterns = toInsightDisplayItems(data.insights?.frequent_turn_patterns, "训练模式");
+
   return (
     <div className="grid gap-4">
       <SectionIntro eyebrow="教学洞察" title="错误模式与训练重点" description="聚合训练报告中的高频问题，供 Skill 生成和教师复盘参考。" />
@@ -1044,14 +2692,76 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
       <Card>
         <CardHeader>
           <CardTitle>当前训练问题</CardTitle>
-          <CardDescription>按训练报告聚合高频问题。</CardDescription>
+          <CardDescription>按报告聚合的高频未覆盖项和按对话过程聚合的训练模式。</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4 text-sm leading-6 text-[#6F6257]">
-            高频漏项、教学重点和来源热度已由后端聚合，用于生成候选 Skill 和教师复盘。
-          </div>
+        <CardContent className="grid gap-4 lg:grid-cols-2">
+          <InsightList items={missedItems} title="近期漏项" />
+          <InsightList items={turnPatterns} title="训练模式" />
         </CardContent>
       </Card>
+      <TeachingFocusList patterns={data.teachingFocusPatterns} />
+    </div>
+  );
+}
+
+function TeachingFocusList({ patterns }: Readonly<{ patterns: readonly AdminTeachingFocusPattern[] }>) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>动态教学重点</CardTitle>
+          <CardDescription>由病例结构、Rubric 和训练报告聚合生成，供教师复盘和后续 Skill 编排参考。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(patterns.length)} 项</Badge>
+      </CardHeader>
+      <CardContent>
+        {patterns.length > 0 ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {patterns.slice(0, 8).map((pattern) => (
+              <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={pattern.focus_id}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold leading-6">{pattern.title || pattern.pattern || "未命名教学重点"}</h3>
+                    <p className="mt-1 text-xs text-[#6F6257]">{joinText(pattern.case_titles, "未绑定病例")}</p>
+                  </div>
+                  <Badge variant="warning">{formatCount(pattern.support_count ?? pattern.source_report_count ?? 0)} 次</Badge>
+                </div>
+                <p className="mt-3 line-clamp-2 text-sm leading-6 text-[#141413]">{pattern.description || pattern.training_suggestion || "暂无说明。"}</p>
+                <p className="mt-2 text-xs text-[#8A7D6F]">{pattern.severity_label || pattern.visibility_level_label || "教学观察"}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyText>暂无动态教学重点。</EmptyText>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function InsightList({ items, title }: Readonly<{ items: readonly InsightDisplayItem[]; title: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold">{title}</h3>
+        <Badge variant="muted">{formatCount(items.length)} 项</Badge>
+      </div>
+      {items.length > 0 ? (
+        <div className="mt-4 grid gap-3">
+          {items.slice(0, 8).map((item, index) => (
+            <article className="rounded-2xl border border-[#F0E8DC] bg-[#FAF9F5] p-4" key={`${item.title}-${index}`}>
+              <div className="flex items-start justify-between gap-3">
+                <h4 className="text-sm font-semibold leading-6">{item.title}</h4>
+                <Badge variant="warning">{formatCount(item.count)} 次</Badge>
+              </div>
+              {item.description ? <p className="mt-2 text-sm leading-6 text-[#6F6257]">{item.description}</p> : null}
+              {item.meta ? <p className="mt-2 text-xs text-[#8A7D6F]">{item.meta}</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyText>暂无可展示的聚合项。</EmptyText>
+      )}
     </div>
   );
 }
@@ -1173,7 +2883,11 @@ function SkillSection({
               <div className="grid gap-3 lg:grid-cols-2">
                 <InfoBlock title="适用范围" value={(selectedCandidate.case_titles ?? []).join("、") || "未绑定病例"} />
                 <InfoBlock title="训练点" value={(selectedCandidate.trigger_item_labels ?? []).slice(0, 8).join("、") || "未记录"} />
-                <InfoBlock className="lg:col-span-2" title="教学策略" value={selectedCandidate.suggested_strategy || "暂无策略。"} />
+                <InfoBlock className="lg:col-span-2" title="完整 Skill 内容" value={getSkillContentText(selectedCandidate)} />
+                <InfoBlock className="lg:col-span-2" title="教学策略" value={getSkillStrategyText(selectedCandidate)} />
+                <InfoBlock title="适用时机" value={joinText(toTextList(selectedCandidate.applies_when).length > 0 ? selectedCandidate.applies_when : selectedCandidate.stage_scope_labels, "由后端按病例、阶段和当前缺口匹配。")} />
+                <InfoBlock title="成功指标" value={joinText(toTextList(selectedCandidate.success_metrics), "样本不足时只记录应用痕迹，不伪造提升。")} />
+                <InfoBlock className="lg:col-span-2" title="来源报告" value={getCandidateSourceText(selectedCandidate)} />
                 <InfoBlock className="lg:col-span-2" title="审批 Agent" value={getApprovalReviewText(selectedCandidate.approval_agent_review)} />
               </div>
               <CompactList items={(selectedCandidate.teaching_action_plan ?? []).map((action) => action.message_template || action.action_type_label || action.action_type || "教学动作").slice(0, 5)} title="Coach 注入动作" />
@@ -1198,7 +2912,39 @@ function SkillSection({
           )}
         </CardContent>
       </Card>
+      <AuditEventList events={data.auditEvents} />
     </div>
+  );
+}
+
+function AuditEventList({ events }: Readonly<{ events: readonly TrainingEventRecord[] }>) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>全局审核审计</CardTitle>
+          <CardDescription>记录候选 Skill、自动应用和人工审核相关事件，便于答辩时追溯。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(events.length)} 条</Badge>
+      </CardHeader>
+      <CardContent>
+        {events.length > 0 ? (
+          <div className="grid gap-2">
+            {events.slice(0, 10).map((event, index) => (
+              <article className="flex flex-col gap-2 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4 sm:flex-row sm:items-center sm:justify-between" key={`${event.created_at ?? ""}-${event.event_type}-${index}`}>
+                <div>
+                  <h4 className="text-sm font-semibold">{getEventTypeLabel(event.event_type)}</h4>
+                  <p className="mt-1 text-xs text-[#6F6257]">{[event.case_id, event.session_id, event.student_id].filter(Boolean).join(" · ") || "系统事件"}</p>
+                </div>
+                <span className="text-xs text-[#8A7D6F]">{formatDateTime(event.created_at ?? "")}</span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyText>暂无全局审核审计事件。</EmptyText>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1223,17 +2969,29 @@ function EvaluationSection({
   return (
     <div className="grid gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <SectionIntro eyebrow="系统评测" title="回归批次和用例结果" description="用于证明 RAG 覆盖、报告兼容和 Skill 闭环不会回退。" />
+        <SectionIntro eyebrow="系统评测" title="系统质检和用例结果" description="自动回归测试，用来确认关键链路没有被最近改动破坏。" />
         <Button disabled={isMutating} onClick={onRunEvaluation}>
           {isMutating ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
           运行系统评测
         </Button>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>系统质检说明</CardTitle>
+          <CardDescription>这里不是学生成绩页，而是给管理员看的自动回归测试结果。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <InfoBlock title="RAG 来源覆盖" value="自动回归测试会检查报告里的反馈解释、建议和来源引用是否还连得上。" />
+          <InfoBlock title="报告兼容" value="自动回归测试会检查旧报告和新报告都能打开，避免字段升级后页面崩溃。" />
+          <InfoBlock title="Skill 闭环" value="自动回归测试会检查候选生成、审核、启用和后续训练注入是否还能跑通。" />
+        </CardContent>
+      </Card>
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<ClipboardCheck />} label="评测批次" value={formatCount(data.evaluationPagination?.total ?? data.evaluations.length)} helper="历史批次" />
         <MetricCard icon={<Gauge />} label="总通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
         <MetricCard icon={<Wrench />} label="失败用例" value={formatCount(data.evaluations.reduce((sum, evaluation) => sum + evaluation.failed_cases, 0))} helper="需要排查" />
       </div>
+      <RetrievalEvalPanel retrievalEval={data.retrievalEval} />
       <Card>
         <CardHeader>
           <CardTitle>评测批次</CardTitle>
@@ -1297,6 +3055,56 @@ function EvaluationSection({
   );
 }
 
+function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRetrievalEval | null }>) {
+  const metrics = retrievalEval?.metrics;
+  const results = retrievalEval?.results ?? [];
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>RAG 检索评测</CardTitle>
+          <CardDescription>用固定 gold query 检查知识库召回和来源覆盖；不参与标准诊断裁判。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(metrics?.query_count ?? retrievalEval?.gold_set?.query_count ?? results.length)} 条查询</Badge>
+      </CardHeader>
+      <CardContent>
+        {retrievalEval ? (
+          <div className="grid gap-4">
+            <div className="grid gap-3 md:grid-cols-5">
+              <MiniStat label="Recall@3" value={formatRatioMetric(metrics?.recall_at_3)} />
+              <MiniStat label="Recall@5" value={formatRatioMetric(metrics?.recall_at_5)} />
+              <MiniStat label="MRR@5" value={formatRatioMetric(metrics?.mrr_at_5)} />
+              <MiniStat label="nDCG@5" value={formatRatioMetric(metrics?.ndcg_at_5)} />
+              <MiniStat label="来源覆盖" value={formatRatioMetric(metrics?.source_coverage)} />
+            </div>
+            <div className="grid gap-3 lg:grid-cols-[1fr_0.8fr]">
+              <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+                <h4 className="text-sm font-semibold">Top 查询命中</h4>
+                <div className="mt-3 grid gap-2">
+                  {results.slice(0, 5).map((result, index) => (
+                    <div className="rounded-xl border border-[#E7E0D4] bg-white px-3 py-3 text-sm" key={`${result.query_id ?? ""}-${index}`}>
+                      <p className="font-medium">{result.query || result.query_id || `查询 ${index + 1}`}</p>
+                      <p className="mt-1 text-xs leading-5 text-[#6F6257]">命中：{joinText(result.retrieved_references ?? result.hits_at_5, "暂无")}</p>
+                    </div>
+                  ))}
+                  {results.length === 0 ? <EmptyText>暂无检索评测明细。</EmptyText> : null}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+                <h4 className="text-sm font-semibold">运行边界</h4>
+                <p className="mt-3 text-sm leading-6 text-[#6F6257]">{retrievalEval.boundary?.rag_usage || "RAG 只服务反馈解释、教学提示、复盘和可追溯展示。"}</p>
+                <p className="mt-2 text-sm leading-6 text-[#6F6257]">{retrievalEval.boundary?.scoring_boundary || "检索结果不得进入标准诊断裁判、rubric 评分或隐藏事实判定。"}</p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <EmptyText>暂无 RAG 检索评测结果。</EmptyText>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
   return (
     <div className="grid gap-4">
@@ -1309,31 +3117,42 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
       <Card>
         <CardHeader>
           <CardTitle>最近模型 API 日志</CardTitle>
-          <CardDescription>不显示密钥或完整 URL，只显示脱敏后的调用结果。</CardDescription>
+          <CardDescription>最近 60 条调用记录；不显示密钥或完整 URL，只显示脱敏后的调用结果。</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
+            <table className="w-full min-w-[1080px] text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
                 <tr className="border-b border-[#E7E0D4]">
                   <th className="py-3 pr-4">时间</th>
+                  <th className="py-3 pr-4">调用人</th>
                   <th className="py-3 pr-4">Provider</th>
                   <th className="py-3 pr-4">用途</th>
                   <th className="py-3 pr-4">模型</th>
                   <th className="py-3 pr-4">耗时</th>
                   <th className="py-3 pr-4">状态</th>
+                  <th className="py-3 pr-4">失败详情</th>
                 </tr>
               </thead>
               <tbody>
                 {(data.apiLogs?.logs ?? []).slice(0, 18).map((log, index) => (
                   <tr className="border-b border-[#F0E8DC]" key={`${log.created_at}-${log.operation}-${index}`}>
                     <td className="py-3 pr-4 text-[#6F6257]">{formatDateTime(log.created_at)}</td>
+                    <td className="py-3 pr-4 text-[#6F6257]">{getCallerLabel(log)}</td>
                     <td className="py-3 pr-4 font-medium">{log.provider || "unknown"}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{getOperationLabel(log.operation)}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{log.model || "未记录"}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{log.duration_ms} ms</td>
                     <td className="py-3 pr-4">
                       <Badge variant={log.success ? "success" : "danger"}>{log.success ? "成功" : `失败 ${log.status_code ?? ""}`}</Badge>
+                    </td>
+                    <td className="max-w-[22rem] py-3 pr-4 text-[#6F6257]">
+                      {log.success ? "无" : (
+                        <div>
+                          <p className="font-medium text-red-700">{log.error_type || "错误"}</p>
+                          <p className="mt-1 line-clamp-3 text-xs leading-5">{log.error_message || "后端未记录具体错误。"}</p>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1477,8 +3296,941 @@ function SimpleList({
   );
 }
 
+function FormField({ children, className, label }: Readonly<{ children: ReactNode; className?: string; label: string }>) {
+  return (
+    <label className={cn("grid gap-2 text-sm font-semibold text-[#141413]", className)}>
+      {label}
+      {children}
+    </label>
+  );
+}
+
+function SelectInput({
+  onChange,
+  optionLabels,
+  options,
+  value,
+}: Readonly<{
+  onChange: (value: string) => void;
+  optionLabels?: Record<string, string>;
+  options: readonly string[];
+  value: string;
+}>) {
+  return (
+    <select
+      className="h-10 w-full rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm text-[#141413] outline-none transition focus:border-[#141413] focus:ring-2 focus:ring-[#141413]/10"
+      onChange={(event) => onChange(event.target.value)}
+      value={value}
+    >
+      {options.length === 0 ? <option value="">暂无可选项</option> : null}
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {optionLabels?.[option] ?? option}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function TextAreaInput({ onChange, placeholder, value }: Readonly<{ onChange: (value: string) => void; placeholder?: string; value: string }>) {
+  return (
+    <textarea
+      className="min-h-36 resize-y rounded-2xl border border-[#E7E0D4] bg-white px-4 py-3 text-sm leading-6 text-[#141413] outline-none transition placeholder:text-[#9A8B7D] focus:border-[#141413] focus:ring-2 focus:ring-[#141413]/10"
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      value={value}
+    />
+  );
+}
+
+function CaseCreationTextRowList({
+  addLabel,
+  description,
+  fieldLabel,
+  onAdd,
+  onRemove,
+  onUpdate,
+  placeholder,
+  rows,
+}: Readonly<{
+  addLabel: string;
+  description: string;
+  fieldLabel: string;
+  onAdd: () => void;
+  onRemove: (rowId: string) => void;
+  onUpdate: (rowId: string, value: string) => void;
+  placeholder: string;
+  rows: readonly CaseCreationTextRow[];
+}>) {
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold">{fieldLabel}</h4>
+          <p className="mt-1 text-xs leading-5 text-[#6F6257]">{description}</p>
+        </div>
+        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+          <PlusCircle />
+          {addLabel}
+        </Button>
+      </div>
+      <div className="grid gap-2">
+        {rows.map((row, index) => (
+          <div className="grid gap-2 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-3" key={row.id}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#AE5630]">
+                {fieldLabel} {index + 1}
+              </span>
+              <Button disabled={rows.length <= 1} onClick={() => onRemove(row.id)} size="sm" type="button" variant="ghost">
+                删除
+              </Button>
+            </div>
+            <Input onChange={(event) => onUpdate(row.id, event.target.value)} placeholder={placeholder} value={row.value} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CaseCreationProcedureRowList({
+  addLabel,
+  description,
+  namePlaceholder,
+  onAdd,
+  onRemove,
+  onUpdate,
+  resultPlaceholder,
+  rows,
+  title,
+}: Readonly<{
+  addLabel: string;
+  description: string;
+  namePlaceholder: string;
+  onAdd: () => void;
+  onRemove: (rowId: string) => void;
+  onUpdate: (rowId: string, patch: Partial<Omit<CaseCreationProcedureRow, "id">>) => void;
+  resultPlaceholder: string;
+  rows: readonly CaseCreationProcedureRow[];
+  title: string;
+}>) {
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold">{title}</h4>
+          <p className="mt-1 text-xs leading-5 text-[#6F6257]">{description}</p>
+        </div>
+        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+          <PlusCircle />
+          {addLabel}
+        </Button>
+      </div>
+      <div className="grid gap-2">
+        {rows.map((row, index) => (
+          <div className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-3" key={row.id}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#AE5630]">
+                {title} {index + 1}
+              </span>
+              <Button disabled={rows.length <= 1} onClick={() => onRemove(row.id)} size="sm" type="button" variant="ghost">
+                删除
+              </Button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[0.9fr_1.4fr]">
+              <Input onChange={(event) => onUpdate(row.id, { name: event.target.value })} placeholder={namePlaceholder} value={row.name} />
+              <Input onChange={(event) => onUpdate(row.id, { result: event.target.value })} placeholder={resultPlaceholder} value={row.result} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CaseCreationDifferentialRowList({
+  addLabel,
+  onAdd,
+  onRemove,
+  onUpdate,
+  rows,
+}: Readonly<{
+  addLabel: string;
+  onAdd: () => void;
+  onRemove: (rowId: string) => void;
+  onUpdate: (rowId: string, patch: Partial<Omit<CaseCreationDifferentialRow, "id">>) => void;
+  rows: readonly CaseCreationDifferentialRow[];
+}>) {
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold">鉴别诊断</h4>
+          <p className="mt-1 text-xs leading-5 text-[#6F6257]">每个单元填写一个需要鉴别的疾病和关键区别。</p>
+        </div>
+        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+          <PlusCircle />
+          {addLabel}
+        </Button>
+      </div>
+      <div className="grid gap-2">
+        {rows.map((row, index) => (
+          <div className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-3" key={row.id}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#AE5630]">鉴别诊断 {index + 1}</span>
+              <Button disabled={rows.length <= 1} onClick={() => onRemove(row.id)} size="sm" type="button" variant="ghost">
+                删除
+              </Button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[0.8fr_1.4fr]">
+              <Input onChange={(event) => onUpdate(row.id, { name: event.target.value })} placeholder="例如 输尿管结石" value={row.name} />
+              <Input onChange={(event) => onUpdate(row.id, { description: event.target.value })} placeholder="例如 多伴血尿或腰部绞痛" value={row.description} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EmptyText({ children }: Readonly<{ children: ReactNode }>) {
   return <p className="rounded-2xl border border-dashed border-[#E7E0D4] bg-[#FAF9F5] p-4 text-sm text-[#6F6257]">{children}</p>;
+}
+
+function getRecordField(value: unknown, fieldName: string): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const fieldValue = (value as Record<string, unknown>)[fieldName];
+  return fieldValue && typeof fieldValue === "object" && !Array.isArray(fieldValue) ? (fieldValue as Record<string, unknown>) : null;
+}
+
+function getRecordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
+}
+
+function getStringField(value: unknown, fieldName: string, fallback: string): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const fieldValue = (value as Record<string, unknown>)[fieldName];
+  if (typeof fieldValue === "string") {
+    return fieldValue.trim() || fallback;
+  }
+  if (typeof fieldValue === "number" || typeof fieldValue === "boolean") {
+    return String(fieldValue);
+  }
+  return fallback;
+}
+
+function getAgeGenderLabel(patientProfile: Record<string, unknown> | null): string {
+  if (!patientProfile) {
+    return "";
+  }
+  const ageValue = getStringField(patientProfile, "age_value", "");
+  const ageUnit = getStringField(patientProfile, "age_unit", "岁");
+  const gender = getStringField(patientProfile, "gender", "");
+  return [ageValue ? `${ageValue}${ageUnit}` : "", gender].filter(Boolean).join(" · ");
+}
+
+function toTextList(value: unknown): string[] {
+  if (value == null) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => toTextList(item));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return [String(value)];
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const preferredFields = [
+      "label",
+      "title",
+      "name",
+      "item_label",
+      "pattern_label",
+      "description",
+      "statement",
+      "message_template",
+      "item_id",
+      "pattern_id",
+      "id",
+    ];
+    return preferredFields.flatMap((fieldName) => toTextList(record[fieldName]));
+  }
+  return [];
+}
+
+function toInsightDisplayItems(value: unknown, fallbackTitle: string): InsightDisplayItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        const title = toTextList(item)[0] || `${fallbackTitle} ${index + 1}`;
+        return { count: 0, description: "", meta: "", title };
+      }
+      const record = item as Record<string, unknown>;
+      const title =
+        getStringField(record, "item_label", "") ||
+        getStringField(record, "pattern_label", "") ||
+        getStringField(record, "label", "") ||
+        getStringField(record, "title", "") ||
+        getStringField(record, "description", "") ||
+        getStringField(record, "item_id", "") ||
+        getStringField(record, "pattern_id", "") ||
+        `${fallbackTitle} ${index + 1}`;
+      const description =
+        getStringField(record, "summary", "") ||
+        getStringField(record, "description", "") ||
+        getStringField(record, "explanation", "") ||
+        getStringField(record, "suggested_focus", "");
+      const countValue =
+        Number(record.count ?? record.support_count ?? record.source_report_count ?? record.report_count ?? record.frequency ?? 0) || 0;
+      const caseText = joinText(record.case_titles ?? record.case_ids, "");
+      const sourceText = joinText(record.source_report_ids ?? record.report_ids, "");
+      const meta = [caseText ? `病例：${caseText}` : "", sourceText ? `来源报告：${sourceText}` : ""].filter(Boolean).join(" · ");
+      return {
+        count: countValue,
+        description,
+        meta,
+        title,
+      };
+    })
+    .filter((item) => item.title.trim());
+}
+
+function toTokenList(value: unknown): string[] {
+  return toTextList(value)
+    .flatMap((item) => item.split(/[,，、\n]/))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinText(value: unknown, fallback: string): string {
+  const items = toTextList(value);
+  return items.length > 0 ? items.join("、") : fallback;
+}
+
+function buildRagKnowledgePayload(item: AdminRagKnowledgeItem): AdminRagKnowledgeItemPayload {
+  return {
+    knowledge_id: item.knowledge_id,
+    scope: item.scope || (item.case_id ? "case" : "global"),
+    case_id: item.case_id || "",
+    content_kind: item.content_kind || "teaching_note",
+    visibility: item.visibility || "pre_submit_safe",
+    allowed_agents: toTokenList(item.allowed_agents).length > 0 ? toTokenList(item.allowed_agents) : ["coach", "reflection", "skill_generation", "skill_approval"],
+    source_id: item.source_id || "",
+    title: item.title || item.section_title || "知识片段",
+    text: item.text || "",
+    tags: toTokenList(item.tags),
+    version: item.version && item.version > 0 ? item.version : 1,
+  };
+}
+
+const courseModuleOptions = ["腹痛", "胸痛", "发热", "头痛", "咳嗽", "呼吸困难", "心悸", "消瘦", "黄疸", "水肿"];
+
+let caseCreationRowCounter = 0;
+
+function createCaseCreationRowId(prefix: string): string {
+  caseCreationRowCounter += 1;
+  return `${prefix}_${caseCreationRowCounter}`;
+}
+
+function createTextRow(value = ""): CaseCreationTextRow {
+  return {
+    id: createCaseCreationRowId("text"),
+    value,
+  };
+}
+
+function createProcedureRow(values: Partial<Omit<CaseCreationProcedureRow, "id">> = {}): CaseCreationProcedureRow {
+  return {
+    code: values.code ?? "",
+    id: createCaseCreationRowId("procedure"),
+    name: values.name ?? "",
+    result: values.result ?? "",
+  };
+}
+
+function createDifferentialRow(values: Partial<Omit<CaseCreationDifferentialRow, "id">> = {}): CaseCreationDifferentialRow {
+  return {
+    description: values.description ?? "",
+    id: createCaseCreationRowId("differential"),
+    name: values.name ?? "",
+  };
+}
+
+function generateSequentialCaseId(cases: readonly AdminCaseSummary[]): string {
+  const existingCaseIds = new Set(cases.map((caseItem) => caseItem.case_id));
+  let nextNumber = cases.length + 1;
+  while (nextNumber <= 999) {
+    const caseId = `teacher_case_${String(nextNumber).padStart(3, "0")}`;
+    if (!existingCaseIds.has(caseId)) {
+      return caseId;
+    }
+    nextNumber += 1;
+  }
+  return "teacher_case_999";
+}
+
+function buildDefaultCaseCreationDraft(sources: readonly AdminSourceSummary[], cases: readonly AdminCaseSummary[]): CaseCreationDraft {
+  return {
+    ageValue: "22",
+    caseId: generateSequentialCaseId(cases),
+    caseTitle: "",
+    chiefComplaint: "",
+    courseModule: "腹痛",
+    differentialDiagnoses: [createDifferentialRow()],
+    difficulty: "初级",
+    examItems: [createProcedureRow()],
+    gender: "男",
+    historyFacts: [createTextRow()],
+    hospitalDepartment: "急诊科",
+    mainDiagnosis: "",
+    occupation: "学生",
+    patientConcern: "担心病情加重",
+    patientExpectation: "希望明确原因",
+    patientIdea: "不清楚具体原因",
+    presentIllnessSummary: "",
+    reasoningPoints: [createTextRow()],
+    safetyNotes: "本病例仅用于 OSCE 教学模拟训练，不提供真实诊疗建议。",
+    sourceId: sources[0]?.source_id ?? "",
+    testItems: [createProcedureRow()],
+  };
+}
+
+function getFilledTextRows(rows: readonly CaseCreationTextRow[]): string[] {
+  return rows.map((row) => row.value.trim()).filter(Boolean);
+}
+
+function getFilledProcedureRows(rows: readonly CaseCreationProcedureRow[]): { code: string; name: string; result: string }[] {
+  return rows
+    .map((row) => ({
+      code: row.code.trim(),
+      name: row.name.trim(),
+      result: row.result.trim(),
+    }))
+    .filter((row) => row.name || row.result);
+}
+
+function getFilledDifferentialRows(rows: readonly CaseCreationDifferentialRow[]): { description: string; name: string }[] {
+  return rows
+    .map((row) => ({
+      description: row.description.trim(),
+      name: row.name.trim(),
+    }))
+    .filter((row) => row.name || row.description);
+}
+
+function getCaseCreationDraftErrors(draft: CaseCreationDraft, cases: readonly AdminCaseSummary[]): string[] {
+  const errors: string[] = [];
+  const caseId = draft.caseId.trim();
+  const ageValue = Number.parseInt(draft.ageValue, 10);
+  if (!/^[a-z0-9_]+_\d{3}$/.test(caseId)) {
+    errors.push("病例 ID 需形如 teacher_case_482");
+  }
+  if (cases.some((caseItem) => caseItem.case_id === caseId)) {
+    errors.push("病例 ID 已存在");
+  }
+  if (!draft.caseTitle.trim()) {
+    errors.push("请填写病例标题");
+  }
+  if (!draft.chiefComplaint.trim()) {
+    errors.push("请填写主诉");
+  }
+  if (!draft.presentIllnessSummary.trim()) {
+    errors.push("请填写现病史概要");
+  }
+  if (!Number.isInteger(ageValue) || ageValue < 0 || ageValue > 120) {
+    errors.push("年龄需为 0-120 的整数");
+  }
+  if (!draft.sourceId.trim()) {
+    errors.push("请选择来源");
+  }
+  if (getFilledTextRows(draft.historyFacts).length < 3) {
+    errors.push("至少填写 3 条病史线索");
+  }
+  if (getFilledProcedureRows(draft.examItems).length < 1) {
+    errors.push("至少填写 1 个查体项目");
+  }
+  if (getFilledProcedureRows(draft.testItems).length < 1) {
+    errors.push("至少填写 1 个辅助检查");
+  }
+  if (!draft.mainDiagnosis.trim()) {
+    errors.push("请填写主要诊断");
+  }
+  if (getFilledDifferentialRows(draft.differentialDiagnoses).length < 2) {
+    errors.push("至少填写 2 个鉴别诊断");
+  }
+  if (getFilledTextRows(draft.reasoningPoints).length < 1) {
+    errors.push("至少填写 1 条推理要点");
+  }
+  return errors;
+}
+
+function buildCaseCreationPayload(draft: CaseCreationDraft): AdminCaseCreationPayload {
+  const caseId = draft.caseId.trim();
+  const rubricId = `${caseId}_rubric`;
+  const historyRows = getFilledTextRows(draft.historyFacts).slice(0, 8);
+  const examRows = getFilledProcedureRows(draft.examItems).slice(0, 6);
+  const testRows = getFilledProcedureRows(draft.testItems).slice(0, 6);
+  const differentialRows = getFilledDifferentialRows(draft.differentialDiagnoses).slice(0, 4);
+  const reasoningLines = getFilledTextRows(draft.reasoningPoints).slice(0, 4);
+  const historyScores = distributeScores(25, historyRows.length);
+  const examScores = distributeScores(15, examRows.length);
+  const testScores = distributeScores(15, testRows.length);
+  const differentialScores = distributeScores(15, differentialRows.length);
+
+  const historyTopics = [
+    { label: "起病与病程", slot: "onset", topic: "现病史", triggers: ["ask_onset", "ask_when_started"] },
+    { label: "症状部位", slot: "location", topic: "现病史", triggers: ["ask_location"] },
+    { label: "伴随症状", slot: "associated_symptom", topic: "现病史", triggers: ["ask_associated_symptom"] },
+    { label: "既往背景", slot: null, topic: "既往史", triggers: ["ask_past_medical"] },
+  ];
+
+  const hiddenFacts = historyRows.map((line, index) => {
+    const topicConfig = historyTopics[index] ?? { label: `病史线索 ${index + 1}`, slot: "context", topic: "现病史", triggers: [`ask_history_${index + 1}`] };
+    const itemId = `ht_${String(index + 1).padStart(2, "0")}`;
+    return {
+      fact_id: `${caseId}.hf_${String(index + 1).padStart(2, "0")}`,
+      topic: topicConfig.topic,
+      slot: topicConfig.slot,
+      canonical_answer: ensureSentence(line),
+      variants: [line],
+      trigger_intents: topicConfig.triggers,
+      blocking_rule: "reveal_on_direct_question",
+      linked_rubric_items: [itemId],
+    };
+  });
+
+  const physicalExamItems = examRows.map((row, index) => ({
+    exam_code: normalizeExamCode(row.code, row.name, index),
+    exam_name_cn: row.name,
+    result: ensureSentence(row.result),
+    is_abnormal: true,
+    linked_rubric_items: [`pe_${String(index + 1).padStart(2, "0")}`],
+  }));
+
+  const auxiliaryTestItems = testRows.map((row, index) => {
+    const testCode = normalizeTestCode(row.code, row.name, index);
+    return {
+      test_code: testCode,
+      test_name_cn: row.name,
+      category: getTestCategory(testCode),
+      invasiveness: testCode.startsWith("lab.") ? "微创" : "无创",
+      cost_hint: testCode.startsWith("img.") ? "中等" : "基础",
+      diagnostic_role: "supports_primary_diagnosis",
+      rules_out: [],
+      recommended_stage: "auxiliary_test",
+      overuse_warning: null,
+      result: ensureSentence(row.result),
+      is_abnormal: true,
+      linked_rubric_items: [`ax_${String(index + 1).padStart(2, "0")}`],
+    };
+  });
+
+  const reasoningPoints = reasoningLines.map((line, index) => ({
+    point_id: `${caseId}.rp_${String(index + 1).padStart(2, "0")}`,
+    statement: ensureSentence(line),
+    kind: index === reasoningLines.length - 1 && reasoningLines.length > 1 ? "鉴别" : "支持",
+    required_evidence: [
+      hiddenFacts[Math.min(index, hiddenFacts.length - 1)]?.fact_id,
+      physicalExamItems[Math.min(index, physicalExamItems.length - 1)]?.exam_code,
+      auxiliaryTestItems[Math.min(index, auxiliaryTestItems.length - 1)]?.test_code,
+    ].filter((item): item is string => Boolean(item)),
+    weight: Math.max(1, 10 - index),
+  }));
+
+  const mainDiagnosis = draft.mainDiagnosis.trim();
+  const casePayload = {
+    case_id: caseId,
+    case_title: draft.caseTitle.trim(),
+    course_module: draft.courseModule,
+    difficulty: draft.difficulty,
+    patient_profile: {
+      name_placeholder: "×××",
+      age_value: Number.parseInt(draft.ageValue, 10),
+      age_unit: "岁",
+      gender: draft.gender,
+      occupation: draft.occupation.trim() || "未记录",
+      marital_status: "未知",
+      address_city: null,
+      social_background: "管理员录入的教学模拟病人。",
+      hospital_department: draft.hospitalDepartment.trim() || "门诊",
+      idea: draft.patientIdea.trim() || null,
+      concern: draft.patientConcern.trim() || null,
+      expectation: draft.patientExpectation.trim() || null,
+    },
+    chief_complaint: draft.chiefComplaint.trim(),
+    history: {
+      present_illness_summary: ensureSentence(draft.presentIllnessSummary.trim()),
+      hidden_facts: hiddenFacts,
+      past_medical_history: "见病史线索。",
+      surgery_injury_history: null,
+      transfusion_history: null,
+      infection_history: null,
+      allergy_history: null,
+      personal_history: null,
+      menstrual_history: null,
+      reproductive_history: null,
+      family_history: null,
+    },
+    physical_exam: {
+      must_items: physicalExamItems,
+      optional_items: [],
+    },
+    auxiliary_tests: {
+      must_items: auxiliaryTestItems,
+      optional_items: [],
+      forbidden_items: [],
+    },
+    diagnosis: {
+      main_diagnosis: mainDiagnosis,
+      main_diagnosis_synonyms: [mainDiagnosis],
+      icd10_hint: null,
+      differential_diagnoses: differentialRows.map((row) => ({
+        disease_name: row.name,
+        icd10_hint: null,
+        expected_action: "排除",
+        key_distinction: ensureSentence(row.description || `需要与${mainDiagnosis}鉴别。`),
+      })),
+      reasoning_points: reasoningPoints,
+      suggested_next_steps: "教学模拟中建议围绕病史、查体、辅助检查和鉴别诊断继续完善证据链。",
+    },
+    distractor_clues: [],
+    negative_findings: [],
+    evidence_graph: {
+      evidence_nodes: [],
+      evidence_edges: [],
+    },
+    rubric_ref: {
+      rubric_id: rubricId,
+      version: "v1",
+    },
+    safety_notes: draft.safetyNotes.trim() || "本病例仅用于 OSCE 教学模拟训练。",
+    source_attribution: {
+      source_id: draft.sourceId,
+      transformation: "admin_case_workshop",
+      attribution_note: "管理员通过病例工坊录入并结构化为教学模拟病例。",
+      modified: true,
+    },
+    teaching_focus: {
+      learning_objectives: [`围绕${draft.courseModule}主诉完成系统问诊`, `用查体和检查验证${mainDiagnosis}相关诊断假设`],
+      common_error_patterns: [],
+      recommended_training_path: ["病史主线", "重点查体", "辅助检查", "诊断与鉴别诊断"],
+    },
+    schema_version: "1.1",
+    tags: [draft.courseModule, draft.difficulty, mainDiagnosis],
+  };
+
+  const rubricPayload = {
+    rubric_id: rubricId,
+    case_id: caseId,
+    version: "v1",
+    total_score: 100,
+    schema_version: "1.1",
+    dimensions: [
+      {
+        dimension_id: "history_taking",
+        weight: 25,
+        scoring_mode: "rule",
+        items: hiddenFacts.map((fact, index) => ({
+          item_id: fact.linked_rubric_items[0],
+          description: `追问${historyTopics[index]?.label ?? `病史线索 ${index + 1}`}`,
+          max_score: historyScores[index],
+          match_rule: {
+            kind: "intent_keyword",
+            spec: {
+              topic: fact.topic,
+              slot: fact.slot,
+              any_of_keywords: buildKeywordsFromText(fact.canonical_answer),
+            },
+          },
+          evidence_expected: [fact.fact_id],
+        })),
+      },
+      {
+        dimension_id: "physical_exam",
+        weight: 15,
+        scoring_mode: "rule",
+        items: physicalExamItems.map((item, index) => ({
+          item_id: item.linked_rubric_items[0],
+          description: `选择查体：${item.exam_name_cn}`,
+          max_score: examScores[index],
+          match_rule: {
+            kind: "exam_code",
+            spec: {
+              exam_code: item.exam_code,
+              must: true,
+            },
+          },
+          evidence_expected: [item.exam_code],
+        })),
+      },
+      {
+        dimension_id: "auxiliary_test",
+        weight: 15,
+        scoring_mode: "rule",
+        items: auxiliaryTestItems.map((item, index) => ({
+          item_id: item.linked_rubric_items[0],
+          description: `申请检查：${item.test_name_cn}`,
+          max_score: testScores[index],
+          match_rule: {
+            kind: "test_code",
+            spec: {
+              test_code: item.test_code,
+              must: true,
+              deduct_if_forbidden: 0,
+            },
+          },
+          evidence_expected: [item.test_code],
+        })),
+      },
+      {
+        dimension_id: "main_diagnosis",
+        weight: 15,
+        scoring_mode: "rule",
+        items: [
+          {
+            item_id: "dx_main",
+            description: `主要诊断命中${mainDiagnosis}`,
+            max_score: 15,
+            match_rule: {
+              kind: "diagnosis_concept",
+              spec: {
+                target: mainDiagnosis,
+                synonyms: [mainDiagnosis],
+                icd10_hint: "",
+              },
+            },
+            evidence_expected: [],
+          },
+        ],
+      },
+      {
+        dimension_id: "differential_diagnosis",
+        weight: 15,
+        scoring_mode: "rule",
+        items: differentialRows.map((row, index) => ({
+          item_id: `dxd_${String(index + 1).padStart(2, "0")}`,
+          description: `提出并鉴别${row.name}`,
+          max_score: differentialScores[index],
+          match_rule: {
+            kind: "diagnosis_concept",
+            spec: {
+              target: row.name,
+              synonyms: [row.name],
+              icd10_hint: "",
+            },
+          },
+          evidence_expected: reasoningPoints[index]?.point_id ? [reasoningPoints[index].point_id] : [],
+        })),
+      },
+      {
+        dimension_id: "reasoning",
+        weight: 15,
+        scoring_mode: "rule",
+        items: [
+          {
+            item_id: "rs_reasoning",
+            description: "推理表达覆盖关键病史、查体、检查和鉴别诊断证据",
+            max_score: 15,
+            match_rule: {
+              kind: "reasoning_coverage",
+              spec: {
+                required_evidence: reasoningPoints.flatMap((point) => point.required_evidence).slice(0, 6),
+                min_coverage_ratio: 0.6,
+              },
+            },
+            evidence_expected: reasoningPoints.map((point) => point.point_id),
+          },
+        ],
+      },
+    ],
+  };
+
+  return { case: casePayload, rubric: rubricPayload };
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseNamedLines(value: string): { description: string; name: string }[] {
+  return splitLines(value).map((line, index) => {
+    const parts = splitDelimitedLine(line);
+    return {
+      name: parts[0] || `鉴别诊断 ${index + 1}`,
+      description: parts[1] || "",
+    };
+  });
+}
+
+function parseProcedureRows(value: string): { code: string; name: string; result: string }[] {
+  return splitLines(value).map((line, index) => {
+    const parts = splitDelimitedLine(line);
+    const name = parts[0] || `项目 ${index + 1}`;
+    return {
+      code: parts[2] || "",
+      name,
+      result: parts[1] || `${name}结果见教学病例设置。`,
+    };
+  });
+}
+
+function splitDelimitedLine(line: string): string[] {
+  return line
+    .split(/[|｜]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function distributeScores(total: number, count: number): number[] {
+  if (count <= 0) {
+    return [];
+  }
+  const base = Math.floor(total / count);
+  let remainder = total - base * count;
+  return Array.from({ length: count }, () => {
+    const score = base + (remainder > 0 ? 1 : 0);
+    remainder -= 1;
+    return Math.max(1, score);
+  });
+}
+
+function sanitizeCodeToken(value: string, fallback: string): string {
+  const token = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return /^[a-z][a-z0-9_]*$/.test(token) ? token : fallback;
+}
+
+function normalizeExamCode(code: string, name: string, index: number): string {
+  if (/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(code)) {
+    return code;
+  }
+  return `exam.${sanitizeCodeToken(name, `item_${index + 1}`)}`;
+}
+
+function normalizeTestCode(code: string, name: string, index: number): string {
+  if (/^(lab|img|ecg|endo|path|other)\.[a-z][a-z0-9_]*$/.test(code)) {
+    return code;
+  }
+  const prefix = name.includes("超声") || name.includes("CT") || name.includes("影像") || name.includes("X") ? "img" : name.includes("心电") ? "ecg" : "lab";
+  return `${prefix}.${sanitizeCodeToken(name, `test_${index + 1}`)}`;
+}
+
+function getTestCategory(testCode: string): string {
+  if (testCode.startsWith("img.")) {
+    return "影像";
+  }
+  if (testCode.startsWith("ecg.")) {
+    return "心电";
+  }
+  if (testCode.startsWith("endo.")) {
+    return "内镜";
+  }
+  if (testCode.startsWith("path.")) {
+    return "病理";
+  }
+  if (testCode.startsWith("other.")) {
+    return "其他";
+  }
+  return "实验室";
+}
+
+function ensureSentence(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "未记录。";
+  }
+  return /[。！？.!?]$/.test(trimmed) ? trimmed : `${trimmed}。`;
+}
+
+function buildKeywordsFromText(value: string): string[] {
+  const compact = value.replace(/[，。！？、,.!?]/g, " ").trim();
+  const firstToken = compact.split(/\s+/)[0] || value.slice(0, 6);
+  return Array.from(new Set([firstToken, value.slice(0, 6), "追问"].filter((item) => item.trim())));
+}
+
+function getCaseImportStatusText(result: AdminCaseImportStatus): string {
+  const errors = joinText(result.errors, "");
+  if (result.imported) {
+    return `发布成功：${result.case_id ?? "新病例"}`;
+  }
+  if (result.valid) {
+    return `预检通过：${result.case_id ?? "新病例"} / ${result.rubric_id ?? "Rubric"}`;
+  }
+  return errors ? `预检未通过：${errors}` : "预检未通过";
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      resolve(value.includes(",") ? value.split(",").at(-1) ?? "" : value);
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("读取文件失败")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildRubricDescriptionDrafts(rubric: AdminRubricDetail): Record<string, string> {
+  return Object.fromEntries(
+    rubric.dimensions.flatMap((dimension) => dimension.items.map((item) => [item.item_id, item.description] as const)),
+  );
+}
+
+function formatRatioMetric(value: number | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "-";
+  }
+  return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(3);
+}
+
+function getAgentLabel(agentId: string): string {
+  const labels: Record<string, string> = {
+    coach: "教学提示",
+    reflection: "训练后复盘",
+    skill_approval: "Skill 审批",
+    skill_generation: "Skill 生成",
+  };
+  return labels[agentId] ?? agentId;
+}
+
+function getRubricDimensionLabel(dimensionId: string): string {
+  const labels: Record<string, string> = {
+    auxiliary_test: "辅助检查",
+    differential_diagnosis: "鉴别诊断",
+    history_taking: "问诊",
+    main_diagnosis: "主要诊断",
+    physical_exam: "查体",
+    reasoning: "推理表达",
+  };
+  return labels[dimensionId] ?? dimensionId;
+}
+
+function getProcedureAuditStatusLabel(audit: ProcedureSimulationAuditItem): string {
+  const statusText = audit.approval_status || audit.approval_decision || "";
+  const labels: Record<string, string> = {
+    approved: "已通过",
+    rejected: "已拒绝",
+    simulated: "已模拟",
+  };
+  return labels[statusText] ?? (statusText || "已记录");
 }
 
 function formatCount(value: number): string {
@@ -1521,6 +4273,16 @@ function getSkillEffectStatusLabel(status: string | undefined): string {
   return status;
 }
 
+function getKnowledgeVisibilityLabel(visibility: string | undefined): string {
+  const labels: Record<string, string> = {
+    admin_only: "仅管理员可见",
+    post_submit_review: "提交后复盘可用",
+    pre_submit_safe: "训练前可用于提示",
+    secret_scoring_only: "仅评分结构使用",
+  };
+  return labels[visibility || ""] ?? (visibility || "未记录");
+}
+
 function getOperationLabel(operation: string): string {
   const labels: Record<string, string> = {
     embedding: "向量检索",
@@ -1530,6 +4292,10 @@ function getOperationLabel(operation: string): string {
     procedure_result: "检查模拟",
   };
   return labels[operation] ?? (operation || "未记录");
+}
+
+function getCallerLabel(log: ApiCallLog): string {
+  return log.caller || log.student_id || log.user_id || log.session_id || "后端未记录";
 }
 
 function getEventTypeLabel(eventType: string): string {
@@ -1549,6 +4315,34 @@ function canReviewCandidate(candidate: TrainingSkillCandidateDetail): boolean {
   return candidate.status === "ready_for_review" || candidate.review?.status === "ready_for_review";
 }
 
+function getSkillContentText(candidate: TrainingSkillCandidateDetail): string {
+  const parts = [
+    candidate.description,
+    candidate.suggested_strategy,
+    joinText(candidate.trigger_item_labels, ""),
+    ...((candidate.teaching_action_plan ?? []).map((action) => action.message_template || action.action_type_label || action.action_type).filter(Boolean) as string[]),
+  ].filter((part): part is string => Boolean(part?.trim()));
+  return parts.length > 0 ? Array.from(new Set(parts)).join("；") : "暂无完整说明。";
+}
+
+function getSkillStrategyText(candidate: TrainingSkillCandidateDetail): string {
+  const actionText = (candidate.teaching_action_plan ?? [])
+    .map((action) => action.message_template || action.action_type_label || action.action_type)
+    .filter(Boolean)
+    .join("；");
+  return candidate.suggested_strategy || actionText || "暂无策略。";
+}
+
+function getCandidateSourceText(candidate: TrainingSkillCandidateDetail): string {
+  const reportIds = toTextList(candidate.source_report_ids).slice(0, 8);
+  const sessionIds = toTextList(candidate.source_session_ids).slice(0, 8);
+  const sourceParts = [
+    reportIds.length > 0 ? `报告：${reportIds.join("、")}` : "",
+    sessionIds.length > 0 ? `Session：${sessionIds.join("、")}` : "",
+  ].filter(Boolean);
+  return sourceParts.length > 0 ? sourceParts.join("；") : `${candidate.source_report_count} 份报告支持`;
+}
+
 function getApprovalReviewText(review: TrainingSkillApprovalAgentReview | undefined): string {
   if (!review) {
     return "暂无审批 Agent 记录。";
@@ -1557,7 +4351,7 @@ function getApprovalReviewText(review: TrainingSkillApprovalAgentReview | undefi
     review.decision ? `结论：${review.decision}` : "",
     review.revision_status ? `修改：${review.revision_status}` : "",
     review.regression_status ? `回归：${review.regression_status}` : "",
-    review.changed_fields?.length ? `调整字段：${review.changed_fields.join("、")}` : "",
+    toTextList(review.changed_fields).length ? `调整字段：${toTextList(review.changed_fields).join("、")}` : "",
   ].filter(Boolean);
   return parts.join("；") || "审批 Agent 已记录，但暂无摘要。";
 }

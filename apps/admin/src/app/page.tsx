@@ -637,6 +637,7 @@ type AuthUser = Readonly<{
   email: string;
   display_name: string;
   created_at: string;
+  is_admin: boolean;
 }>;
 
 type AdminPagination = Readonly<{
@@ -1047,8 +1048,6 @@ type AdminWorkspaceSubsection = Readonly<{
 const ADMIN_LOGIN_REQUIRED_MESSAGE = "管理后台需要登录，请先完成登录后再刷新页面。";
 const ADMIN_FORBIDDEN_MESSAGE = "当前账号没有管理后台权限，请使用管理员账号登录。";
 const ADMIN_LOGIN_FAILED_MESSAGE = "管理员登录失败，请检查邮箱和密码。";
-const DEMO_ADMIN_EMAIL = "admin@osce.test";
-const DEMO_ADMIN_PASSWORD = "admin";
 const ADMIN_LIST_PAGE_SIZE = 20;
 const EMPTY_ADMIN_PAGINATION: AdminPagination = { limit: ADMIN_LIST_PAGE_SIZE, offset: 0, total: 0 };
 const EMPTY_ADMIN_CASE_EDIT_FORM: AdminCaseFieldUpdatePayload = {
@@ -1098,7 +1097,7 @@ const ADMIN_RAG_KNOWLEDGE_VISIBILITY_OPTIONS = [
   { value: "secret_scoring_only", label: "标准答案保护区" },
 ] as const;
 const ADMIN_RAG_AGENT_OPTIONS = [
-  { value: "coach", label: "教练提示" },
+  { value: "coach", label: "教师智能体提示" },
   { value: "reflection", label: "训练后复盘" },
   { value: "skill_generation", label: "Skill 生成" },
   { value: "skill_approval", label: "Skill 审批" },
@@ -2064,7 +2063,7 @@ function getAdminVectorProviderStatus(providers: readonly AdminModelProviderConf
 function getAdminModelApiProviderLabel(provider: string): string {
   const labels: Record<string, string> = {
     anthropic: "Anthropic 通道",
-    gemini_coach: "Coach 提示",
+    gemini_coach: "教师智能体提示",
     gemini_patient: "标准化病人",
     gemini_procedure_approval: "检查审批",
     gemini_procedure_router: "申请识别",
@@ -2073,7 +2072,7 @@ function getAdminModelApiProviderLabel(provider: string): string {
     gemini_turn_intent: "意图识别",
     openai_compatible: "主对话通道",
     openai_compatible_fallback: "备用通道",
-    vertex_gemini_coach: "Coach 提示",
+    vertex_gemini_coach: "教师智能体提示",
     vertex_gemini_embedding: "RAG 向量",
     vertex_gemini_patient: "标准化病人",
     vertex_gemini_procedure_approval: "检查审批",
@@ -2642,8 +2641,8 @@ export default function AdminDashboardPage() {
   const [trainingEvents, setTrainingEvents] = useState<readonly TrainingEventRecord[]>([]);
   const [statusText, setStatusText] = useState("正在读取管理后台数据...");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [adminEmail, setAdminEmail] = useState(DEMO_ADMIN_EMAIL);
-  const [adminPassword, setAdminPassword] = useState(DEMO_ADMIN_PASSWORD);
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [adminLoginErrorText, setAdminLoginErrorText] = useState<string | null>(null);
   const [isAdminLoginDialogOpen, setIsAdminLoginDialogOpen] = useState(false);
   const [isAdminAccountMenuOpen, setIsAdminAccountMenuOpen] = useState(false);
@@ -3816,7 +3815,7 @@ export default function AdminDashboardPage() {
           <div className="mt-4 grid gap-3 lg:grid-cols-3">
             <div className={adminDrawerPanelClassName}>
               <p className="text-sm font-semibold">RAG 使用范围</p>
-              <p className="mt-2 text-sm leading-6 text-[#6F6257]">仅用于 Coach、复盘、Skill 生成/审批和知识库检索。</p>
+              <p className="mt-2 text-sm leading-6 text-[#6F6257]">仅用于 TeacherAgent、训练后复盘、Skill 生成/审批和知识库检索。</p>
             </div>
             <div className={adminDrawerPanelClassName}>
               <p className="text-sm font-semibold">评分边界</p>
@@ -4130,7 +4129,7 @@ export default function AdminDashboardPage() {
               <div>
                 <p className="text-xs font-semibold text-[#AE5630]">RAG 知识库</p>
                 <h3 className="mt-1 text-sm font-semibold">全局知识库 / 病例知识库</h3>
-                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">默认推荐：上传文档知识库。教师资料启用后只服务 Coach、复盘、Skill 生成 / 审批和可追溯解释，不参与评分裁判。</p>
+                <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">默认推荐：上传文档知识库。教师资料启用后只服务 TeacherAgent、训练后复盘、Skill 生成 / 审批和可追溯解释，不参与评分裁判。</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <p className="rounded-full border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-1 text-xs text-[#AE5630]">{ragDocuments.length} 份文档</p>
@@ -4142,7 +4141,7 @@ export default function AdminDashboardPage() {
                 <div>
                   <p className="text-xs font-semibold text-[#AE5630]">全局文档知识库 / 病例文档知识库</p>
                   <h4 className="mt-1 text-sm font-semibold">上传并切分文档</h4>
-                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf、docx 或 html 后，后端会按标题、页码和段落切分为可追溯 chunk；默认进入 Coach、复盘、Skill 生成和审批 Agent，但不参与评分裁判。</p>
+                  <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">教师上传 md、txt、pdf、docx 或 html 后，后端会按标题、页码和段落切分为可追溯 chunk；默认进入 TeacherAgent、训练后复盘、Skill 生成和审批 Agent，但不参与评分裁判。</p>
                 </div>
                 <p className="rounded-full border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-1 text-xs text-[#6F6257]">{ragDocuments.length} 份文档</p>
               </div>
@@ -4442,7 +4441,7 @@ export default function AdminDashboardPage() {
                   >
                     {isRagKnowledgeBusy ? "保存中" : "保存手工条目"}
                   </button>
-                  <p className="text-xs leading-5 text-[#8A7D6F]">选择“标准答案保护区”时，不会开放给教练提示、训练后复盘、Skill 生成或 Skill 审批。</p>
+                  <p className="text-xs leading-5 text-[#8A7D6F]">选择“标准答案保护区”时，不会开放给 TeacherAgent 提示、训练后复盘、Skill 生成或 Skill 审批。</p>
                 </div>
                 {ragKnowledgeStatusText ? (
                   <p className="rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] p-3 text-xs leading-5 text-[#6F6257]">{ragKnowledgeStatusText}</p>
@@ -4677,7 +4676,7 @@ export default function AdminDashboardPage() {
                   </dl>
                   <div className="rounded-xl border border-[#E6DFD2] bg-white p-3">
                     <h4 className="text-sm font-semibold">Skill 跳过原因</h4>
-                    <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">这里只说明 enabled Skill 为什么没有进入本轮 Coach 上下文，便于审计编排边界。</p>
+                    <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">这里只说明 enabled Skill 为什么没有进入本轮 TeacherAgent 上下文，便于审计编排边界。</p>
                     {(() => {
                       const skippedReasons = selectedSessionSummary.active_skill_context?.skipped_reasons ?? [];
                       const visibleSkippedReasons = getAdminVisibleSkippedReasons(skippedReasons);
@@ -6305,19 +6304,18 @@ export default function AdminDashboardPage() {
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-[#8A7D6F]">临境 OSCE 智能体（TraceOSCE）</p>
               <h2 className="mt-2 text-xl font-semibold">管理员登录</h2>
               <p className="mt-2 text-sm leading-6 text-[#6F6257]">登录管理员账号后读取训练 Session、评分报告、系统评测和候选 Skill 审核数据。</p>
-              <p className="mt-2 rounded-lg border border-[#AE5630]/20 bg-[#AE5630]/10 px-3 py-2 text-xs leading-5 text-[#AE5630]">演示账号已预填：{DEMO_ADMIN_EMAIL} / {DEMO_ADMIN_PASSWORD}</p>
             </div>
-            <form className="mt-5 space-y-4" onSubmit={(event) => void handleAdminLogin(event)}>
+            <form autoComplete="off" className="mt-5 space-y-4" onSubmit={(event) => void handleAdminLogin(event)}>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="admin-email-input">
                   邮箱
                 </label>
                 <input
-                  autoComplete="email"
+                  autoComplete="off"
                   className="w-full rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm outline-none transition placeholder:text-[#8A7D6F] focus:border-[#AE5630] focus:ring-2 focus:ring-[#AE5630]/15"
                   id="admin-email-input"
                   onChange={(event) => setAdminEmail(event.target.value)}
-                  placeholder={DEMO_ADMIN_EMAIL}
+                  placeholder="输入管理员邮箱"
                   type="email"
                   value={adminEmail}
                 />
@@ -6327,7 +6325,7 @@ export default function AdminDashboardPage() {
                   密码
                 </label>
                 <input
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   className="w-full rounded-lg border border-[#E6DFD2] bg-[#FAF9F5] px-3 py-2 text-sm outline-none transition placeholder:text-[#8A7D6F] focus:border-[#AE5630] focus:ring-2 focus:ring-[#AE5630]/15"
                   id="admin-password-input"
                   onChange={(event) => setAdminPassword(event.target.value)}

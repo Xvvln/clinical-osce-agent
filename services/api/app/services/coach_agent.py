@@ -14,17 +14,19 @@ from app.services.gemini_patient_responder import GeminiPatientSettings, _apply_
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
-SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控教学策略 Agent，只负责生成短提示来帮助学生继续训练。
+SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练系统中的 TeacherAgent 训练中提示模块，只负责生成短提示来帮助学生继续训练。
 
 硬性规则：
 - 只能生成教学提示、苏格拉底式引导或下一步训练策略。
 - 不得输出诊断答案、病例隐藏事实、rubric 全量、治疗方案、用药剂量或真实医疗建议。
 - 不要新增医学事实；只能围绕 base_hint、hint_context、pedagogy_state、clinical_reasoning_state、skill_context、retrieved_knowledge_context 和已公开对话做教学引导。
 - 如果 hint_context 存在，优先参考其中的 next_step、evidence_coverage、difficulty_policy、skill_selection 和 rag_context，综合判断下一步提示，而不是只复述 base_hint。
-- 如果 prompt_kind 是 skill_router，只判断是否需要使用候选 Skill：只可从 hint_context.skill_selection.candidate_skills 中选择 selected_skill_ids；空白开局、普通下一步提示或没有明确错误模式时 selected_skill_ids=[]，skill_intervention_level="none"。
+- 如果 prompt_kind 是 skill_router，只判断 TeacherAgent 此刻是否需要使用候选 Skill：只可从 hint_context.skill_selection.candidate_skills 中选择 selected_skill_ids；空白开局、普通下一步提示或没有明确错误模式时 selected_skill_ids=[]，skill_intervention_level="none"。
 - 如果 prompt_kind 是 socratic_hint，只有 skill_context 非空时才把其中 Skill 作为本轮教学策略；skill_context 为空时不要编造“本轮训练重点”。
+- 如果 prompt_kind 是 socratic_hint，输出必须像“下一步可以怎么问/怎么做 + 为什么这样做”的教学提示，不要写成考试题。
 - training_difficulty 会影响提示粒度：beginner 可更明确指出下一类动作；intermediate 应提示学生选择项目并说明目的；advanced 应引导学生用自由文本表达想申请什么和为什么。
-- 如果 clinical_reasoning_state 中存在 sequence_flags，应先指出训练顺序缺口，再用“为什么 / 想一想”组织反问式提示。
+- 如果 clinical_reasoning_state 中存在 sequence_flags，应指出训练顺序缺口，并给出下一步可执行动作及简短理由。
+- 不要要求学生“请说明/解释/写出问诊目的、检查目的、操作目的或申请目的”；提示可以反问，但必须包含可执行下一步。
 - 如果学生已接近提交诊断，只提醒整理证据链和排除依据，不要给出标准答案。
 - 如果 prompt_kind 是 passive_turn_review，必须先判断是否真的需要打断学生；学生提出有效问诊且患者已回答时，should_emit=false 且 hint=""。
 - 如果 prompt_kind 是 answer_boundary_redirect 或 safety_boundary_redirect，必须 should_emit=true，并用 base_hint 改写为教练边界提示。
@@ -57,6 +59,36 @@ class CoachResponse(BaseModel):
     selected_skill_ids: list[str] = Field(default_factory=list)
     skill_intervention_level: str = "auto"
     skill_selection_reason: str = ""
+
+
+_EXAM_STYLE_VERBS = ("请说明", "请解释", "请写", "写出", "说出", "阐述")
+_EXAM_STYLE_OBJECTS = ("问诊目的", "检查目的", "查体目的", "操作目的", "申请目的")
+
+
+def _looks_like_exam_style_prompt(hint: str) -> bool:
+    compact_hint = "".join(hint.split())
+    return any(verb in compact_hint for verb in _EXAM_STYLE_VERBS) and any(
+        target in compact_hint for target in _EXAM_STYLE_OBJECTS
+    )
+
+
+def _normalize_coach_response_for_request(request: CoachRequest, response: CoachResponse | dict[str, Any]) -> CoachResponse:
+    normalized = normalize_coach_response(response)
+    if request.prompt_kind == "skill_router":
+        return normalized
+    if not normalized.should_emit:
+        return normalized.model_copy(update={"hint": ""})
+
+    sanitized_hint = sanitize_coach_hint(normalized.hint, request.forbidden_terms)
+    if request.prompt_kind == "socratic_hint" and _looks_like_exam_style_prompt(sanitized_hint):
+        sanitized_hint = sanitize_coach_hint(request.base_hint, request.forbidden_terms)
+
+    return normalized.model_copy(
+        update={
+            "hint": sanitized_hint,
+            "trigger_kind": normalized.trigger_kind or request.prompt_kind,
+        }
+    )
 
 
 class DeterministicCoachAgent:
@@ -101,15 +133,21 @@ class DeterministicCoachAgent:
             base_hint = request.base_hint.strip()
             if not base_hint:
                 return CoachResponse(should_emit=False, hint="", trigger_kind="none")
-            return CoachResponse(
-                should_emit=True,
-                hint=sanitize_coach_hint(base_hint, request.forbidden_terms),
-                trigger_kind="passive_review",
+            return _normalize_coach_response_for_request(
+                request,
+                CoachResponse(
+                    should_emit=True,
+                    hint=base_hint,
+                    trigger_kind="passive_review",
+                ),
             )
-        return CoachResponse(
-            should_emit=True,
-            hint=sanitize_coach_hint(request.base_hint, request.forbidden_terms),
-            trigger_kind=request.prompt_kind,
+        return _normalize_coach_response_for_request(
+            request,
+            CoachResponse(
+                should_emit=True,
+                hint=request.base_hint,
+                trigger_kind=request.prompt_kind,
+            ),
         )
 
 
@@ -119,12 +157,13 @@ class OpenAICompatibleCoachAgent:
         self._client = client or OpenAICompatibleChatClient(settings)
 
     def __call__(self, request: CoachRequest) -> CoachResponse:
-        return self._client.complete_json(
+        response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
             payload=request.model_dump(),
             response_model=CoachResponse,
             temperature=0.2,
         )
+        return _normalize_coach_response_for_request(request, response)
 
 
 class AnthropicCoachAgent:
@@ -133,12 +172,13 @@ class AnthropicCoachAgent:
         self._client = client or AnthropicChatClient(settings)
 
     def __call__(self, request: CoachRequest) -> CoachResponse:
-        return self._client.complete_json(
+        response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
             payload=request.model_dump(),
             response_model=CoachResponse,
             temperature=0.2,
         )
+        return _normalize_coach_response_for_request(request, response)
 
 
 class GeminiCoachAgent:
@@ -174,7 +214,7 @@ class GeminiCoachAgent:
                 ),
             ),
         )
-        return CoachResponse.model_validate_json(response.text)
+        return _normalize_coach_response_for_request(request, CoachResponse.model_validate_json(response.text))
 
 
 class LazyCoachAgent:

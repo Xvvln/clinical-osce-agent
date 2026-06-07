@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+from contextvars import ContextVar, Token
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_API_CALL_LOG_PATH = PROJECT_ROOT / "data" / "runtime" / "model_api_calls.jsonl"
 MAX_ERROR_MESSAGE_LENGTH = 220
 MAX_LOG_ENTRIES_READ = 2000
+API_CALL_CONTEXT: ContextVar[dict[str, str]] = ContextVar("api_call_context", default={})
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
@@ -43,12 +45,17 @@ class ApiCallLogStore:
         status_code: int | None = None,
         error: BaseException | None = None,
     ) -> None:
+        context = API_CALL_CONTEXT.get()
         entry = {
             "created_at": datetime.now(UTC).isoformat(),
             "provider": provider,
             "operation": operation,
             "model": model,
             "endpoint": _safe_endpoint(endpoint),
+            "caller": context.get("caller", ""),
+            "user_id": context.get("user_id", ""),
+            "student_id": context.get("student_id", ""),
+            "session_id": context.get("session_id", ""),
             "success": bool(success),
             "status_code": status_code if status_code is not None else _status_code_from_error(error),
             "duration_ms": round(max(duration_ms, 0.0), 1),
@@ -144,6 +151,21 @@ def _sanitize_error_message(message: str) -> str:
 api_call_log_store = ApiCallLogStore()
 
 
+def set_api_call_context(*, user_id: str = "", caller: str = "", student_id: str = "", session_id: str = "") -> Token[dict[str, str]]:
+    return API_CALL_CONTEXT.set(
+        {
+            "caller": caller.strip(),
+            "user_id": user_id.strip(),
+            "student_id": student_id.strip(),
+            "session_id": session_id.strip(),
+        }
+    )
+
+
+def reset_api_call_context(token: Token[dict[str, str]]) -> None:
+    API_CALL_CONTEXT.reset(token)
+
+
 def call_with_api_logging(
     *,
     provider: str,
@@ -179,4 +201,4 @@ def call_with_api_logging(
     return result
 
 
-__all__ = ["ApiCallLogStore", "api_call_log_store", "call_with_api_logging"]
+__all__ = ["ApiCallLogStore", "api_call_log_store", "call_with_api_logging", "reset_api_call_context", "set_api_call_context"]

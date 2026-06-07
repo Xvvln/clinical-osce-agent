@@ -91,14 +91,14 @@ test("student action buttons keep Chinese labels on one line", () => {
   assertInteractiveLabelsDoNotWrap("sources page", sourcesSource, ["返回工作台"]);
 });
 
-test("home page renders backend patient opening utterance instead of raw chief complaint", () => {
+test("home page keeps backend patient opening utterance metadata without auto-speaking first", () => {
   assert.match(pageSource, /patient_opening_utterance: string;/);
   assert.match(pageSource, /patientOpeningUtterance: string;/);
   assert.match(pageSource, /patient_opening_utterance: string;/);
   assert.match(pageSource, /patientOpeningUtterance: caseSummary\.patient_opening_utterance,/);
-  assert.match(pageSource, /const preparedPatientOpeningUtterance = session\?\.patient_opening_utterance \?\? selectedCase\?\.patientOpeningUtterance \?\? null;/);
-  assert.match(pageSource, /id: "patient-opening"/);
-  assert.match(pageSource, /text: preparedPatientOpeningUtterance,/);
+  assert.doesNotMatch(pageSource, /const preparedPatientOpeningUtterance = session\?\.patient_opening_utterance \?\? selectedCase\?\.patientOpeningUtterance \?\? null;/);
+  assert.doesNotMatch(pageSource, /id: "patient-opening"/);
+  assert.doesNotMatch(pageSource, /text: preparedPatientOpeningUtterance,/);
   assert.doesNotMatch(pageSource, /id: "chief-complaint"/);
   assert.doesNotMatch(pageSource, /`医生您好，我这次主要是\$\{session\.chief_complaint\}。`/);
 });
@@ -195,6 +195,23 @@ test("home patient reply processing timeline excludes coach Skill and RAG work",
 
   const pendingTimelineSource = pageSource.slice(pendingTimelineStart, pendingTimelineEnd);
   assert.match(pendingTimelineSource, /getPatientReplyProcessingSteps\(statusSteps\)/);
+});
+
+test("home pending teacher hint timeline uses backend steps instead of patient reply filtering", () => {
+  const hintTimelineStart = pageSource.indexOf("function buildPendingHintProcessingTimeline");
+  const hintTimelineEnd = pageSource.indexOf("function getBackendProcessingTraceElapsedMs");
+  assert.ok(hintTimelineStart >= 0, "should define pending teacher hint timeline builder");
+  assert.ok(hintTimelineEnd > hintTimelineStart, "should define backend trace helpers after hint timeline");
+
+  const hintTimelineSource = pageSource.slice(hintTimelineStart, hintTimelineEnd);
+  assert.match(hintTimelineSource, /processingStatus\?\.steps\.map/);
+  assert.match(hintTimelineSource, /withTeacherContextEvaluationStep\(timelineSteps\)/);
+  assert.match(hintTimelineSource, /正在评估当前对话上下文/);
+  assert.match(hintTimelineSource, /正在生成过程提示/);
+  assert.match(hintTimelineSource, /title: "教师智能体处理中"/);
+  assert.doesNotMatch(hintTimelineSource, /buildPendingAgentProcessingTimeline/);
+  assert.doesNotMatch(hintTimelineSource, /getPatientReplyProcessingSteps/);
+  assert.doesNotMatch(hintTimelineSource, /正在等待可见回复返回/);
 });
 
 test("home history input disables browser autofill history", () => {
@@ -835,7 +852,7 @@ test("report page notifies when a pending personal skill finishes in the backgro
   assert.match(reportSource, /if \(status === "blocked_by_regression"\)/);
   assert.match(reportSource, /if \(status === "generation_failed"\)/);
   assert.match(reportSource, /report\?\.personal_skill_candidate\.status !== "generation_pending"/);
-  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{sessionId\}\/report`/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{sessionId\}\/report\?enrich=true`/);
   assert.match(reportSource, /const noticeText = getPersonalSkillCompletionNoticeText\(nextReport\.personal_skill_candidate\.status\);/);
   assert.match(reportSource, /if \(noticeText\) \{/);
   assert.match(reportSource, /setPersonalSkillNoticeText\(noticeText\);/);
@@ -884,7 +901,7 @@ test("report page exposes approval agent review details in expandable records", 
   assert.match(reportSource, /修改前/);
   assert.match(reportSource, /修改后/);
   assert.match(reportSource, /为什么改/);
-  assert.match(reportSource, /把策略拆成 Coach 可执行动作/);
+  assert.match(reportSource, /把策略拆成 TeacherAgent 可执行动作/);
   assert.match(reportSource, /max-h-24 overflow-y-auto whitespace-pre-wrap break-words/);
   assert.match(reportSource, /\[overflow-wrap:anywhere\]/);
   assert.match(reportSource, /门禁与问题/);
@@ -916,6 +933,12 @@ test("report page recommends only follow-up cases and does not list study materi
   assert.match(reportSource, /推荐训练病例/);
   assert.match(reportSource, /当前病例库暂未找到适合的下一轮训练病例。/);
   assert.doesNotMatch(reportSource, /getRecommendationKindLabel\(item\.reference\)/);
+  const caseRecommendationsSource = reportSource.slice(
+    reportSource.indexOf("function CaseRecommendations"),
+    reportSource.indexOf("function LlmReasoningAuditSection"),
+  );
+  assert.doesNotMatch(caseRecommendationsSource, />\s*\{item\.reference\}\s*</);
+  assert.doesNotMatch(caseRecommendationsSource, /font-mono/);
 });
 
 test("report page shows submitted material coverage map as the round conclusion", () => {
@@ -1104,7 +1127,7 @@ test("profile page omits empty Skill detail rows instead of rendering blank card
   assert.match(profileSource, /function formatSkillEffectSummary\(skill: EnabledSkillSummary\): string/);
   assert.doesNotMatch(profileSource, /当前效果：\{skill\.effect_status_label\}。/);
   assert.match(profileSource, /<SkillDetailRow label="训练目标" value=\{skill\.description\} \/>/);
-  assert.match(profileSource, /<SkillDetailRow label="Coach 应用方式" value=\{skill\.learning_action\} \/>/);
+  assert.match(profileSource, /<SkillDetailRow label="TeacherAgent 应用方式" value=\{skill\.learning_action\} \/>/);
   assert.match(profileSource, /<SkillDetailRow label="生效条件" value=\{skill\.activation_summary\} \/>/);
   assert.match(profileSource, /<SkillDetailRow label="来源与效果" value=\{formatSkillEffectSummary\(skill\)\} \/>/);
 })
@@ -1182,10 +1205,9 @@ test("home workspace starts without a default case and only prepares a case afte
   assert.doesNotMatch(pageSource, /<CaseSelectionPrompt[\s\S]*selectedCase=\{selectedCase\}/);
   assert.match(pageSource, /href="\/cases"[\s\S]*?>\s*选择病例\s*<\/Link>/);
   assert.match(pageSource, /const preparedOpeningTaskCard = session\?\.opening_task_card \?\? selectedCase\?\.openingTaskCard \?\? null;/);
-  assert.match(pageSource, /const preparedPatientOpeningUtterance = session\?\.patient_opening_utterance \?\? selectedCase\?\.patientOpeningUtterance \?\? null;/);
   assert.match(pageSource, /<OpeningTaskCardMessage openingTaskCard=\{preparedOpeningTaskCard\} \/>/);
-  assert.match(pageSource, /let baseMessages: ChatMessage\[\] = preparedPatientOpeningUtterance/);
-  assert.match(pageSource, /id: "patient-opening"/);
+  assert.match(pageSource, /let baseMessages: ChatMessage\[\] = \[];/);
+  assert.doesNotMatch(pageSource, /id: "patient-opening"/);
   assert.doesNotMatch(pageSource, /speaker: "patient"[\s\S]{0,240}请先选择一个病例；进入病例后/);
 });
 
@@ -1315,7 +1337,8 @@ test("home workspace keeps the composer sticky and moves final diagnosis into th
   assert.match(pageSource, /const \[isDiagnosisComposerOpen, setIsDiagnosisComposerOpen\] = useState\(false\);/);
   assert.match(pageSource, /className="pointer-events-none absolute inset-x-0 bottom-0 z-20 isolate px-3 pb-4 pt-10"/);
   assert.match(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-0 z-0 h-20 bg-background"/);
-  assert.match(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background\/75 backdrop-blur-md \[mask-image:linear-gradient\(to_top,black,black_52%,transparent\)\]"/);
+  assert.match(pageSource, /aria-hidden="true" className="absolute bottom-20 left-1\/2 z-0 h-10 w-full max-w-3xl -translate-x-1\/2 bg-background\/75 backdrop-blur-md \[mask-image:linear-gradient\(to_top,black,black_52%,transparent\)\]"/);
+  assert.doesNotMatch(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background\/75 backdrop-blur-md/);
   assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
   assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"/);
   const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
@@ -1734,6 +1757,8 @@ test("home workspace keeps backend progress data and gates compact admin coverag
   assert.match(pageSource, /function CoverageMapSection\(/);
   assert.match(pageSource, /const \[isCoverageMapOpen, setIsCoverageMapOpen\] = useState\(false\);/);
   assert.match(pageSource, /function canViewAdminCoverageMap\(authUser: AuthUser \| null\): boolean/);
+  assert.doesNotMatch(pageSource, /const ADMIN_AUTH_EMAIL = "admin@osce\.test";/);
+  assert.match(pageSource, /return authUser\?\.is_admin === true;/);
   assert.match(pageSource, /const canOpenAdminCoverageMap = canViewAdminCoverageMap\(authUser\);/);
   assert.doesNotMatch(pageSource, /<Panel title="训练进度与素材覆盖"/);
   assert.doesNotMatch(pageSource, />问诊线索<\/p>/);
@@ -1942,20 +1967,22 @@ test("cases page does not expose raw case details to student users", () => {
 test("home page renders login/register dialog on the existing workspace", () => {
   assert.ok(existsSync(authClientUrl), "home auth client should exist");
   assert.match(authClientSource, /export type AuthUser = Readonly<\{/);
+  assert.match(authClientSource, /is_admin: boolean;/);
   assert.match(authClientSource, /export async function getCurrentUser\(\): Promise<AuthUser \| null>/);
   assert.match(authClientSource, /export async function loginUser\(email: string, password: string\): Promise<AuthUser>/);
   assert.match(authClientSource, /export async function registerUser\(email: string, password: string, displayName: string\): Promise<AuthUser>/);
   assert.match(authClientSource, /export async function logoutUser\(\): Promise<void>/);
   assert.match(pageSource, /import \{ getCurrentUser, loginUser, logoutUser \} from "\.\/auth-client";/);
   assert.match(pageSource, /import type \{ AuthUser \} from "\.\/auth-client";/);
-  assert.match(pageSource, /const DEFAULT_AUTH_EMAIL = "student@osce\.test";/);
-  assert.match(pageSource, /const DEFAULT_AUTH_PASSWORD = "student";/);
+  assert.doesNotMatch(pageSource, /const DEFAULT_AUTH_EMAIL = "student@osce\.test";/);
+  assert.doesNotMatch(pageSource, /const DEFAULT_AUTH_PASSWORD = "student";/);
   assert.match(pageSource, /const \[authUser, setAuthUser\] = useState<AuthUser \| null>\(null\);/);
   assert.match(pageSource, /const \[isAuthDialogOpen, setIsAuthDialogOpen\] = useState\(false\);/);
-  assert.match(pageSource, /const \[authEmail, setAuthEmail\] = useState\(DEFAULT_AUTH_EMAIL\);/);
-  assert.match(pageSource, /const \[authPassword, setAuthPassword\] = useState\(DEFAULT_AUTH_PASSWORD\);/);
-  assert.match(pageSource, /setAuthEmail\(DEFAULT_AUTH_EMAIL\);/);
-  assert.match(pageSource, /setAuthPassword\(DEFAULT_AUTH_PASSWORD\);/);
+  assert.match(pageSource, /const \[authEmail, setAuthEmail\] = useState\(""\);/);
+  assert.match(pageSource, /const \[authPassword, setAuthPassword\] = useState\(""\);/);
+  assert.match(pageSource, /setAuthEmail\(""\);/);
+  assert.match(pageSource, /setAuthPassword\(""\);/);
+  assert.match(pageSource, /placeholder="输入登录邮箱"/);
   assert.match(pageSource, /<div className=\{isAuthDialogOpen \? "h-full pointer-events-none blur-sm" : "h-full"\}>/);
   assert.match(pageSource, /\{!isCheckingAuth && isAuthDialogOpen \? \(/);
   assert.match(pageSource, /backdrop-blur/);
@@ -1967,8 +1994,11 @@ test("home page renders login/register dialog on the existing workspace", () => 
   assert.doesNotMatch(pageSource, /<div className="mt-5 grid grid-cols-1 gap-2 rounded-xl bg-muted p-1">/);
   assert.match(pageSource, /id="auth-email-input"/);
   assert.match(pageSource, /id="auth-password-input"/);
+  assert.match(pageSource, /<form autoComplete="off" className="mt-6 space-y-4" onSubmit=\{handleAuthSubmit\}>/);
+  assert.match(pageSource, /autoComplete="off"[\s\S]*?id="auth-email-input"/);
+  assert.match(pageSource, /autoComplete="new-password"[\s\S]*?id="auth-password-input"/);
   assert.doesNotMatch(pageSource, /id="auth-display-name-input"/);
-  assert.match(pageSource, /placeholder="student@osce\.test"/);
+  assert.match(pageSource, /placeholder="输入登录邮箱"/);
   assert.match(pageSource, /placeholder="请输入密码"/);
   assert.doesNotMatch(pageSource, /placeholder="student 或 admin"/);
   assert.doesNotMatch(pageSource, /学生：student@osce\.test \/ student；管理员：admin@osce\.test \/ admin/);
