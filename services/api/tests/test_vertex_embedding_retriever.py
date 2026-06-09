@@ -67,6 +67,32 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
     ]
 
 
+def test_vertex_embedding_client_uses_environment_api_key_without_project(monkeypatch) -> None:
+    class FakeClient:
+        created: list[dict[str, object]] = []
+
+        def __init__(self, **kwargs: object) -> None:
+            self.created.append(kwargs)
+            self.models = object()
+
+    monkeypatch.setattr(vertex_embedding_retriever.genai, "Client", FakeClient)
+    monkeypatch.setattr(
+        vertex_embedding_retriever.runtime_model_config_store,
+        "get_vertex_gemini_config",
+        lambda: None,
+    )
+    vertex_embedding_retriever.clear_vertex_embedding_quota_cooldown()
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
+    monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_API_KEY", "test-vertex-api-key")
+    monkeypatch.delenv("OSCE_VERTEX_EMBEDDING_PROJECT", raising=False)
+    monkeypatch.delenv("OSCE_VERTEX_PROJECT", raising=False)
+
+    client = vertex_embedding_retriever.build_vertex_embedding_client_from_environment()
+
+    assert client is not None
+    assert FakeClient.created == [{"vertexai": True, "api_key": "test-vertex-api-key"}]
+
+
 def test_vertex_embedding_quota_error_opens_cooldown(monkeypatch) -> None:
     class FakeModels:
         def embed_content(self, **kwargs: object):
