@@ -1290,6 +1290,31 @@ def _build_skill_accumulation(user_id: str, sessions: list[dict[str, object]]) -
     }
 
 
+PROFILE_RECENT_SESSION_FIELDS = [
+    "session_id",
+    "case_id",
+    "case_title",
+    "stage",
+    "stage_label",
+    "created_at",
+    "updated_at",
+    "is_completed",
+    "can_continue",
+    "has_report",
+    "completion_status",
+    "training_difficulty",
+]
+
+
+def _serialize_profile_recent_session(session: dict[str, object]) -> dict[str, object]:
+    enriched_session = enrich_session_summary(dict(session))
+    return {
+        field: enriched_session[field]
+        for field in PROFILE_RECENT_SESSION_FIELDS
+        if field in enriched_session
+    }
+
+
 def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
     sessions = osce_session_service.session_store.list_user_session_summaries(user["user_id"])
     reports = [
@@ -1315,7 +1340,7 @@ def _build_learning_profile(user: dict[str, str]) -> dict[str, object]:
         "weakest_dimension": weakest_dimension,
         "next_focus": f"下一轮优先补强{weakest_dimension['label']}，并在训练记录中对比改进趋势。" if weakest_dimension else "先完成一次完整训练并生成评分报告。",
         "learning_path": _build_learning_path(reports, weakest_dimension),
-        "recent_sessions": [enrich_session_summary(dict(session)) for session in sessions[:5]],
+        "recent_sessions": [_serialize_profile_recent_session(dict(session)) for session in sessions[:5]],
         "skill_accumulation": _build_skill_accumulation(user["user_id"], sessions),
         "skill_profile_summary": osce_session_service.build_student_profile_summary(user["user_id"]),
     }

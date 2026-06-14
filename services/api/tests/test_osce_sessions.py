@@ -680,6 +680,7 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["recent_sessions"][0]["session_id"] != other_response.json()["session_id"]
     assert profile["recent_sessions"][0]["case_title"] == "右下腹痛教学病例"
     assert profile["recent_sessions"][0]["stage_label"] == "报告已生成"
+    assert "active_skill_context" not in profile["recent_sessions"][0]
     assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 15}
     assert profile["weakest_dimension"] == {"key": "differential_diagnosis", "label": "鉴别诊断", "average": 0}
     assert profile["skill_accumulation"]["status"] == "active"

@@ -174,6 +174,8 @@ type CurrentUserProfileResponse = Readonly<{
   profile: CurrentUserProfilePayload;
 }>;
 
+type ProfileLoadState = "loading" | "ready" | "unauthenticated" | "empty" | "error";
+
 type LearningProfile = Readonly<{
   totalSessions: number;
   reportCount: number;
@@ -232,7 +234,7 @@ const EMPTY_LEARNING_PROFILE: LearningProfile = {
   recentSessions: [],
   skillAccumulation: {
     status: "planned",
-    description: "Step 8 会把已审核教学 Skill、常见错误模式和个性化提示策略接入这里；当前页面先展示由评分报告聚合出的学习画像。",
+    description: "长期 Skill 记忆会沉淀反复出现的问题模式、历史证据和干预策略；完成训练报告后开始积累。",
     enabled_skill_count: 0,
     applied_skill_count: 0,
     enabled_skills: [],
@@ -250,6 +252,13 @@ function formatSavedAt(savedAt: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+class UnauthenticatedProfileError extends Error {
+  constructor() {
+    super("请先登录查看近期学习画像。");
+    this.name = "UnauthenticatedProfileError";
+  }
 }
 
 function toLearningProfile(payload: CurrentUserProfilePayload): LearningProfile {
@@ -302,7 +311,7 @@ async function getCurrentUserProfile(): Promise<LearningProfile> {
   });
 
   if (response.status === 401) {
-    return EMPTY_LEARNING_PROFILE;
+    throw new UnauthenticatedProfileError();
   }
 
   if (!response.ok) {
@@ -312,6 +321,42 @@ async function getCurrentUserProfile(): Promise<LearningProfile> {
 
   const payload = (await response.json()) as CurrentUserProfileResponse;
   return toLearningProfile(payload.profile);
+}
+
+function isEmptyLearningProfile(profile: LearningProfile): boolean {
+  return profile.totalSessions === 0 && profile.reportCount === 0;
+}
+
+function ProfileStateNotice({
+  state,
+  message,
+}: Readonly<{
+  state: ProfileLoadState;
+  message: string;
+}>) {
+  const titleByState: Record<ProfileLoadState, string> = {
+    loading: "正在读取近期学习画像",
+    ready: "近期学习画像已生成",
+    unauthenticated: "请先登录查看近期学习画像",
+    empty: "暂无近期学习画像",
+    error: "读取近期学习画像失败",
+  };
+
+  return (
+    <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+      <p className="text-xs font-medium text-brand">近期学习画像</p>
+      <h2 className="mt-2 text-xl font-semibold tracking-tight">{titleByState[state]}</h2>
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{message}</p>
+      {state === "unauthenticated" ? (
+        <Link
+          className="mt-4 inline-flex rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"
+          href="/"
+        >
+          返回工作台登录
+        </Link>
+      ) : null}
+    </section>
+  );
 }
 
 function SkillDetailRow({ label, value }: Readonly<{ label: string; value: string }>) {
@@ -448,7 +493,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="text-xs font-medium text-brand">Skill 编排依据</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">当前训练问题</h2>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">近期训练问题</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
             由最近评分报告中的未覆盖训练点、顺序问题和证据链断点派生，TeacherAgent 会优先参考这些问题选择少量相关 Skill。
           </p>
@@ -593,10 +638,10 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
     <section className="rounded-2xl border border-brand/20 bg-brand/5 p-5 shadow-xs">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="text-xs font-medium text-brand">Skill 积累</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">个人训练 Skill</h2>
+          <p className="text-xs font-medium text-brand">长期 Skill 记忆</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">长期问题与干预策略</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-            已审核的教学策略会在后续训练中按病例、阶段和当前缺口注入 TeacherAgent 提示；样本不足时只展示应用痕迹，不伪造提升。
+            Skill 沉淀学生反复出现的问题模式、历史证据和干预策略；后续训练会按病例、阶段和近期缺口注入 TeacherAgent 提示。
           </p>
         </div>
         <div className="grid w-full gap-2 sm:grid-cols-2 lg:w-80">
@@ -670,16 +715,32 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
 
 export default function ProfilePage() {
   const [learningProfile, setLearningProfile] = useState<LearningProfile | null>(null);
-  const [statusText, setStatusText] = useState("正在读取当前账号的学习画像...");
+  const [loadState, setLoadState] = useState<ProfileLoadState>("loading");
+  const [statusText, setStatusText] = useState("正在读取近期学习画像...");
 
   useEffect(() => {
     async function loadLearningProfile() {
       try {
+        setLoadState("loading");
         const nextProfile = await getCurrentUserProfile();
         setLearningProfile(nextProfile);
-        setStatusText(nextProfile.reportCount > 0 ? "已根据后端聚合画像生成个人训练主页。" : "暂无已生成报告，完成一次诊断提交后会形成学习画像。");
+        if (isEmptyLearningProfile(nextProfile)) {
+          setLoadState("empty");
+          setStatusText("暂无近期学习画像。完成一次完整训练并生成报告后，这里会汇总最近训练状态。");
+          return;
+        }
+        setLoadState("ready");
+        setStatusText("已根据后端聚合画像生成近期学习主页。");
       } catch (error) {
-        setStatusText(error instanceof Error ? error.message : "读取学习画像失败。");
+        if (error instanceof UnauthenticatedProfileError) {
+          setLoadState("unauthenticated");
+          setLearningProfile(null);
+          setStatusText("请先登录查看近期学习画像。");
+          return;
+        }
+        setLoadState("error");
+        setLearningProfile(null);
+        setStatusText(error instanceof Error ? error.message : "读取近期学习画像失败。");
       }
     }
 
@@ -687,6 +748,7 @@ export default function ProfilePage() {
   }, []);
 
   const profile = learningProfile ?? EMPTY_LEARNING_PROFILE;
+  const shouldRenderProfile = loadState === "ready" || loadState === "empty";
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
@@ -697,9 +759,9 @@ export default function ProfilePage() {
               <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
                 临境 OSCE 智能体（TraceOSCE）
               </p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">学习画像</h1>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight">近期学习画像</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                汇总当前账号的训练次数、平均分、长期薄弱项和下一步训练重点，后续承接个人 Skill 积累。
+                画像记录最近训练状态，长期 Skill 记忆沉淀反复出现的问题模式、历史证据和干预策略。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -723,7 +785,7 @@ export default function ProfilePage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm font-semibold text-brand">个人训练主页</p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">长期表现从后端训练记录聚合生成。</h2>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">近期表现从后端训练记录聚合生成。</h2>
             </div>
             <span className="w-fit rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
               当前账号
@@ -732,6 +794,16 @@ export default function ProfilePage() {
           <p className="mt-4 max-w-3xl text-sm leading-6 text-muted-foreground">{statusText}</p>
         </section>
 
+        {loadState !== "ready" && loadState !== "empty" ? (
+          <ProfileStateNotice state={loadState} message={statusText} />
+        ) : null}
+
+        {loadState === "empty" ? (
+          <ProfileStateNotice state={loadState} message={statusText} />
+        ) : null}
+
+        {shouldRenderProfile ? (
+          <>
         <section className="grid gap-3 md:grid-cols-3">
           <article className="rounded-2xl border border-border bg-background p-5 shadow-xs">
             <p className="text-xs font-medium text-muted-foreground">训练次数</p>
@@ -909,6 +981,8 @@ export default function ProfilePage() {
             </p>
           )}
         </section>
+          </>
+        ) : null}
       </div>
     </main>
   );

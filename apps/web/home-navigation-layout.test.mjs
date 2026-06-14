@@ -1007,7 +1007,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.doesNotMatch(profileSource, /\{task\.target_rubric_items\.map/);
   assert.doesNotMatch(profileSource, /来源：\{task\.source_references\.join/);
   assert.doesNotMatch(profileSource, /当前阶段：\{session\.stage\}/);
-  assert.match(profileSource, /Skill 积累/);
+  assert.match(profileSource, /长期 Skill 记忆/);
   assert.match(profileSource, /type EnabledSkillSummary = Readonly<\{/);
   assert.match(profileSource, /type SkillProfileItem = Readonly<\{/);
   assert.match(profileSource, /type SkillProfileSkillState = Readonly<\{/);
@@ -1038,6 +1038,22 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /暂无已启用 Skill/);
 });
 
+test("profile page separates loading, unauthenticated and empty learning profile states", () => {
+  assert.match(profileSource, /type ProfileLoadState = "loading" \| "ready" \| "unauthenticated" \| "empty" \| "error";/);
+  assert.match(profileSource, /setLoadState\("unauthenticated"\)/);
+  assert.match(profileSource, /setLoadState\("empty"\)/);
+  assert.match(profileSource, /请先登录查看近期学习画像/);
+  assert.match(profileSource, /正在读取近期学习画像/);
+  assert.doesNotMatch(profileSource, /if \(response\.status === 401\) \{[\s\S]*?return EMPTY_LEARNING_PROFILE;/);
+});
+
+test("profile page names profile as short-term memory and Skill as long-term memory", () => {
+  assert.match(profileSource, /近期学习画像/);
+  assert.match(profileSource, /长期 Skill 记忆/);
+  assert.match(profileSource, /近期训练问题/);
+  assert.match(profileSource, /画像记录最近训练状态，长期 Skill 记忆沉淀反复出现的问题模式/);
+});
+
 test("profile page exposes readable Skill profile orchestration summary", () => {
   assert.match(profileSource, /type SkillProfileReasoningPattern = Readonly<\{/);
   assert.match(profileSource, /type SkillProfileSequenceIssue = Readonly<\{/);
@@ -1049,7 +1065,7 @@ test("profile page exposes readable Skill profile orchestration summary", () => 
   assert.match(profileSource, /reasoning_profile_summary: EMPTY_SKILL_PROFILE_REASONING_SUMMARY,/);
   assert.match(profileSource, /function SkillProfileSummarySection\(\{ summary \}: Readonly<\{ summary: SkillProfileSummary \}>\)/);
   assert.match(profileSource, /<SkillProfileSummarySection summary=\{profile\.skillProfileSummary\} \/>/);
-  assert.match(profileSource, /当前训练问题/);
+  assert.match(profileSource, /近期训练问题/);
   assert.match(profileSource, /近期漏项/);
   assert.match(profileSource, /近期思维模式/);
   assert.match(profileSource, /顺序问题/);
@@ -1101,7 +1117,7 @@ test("profile page gives Skill accumulation its own detailed module", () => {
   const asideStart = profileSource.indexOf("<aside");
   const asideEnd = profileSource.indexOf("</aside>", asideStart);
   const skillModuleIndex = profileSource.indexOf("<SkillAccumulationSection accumulation={profile.skillAccumulation} />");
-  const recentSessionsIndex = profileSource.indexOf("最近训练");
+  const recentSessionsIndex = profileSource.indexOf('<h2 className="text-sm font-semibold">最近训练</h2>');
 
   assert.match(profileSource, /function SkillAccumulationSection\(\{ accumulation \}: Readonly<\{ accumulation: SkillAccumulation \}>\)/);
   assert.ok(asideStart >= 0, "profile page should still have an aside for weak and strong dimensions");
