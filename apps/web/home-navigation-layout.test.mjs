@@ -1036,7 +1036,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /const hiddenSkills = sortedSkills\.slice\(FEATURED_SKILL_LIMIT\);/);
   assert.match(profileSource, /已启用 Skill/);
   assert.match(profileSource, /应用次数/);
-  assert.match(profileSource, /支持次数/);
+  assert.match(profileSource, /支持 \{skill\.support_count\} 次/);
   assert.match(profileSource, /效果状态/);
   assert.match(profileSource, /暂无已启用 Skill/);
 });
@@ -1145,15 +1145,24 @@ test("profile page gives Skill accumulation its own detailed module", () => {
   assert.match(profileSource, /visibleSkills\.map/);
   assert.match(profileSource, /hiddenSkills\.length > 0 \? \(/);
   assert.match(profileSource, /查看全部 \{sortedSkills\.length\} 条长期 Skill/);
-  assert.match(profileSource, /<details className="rounded-xl border border-border bg-background p-4 shadow-xs"/);
-  assert.match(profileSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);
-  assert.match(profileSource, /查看 Skill 详情/);
+  assert.match(profileSource, /<details className="rounded-xl border border-border bg-background shadow-xs"/);
+  assert.match(profileSource, /<summary className="cursor-pointer p-4">/);
+  assert.match(profileSource, /getSkillPreviewSummary\(skill\)/);
   assert.match(profileSource, /skill\.description/);
   assert.match(profileSource, /skill\.learning_action/);
   assert.match(profileSource, /skill\.activation_summary/);
   assert.match(profileSource, /skill\.source_summary/);
   assert.match(profileSource, /skill\.effect_status_label/);
   assert.match(profileSource, /skill\.scope_label/);
+});
+
+test("profile page renders Skill memory cards without repeated action pills", () => {
+  assert.match(profileSource, /function getSkillPreviewSummary\(skill: EnabledSkillSummary\): string/);
+  assert.match(profileSource, /支持 \{skill\.support_count\} 次/);
+  assert.doesNotMatch(profileSource, /查看 Skill 详情/);
+  assert.doesNotMatch(profileSource, /展开训练策略/);
+  assert.doesNotMatch(profileSource, /支持次数 \{skill\.support_count\}/);
+  assert.doesNotMatch(profileSource, /className="flex flex-col items-end gap-2"/);
 });
 
 test("profile page omits empty Skill detail rows instead of rendering blank cards", () => {

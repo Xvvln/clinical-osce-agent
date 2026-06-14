@@ -457,6 +457,20 @@ function formatSkillEffectSummary(skill: EnabledSkillSummary): string {
   return "";
 }
 
+function getSkillPreviewSummary(skill: EnabledSkillSummary): string {
+  const studentVisibleSummary = skill.student_visible_summary.trim();
+  if (studentVisibleSummary) {
+    return studentVisibleSummary;
+  }
+
+  const description = skill.description.trim();
+  if (description) {
+    return description;
+  }
+
+  return "该 Skill 会作为长期教学记忆，在后续训练中按病例、阶段和近期缺口被选择性注入。";
+}
+
 function TeachingEffectSummarySection({ summary }: Readonly<{ summary: TeachingEffectSummary }>) {
   const previewAbilityAxes = summary.ability_axes.slice(0, 3);
   const previewObservedChanges = summary.observed_changes.slice(0, 2);
@@ -804,11 +818,12 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
             const effectStatusLabel = skill.effect_status_label.trim();
             const scopeLabel = skill.scope_label.trim();
             const studentVisibleSummary = skill.student_visible_summary.trim();
+            const previewSummary = getSkillPreviewSummary(skill);
 
             return (
-              <details className="rounded-xl border border-border bg-background p-4 shadow-xs" key={skill.skill_id}>
-                <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
-                  <div>
+              <details className="rounded-xl border border-border bg-background shadow-xs" key={skill.skill_id}>
+                <summary className="cursor-pointer p-4">
+                  <div className="ml-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="text-base font-semibold">{skill.title}</h3>
                       {scopeLabel ? (
@@ -817,24 +832,18 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {effectStatusLabel ? `已启用教学策略 · 效果状态：${effectStatusLabel}` : "已启用教学策略"}
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{previewSummary}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      已启用教学策略
+                      {effectStatusLabel ? ` · 效果状态：${effectStatusLabel}` : ""} · 支持 {skill.support_count} 次
                     </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium whitespace-nowrap text-brand">
-                      支持次数 {skill.support_count}
-                    </span>
-                    <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium whitespace-nowrap text-brand">
-                      查看 Skill 详情
-                    </span>
                   </div>
                 </summary>
 
                 {studentVisibleSummary ? (
-                  <p className="mt-4 text-sm leading-6 text-muted-foreground">{studentVisibleSummary}</p>
+                  <p className="border-t border-border px-4 pt-4 text-sm leading-6 text-muted-foreground">{studentVisibleSummary}</p>
                 ) : null}
-                <div className="mt-4 grid gap-3 text-sm leading-6">
+                <div className="grid gap-3 px-4 py-4 text-sm leading-6">
                   <SkillDetailRow label="训练目标" value={skill.description} />
                   <SkillDetailRow label="TeacherAgent 应用方式" value={skill.learning_action} />
                   <SkillDetailRow label="生效条件" value={skill.activation_summary} />
@@ -862,10 +871,8 @@ function SkillAccumulationSection({ accumulation }: Readonly<{ accumulation: Ski
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           {skill.student_visible_summary.trim() || skill.description}
                         </p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">支持 {skill.support_count} 次</p>
                       </div>
-                      <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
-                        支持次数 {skill.support_count}
-                      </span>
                     </div>
                   </article>
                 ))}
