@@ -155,19 +155,25 @@ Skill 是学生训练后的可复用教学记忆。它不是医学事实库，�
 - `uv`
 - `pnpm`，推荐通过 `corepack` 使用
 
-便捷启动：
+便捷启动统一入口：
 
 ```powershell
 python '.\start-dev.py'
 ```
 
-如需单独启动管理端，可参考：
+该命令会启动同一套本地后端和两个前端：
+
+- API：`http://127.0.0.1:8000`
+- 学生端：`http://127.0.0.1:3000`
+- 管理端：`http://127.0.0.1:3100`
+
+如需在 API 已经运行时单独调试管理端，可参考：
 
 ```powershell
 python '.\start-admin.py'
 ```
 
-这两个脚本包含当前本地开发机的联调假设。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md` 和 `apps/admin/README.md` 为准。
+`start-admin.py` 不再启动第二套 API，只会将管理端连接到 `http://127.0.0.1:8000`。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md`、`apps/admin/README.md` 和 `docker-compose.yml` 为准。
 
 ## 常用验证
 

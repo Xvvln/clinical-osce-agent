@@ -46,6 +46,7 @@ data/processed/
 # Runtime artifacts
 logs/
 output/
+data/runtime/
 *.log
 *.sqlite3
 *.db

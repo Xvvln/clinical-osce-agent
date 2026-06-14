@@ -17,26 +17,10 @@ def load_start_admin_module() -> ModuleType:
     return module
 
 
-def test_api_command_starts_admin_api_on_8001() -> None:
+def test_admin_script_does_not_start_a_second_api() -> None:
     start_admin = load_start_admin_module()
 
-    command = start_admin._api_command()
-
-    assert command == [
-        "cmd",
-        "/c",
-        "uv",
-        "run",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8001",
-        "--reload",
-        "--reload-dir",
-        str(start_admin.API_DIR),
-    ]
+    assert not hasattr(start_admin, "_api_command")
 
 
 def test_admin_command_starts_next_admin_app_on_3100() -> None:
@@ -44,19 +28,7 @@ def test_admin_command_starts_next_admin_app_on_3100() -> None:
 
     command = start_admin._admin_command()
 
-    assert command == [
-        "cmd",
-        "/c",
-        "corepack",
-        "pnpm",
-        "exec",
-        "next",
-        "dev",
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        "3100",
-    ]
+    assert command[-6:] == ["next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
 
 
 def test_child_processes_default_to_local_admin_email_and_api_url() -> None:
@@ -65,7 +37,7 @@ def test_child_processes_default_to_local_admin_email_and_api_url() -> None:
     env = start_admin._process_env()
 
     assert env["CLINICAL_OSCE_ADMIN_EMAILS"] == "admin@example.test"
-    assert env["CLINICAL_OSCE_ADMIN_API_URL"] == "http://127.0.0.1:8001"
+    assert env["CLINICAL_OSCE_ADMIN_API_URL"] == "http://127.0.0.1:8000"
 
 
 def test_existing_admin_email_list_is_preserved_and_local_admin_is_added(monkeypatch) -> None:
@@ -80,7 +52,7 @@ def test_existing_admin_email_list_is_preserved_and_local_admin_is_added(monkeyp
 def test_admin_script_uses_api_and_admin_ports_only() -> None:
     start_admin = load_start_admin_module()
 
-    assert start_admin.API_URL == "http://127.0.0.1:8001"
+    assert start_admin.API_URL == "http://127.0.0.1:8000"
     assert start_admin.ADMIN_URL == "http://127.0.0.1:3100"
-    assert start_admin.DEV_PORTS == (8001, 3100)
+    assert start_admin.DEV_PORTS == (3100,)
     assert start_admin.ADMIN_DIR == start_admin.ROOT_DIR / "apps" / "admin"

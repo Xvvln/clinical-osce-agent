@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import os
 import platform
-import socket
+import shutil
 import subprocess
 import time
 import webbrowser
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
-API_DIR = ROOT_DIR / "services" / "api"
 ADMIN_DIR = ROOT_DIR / "apps" / "admin"
-AGENT_ENV_DIR = Path("D:/Anaconda3/envs/agent")
-API_URL = "http://127.0.0.1:8001"
+API_URL = "http://127.0.0.1:8000"
 ADMIN_URL = "http://127.0.0.1:3100"
 DEV_HOST = "127.0.0.1"
-DEV_PORTS = (8001, 3100)
+DEV_PORTS = (3100,)
 LOCAL_ADMIN_EMAIL = "admin@example.test"
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 ADMIN_API_URL_ENV_NAME = "CLINICAL_OSCE_ADMIN_API_URL"
@@ -23,33 +21,25 @@ ADMIN_API_URL_ENV_NAME = "CLINICAL_OSCE_ADMIN_API_URL"
 
 def main() -> int:
     _stop_stale_dev_processes()
-    processes = [
-        _start_process(
-            name="clinical-osce-api",
-            command=_api_command(),
-            cwd=API_DIR,
-        ),
-        _start_process(
-            name="clinical-osce-admin",
-            command=_admin_command(),
-            cwd=ADMIN_DIR,
-        ),
-    ]
-    print(f"API: {API_URL}")
+    process = _start_process(
+        name="clinical-osce-admin",
+        command=_admin_command(),
+        cwd=ADMIN_DIR,
+    )
     print(f"Admin: {ADMIN_URL}")
-    print("Development hot reload is enabled for both API and Admin.")
-    print("Wait a few seconds for services to compile, then the browser will open.")
+    print(f"Expected API: {API_URL}")
+    print("This script starts only the Admin app. Use start-dev.py for API + Web + Admin.")
+    print("Wait a few seconds for Admin to compile, then the browser will open.")
     time.sleep(5)
     webbrowser.open(ADMIN_URL)
-    print("Press Ctrl+C here to stop both services.")
+    print("Press Ctrl+C here to stop Admin.")
     try:
-        while all(process.poll() is None for process in processes):
+        while process.poll() is None:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("Stopping services...")
+        print("Stopping Admin...")
     finally:
-        for process in processes:
-            _stop_process(process)
+        _stop_process(process)
     return 0
 
 
@@ -66,7 +56,7 @@ def _stop_stale_dev_processes() -> None:
 def _stop_stale_port_processes(host: str, port: int) -> None:
     deadline = time.monotonic() + 10
     while True:
-        process_id = _get_listening_process_id(host, port)
+        process_id = _get_listening_process_id(port)
         if process_id is None:
             return
 
@@ -84,13 +74,13 @@ def _stop_stale_port_processes(host: str, port: int) -> None:
             raise RuntimeError(f"{host}:{port} is still in use after stopping stale project processes.")
 
 
-def _get_listening_process_id(host: str, port: int) -> int | None:
+def _get_listening_process_id(port: int) -> int | None:
     if platform.system() == "Windows":
         command = [
             "powershell",
             "-NoProfile",
             "-Command",
-            f"(Get-NetTCPConnection -LocalAddress {host} -LocalPort {port} -State Listen -ErrorAction SilentlyContinue).OwningProcess",
+            f"(Get-NetTCPConnection -LocalAddress {DEV_HOST} -LocalPort {port} -State Listen -ErrorAction SilentlyContinue).OwningProcess",
         ]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         for line in result.stdout.splitlines():
@@ -99,10 +89,12 @@ def _get_listening_process_id(host: str, port: int) -> int | None:
                 return int(line)
         return None
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.2)
-        if probe.connect_ex((host, port)) != 0:
-            return None
+    command = ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
     return None
 
 
@@ -116,6 +108,27 @@ def _get_process_command_line(process_id: int) -> str:
         ]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         return result.stdout.strip()
+
+    command_result = subprocess.run(
+        ["ps", "-p", str(process_id), "-o", "command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    cwd = _get_process_working_directory(process_id)
+    return "\n".join(part for part in [command_result.stdout.strip(), cwd] if part)
+
+
+def _get_process_working_directory(process_id: int) -> str:
+    result = subprocess.run(
+        ["lsof", "-a", "-p", str(process_id), "-d", "cwd", "-Fn"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:].strip()
     return ""
 
 
@@ -134,16 +147,6 @@ def _terminate_process_tree(process_id: int) -> None:
 
 def _process_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["CONDA_PREFIX"] = str(AGENT_ENV_DIR)
-    env["VIRTUAL_ENV"] = str(AGENT_ENV_DIR)
-    env["PATH"] = os.pathsep.join(
-        [
-            str(AGENT_ENV_DIR),
-            str(AGENT_ENV_DIR / "Scripts"),
-            str(AGENT_ENV_DIR / "Library" / "bin"),
-            env.get("PATH", ""),
-        ]
-    )
     env[ADMIN_EMAILS_ENV_NAME] = _admin_email_list(env.get(ADMIN_EMAILS_ENV_NAME, ""))
     env[ADMIN_API_URL_ENV_NAME] = API_URL
     return env
@@ -156,30 +159,17 @@ def _admin_email_list(existing_value: str) -> str:
     return ",".join(emails)
 
 
-def _api_command() -> list[str]:
-    command = [
-        "uv",
-        "run",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8001",
-        "--reload",
-        "--reload-dir",
-        str(API_DIR),
-    ]
-    if platform.system() == "Windows":
-        return ["cmd", "/c", *command]
-    return command
-
-
 def _admin_command() -> list[str]:
-    command = ["corepack", "pnpm", "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
+    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
     if platform.system() == "Windows":
         return ["cmd", "/c", *command]
     return command
+
+
+def _pnpm_command() -> list[str]:
+    if shutil.which("corepack"):
+        return ["corepack", "pnpm"]
+    return ["pnpm"]
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
