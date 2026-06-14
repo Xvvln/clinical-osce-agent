@@ -995,12 +995,13 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /stage_label: string;/);
   assert.match(profileSource, /learning_path: readonly LearningPathItem\[];/);
   assert.match(profileSource, /learningPath: readonly LearningPathItem\[];/);
-  assert.match(profileSource, /profile\.learningPath\.map/);
-  assert.match(profileSource, /个性化学习路径/);
+  assert.match(profileSource, /const primaryLearningTask = profile\.learningPath\[0\] \?\? null;/);
+  assert.match(profileSource, /const secondaryLearningTasks = profile\.learningPath\.slice\(1, 3\);/);
+  assert.match(profileSource, /下一轮训练任务/);
   assert.match(profileSource, /task\.task_type_label/);
   assert.match(profileSource, /task\.case_title/);
-  assert.match(profileSource, /task\.target_rubric_item_labels/);
-  assert.match(profileSource, /task\.source_reference_labels/);
+  assert.match(profileSource, /primaryLearningTask\.target_rubric_item_labels/);
+  assert.match(profileSource, /primaryLearningTask\.source_reference_labels/);
   assert.match(profileSource, /session\.case_title/);
   assert.match(profileSource, /session\.stage_label/);
   assert.doesNotMatch(profileSource, /病例：\{task\.case_id\}/);
@@ -1030,7 +1031,9 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /enabled_skills: readonly EnabledSkillSummary\[];/);
   assert.match(profileSource, /accumulation\.enabled_skill_count/);
   assert.match(profileSource, /accumulation\.applied_skill_count/);
-  assert.match(profileSource, /accumulation\.enabled_skills\.map/);
+  assert.match(profileSource, /const sortedSkills = getRankedEnabledSkills\(accumulation\.enabled_skills\);/);
+  assert.match(profileSource, /const visibleSkills = sortedSkills\.slice\(0, FEATURED_SKILL_LIMIT\);/);
+  assert.match(profileSource, /const hiddenSkills = sortedSkills\.slice\(FEATURED_SKILL_LIMIT\);/);
   assert.match(profileSource, /已启用 Skill/);
   assert.match(profileSource, /应用次数/);
   assert.match(profileSource, /支持次数/);
@@ -1054,6 +1057,16 @@ test("profile page names profile as short-term memory and Skill as long-term mem
   assert.match(profileSource, /画像记录最近训练状态，长期 Skill 记忆沉淀反复出现的问题模式/);
 });
 
+test("profile page prioritizes the next training action in the first viewport", () => {
+  assert.match(profileSource, /当前最该练什么/);
+  assert.match(profileSource, /下一轮训练任务/);
+  assert.match(profileSource, /primaryLearningTask \? \(/);
+  assert.match(profileSource, /secondaryLearningTasks\.map/);
+  assert.match(profileSource, /href="\/cases"/);
+  assert.match(profileSource, /开始下一轮训练/);
+  assert.doesNotMatch(profileSource, /个人训练主页/);
+});
+
 test("profile page exposes readable Skill profile orchestration summary", () => {
   assert.match(profileSource, /type SkillProfileReasoningPattern = Readonly<\{/);
   assert.match(profileSource, /type SkillProfileSequenceIssue = Readonly<\{/);
@@ -1071,10 +1084,13 @@ test("profile page exposes readable Skill profile orchestration summary", () => 
   assert.match(profileSource, /顺序问题/);
   assert.match(profileSource, /证据链焦点/);
   assert.match(profileSource, /Skill 编排依据/);
-  assert.match(profileSource, /reasoningSummary\.current_reasoning_focus\.map/);
-  assert.match(profileSource, /reasoningSummary\.sequence_issue_counts\.map/);
-  assert.match(profileSource, /reasoningSummary\.evidence_chain_focus\.map/);
-  assert.match(profileSource, /className="mt-4 grid items-start gap-3 xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1\.2fr\)\]"/);
+  assert.match(profileSource, /function getCurrentPriorityIssues\(summary: SkillProfileSummary\): readonly CurrentPriorityIssue\[]/);
+  assert.match(profileSource, /const priorityIssues = getCurrentPriorityIssues\(summary\);/);
+  assert.match(profileSource, /priorityIssues\.map/);
+  assert.match(profileSource, /查看完整近期问题证据/);
+  assert.match(profileSource, /reasoningSummary\.current_reasoning_focus\.slice\(0, 6\)\.map/);
+  assert.match(profileSource, /reasoningSummary\.sequence_issue_counts\.slice\(0, 6\)\.map/);
+  assert.match(profileSource, /reasoningSummary\.evidence_chain_focus\.slice\(0, 6\)\.map/);
   assert.match(profileSource, /focus\.missing_evidence_labels/);
   assert.match(profileSource, /summary\.current_focus_items\.map/);
   assert.match(profileSource, /focusItem\.label/);
@@ -1124,6 +1140,11 @@ test("profile page gives Skill accumulation its own detailed module", () => {
   assert.ok(asideEnd > asideStart, "profile aside should close before the standalone Skill module");
   assert.ok(skillModuleIndex > asideEnd, "Skill accumulation should not be nested in the right aside");
   assert.ok(skillModuleIndex < recentSessionsIndex, "Skill accumulation should remain a first-class profile section before recent sessions");
+  assert.match(profileSource, /const FEATURED_SKILL_LIMIT = 5;/);
+  assert.match(profileSource, /function getRankedEnabledSkills\(skills: readonly EnabledSkillSummary\[\]\): readonly EnabledSkillSummary\[]/);
+  assert.match(profileSource, /visibleSkills\.map/);
+  assert.match(profileSource, /hiddenSkills\.length > 0 \? \(/);
+  assert.match(profileSource, /查看全部 \{sortedSkills\.length\} 条长期 Skill/);
   assert.match(profileSource, /<details className="rounded-xl border border-border bg-background p-4 shadow-xs"/);
   assert.match(profileSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);
   assert.match(profileSource, /查看 Skill 详情/);
