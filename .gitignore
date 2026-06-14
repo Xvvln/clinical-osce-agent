@@ -36,6 +36,7 @@ CLAUDE.md
 goal.md
 xwh.pem
 *.eml
+traceosce-private-dev-state-*/
 
 # Local references and raw datasets
 references/

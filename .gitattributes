@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+# Windows command scripts should keep CRLF when present.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary/runtime artifacts.
+*.bin binary
+*.db binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.pickle binary
+*.png binary
+*.sqlite3 binary
+*.webp binary
