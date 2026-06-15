@@ -610,6 +610,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     case_step_started_at, case_step_started_perf = _start_processing_step()
     pedagogy_state = build_pedagogy_state(dict(state))
     base_hint = _build_socratic_hint(state, pedagogy_state)
+    base_hint = _active_training_goal_hint(state, fallback=base_hint)
     selected_skill_context: list[str] = []
     selected_skill_ids: list[str] = []
     routed_skill_context: dict[str, Any] | None = None
@@ -1403,6 +1404,47 @@ def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> st
     if phase == "ready_for_submission":
         return "提交前先梳理支持证据和排除依据，再提交最终诊断与推理过程。"
     return ""
+
+
+def _active_training_goal_hint(state: OsceGraphState, *, fallback: str) -> str:
+    active_skill_context = state.get("active_skill_context", {})
+    if not isinstance(active_skill_context, dict):
+        return fallback
+    goals = active_skill_context.get("humanistic_training_goals") or active_skill_context.get("current_training_gaps")
+    if not isinstance(goals, list):
+        return fallback
+    stage = str(state.get("stage") or "case_intro")
+    for goal in goals:
+        if not isinstance(goal, dict) or str(goal.get("status") or "") == "recovered":
+            continue
+        trigger_stage = str(goal.get("trigger_stage") or goal.get("stage") or "")
+        if not _training_goal_applies_to_stage(stage, trigger_stage):
+            continue
+        action = _training_goal_action_text(goal)
+        if action:
+            return action
+    return fallback
+
+
+def _training_goal_applies_to_stage(stage: str, trigger_stage: str) -> bool:
+    if not trigger_stage:
+        return True
+    normalized_stage = "auxiliary_test" if stage == "auxiliary_testing" else stage
+    normalized_trigger = "auxiliary_test" if trigger_stage == "auxiliary_testing" else trigger_stage
+    if normalized_stage == normalized_trigger:
+        return True
+    return normalized_trigger == "history_taking" and normalized_stage == "case_intro"
+
+
+def _training_goal_action_text(goal: dict[str, Any]) -> str:
+    action = str(goal.get("next_training_action") or "").strip()
+    if action:
+        return action.replace("下一轮", "本轮")
+    success_signal = str(goal.get("success_signal") or "").strip()
+    if success_signal:
+        return f"本轮训练目标：{success_signal}"
+    label = str(goal.get("label") or "").strip()
+    return f"本轮训练目标：{label}。" if label else ""
 
 
 def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:

@@ -46,6 +46,10 @@ SKILL_TYPE_LABELS: dict[str, str] = {
     "reasoning_bridge": "证据链推理训练",
     "differential_broadening": "鉴别诊断拓展训练",
     "safety_boundary": "安全边界训练",
+    "narrative_perspective": "患者叙事与视角训练",
+    "communication_structure": "沟通结构训练",
+    "ethics_consent": "知情同意训练",
+    "relationship_repair": "医患关系修复训练",
 }
 
 SKILL_STAGE_LABELS: dict[str, str] = {
@@ -150,6 +154,10 @@ LEGACY_ITEM_PREFIX_LABELS: dict[str, str] = {
     "pe": "查体",
     "rs": "推理表达",
     "at": "辅助检查",
+    "nm": "叙事医学",
+    "comm": "沟通技巧",
+    "eth": "医学伦理",
+    "rel": "关系建立",
 }
 
 LEGACY_ITEM_TOKEN_LABELS: dict[str, str] = {
@@ -163,6 +171,24 @@ LEGACY_ITEM_TOKEN_LABELS: dict[str, str] = {
     "past": "既往",
     "severity": "程度",
     "urolith": "输尿管结石",
+    "autonomy": "尊重自主",
+    "collaborative": "合作式表达",
+    "comfort": "舒适度",
+    "concern": "担忧",
+    "confirm": "确认理解",
+    "consent": "知情同意",
+    "empathy": "共情回应",
+    "intro": "自我介绍",
+    "life": "生活影响",
+    "open": "开放式提问",
+    "patient": "患者视角",
+    "perspective": "患者视角",
+    "privacy": "隐私保护",
+    "purpose": "目的说明",
+    "relationship": "医患关系",
+    "response": "回应",
+    "summary": "阶段性总结",
+    "supportive": "支持性语言",
 }
 
 

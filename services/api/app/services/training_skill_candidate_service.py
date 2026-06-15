@@ -644,6 +644,14 @@ def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:
         return "differential_broadening"
     if any("reasoning" in item_id or item_id.startswith("rp_") for item_id in item_ids):
         return "reasoning_bridge"
+    if any(item_id.startswith("nm_") for item_id in item_ids):
+        return "narrative_perspective"
+    if any(item_id.startswith("comm_") for item_id in item_ids):
+        return "communication_structure"
+    if any(item_id.startswith("eth_") for item_id in item_ids):
+        return "ethics_consent"
+    if any(item_id.startswith("rel_") for item_id in item_ids):
+        return "relationship_repair"
     if any(item_id.startswith("ht_") for item_id in item_ids):
         return "history_bundle"
     if any(item_id.startswith(("pe_", "exam_")) for item_id in item_ids):
@@ -660,6 +668,10 @@ def _stage_scope(skill_type: SkillCandidateType) -> list[str]:
         return ["case_intro", "history_taking", "physical_exam", "auxiliary_testing"]
     if skill_type == "history_bundle":
         return ["case_intro", "history_taking"]
+    if skill_type in {"narrative_perspective", "communication_structure", "relationship_repair"}:
+        return ["case_intro", "history_taking"]
+    if skill_type == "ethics_consent":
+        return ["case_intro", "physical_exam", "auxiliary_testing"]
     if skill_type == "exam_bundle":
         return ["case_intro", "physical_exam"]
     if skill_type == "test_strategy":

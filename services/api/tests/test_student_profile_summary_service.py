@@ -180,6 +180,90 @@ def test_profile_summary_aggregates_reasoning_patterns_beyond_missed_items() -> 
     assert "思维模式" in state["selection_reason"]
 
 
+def test_profile_summary_prioritizes_humanistic_training_gaps() -> None:
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_latest",
+                "missed_items": ["eth_exam_consent"],
+                "training_gaps": [
+                    {
+                        "dimension_id": "medical_ethics",
+                        "rubric_item_id": "eth_exam_consent",
+                        "gap_type": "ethics_consent_missing",
+                        "label": "查体或检查前说明目的并征得同意",
+                        "missing_score": 3,
+                        "severity": "high",
+                        "stage": "physical_exam",
+                        "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                        "skill_type": "ethics_consent",
+                        "gap_source": "score_trace",
+                    },
+                    {
+                        "dimension_id": "relationship_building",
+                        "rubric_item_id": "",
+                        "gap_type": "relationship_empathy_missing",
+                        "label": "错失患者沟通信号",
+                        "missing_score": 2,
+                        "severity": "medium",
+                        "stage": "history_taking",
+                        "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+                        "skill_type": "relationship_repair",
+                        "gap_source": "missed_opportunity",
+                    },
+                ],
+            },
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_previous",
+                "missed_items": ["eth_exam_consent"],
+                "training_gaps": [
+                    {
+                        "dimension_id": "medical_ethics",
+                        "rubric_item_id": "eth_exam_consent",
+                        "gap_type": "ethics_consent_missing",
+                        "label": "查体或检查前说明目的并征得同意",
+                        "missing_score": 2,
+                        "severity": "medium",
+                        "stage": "physical_exam",
+                        "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                        "skill_type": "ethics_consent",
+                        "gap_source": "score_trace",
+                    }
+                ],
+            },
+        ],
+        enabled_skills=[
+            {
+                "skill_id": "skill_ethics_consent",
+                "title": "查体前同意训练",
+                "skill_type": "ethics_consent",
+                "trigger_gap_types": ["ethics_consent_missing"],
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["physical_exam"],
+                "support_count": 2,
+            }
+        ],
+    )
+
+    assert summary["recent_training_gap_types"][:2] == [
+        "ethics_consent_missing",
+        "relationship_empathy_missing",
+    ]
+    assert summary["recent_training_skill_types"][:2] == ["ethics_consent", "relationship_repair"]
+    top_gap = summary["current_humanistic_gaps"][0]
+    assert top_gap["gap_type"] == "ethics_consent_missing"
+    assert top_gap["priority"] == 10
+    assert top_gap["status"] == "persistent"
+    assert top_gap["trigger_stage"] == "physical_exam"
+    assert top_gap["success_signal"] == "查体或检查前先说明目的并征得同意。"
+    state = summary["skill_states"]["skill_ethics_consent"]
+    assert state["state"] == "active"
+    assert state["matched_recent_training_gap_types"] == ["ethics_consent_missing"]
+    assert "近期训练缺口命中" in state["selection_reason"]
+
+
 def test_teaching_effect_change_descriptions_are_axis_specific() -> None:
     summary = build_skill_profile_summary(
         reports=[

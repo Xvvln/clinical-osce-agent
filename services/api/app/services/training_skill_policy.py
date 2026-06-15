@@ -18,6 +18,10 @@ SKILL_TYPE_GAP_LABELS = {
     "workflow_sequencing": "训练流程顺序与验证链衔接不足",
     "conversation_repair": "问诊目标聚焦与沟通修复不足",
     "safety_boundary": "教学边界与安全意识不足",
+    "narrative_perspective": "患者叙事、担忧期待与生活影响理解不足",
+    "communication_structure": "沟通结构、总结确认与理解校验不足",
+    "ethics_consent": "知情同意、隐私舒适度与患者自主尊重不足",
+    "relationship_repair": "情绪回应、支持性语言与合作关系建立不足",
 }
 
 FOCUS_ITEM_PREFIX_LABELS = {
@@ -38,6 +42,10 @@ FOCUS_ITEM_PREFIX_LABELS = {
     "sequence": "训练顺序",
     "turn": "对话轮次",
     "event": "训练事件",
+    "nm": "叙事医学",
+    "comm": "沟通技巧",
+    "eth": "医学伦理",
+    "rel": "关系建立",
 }
 
 FOCUS_ITEM_TOKEN_LABELS = {
@@ -69,6 +77,26 @@ FOCUS_ITEM_TOKEN_LABELS = {
     "urolith": "输尿管结石",
     "vomit": "呕吐",
     "core": "核心证据链",
+    "autonomy": "尊重自主",
+    "collaborative": "合作式表达",
+    "comfort": "舒适度",
+    "concern": "担忧",
+    "confirm": "确认理解",
+    "consent": "知情同意",
+    "empathy": "共情回应",
+    "intro": "自我介绍",
+    "life": "生活影响",
+    "medicine": "医学",
+    "narrative": "叙事",
+    "open": "开放式提问",
+    "patient": "患者视角",
+    "perspective": "患者视角",
+    "privacy": "隐私保护",
+    "purpose": "目的说明",
+    "relationship": "医患关系",
+    "response": "回应",
+    "summary": "阶段性总结",
+    "supportive": "支持性语言",
 }
 
 STAGE_LABELS = {

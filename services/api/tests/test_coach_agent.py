@@ -5,7 +5,9 @@ import pytest
 from app.services import anthropic_chat_client as anthropic_module
 from app.services import coach_agent as module
 from app.services import openai_compatible_chat_client as openai_module
+from app.services.coach_hint_context_service import build_coach_hint_context
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.graph.osce_graph import _load_case
 
 
 class FakeGeminiModels:
@@ -136,6 +138,52 @@ def test_coach_request_carries_difficulty_and_hint_context() -> None:
     assert payload["training_difficulty"] == "advanced"
     assert payload["hint_context"]["session"]["training_difficulty"] == "advanced"
     assert payload["hint_context"]["next_step"]["base_hint"] == "先解释下一步为什么要补病史。"
+
+
+def test_coach_hint_context_exposes_humanistic_training_goals() -> None:
+    case = _load_case("appendicitis_001")
+
+    context = build_coach_hint_context(
+        state={
+            "session_id": "session-humanistic",
+            "case_id": "appendicitis_001",
+            "stage": "physical_exam",
+            "messages": [],
+            "active_skill_context": {
+                "current_training_gaps": [
+                    {
+                        "gap_type": "ethics_consent_missing",
+                        "label": "查体或检查前说明目的并征得同意",
+                        "trigger_stage": "physical_exam",
+                        "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                        "success_signal": "查体或检查前先说明目的并征得同意。",
+                        "skill_type": "ethics_consent",
+                        "status": "persistent",
+                        "priority": 10,
+                    }
+                ],
+                "humanistic_training_goals": [
+                    {
+                        "gap_type": "ethics_consent_missing",
+                        "label": "查体或检查前说明目的并征得同意",
+                        "trigger_stage": "physical_exam",
+                        "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                        "success_signal": "查体或检查前先说明目的并征得同意。",
+                        "skill_type": "ethics_consent",
+                        "status": "persistent",
+                        "priority": 10,
+                    }
+                ],
+            },
+        },
+        case=case,
+        pedagogy_state={},
+        base_hint="下一步选择关键查体。",
+        retrieved_knowledge_context=[],
+    )
+
+    assert context["skill_selection"]["training_goals"][0]["gap_type"] == "ethics_consent_missing"
+    assert context["skill_selection"]["humanistic_training_goals"][0]["success_signal"] == "查体或检查前先说明目的并征得同意。"
 
 
 def test_active_hint_does_not_turn_into_exam_style_question() -> None:

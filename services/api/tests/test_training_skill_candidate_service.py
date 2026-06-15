@@ -172,6 +172,39 @@ def _without_memory_fields(candidate: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_training_skill_candidate_maps_humanistic_items_to_skill_types() -> None:
+    consent_context = TrainingSkillCandidateContext(
+        pattern_id="training_pattern_eth_exam_consent",
+        missed_items=[
+            TrainingSkillCandidateMissedItem(
+                item_id="eth_exam_consent",
+                count=3,
+                case_ids=["appendicitis_001"],
+            )
+        ],
+        support_count=3,
+        case_ids=["appendicitis_001"],
+        source_report_count=3,
+        related_recommendations=[],
+    )
+    communication_context = replace(
+        consent_context,
+        pattern_id="training_pattern_comm_summary_check",
+        missed_items=[
+            TrainingSkillCandidateMissedItem(
+                item_id="comm_summary_check",
+                count=2,
+                case_ids=["appendicitis_001"],
+            )
+        ],
+    )
+
+    assert candidate_module._skill_type(consent_context) == "ethics_consent"
+    assert candidate_module._stage_scope("ethics_consent") == ["case_intro", "physical_exam", "auxiliary_testing"]
+    assert candidate_module._skill_type(communication_context) == "communication_structure"
+    assert candidate_module._stage_scope("communication_structure") == ["case_intro", "history_taking"]
+
+
 def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_context_and_response_schema() -> None:
     fake_client = FakeSkillCandidateClient()
     generator = VertexGeminiTrainingSkillCandidateGenerator(

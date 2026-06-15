@@ -11,6 +11,31 @@ from app.services.clinical_reasoning_trace_service import (
 from app.services.admin_display_resolver import effect_status_label, rubric_item_label, trigger_item_labels
 
 
+HUMANISTIC_DIMENSIONS = {
+    "narrative_medicine",
+    "communication_skill",
+    "medical_ethics",
+    "relationship_building",
+}
+
+HUMANISTIC_SKILL_TYPES = {
+    "narrative_perspective",
+    "communication_structure",
+    "ethics_consent",
+    "relationship_repair",
+}
+
+GAP_TYPE_LABELS = {
+    "narrative_patient_perspective_missing": "患者视角与担忧期待缺失",
+    "communication_summary_missing": "阶段性总结与确认缺失",
+    "communication_confirm_understanding_missing": "确认患者理解缺失",
+    "ethics_consent_missing": "查体/检查前同意缺失",
+    "ethics_privacy_comfort_missing": "隐私与舒适度说明缺失",
+    "ethics_autonomy_missing": "尊重患者自主表达不足",
+    "relationship_empathy_missing": "患者情绪回应缺失",
+}
+
+
 def build_skill_profile_summary(
     *,
     reports: Iterable[Mapping[str, Any]],
@@ -20,10 +45,24 @@ def build_skill_profile_summary(
 ) -> dict[str, Any]:
     report_list = list(reports)
     recent_error_items = _recent_error_items(report_list, limit=recent_error_limit)
+    recent_training_gaps = _recent_training_gaps(report_list, limit=recent_error_limit)
+    current_training_gaps = [
+        gap for gap in recent_training_gaps if gap["status"] in {"current", "persistent"}
+    ][:current_focus_limit]
+    current_humanistic_gaps = [
+        gap for gap in current_training_gaps if gap["is_humanistic"]
+    ][:current_focus_limit]
+    recent_training_gap_types = [gap["gap_type"] for gap in recent_training_gaps]
+    recent_training_skill_types = _unique_strings(
+        [gap["skill_type"] for gap in recent_training_gaps if gap["skill_type"]]
+    )
     recent_error_item_ids = [item["item_id"] for item in recent_error_items]
     current_focus_items = recent_error_items[:current_focus_limit]
     recent_error_set = set(recent_error_item_ids)
     recent_error_item_by_id = {item["item_id"]: item for item in recent_error_items}
+    recent_training_gap_type_set = set(recent_training_gap_types)
+    recent_training_gap_by_type = {gap["gap_type"]: gap for gap in recent_training_gaps}
+    recent_training_skill_type_set = set(recent_training_skill_types)
     reasoning_profile_summary = _reasoning_profile_summary(report_list, limit=recent_error_limit)
     recent_reasoning_pattern_ids = reasoning_profile_summary["recent_pattern_ids"]
     recent_reasoning_pattern_set = set(recent_reasoning_pattern_ids)
@@ -39,6 +78,10 @@ def build_skill_profile_summary(
             recent_reasoning_pattern_ids,
             recent_reasoning_pattern_set,
             recent_reasoning_pattern_by_id,
+            recent_training_gap_types,
+            recent_training_gap_type_set,
+            recent_training_gap_by_type,
+            recent_training_skill_type_set,
             report_list,
         )
         for skill in enabled_skills
@@ -49,6 +92,12 @@ def build_skill_profile_summary(
         "recent_error_items": recent_error_items,
         "current_focus_item_ids": recent_error_item_ids[:current_focus_limit],
         "current_focus_items": current_focus_items,
+        "recent_training_gap_types": recent_training_gap_types,
+        "recent_training_skill_types": recent_training_skill_types,
+        "recent_training_gaps": recent_training_gaps,
+        "current_training_gaps": current_training_gaps,
+        "current_humanistic_gaps": current_humanistic_gaps,
+        "humanistic_gap_summary": _humanistic_gap_summary(recent_training_gaps, current_humanistic_gaps),
         "reasoning_profile_summary": reasoning_profile_summary,
         "skill_states": skill_states,
         "teaching_effect_summary": build_teaching_effect_summary(
@@ -404,6 +453,185 @@ def _recent_error_items(reports: Iterable[Mapping[str, Any]], *, limit: int) -> 
     return recent_items
 
 
+def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    report_list = list(reports)
+    for report_index, report in enumerate(report_list):
+        case_id = str(report.get("case_id", "")).strip()
+        report_id = str(report.get("report_id") or report.get("session_id") or "").strip()
+        for gap in _report_training_gaps(report):
+            gap_type = str(gap.get("gap_type") or "").strip()
+            rubric_item_id = str(gap.get("rubric_item_id") or "").strip()
+            key = gap_type or rubric_item_id
+            if not key:
+                continue
+            label = _gap_label(gap, case_id)
+            entry = grouped.setdefault(
+                key,
+                {
+                    "gap_type": gap_type or key,
+                    "rubric_item_id": rubric_item_id,
+                    "label": label,
+                    "dimension_id": str(gap.get("dimension_id") or ""),
+                    "skill_type": str(gap.get("skill_type") or ""),
+                    "gap_source": str(gap.get("gap_source") or "score_trace"),
+                    "severity": str(gap.get("severity") or "medium"),
+                    "trigger_stage": str(gap.get("stage") or gap.get("trigger_stage") or ""),
+                    "next_training_action": str(gap.get("next_training_action") or ""),
+                    "evidence_summary": str(gap.get("evidence_summary") or ""),
+                    "missing_score": 0,
+                    "repeat_count": 0,
+                    "latest_present": False,
+                    "latest_report_index": report_index,
+                    "source_report_ids": [],
+                    "is_humanistic": _is_humanistic_gap(gap),
+                },
+            )
+            entry["repeat_count"] = int(entry["repeat_count"]) + 1
+            entry["missing_score"] = max(int(entry["missing_score"]), _int_value(gap.get("missing_score")))
+            entry["is_humanistic"] = bool(entry["is_humanistic"]) or _is_humanistic_gap(gap)
+            if report_index == 0:
+                entry["latest_present"] = True
+            entry["latest_report_index"] = min(int(entry["latest_report_index"]), report_index)
+            if report_id and report_id not in entry["source_report_ids"]:
+                entry["source_report_ids"].append(report_id)
+            if not entry["next_training_action"]:
+                entry["next_training_action"] = str(gap.get("next_training_action") or "")
+            if not entry["trigger_stage"]:
+                entry["trigger_stage"] = str(gap.get("stage") or gap.get("trigger_stage") or "")
+
+    gaps = [_finalize_training_gap(entry) for entry in grouped.values()]
+    gaps.sort(key=lambda item: (-int(item["priority"]), int(item["latest_report_index"]), item["label"]))
+    return gaps[:limit]
+
+
+def _report_training_gaps(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    gaps = report.get("training_gaps", [])
+    if not isinstance(gaps, list):
+        return []
+    return [gap for gap in gaps if isinstance(gap, Mapping)]
+
+
+def _finalize_training_gap(entry: Mapping[str, Any]) -> dict[str, Any]:
+    missing_score = int(entry.get("missing_score") or 0)
+    repeat_count = int(entry.get("repeat_count") or 0)
+    gap_source = str(entry.get("gap_source") or "")
+    skill_type = str(entry.get("skill_type") or "")
+    dimension_id = str(entry.get("dimension_id") or "")
+    latest_present = bool(entry.get("latest_present"))
+    ethics_or_safety_bonus = 3 if (
+        dimension_id == "medical_ethics"
+        or skill_type == "ethics_consent"
+        or "ethics" in str(entry.get("gap_type") or "")
+        or "safety" in str(entry.get("gap_type") or "")
+    ) else 0
+    missed_opportunity_bonus = 3 if gap_source == "missed_opportunity" else 0
+    recent_recovery_bonus = 4 if not latest_present else 0
+    priority = missing_score + repeat_count * 2 + ethics_or_safety_bonus + missed_opportunity_bonus - recent_recovery_bonus
+    status = "persistent" if latest_present and repeat_count >= 2 else "current" if latest_present else "recovered"
+    trigger_stage = str(entry.get("trigger_stage") or "")
+    gap_type = str(entry.get("gap_type") or "")
+    return {
+        "gap_type": gap_type,
+        "rubric_item_id": str(entry.get("rubric_item_id") or ""),
+        "label": str(entry.get("label") or _gap_type_label(gap_type)),
+        "dimension_id": dimension_id,
+        "skill_type": skill_type,
+        "gap_source": gap_source,
+        "severity": str(entry.get("severity") or "medium"),
+        "trigger_stage": trigger_stage,
+        "trigger_stage_label": _stage_label(trigger_stage),
+        "next_training_action": str(entry.get("next_training_action") or "下一轮围绕该缺口做一次短目标训练。"),
+        "success_signal": _success_signal_for_gap(gap_type),
+        "evidence_summary": str(entry.get("evidence_summary") or ""),
+        "missing_score": missing_score,
+        "repeat_count": repeat_count,
+        "priority": priority,
+        "status": status,
+        "status_label": {"persistent": "反复出现", "current": "当前缺口", "recovered": "近期恢复"}.get(status, "待观察"),
+        "source_report_ids": list(entry.get("source_report_ids") or []),
+        "latest_report_index": int(entry.get("latest_report_index") or 0),
+        "is_humanistic": bool(entry.get("is_humanistic")),
+        "priority_components": {
+            "missing_score": missing_score,
+            "repeat_bonus": repeat_count * 2,
+            "ethics_or_safety_bonus": ethics_or_safety_bonus,
+            "missed_opportunity_bonus": missed_opportunity_bonus,
+            "recent_recovery_bonus": recent_recovery_bonus,
+        },
+    }
+
+
+def _gap_label(gap: Mapping[str, Any], case_id: str) -> str:
+    label = str(gap.get("label") or "").strip()
+    if label:
+        return label
+    rubric_item_id = str(gap.get("rubric_item_id") or "").strip()
+    if rubric_item_id:
+        return rubric_item_label(rubric_item_id, [case_id] if case_id else ())
+    return _gap_type_label(str(gap.get("gap_type") or ""))
+
+
+def _gap_type_label(gap_type: str) -> str:
+    return GAP_TYPE_LABELS.get(str(gap_type or ""), str(gap_type or "") or "未记录训练缺口")
+
+
+def _stage_label(stage: str) -> str:
+    return {
+        "case_intro": "训练开始",
+        "history_taking": "问诊阶段",
+        "physical_exam": "查体阶段",
+        "auxiliary_test": "辅助检查阶段",
+        "auxiliary_testing": "辅助检查阶段",
+        "diagnosis_submission": "诊断提交前",
+        "feedback": "复盘阶段",
+    }.get(str(stage or ""), str(stage or "") or "未记录阶段")
+
+
+def _success_signal_for_gap(gap_type: str) -> str:
+    return {
+        "narrative_patient_perspective_missing": "问诊中主动询问患者担忧、期待或生活影响。",
+        "communication_summary_missing": "阶段转换前总结已获得信息并请患者确认。",
+        "communication_confirm_understanding_missing": "解释判断或检查目的后确认患者是否理解。",
+        "ethics_consent_missing": "查体或检查前先说明目的并征得同意。",
+        "ethics_privacy_comfort_missing": "查体前主动说明隐私保护和不适反馈方式。",
+        "ethics_autonomy_missing": "说明选择理由后邀请患者表达顾虑并共同决定。",
+        "relationship_empathy_missing": "患者表达焦虑或担忧后，先回应情绪再继续推进。",
+    }.get(str(gap_type or ""), "下一轮能在对应阶段主动补齐该训练动作。")
+
+
+def _humanistic_gap_summary(
+    recent_training_gaps: list[Mapping[str, Any]],
+    current_humanistic_gaps: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    humanistic_gaps = [gap for gap in recent_training_gaps if gap.get("is_humanistic")]
+    return {
+        "recent_count": len(humanistic_gaps),
+        "current_count": len(current_humanistic_gaps),
+        "top_gap_type": str(current_humanistic_gaps[0].get("gap_type") or "") if current_humanistic_gaps else "",
+        "top_next_training_action": str(current_humanistic_gaps[0].get("next_training_action") or "") if current_humanistic_gaps else "",
+    }
+
+
+def _is_humanistic_gap(gap: Mapping[str, Any]) -> bool:
+    dimension_id = str(gap.get("dimension_id") or "")
+    skill_type = str(gap.get("skill_type") or "")
+    gap_type = str(gap.get("gap_type") or "")
+    return (
+        dimension_id in HUMANISTIC_DIMENSIONS
+        or skill_type in HUMANISTIC_SKILL_TYPES
+        or gap_type.startswith(("narrative_", "communication_", "ethics_", "relationship_"))
+    )
+
+
+def _int_value(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
 def _skill_state(
     skill: Mapping[str, Any],
     recent_error_item_ids: list[str],
@@ -412,9 +640,15 @@ def _skill_state(
     recent_reasoning_pattern_ids: list[str],
     recent_reasoning_pattern_set: set[str],
     recent_reasoning_pattern_by_id: Mapping[str, Mapping[str, Any]],
+    recent_training_gap_types: list[str],
+    recent_training_gap_type_set: set[str],
+    recent_training_gap_by_type: Mapping[str, Mapping[str, Any]],
+    recent_training_skill_type_set: set[str],
     reports: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     trigger_item_ids = _trigger_item_ids(skill)
+    trigger_gap_types = _trigger_gap_types(skill)
+    skill_type = str(skill.get("skill_type") or "").strip()
     matched_recent_error_item_ids = [item_id for item_id in recent_error_item_ids if item_id in set(trigger_item_ids)]
     matched_recent_error_items = [
         {
@@ -423,6 +657,21 @@ def _skill_state(
         }
         for item_id in matched_recent_error_item_ids
     ]
+    matched_recent_training_gap_types = [
+        gap_type for gap_type in recent_training_gap_types if gap_type in set(trigger_gap_types)
+    ]
+    matched_recent_training_gaps = [
+        {
+            "gap_type": gap_type,
+            "label": str(recent_training_gap_by_type.get(gap_type, {}).get("label") or _gap_type_label(gap_type)),
+        }
+        for gap_type in matched_recent_training_gap_types
+    ]
+    matched_recent_training_skill_types = (
+        [skill_type]
+        if skill_type in HUMANISTIC_SKILL_TYPES and skill_type in recent_training_skill_type_set
+        else []
+    )
     reasoning_pattern_ids = _reasoning_pattern_ids(skill)
     matched_recent_reasoning_pattern_ids = [
         pattern_id for pattern_id in recent_reasoning_pattern_ids if pattern_id in set(reasoning_pattern_ids)
@@ -443,14 +692,22 @@ def _skill_state(
         skill,
         matched_recent_reasoning_pattern_ids=matched_recent_reasoning_pattern_ids,
         reasoning_pattern_ids=reasoning_pattern_ids,
+        matched_recent_training_gap_types=matched_recent_training_gap_types,
+        trigger_gap_types=trigger_gap_types,
+        matched_recent_training_skill_types=matched_recent_training_skill_types,
+        skill_type=skill_type,
     )
     priority = _priority_for_skill(
         skill,
         state=state,
         matched_recent_error_item_ids=matched_recent_error_item_ids,
         matched_recent_reasoning_pattern_ids=matched_recent_reasoning_pattern_ids,
+        matched_recent_training_gap_types=matched_recent_training_gap_types,
+        matched_recent_training_skill_types=matched_recent_training_skill_types,
         recent_error_set=recent_error_set,
         recent_reasoning_pattern_set=recent_reasoning_pattern_set,
+        recent_training_gap_type_set=recent_training_gap_type_set,
+        recent_training_skill_type_set=recent_training_skill_type_set,
     )
     return {
         "state": state,
@@ -458,6 +715,10 @@ def _skill_state(
         "priority": priority,
         "trigger_item_ids": trigger_item_ids,
         "trigger_item_labels": trigger_item_labels(trigger_item_ids, _case_ids(skill)),
+        "trigger_gap_types": trigger_gap_types,
+        "matched_recent_training_gap_types": matched_recent_training_gap_types,
+        "matched_recent_training_gaps": matched_recent_training_gaps,
+        "matched_recent_training_skill_types": matched_recent_training_skill_types,
         "reasoning_pattern_ids": reasoning_pattern_ids,
         "reasoning_pattern_labels": _reasoning_pattern_labels(skill, reasoning_pattern_ids),
         "matched_recent_reasoning_pattern_ids": matched_recent_reasoning_pattern_ids,
@@ -470,6 +731,8 @@ def _skill_state(
             matched_recent_error_items,
             state,
             matched_recent_reasoning_patterns=matched_recent_reasoning_patterns,
+            matched_recent_training_gaps=matched_recent_training_gaps,
+            matched_recent_training_skill_types=matched_recent_training_skill_types,
         ),
     }
 
@@ -484,6 +747,19 @@ def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:
     return [trigger_item_id] if trigger_item_id else []
 
 
+def _trigger_gap_types(skill: Mapping[str, Any]) -> list[str]:
+    gap_types = _normalized_string_list(skill.get("trigger_gap_types"))
+    if gap_types:
+        return gap_types
+    gap_types = _normalized_string_list(skill.get("gap_types"))
+    if gap_types:
+        return gap_types
+    applies_when = skill.get("applies_when")
+    if isinstance(applies_when, Mapping):
+        return _normalized_string_list(applies_when.get("gap_types") or applies_when.get("trigger_gap_types"))
+    return []
+
+
 def _state_for_skill(
     effect_status: str,
     matched_recent_error_item_ids: list[str],
@@ -493,13 +769,28 @@ def _state_for_skill(
     *,
     matched_recent_reasoning_pattern_ids: list[str],
     reasoning_pattern_ids: list[str],
+    matched_recent_training_gap_types: list[str],
+    trigger_gap_types: list[str],
+    matched_recent_training_skill_types: list[str],
+    skill_type: str,
 ) -> str:
-    if not trigger_item_ids and not reasoning_pattern_ids:
+    if not trigger_item_ids and not reasoning_pattern_ids and not trigger_gap_types and not skill_type:
         return "inactive"
-    lifecycle_state = _lifecycle_state_from_reports(trigger_item_ids, reports, skill)
+    lifecycle_state = _lifecycle_state_from_reports(
+        trigger_item_ids,
+        reports,
+        skill,
+        trigger_gap_types=trigger_gap_types,
+        skill_type=skill_type if skill_type in HUMANISTIC_SKILL_TYPES else "",
+    )
     if lifecycle_state:
         return lifecycle_state
-    if matched_recent_error_item_ids or matched_recent_reasoning_pattern_ids:
+    if (
+        matched_recent_error_item_ids
+        or matched_recent_reasoning_pattern_ids
+        or matched_recent_training_gap_types
+        or matched_recent_training_skill_types
+    ):
         return "active"
     if effect_status == "improving":
         return "cooldown"
@@ -524,8 +815,12 @@ def _selection_reason(
     state: str,
     *,
     matched_recent_reasoning_patterns: list[dict[str, str]] | None = None,
+    matched_recent_training_gaps: list[dict[str, str]] | None = None,
+    matched_recent_training_skill_types: list[str] | None = None,
 ) -> str:
     matched_recent_reasoning_patterns = matched_recent_reasoning_patterns or []
+    matched_recent_training_gaps = matched_recent_training_gaps or []
+    matched_recent_training_skill_types = matched_recent_training_skill_types or []
     if state == "cooldown":
         return "近期已补上该 Skill 训练点，暂进入冷却观察。"
     if state == "retired":
@@ -533,6 +828,12 @@ def _selection_reason(
     if state == "reactivated" and matched_recent_error_items:
         labels = [item["label"] for item in matched_recent_error_items[:3]]
         return f"近期又出现该 Skill 相关缺口：{'、'.join(labels)}。"
+    if matched_recent_training_gaps:
+        labels = [item["label"] for item in matched_recent_training_gaps[:3]]
+        return f"近期训练缺口命中：{'、'.join(labels)}。"
+    if matched_recent_training_skill_types:
+        labels = [_skill_type_label(skill_type) for skill_type in matched_recent_training_skill_types[:3]]
+        return f"近期人文沟通 Skill 类型命中：{'、'.join(labels)}。"
     if matched_recent_reasoning_patterns:
         labels = [item["label"] for item in matched_recent_reasoning_patterns[:3]]
         if matched_recent_error_items:
@@ -563,8 +864,12 @@ def _priority_for_skill(
     state: str,
     matched_recent_error_item_ids: list[str],
     matched_recent_reasoning_pattern_ids: list[str],
+    matched_recent_training_gap_types: list[str],
+    matched_recent_training_skill_types: list[str],
     recent_error_set: set[str],
     recent_reasoning_pattern_set: set[str],
+    recent_training_gap_type_set: set[str],
+    recent_training_skill_type_set: set[str],
 ) -> int:
     if state in {"cooldown", "retired", "inactive"}:
         return -100
@@ -575,9 +880,18 @@ def _priority_for_skill(
         priority += 8
     if matched_recent_reasoning_pattern_ids:
         priority += 6
+    if matched_recent_training_gap_types:
+        priority += 8
+    if matched_recent_training_skill_types:
+        priority += 6
     if set(_trigger_item_ids(skill)) & recent_error_set:
         priority += min(int(skill.get("support_count") or 0), 3)
     if set(_reasoning_pattern_ids(skill)) & recent_reasoning_pattern_set:
+        priority += min(int(skill.get("support_count") or 0), 3)
+    if set(_trigger_gap_types(skill)) & recent_training_gap_type_set:
+        priority += min(int(skill.get("support_count") or 0), 3)
+    skill_type = str(skill.get("skill_type") or "").strip()
+    if skill_type in HUMANISTIC_SKILL_TYPES and skill_type in recent_training_skill_type_set:
         priority += min(int(skill.get("support_count") or 0), 3)
     return priority
 
@@ -587,6 +901,8 @@ def _lifecycle_state_from_reports(
     reports: list[Mapping[str, Any]],
     skill: Mapping[str, Any],
     *,
+    trigger_gap_types: list[str] | None = None,
+    skill_type: str = "",
     stable_coverage_window: int = 3,
 ) -> str:
     relevant_reports = [
@@ -596,21 +912,23 @@ def _lifecycle_state_from_reports(
         return ""
     recent_reports = relevant_reports[:stable_coverage_window]
     latest_report = relevant_reports[0]
-    if _report_misses_any(latest_report, trigger_item_ids):
+    if _report_matches_skill_gap(latest_report, trigger_item_ids, trigger_gap_types or [], skill_type):
         previous_stable_reports = relevant_reports[1 : stable_coverage_window + 1]
         older_reports = relevant_reports[stable_coverage_window + 1 :]
         if (
             len(previous_stable_reports) >= stable_coverage_window
-            and all(not _report_misses_any(report, trigger_item_ids) for report in previous_stable_reports)
-            and any(_report_misses_any(report, trigger_item_ids) for report in older_reports)
+            and all(not _report_matches_skill_gap(report, trigger_item_ids, trigger_gap_types or [], skill_type) for report in previous_stable_reports)
+            and any(_report_matches_skill_gap(report, trigger_item_ids, trigger_gap_types or [], skill_type) for report in older_reports)
         ):
             return "reactivated"
         return "active"
-    historical_miss_count = sum(1 for report in relevant_reports if _report_misses_any(report, trigger_item_ids))
+    historical_miss_count = sum(
+        1 for report in relevant_reports if _report_matches_skill_gap(report, trigger_item_ids, trigger_gap_types or [], skill_type)
+    )
     if historical_miss_count == 0:
         return ""
     if len(recent_reports) >= stable_coverage_window and all(
-        not _report_misses_any(report, trigger_item_ids) for report in recent_reports
+        not _report_matches_skill_gap(report, trigger_item_ids, trigger_gap_types or [], skill_type) for report in recent_reports
     ):
         return "retired"
     return "cooldown"
@@ -631,6 +949,35 @@ def _report_misses_any(report: Mapping[str, Any], trigger_item_ids: list[str]) -
         return False
     missed_item_set = {str(item_id).strip() for item_id in missed_items if str(item_id).strip()}
     return bool(set(trigger_item_ids) & missed_item_set)
+
+
+def _report_matches_skill_gap(
+    report: Mapping[str, Any],
+    trigger_item_ids: list[str],
+    trigger_gap_types: list[str],
+    skill_type: str,
+) -> bool:
+    if trigger_item_ids and _report_misses_any(report, trigger_item_ids):
+        return True
+    gaps = _report_training_gaps(report)
+    if not gaps:
+        return False
+    if trigger_gap_types:
+        gap_type_set = {str(gap.get("gap_type") or "").strip() for gap in gaps}
+        if set(trigger_gap_types) & gap_type_set:
+            return True
+    if skill_type:
+        return any(str(gap.get("skill_type") or "").strip() == skill_type for gap in gaps)
+    return False
+
+
+def _skill_type_label(skill_type: str) -> str:
+    return {
+        "narrative_perspective": "患者叙事与视角训练",
+        "communication_structure": "沟通结构训练",
+        "ethics_consent": "知情同意训练",
+        "relationship_repair": "医患关系修复训练",
+    }.get(str(skill_type or ""), str(skill_type or "") or "未分类 Skill")
 
 
 def _normalized_string_list(value: Any) -> list[str]:

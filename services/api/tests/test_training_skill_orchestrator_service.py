@@ -384,3 +384,60 @@ def test_skill_orchestrator_reads_reasoning_labels_from_recent_patterns() -> Non
     selected = context["selected_skills"][0]
     assert selected["why_selected_label"] == "近期思维模式命中：迁移痛推理点。"
     assert selected["reasoning_pattern_labels"] == ["迁移痛推理点"]
+
+
+def test_skill_orchestrator_selects_humanistic_skill_by_training_gap_type() -> None:
+    context = build_active_skill_context(
+        [
+            {
+                "skill_id": "skill_ethics_consent",
+                "title": "查体前同意训练",
+                "suggested_strategy": "查体或检查前，先说明目的和可能不适，再征得患者同意。",
+                "skill_type": "ethics_consent",
+                "trigger_gap_types": ["ethics_consent_missing"],
+                "case_ids": ["appendicitis_001"],
+                "stage_scope": ["physical_exam"],
+                "support_count": 1,
+            }
+        ],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="physical_exam",
+        rubric_item_ids=["eth_exam_consent"],
+        current_missing_evidence=[],
+        student_profile={
+            "recent_training_gap_types": ["ethics_consent_missing"],
+            "recent_training_skill_types": ["ethics_consent"],
+            "current_training_gaps": [
+                {
+                    "gap_type": "ethics_consent_missing",
+                    "label": "查体或检查前说明目的并征得同意",
+                    "trigger_stage": "physical_exam",
+                    "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                    "success_signal": "查体或检查前先说明目的并征得同意。",
+                    "skill_type": "ethics_consent",
+                    "priority": 10,
+                    "status": "persistent",
+                }
+            ],
+            "current_humanistic_gaps": [
+                {
+                    "gap_type": "ethics_consent_missing",
+                    "label": "查体或检查前说明目的并征得同意",
+                    "trigger_stage": "physical_exam",
+                    "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                    "success_signal": "查体或检查前先说明目的并征得同意。",
+                    "skill_type": "ethics_consent",
+                    "priority": 10,
+                    "status": "persistent",
+                }
+            ],
+        },
+        limit=1,
+    )
+
+    assert context["selected_skills"][0]["skill_id"] == "skill_ethics_consent"
+    assert context["selected_skills"][0]["trigger_gap_types"] == ["ethics_consent_missing"]
+    assert context["selected_skills"][0]["why_selected_label"] == "近期训练缺口命中：查体或检查前说明目的并征得同意。"
+    assert context["current_training_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert context["humanistic_training_goals"][0]["success_signal"] == "查体或检查前先说明目的并征得同意。"

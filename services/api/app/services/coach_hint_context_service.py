@@ -171,6 +171,10 @@ def _skill_selection(state: dict[str, Any]) -> dict[str, Any]:
         "available_skill_ids": [skill["skill_id"] for skill in candidate_skills if skill["skill_id"]],
         "candidate_skills": candidate_skills,
         "selected_skills": candidate_skills,
+        "training_goals": _compact_training_goals(active_skill_context.get("current_training_gaps", [])),
+        "humanistic_training_goals": _compact_training_goals(
+            active_skill_context.get("humanistic_training_goals", [])
+        ),
     }
 
 
@@ -187,6 +191,30 @@ def _compact_skill_selection_payload(skill: dict[str, Any], indexed_skill: dict[
         if field_value:
             payload[field_name] = field_value
     return payload
+
+
+def _compact_training_goals(value: Any, limit: int = 3) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    goals: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        goals.append(
+            {
+                "gap_type": str(item.get("gap_type") or ""),
+                "label": str(item.get("label") or ""),
+                "trigger_stage": str(item.get("trigger_stage") or item.get("stage") or ""),
+                "next_training_action": str(item.get("next_training_action") or ""),
+                "success_signal": str(item.get("success_signal") or ""),
+                "skill_type": str(item.get("skill_type") or ""),
+                "status": str(item.get("status") or ""),
+                "priority": _int_value(item.get("priority")),
+            }
+        )
+        if len(goals) >= limit:
+            break
+    return goals
 
 
 def _recent_turns(messages: Any, limit: int = 8) -> list[dict[str, str]]:
@@ -231,6 +259,14 @@ def _nested_int(source: dict[str, Any], key: str, nested_key: str) -> int:
         return 0
     value = nested.get(nested_key, 0)
     return value if isinstance(value, int) else 0
+
+
+def _int_value(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
 
 
 def _safe_case_item_id(case: Case, item_id: str) -> str:
