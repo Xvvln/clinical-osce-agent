@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import re
+import math
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 import yaml
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 ANCHOR_BANK_PATH = ROOT_DIR / "data" / "humanistic_anchor_bank.yaml"
+LOGGER = logging.getLogger(__name__)
 
 PATIENT_EMOTION_KEYWORDS = ("担心", "担忧", "害怕", "焦虑", "怕", "紧张")
 LIFE_IMPACT_KEYWORDS = ("影响", "上班", "工作", "学习", "睡眠", "生活")
@@ -42,6 +46,121 @@ class ScoringLedger:
             "awarded_item_ids": list(self.awarded_item_ids),
             "awarded_event_keys": sorted(self.awarded_event_keys),
         }
+
+
+class HumanisticEmbeddingClient(Protocol):
+    def embed_texts(self, texts: Sequence[str], *, task_type: str) -> list[list[float]]:
+        ...
+
+
+@dataclass(frozen=True)
+class SemanticReviewRequest:
+    text: str
+    anchor_id: str
+    semantic_score: float
+    threshold: float
+    positive_anchor: str | None
+    negative_anchor: str | None
+    match_method: str
+
+
+class HumanisticSemanticReviewer(Protocol):
+    def review(self, request: SemanticReviewRequest) -> str:
+        ...
+
+
+class SemanticAnchorMatcher:
+    def __init__(
+        self,
+        anchor_bank: Mapping[str, Any],
+        *,
+        embedding_client: HumanisticEmbeddingClient | None = None,
+        reviewer: HumanisticSemanticReviewer | None = None,
+        review_margin: float = 0.08,
+    ) -> None:
+        self._anchor_bank = anchor_bank
+        self._embedding_client = embedding_client
+        self._reviewer = reviewer
+        self._review_margin = review_margin
+        self._anchor_vector_cache: dict[tuple[str, str, tuple[str, ...]], list[list[float]]] = {}
+        self._query_vector_cache: dict[str, list[float]] = {}
+
+    def match(self, text: str, anchor_id: str) -> dict[str, Any]:
+        if self._embedding_client is not None:
+            try:
+                return self._embedding_anchor_match(text, anchor_id)
+            except Exception as exc:
+                LOGGER.warning("Humanistic embedding anchor match failed; falling back to lexical anchors: %s", exc)
+        return _lexical_anchor_match(
+            text,
+            anchor_id,
+            self._anchor_bank,
+            reviewer=self._reviewer,
+            review_margin=self._review_margin,
+        )
+
+    def _embedding_anchor_match(self, text: str, anchor_id: str) -> dict[str, Any]:
+        anchor = _anchor_payload(anchor_id, self._anchor_bank)
+        positive_anchors = [str(item) for item in anchor.get("positive", []) if str(item)]
+        negative_anchors = [str(item) for item in anchor.get("negative", []) if str(item)]
+        text_vector = self._query_vector(text)
+        positive_anchor, positive_score = self._best_embedding_anchor(text_vector, anchor_id, "positive", positive_anchors)
+        negative_anchor, negative_score = self._best_embedding_anchor(text_vector, anchor_id, "negative", negative_anchors)
+        semantic_score = max(0.0, min(1.0, positive_score - max(0.0, negative_score - 0.2)))
+        threshold = float(anchor.get("threshold", 0.28) or 0.28)
+        matched = semantic_score >= threshold and positive_score > negative_score
+        return _apply_boundary_review(
+            {
+                "matched": matched,
+                "semantic_score": round(semantic_score, 4),
+                "positive_anchor": positive_anchor,
+                "negative_anchor": negative_anchor,
+                "anchor_bank_version": str(self._anchor_bank.get("version") or ""),
+                "match_method": "embedding_anchor",
+            },
+            text=text,
+            anchor_id=anchor_id,
+            threshold=threshold,
+            reviewer=self._reviewer,
+            review_margin=self._review_margin,
+        )
+
+    def _query_vector(self, text: str) -> list[float]:
+        normalized_text = str(text)
+        if normalized_text not in self._query_vector_cache:
+            vectors = self._embedding_client.embed_texts([normalized_text], task_type="RETRIEVAL_QUERY")  # type: ignore[union-attr]
+            if len(vectors) != 1:
+                raise ValueError("humanistic embedding client must return one query vector")
+            self._query_vector_cache[normalized_text] = [float(value) for value in vectors[0]]
+        return self._query_vector_cache[normalized_text]
+
+    def _best_embedding_anchor(
+        self,
+        text_vector: list[float],
+        anchor_id: str,
+        polarity: str,
+        anchors: list[str],
+    ) -> tuple[str | None, float]:
+        if not anchors:
+            return None, 0.0
+        anchor_vectors = self._anchor_vectors(anchor_id, polarity, anchors)
+        scored = [
+            (anchor, _cosine_similarity(text_vector, anchor_vector))
+            for anchor, anchor_vector in zip(anchors, anchor_vectors)
+        ]
+        return max(scored, key=lambda item: item[1])
+
+    def _anchor_vectors(self, anchor_id: str, polarity: str, anchors: list[str]) -> list[list[float]]:
+        cache_key = (anchor_id, polarity, tuple(anchors))
+        if cache_key not in self._anchor_vector_cache:
+            vectors = self._embedding_client.embed_texts(anchors, task_type="RETRIEVAL_DOCUMENT")  # type: ignore[union-attr]
+            if len(vectors) != len(anchors):
+                raise ValueError("humanistic embedding client must return one vector for each anchor")
+            self._anchor_vector_cache[cache_key] = [
+                [float(value) for value in vector]
+                for vector in vectors
+            ]
+        return self._anchor_vector_cache[cache_key]
 
 
 def build_training_event_stream(session: Any) -> list[TrainingEvent]:
@@ -95,22 +214,53 @@ def load_anchor_bank(path: Path = ANCHOR_BANK_PATH) -> dict[str, Any]:
 
 
 def semantic_anchor_match(text: str, anchor_id: str, anchor_bank: Mapping[str, Any]) -> dict[str, Any]:
-    anchors = anchor_bank.get("anchors", {})
-    anchor = anchors.get(anchor_id, {}) if isinstance(anchors, Mapping) else {}
+    return _lexical_anchor_match(text, anchor_id, anchor_bank)
+
+
+def build_humanistic_embedding_client_from_environment() -> HumanisticEmbeddingClient | None:
+    try:
+        from app.services.vertex_embedding_retriever import build_vertex_embedding_client_from_environment
+
+        vertex_client = build_vertex_embedding_client_from_environment()
+    except Exception as exc:
+        LOGGER.warning("Humanistic Vertex embedding client initialization failed: %s", exc)
+        vertex_client = None
+    if vertex_client is not None:
+        return vertex_client
+
+    try:
+        from app.services.local_embedding_retriever import build_local_embedding_client_from_environment
+
+        return build_local_embedding_client_from_environment()
+    except Exception as exc:
+        LOGGER.warning("Humanistic local embedding client initialization failed: %s", exc)
+        return None
+
+
+def _lexical_anchor_match(
+    text: str,
+    anchor_id: str,
+    anchor_bank: Mapping[str, Any],
+    *,
+    reviewer: HumanisticSemanticReviewer | None = None,
+    review_margin: float = 0.08,
+) -> dict[str, Any]:
+    anchor = _anchor_payload(anchor_id, anchor_bank)
     positive_anchors = [str(item) for item in anchor.get("positive", []) if str(item)]
     negative_anchors = [str(item) for item in anchor.get("negative", []) if str(item)]
     positive_anchor, positive_score = _best_anchor_score(text, positive_anchors)
     negative_anchor, negative_score = _best_anchor_score(text, negative_anchors)
     semantic_score = max(0.0, min(1.0, positive_score - max(0.0, negative_score - 0.2)))
-    matched = semantic_score >= float(anchor.get("threshold", 0.28) or 0.28) and positive_score > negative_score
-    return {
+    threshold = float(anchor.get("threshold", 0.28) or 0.28)
+    matched = semantic_score >= threshold and positive_score > negative_score
+    return _apply_boundary_review({
         "matched": matched,
         "semantic_score": round(semantic_score, 4),
         "positive_anchor": positive_anchor,
         "negative_anchor": negative_anchor,
         "anchor_bank_version": str(anchor_bank.get("version") or ""),
         "match_method": "semantic_anchor",
-    }
+    }, text=text, anchor_id=anchor_id, threshold=threshold, reviewer=reviewer, review_margin=review_margin)
 
 
 def detect_missed_opportunities(events: list[TrainingEvent]) -> list[dict[str, Any]]:
@@ -131,6 +281,64 @@ def detect_missed_opportunities(events: list[TrainingEvent]) -> list[dict[str, A
             }
         )
     return missed
+
+
+def _anchor_payload(anchor_id: str, anchor_bank: Mapping[str, Any]) -> Mapping[str, Any]:
+    anchors = anchor_bank.get("anchors", {})
+    anchor = anchors.get(anchor_id, {}) if isinstance(anchors, Mapping) else {}
+    return anchor if isinstance(anchor, Mapping) else {}
+
+
+def _apply_boundary_review(
+    result: dict[str, Any],
+    *,
+    text: str,
+    anchor_id: str,
+    threshold: float,
+    reviewer: HumanisticSemanticReviewer | None,
+    review_margin: float,
+) -> dict[str, Any]:
+    if reviewer is None:
+        return result
+    semantic_score = float(result.get("semantic_score") or 0.0)
+    if abs(semantic_score - threshold) > review_margin:
+        return result
+    status = _normalized_review_status(
+        reviewer.review(
+            SemanticReviewRequest(
+                text=text,
+                anchor_id=anchor_id,
+                semantic_score=semantic_score,
+                threshold=threshold,
+                positive_anchor=result.get("positive_anchor"),
+                negative_anchor=result.get("negative_anchor"),
+                match_method=str(result.get("match_method") or ""),
+            )
+        )
+    )
+    result["llm_review_status"] = status
+    if status == "accepted":
+        result["matched"] = True
+    elif status == "rejected":
+        result["matched"] = False
+    return result
+
+
+def _normalized_review_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"accepted", "rejected", "uncertain"}:
+        return normalized
+    return "uncertain"
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right) or not left:
+        return 0.0
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return sum(left_value * right_value for left_value, right_value in zip(left, right)) / (left_norm * right_norm)
 
 
 def event_key(event: TrainingEvent) -> str:

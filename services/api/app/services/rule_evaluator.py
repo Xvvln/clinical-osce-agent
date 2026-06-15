@@ -9,13 +9,16 @@ from pydantic import ValidationError
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse, ScoreTrace
 from app.services.humanistic_evaluator import (
+    HumanisticEmbeddingClient,
+    HumanisticSemanticReviewer,
     ScoringLedger,
+    SemanticAnchorMatcher,
     TrainingEvent,
+    build_humanistic_embedding_client_from_environment,
     build_training_event_stream,
     detect_missed_opportunities,
     event_key,
     load_anchor_bank,
-    semantic_anchor_match,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -77,6 +80,8 @@ class RuleEvaluationReport:
 def evaluate_session_rules(
     session: RuleEvaluationSession,
     llm_scorer: LlmRubricScorer | None = None,
+    humanistic_embedding_client: HumanisticEmbeddingClient | None = None,
+    humanistic_semantic_reviewer: HumanisticSemanticReviewer | None = None,
 ) -> dict[str, Any]:
     rubric = _load_rubric(session.case_id)
     dimension_scores: dict[str, int] = {}
@@ -86,6 +91,13 @@ def evaluate_session_rules(
     training_gaps: list[dict[str, Any]] = []
     event_stream = build_training_event_stream(session)
     anchor_bank = load_anchor_bank()
+    if humanistic_embedding_client is None:
+        humanistic_embedding_client = build_humanistic_embedding_client_from_environment()
+    semantic_matcher = SemanticAnchorMatcher(
+        anchor_bank,
+        embedding_client=humanistic_embedding_client,
+        reviewer=humanistic_semantic_reviewer,
+    )
     scoring_ledger = ScoringLedger()
 
     for dimension in rubric["dimensions"]:
@@ -99,7 +111,7 @@ def evaluate_session_rules(
                 item,
                 llm_scorer=llm_scorer,
                 event_stream=event_stream,
-                anchor_bank=anchor_bank,
+                semantic_matcher=semantic_matcher,
                 scoring_ledger=scoring_ledger,
             )
             trace = item_result.pop("trace")
@@ -152,7 +164,7 @@ def evaluate_rubric_item(
     item: dict[str, Any],
     llm_scorer: LlmRubricScorer | None = None,
     event_stream: list[TrainingEvent] | None = None,
-    anchor_bank: dict[str, Any] | None = None,
+    semantic_matcher: SemanticAnchorMatcher | None = None,
     scoring_ledger: ScoringLedger | None = None,
 ) -> dict[str, Any]:
     item_id = item["item_id"]
@@ -188,11 +200,29 @@ def evaluate_rubric_item(
     if kind == "dialogue_act":
         return _evaluate_dialogue_act(item, spec, event_stream or [], scoring_ledger)
     if kind == "semantic_anchor":
-        return _evaluate_semantic_anchor(item, spec, event_stream or [], anchor_bank or {}, scoring_ledger)
+        return _evaluate_semantic_anchor(
+            item,
+            spec,
+            event_stream or [],
+            semantic_matcher or SemanticAnchorMatcher(load_anchor_bank()),
+            scoring_ledger,
+        )
     if kind == "sequence_check":
-        return _evaluate_sequence_check(item, spec, event_stream or [], anchor_bank or {}, scoring_ledger)
+        return _evaluate_sequence_check(
+            item,
+            spec,
+            event_stream or [],
+            semantic_matcher or SemanticAnchorMatcher(load_anchor_bank()),
+            scoring_ledger,
+        )
     if kind == "triggered_response":
-        return _evaluate_triggered_response(item, spec, event_stream or [], anchor_bank or {}, scoring_ledger)
+        return _evaluate_triggered_response(
+            item,
+            spec,
+            event_stream or [],
+            semantic_matcher or SemanticAnchorMatcher(load_anchor_bank()),
+            scoring_ledger,
+        )
     return {"trace": _build_score_trace(item, 0, [])}
 
 
@@ -259,13 +289,13 @@ def _evaluate_semantic_anchor(
     item: dict[str, Any],
     spec: dict[str, Any],
     event_stream: list[TrainingEvent],
-    anchor_bank: dict[str, Any],
+    semantic_matcher: SemanticAnchorMatcher,
     scoring_ledger: ScoringLedger | None,
 ) -> dict[str, Any]:
     anchor_id = str(spec["anchor_id"])
     best: tuple[TrainingEvent, dict[str, Any]] | None = None
     for event in _student_events(event_stream):
-        result = semantic_anchor_match(event.content, anchor_id, anchor_bank)
+        result = semantic_matcher.match(event.content, anchor_id)
         if best is None or float(result["semantic_score"]) > float(best[1]["semantic_score"]):
             best = (event, result)
     if best is None:
@@ -287,6 +317,7 @@ def _evaluate_semantic_anchor(
             positive_anchor=result.get("positive_anchor"),
             negative_anchor=result.get("negative_anchor"),
             anchor_bank_version=str(result.get("anchor_bank_version") or ""),
+            llm_review_status=result.get("llm_review_status"),
             matched_turn_index=event.turn_index if score else None,
         )
     }
@@ -296,7 +327,7 @@ def _evaluate_sequence_check(
     item: dict[str, Any],
     spec: dict[str, Any],
     event_stream: list[TrainingEvent],
-    anchor_bank: dict[str, Any],
+    semantic_matcher: SemanticAnchorMatcher,
     scoring_ledger: ScoringLedger | None,
 ) -> dict[str, Any]:
     action_types = {str(action_type) for action_type in spec.get("action_types", []) if str(action_type)}
@@ -315,7 +346,7 @@ def _evaluate_sequence_check(
     ]
     before_events = _events_matching_required_keywords(before_events, spec)
     after_events = _events_matching_required_keywords(after_events, spec)
-    before_match = _best_semantic_event(before_events, str(spec["anchor_id"]), anchor_bank)
+    before_match = _best_semantic_event(before_events, str(spec["anchor_id"]), semantic_matcher)
     if before_match and before_match[1]["matched"]:
         event, result = before_match
         key = event_key(event)
@@ -331,13 +362,14 @@ def _evaluate_sequence_check(
                     positive_anchor=result.get("positive_anchor"),
                     negative_anchor=result.get("negative_anchor"),
                     anchor_bank_version=str(result.get("anchor_bank_version") or ""),
+                    llm_review_status=result.get("llm_review_status"),
                     timing_status="before_action",
                     required_before_action=action.event_type,
                     matched_turn_index=event.turn_index,
                     action_turn_index=action.turn_index,
                 )
             }
-    after_match = _best_semantic_event(after_events, str(spec["anchor_id"]), anchor_bank)
+    after_match = _best_semantic_event(after_events, str(spec["anchor_id"]), semantic_matcher)
     if after_match and after_match[1]["matched"]:
         event, result = after_match
         return {
@@ -350,6 +382,7 @@ def _evaluate_sequence_check(
                 positive_anchor=result.get("positive_anchor"),
                 negative_anchor=result.get("negative_anchor"),
                 anchor_bank_version=str(result.get("anchor_bank_version") or ""),
+                llm_review_status=result.get("llm_review_status"),
                 timing_status="late",
                 required_before_action=action.event_type,
                 matched_turn_index=event.turn_index,
@@ -375,7 +408,7 @@ def _evaluate_triggered_response(
     item: dict[str, Any],
     spec: dict[str, Any],
     event_stream: list[TrainingEvent],
-    anchor_bank: dict[str, Any],
+    semantic_matcher: SemanticAnchorMatcher,
     scoring_ledger: ScoringLedger | None,
 ) -> dict[str, Any]:
     triggers = [str(keyword) for keyword in spec.get("trigger_keywords", []) if str(keyword)]
@@ -387,7 +420,7 @@ def _evaluate_triggered_response(
             event for event in _student_events(event_stream)
             if trigger_event.turn_index < event.turn_index <= trigger_event.turn_index + window
         ]
-        match = _best_semantic_event(candidate_events, str(spec["anchor_id"]), anchor_bank)
+        match = _best_semantic_event(candidate_events, str(spec["anchor_id"]), semantic_matcher)
         if not match or not match[1]["matched"]:
             continue
         event, result = match
@@ -406,6 +439,7 @@ def _evaluate_triggered_response(
                 positive_anchor=result.get("positive_anchor"),
                 negative_anchor=result.get("negative_anchor"),
                 anchor_bank_version=str(result.get("anchor_bank_version") or ""),
+                llm_review_status=result.get("llm_review_status"),
                 matched_turn_index=event.turn_index,
             )
         }
@@ -415,11 +449,11 @@ def _evaluate_triggered_response(
 def _best_semantic_event(
     events: list[TrainingEvent],
     anchor_id: str,
-    anchor_bank: dict[str, Any],
+    semantic_matcher: SemanticAnchorMatcher,
 ) -> tuple[TrainingEvent, dict[str, Any]] | None:
     best: tuple[TrainingEvent, dict[str, Any]] | None = None
     for event in events:
-        result = semantic_anchor_match(event.content, anchor_id, anchor_bank)
+        result = semantic_matcher.match(event.content, anchor_id)
         if best is None or float(result["semantic_score"]) > float(best[1]["semantic_score"]):
             best = (event, result)
     return best

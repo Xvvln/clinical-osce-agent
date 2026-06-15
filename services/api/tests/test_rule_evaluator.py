@@ -11,6 +11,36 @@ from app.services.rule_evaluator import evaluate_session_rules, score_rubric_ite
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+class FakeHumanisticEmbeddingClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], str]] = []
+
+    def embed_texts(self, texts, *, task_type: str):  # type: ignore[no-untyped-def]
+        normalized_texts = tuple(str(text) for text in texts)
+        self.calls.append((normalized_texts, task_type))
+        return [_fake_embedding_vector(text) for text in normalized_texts]
+
+
+class BoundaryAcceptingReviewer:
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    def review(self, request: object) -> str:
+        self.requests.append(request)
+        return "accepted"
+
+
+def _fake_embedding_vector(text: str) -> list[float]:
+    normalized = text.lower()
+    if "最担心" in normalized or "担心什么" in normalized or "放不下" in normalized or "就诊" in normalized:
+        return [1.0, 0.0, 0.0]
+    if "没事" in normalized or "不重要" in normalized:
+        return [0.0, 1.0, 0.0]
+    if "也许需要了解你的想法" in normalized:
+        return [0.29, 0.0, 0.957]
+    return [0.0, 0.0, 1.0]
+
+
 def test_appendicitis_male_case_uses_sex_appropriate_differential_items() -> None:
     case_payload = json.loads((PROJECT_ROOT / "data/cases/appendicitis_001.json").read_text(encoding="utf-8"))
     rubric_payload = yaml.safe_load(
@@ -244,6 +274,60 @@ def test_humanistic_dialogue_and_semantic_items_score_with_trace() -> None:
     consent_trace = report["rubric_scores"]["eth_exam_consent"]["trace"]
     assert consent_trace["timing_status"] == "before_action"
     assert consent_trace["matched_turn_index"] <= consent_trace["action_turn_index"]
+
+
+def test_humanistic_semantic_scoring_uses_embedding_client_and_reuses_anchor_vectors() -> None:
+    embedding_client = FakeHumanisticEmbeddingClient()
+    session = OsceSession(
+        session_id="session_embedding_humanistic",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "student", "content": "我想先听听你现在最担心什么。"},
+            {"role": "student", "content": "你现在最担心的是什么？"},
+        ],
+    )
+
+    report = evaluate_session_rules(session, humanistic_embedding_client=embedding_client)
+
+    trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
+    assert trace["match_method"] == "embedding_anchor"
+    assert trace["anchor_bank_version"] == "humanistic_anchor_bank_v1"
+    assert trace["semantic_score"] > 0.95
+    patient_concern_anchor_calls = [
+        call
+        for call in embedding_client.calls
+        if call[1] == "RETRIEVAL_DOCUMENT" and "你现在最担心的是什么？" in call[0]
+    ]
+    assert len(patient_concern_anchor_calls) == 1
+    assert len([call for call in embedding_client.calls if call[1] == "RETRIEVAL_QUERY"]) >= 1
+
+
+def test_humanistic_semantic_boundary_calls_reviewer_and_records_status() -> None:
+    embedding_client = FakeHumanisticEmbeddingClient()
+    reviewer = BoundaryAcceptingReviewer()
+    session = OsceSession(
+        session_id="session_humanistic_reviewer",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "student", "content": "也许需要了解你的想法。"},
+        ],
+    )
+
+    report = evaluate_session_rules(
+        session,
+        humanistic_embedding_client=embedding_client,
+        humanistic_semantic_reviewer=reviewer,
+    )
+
+    trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
+    assert trace["llm_review_status"] == "accepted"
+    assert len(reviewer.requests) == 1
 
 
 def test_humanistic_sequence_check_rejects_late_consent_and_generates_gap() -> None:
