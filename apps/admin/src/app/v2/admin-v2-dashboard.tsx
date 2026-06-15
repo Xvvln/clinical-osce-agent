@@ -101,13 +101,35 @@ type AdminSessionReport = Readonly<{
   case_title?: string;
   student_id: string;
   total_score?: number;
+  score_groups?: Record<string, Readonly<{ score: number; max_score: number }>>;
   dimension_scores?: Record<string, number>;
   missed_items?: readonly string[];
   missed_item_labels?: readonly string[];
+  training_gaps?: readonly AdminTrainingGap[];
+  missed_opportunities?: readonly AdminMissedOpportunity[];
   source_reference_items?: readonly AdminSourceReferenceItem[];
   explanation_source_items?: readonly AdminSourceReferenceItem[];
   knowledge_recommendations?: readonly ReportRecommendation[];
   generation_warnings?: readonly string[];
+}>;
+
+type AdminTrainingGap = Readonly<{
+  dimension_id?: string;
+  rubric_item_id?: string;
+  gap_type?: string;
+  label?: string;
+  missing_score?: number;
+  severity?: string;
+  next_training_action?: string;
+  skill_type?: string;
+  gap_source?: string;
+}>;
+
+type AdminMissedOpportunity = Readonly<{
+  opportunity_id?: string;
+  gap_type?: string;
+  trigger_evidence?: string;
+  expected_response?: string;
 }>;
 
 type TrainingEventRecord = Readonly<{
@@ -2544,6 +2566,7 @@ function TrainingSection({
   const hasSelectedReport = selectedSession
     ? selectedSession.stage === "feedback" || data.reports.some((report) => report.session_id === selectedSession.session_id)
     : false;
+  const humanisticReportStats = selectedReport ? getHumanisticReportStats(selectedReport) : null;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
@@ -2595,6 +2618,22 @@ function TrainingSection({
                     <MiniStat label="评分来源" value={formatCount(selectedReport.source_reference_items?.length ?? 0)} />
                     <MiniStat label="解释来源" value={formatCount(selectedReport.explanation_source_items?.length ?? 0)} />
                   </div>
+                  {humanisticReportStats ? (
+                    <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">人文沟通统计</p>
+                          <p className="mt-1 text-xs leading-5 text-[#6F6257]">叙事、沟通、伦理和关系建立的缺口与错失机会。</p>
+                        </div>
+                        <Badge variant="muted">{humanisticReportStats.scoreLabel}</Badge>
+                      </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <MiniStat label="人文沟通 gap" value={formatCount(humanisticReportStats.gaps.length)} />
+                        <MiniStat label="错失机会" value={formatCount(selectedReport.missed_opportunities?.length ?? 0)} />
+                      </div>
+                      <CompactList items={humanisticReportStats.gaps.map((gap) => gap.label || gap.gap_type || "未命名缺口").slice(0, 4)} title="高频人文沟通缺口" />
+                    </div>
+                  ) : null}
                   <CompactList items={(selectedReport.missed_item_labels ?? selectedReport.missed_items ?? []).slice(0, 5)} title="主要未覆盖项" />
                 </div>
               ) : null}
@@ -4217,10 +4256,41 @@ function getRubricDimensionLabel(dimensionId: string): string {
     differential_diagnosis: "鉴别诊断",
     history_taking: "问诊",
     main_diagnosis: "主要诊断",
+    medical_ethics: "医学伦理",
+    communication_skill: "沟通技巧",
+    narrative_medicine: "叙事医学",
     physical_exam: "查体",
+    relationship_building: "关系建立",
     reasoning: "推理表达",
   };
   return labels[dimensionId] ?? dimensionId;
+}
+
+function getHumanisticReportStats(report: AdminSessionReport): { scoreLabel: string; gaps: readonly AdminTrainingGap[] } | null {
+  const scoreGroup = report.score_groups?.humanistic_communication;
+  const gaps = (report.training_gaps ?? []).filter((gap) => isHumanisticGap(gap));
+  const missedOpportunityCount = report.missed_opportunities?.length ?? 0;
+  if (!scoreGroup && gaps.length === 0 && missedOpportunityCount === 0) {
+    return null;
+  }
+  return {
+    scoreLabel: scoreGroup ? `${scoreGroup.score}/${scoreGroup.max_score}` : "人文沟通",
+    gaps,
+  };
+}
+
+function isHumanisticGap(gap: AdminTrainingGap): boolean {
+  const dimensionId = gap.dimension_id ?? "";
+  const skillType = gap.skill_type ?? "";
+  const gapType = gap.gap_type ?? "";
+  return (
+    ["narrative_medicine", "communication_skill", "medical_ethics", "relationship_building"].includes(dimensionId)
+    || ["narrative_perspective", "communication_structure", "ethics_consent", "relationship_repair"].includes(skillType)
+    || gapType.startsWith("narrative_")
+    || gapType.startsWith("communication_")
+    || gapType.startsWith("ethics_")
+    || gapType.startsWith("relationship_")
+  );
 }
 
 function getProcedureAuditStatusLabel(audit: ProcedureSimulationAuditItem): string {

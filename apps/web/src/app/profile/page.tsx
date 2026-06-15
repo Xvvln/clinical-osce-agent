@@ -43,6 +43,27 @@ type SkillProfileItem = Readonly<{
   label: string;
 }>;
 
+type SkillProfileTrainingGap = Readonly<{
+  gap_type: string;
+  rubric_item_id: string;
+  label: string;
+  dimension_id: string;
+  skill_type: string;
+  gap_source: string;
+  severity: string;
+  trigger_stage: string;
+  trigger_stage_label: string;
+  next_training_action: string;
+  success_signal: string;
+  evidence_summary: string;
+  missing_score: number;
+  repeat_count: number;
+  priority: number;
+  status: string;
+  status_label: string;
+  is_humanistic: boolean;
+}>;
+
 type SkillProfileReasoningPattern = Readonly<{
   pattern_id: string;
   label: string;
@@ -85,9 +106,13 @@ type SkillProfileSkillState = Readonly<{
   priority: number;
   trigger_item_ids: readonly string[];
   trigger_item_labels: readonly string[];
+  trigger_gap_types: readonly string[];
   matched_recent_error_item_ids: readonly string[];
   matched_recent_error_items: readonly SkillProfileItem[];
   matched_recent_reasoning_patterns: readonly SkillProfileReasoningPattern[];
+  matched_recent_training_gap_types: readonly string[];
+  matched_recent_training_gaps: readonly Pick<SkillProfileTrainingGap, "gap_type" | "label">[];
+  matched_recent_training_skill_types: readonly string[];
   effect_status: string;
   effect_status_label: string;
   selection_reason: string;
@@ -128,6 +153,17 @@ type SkillProfileSummary = Readonly<{
   recent_error_items: readonly SkillProfileItem[];
   current_focus_item_ids: readonly string[];
   current_focus_items: readonly SkillProfileItem[];
+  recent_training_gap_types: readonly string[];
+  recent_training_skill_types: readonly string[];
+  recent_training_gaps: readonly SkillProfileTrainingGap[];
+  current_training_gaps: readonly SkillProfileTrainingGap[];
+  current_humanistic_gaps: readonly SkillProfileTrainingGap[];
+  humanistic_gap_summary: Readonly<{
+    recent_count: number;
+    current_count: number;
+    top_gap_type: string;
+    top_next_training_action: string;
+  }>;
   reasoning_profile_summary: SkillProfileReasoningSummary;
   skill_states: Readonly<Record<string, SkillProfileSkillState>>;
   teaching_effect_summary: TeachingEffectSummary;
@@ -216,6 +252,17 @@ const EMPTY_SKILL_PROFILE_SUMMARY: SkillProfileSummary = {
   recent_error_items: [],
   current_focus_item_ids: [],
   current_focus_items: [],
+  recent_training_gap_types: [],
+  recent_training_skill_types: [],
+  recent_training_gaps: [],
+  current_training_gaps: [],
+  current_humanistic_gaps: [],
+  humanistic_gap_summary: {
+    recent_count: 0,
+    current_count: 0,
+    top_gap_type: "",
+    top_next_training_action: "",
+  },
   reasoning_profile_summary: EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
   skill_states: {},
   teaching_effect_summary: EMPTY_TEACHING_EFFECT_SUMMARY,
@@ -293,8 +340,12 @@ function normalizeSkillProfileSummary(summary?: Partial<SkillProfileSummary>): S
       skillId,
       {
         ...state,
+        trigger_gap_types: state.trigger_gap_types ?? [],
         matched_recent_error_items: state.matched_recent_error_items ?? [],
         matched_recent_reasoning_patterns: state.matched_recent_reasoning_patterns ?? [],
+        matched_recent_training_gap_types: state.matched_recent_training_gap_types ?? [],
+        matched_recent_training_gaps: state.matched_recent_training_gaps ?? [],
+        matched_recent_training_skill_types: state.matched_recent_training_skill_types ?? [],
       },
     ]),
   );
@@ -302,6 +353,15 @@ function normalizeSkillProfileSummary(summary?: Partial<SkillProfileSummary>): S
   return {
     ...EMPTY_SKILL_PROFILE_SUMMARY,
     ...summary,
+    recent_training_gap_types: summary?.recent_training_gap_types ?? [],
+    recent_training_skill_types: summary?.recent_training_skill_types ?? [],
+    recent_training_gaps: summary?.recent_training_gaps ?? [],
+    current_training_gaps: summary?.current_training_gaps ?? [],
+    current_humanistic_gaps: summary?.current_humanistic_gaps ?? [],
+    humanistic_gap_summary: {
+      ...EMPTY_SKILL_PROFILE_SUMMARY.humanistic_gap_summary,
+      ...(summary?.humanistic_gap_summary ?? {}),
+    },
     reasoning_profile_summary: {
       ...EMPTY_SKILL_PROFILE_REASONING_SUMMARY,
       ...(summary?.reasoning_profile_summary ?? {}),
@@ -348,6 +408,14 @@ function isEmptyLearningProfile(profile: LearningProfile): boolean {
 function getCurrentPriorityIssues(summary: SkillProfileSummary): readonly CurrentPriorityIssue[] {
   const reasoningSummary = summary.reasoning_profile_summary;
 
+  const humanisticIssues = summary.current_humanistic_gaps.slice(0, 2).map((gap) => ({
+    id: `humanistic-${gap.gap_type}`,
+    sourceLabel: gap.gap_source === "missed_opportunity" ? "错失机会" : "人文沟通",
+    title: gap.label,
+    description: `${gap.trigger_stage_label || "下一轮"}：${gap.next_training_action || gap.success_signal}`,
+    count: gap.repeat_count,
+  }));
+
   const focusIssues = summary.current_focus_items.slice(0, 2).map((item) => ({
     id: `focus-${item.item_id}`,
     sourceLabel: "近期漏项",
@@ -382,7 +450,7 @@ function getCurrentPriorityIssues(summary: SkillProfileSummary): readonly Curren
     count: pattern.count,
   }));
 
-  return [...focusIssues, ...evidenceIssues, ...sequenceIssues, ...reasoningIssues].slice(0, 5);
+  return [...humanisticIssues, ...focusIssues, ...evidenceIssues, ...sequenceIssues, ...reasoningIssues].slice(0, 5);
 }
 
 function getRankedEnabledSkills(skills: readonly EnabledSkillSummary[]): readonly EnabledSkillSummary[] {
@@ -662,7 +730,11 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
                       {state.state_label || state.effect_status_label}
                     </span>
                   </div>
-                  {state.matched_recent_error_items.length > 0 ? (
+                  {state.matched_recent_training_gaps.length > 0 ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      命中训练缺口：{state.matched_recent_training_gaps.map((item) => item.label).join("、")}
+                    </p>
+                  ) : state.matched_recent_error_items.length > 0 ? (
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
                       命中训练点：{state.matched_recent_error_items.map((item) => item.label).join("、")}
                     </p>
@@ -693,7 +765,7 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold">
           <span>查看完整近期问题证据</span>
           <span className="rounded-full border border-brand/20 bg-background px-2 py-1 text-[11px] font-medium text-brand">
-            漏项 {summary.current_focus_items.length} · 证据链 {reasoningSummary.evidence_chain_focus.length}
+            漏项 {summary.current_focus_items.length} · 人文 {summary.current_humanistic_gaps.length} · 证据链 {reasoningSummary.evidence_chain_focus.length}
           </span>
         </summary>
 
@@ -725,6 +797,28 @@ function SkillProfileSummarySection({ summary }: Readonly<{ summary: SkillProfil
               </div>
             ) : (
               <p className="mt-3 text-sm leading-6 text-muted-foreground">暂无近期思维模式。</p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-border bg-background p-3">
+            <h3 className="text-sm font-semibold">人文沟通缺口</h3>
+            {summary.current_humanistic_gaps.length > 0 ? (
+              <div className="mt-3 grid gap-2">
+                {summary.current_humanistic_gaps.slice(0, 6).map((gap) => (
+                  <article className="rounded-lg border border-border bg-muted/30 p-3" key={gap.gap_type}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm font-semibold">{gap.label}</p>
+                      <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] font-medium text-brand">
+                        {gap.status_label}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{gap.next_training_action}</p>
+                    {gap.success_signal ? <p className="mt-1 text-xs leading-5 text-muted-foreground">成功信号：{gap.success_signal}</p> : null}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">暂无当前人文沟通缺口。</p>
             )}
           </div>
 

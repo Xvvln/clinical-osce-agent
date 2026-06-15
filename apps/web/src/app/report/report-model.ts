@@ -280,13 +280,60 @@ export type RubricScoreItem = Readonly<{
   description: string;
 }>;
 
+export type ReportScoreGroup = Readonly<{
+  score: number;
+  max_score: number;
+}>;
+
+export type ReportScoreTrace = Readonly<{
+  rubric_item_id: string;
+  awarded_score: number;
+  max_score: number;
+  match_kind: string;
+  matched_evidence: readonly string[];
+  gap_type?: string;
+  stage?: string;
+  next_training_action?: string;
+  match_method?: string;
+  semantic_score?: number;
+  timing_status?: string;
+  llm_review_status?: string;
+  ethics_principle?: string;
+}>;
+
+export type TrainingGapItem = Readonly<{
+  dimension_id: string;
+  rubric_item_id: string;
+  gap_type: string;
+  label: string;
+  missing_score: number;
+  severity: string;
+  evidence_summary: string;
+  next_training_action: string;
+  skill_type: string;
+  gap_source: string;
+}>;
+
+export type MissedOpportunityItem = Readonly<{
+  opportunity_id: string;
+  gap_type: string;
+  stage: string;
+  trigger_evidence: string;
+  expected_response: string;
+  next_training_action: string;
+}>;
+
 export type FeedbackReportPayload = Readonly<{
   session_id: string;
   case_id: string;
   total_score: number;
   dimension_scores: Readonly<Record<string, number>>;
+  score_groups?: Readonly<Record<string, ReportScoreGroup>>;
+  dimension_traces?: Readonly<Record<string, readonly ReportScoreTrace[]>>;
   rubric_scores: Readonly<Record<string, RubricScoreItem>>;
   missed_items: readonly string[];
+  training_gaps?: readonly TrainingGapItem[];
+  missed_opportunities?: readonly MissedOpportunityItem[];
   strengths: readonly string[];
   reasoning_errors: readonly string[];
   next_recommendations: readonly string[];
@@ -308,6 +355,10 @@ export type FeedbackReport = FeedbackReportPayload &
     source_reference_items: readonly SourceReferenceItem[];
     explanation_source_items: readonly ExplanationSourceItem[];
     procedure_simulation_audit_items: readonly ProcedureSimulationAuditItem[];
+    score_groups: Readonly<Record<string, ReportScoreGroup>>;
+    dimension_traces: Readonly<Record<string, readonly ReportScoreTrace[]>>;
+    training_gaps: readonly TrainingGapItem[];
+    missed_opportunities: readonly MissedOpportunityItem[];
     knowledge_recommendations: readonly KnowledgeRecommendationItem[];
     llm_reasoning_feedback: readonly LlmReasoningFeedbackItem[];
     evidence_graph_summary: EvidenceGraphSummary | null;
@@ -322,6 +373,10 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     source_reference_items: report.source_reference_items ?? [],
     explanation_source_items: report.explanation_source_items ?? [],
     procedure_simulation_audit_items: report.procedure_simulation_audit_items ?? [],
+    score_groups: report.score_groups ?? {},
+    dimension_traces: report.dimension_traces ?? {},
+    training_gaps: report.training_gaps ?? [],
+    missed_opportunities: report.missed_opportunities ?? [],
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
     evidence_graph_summary: report.evidence_graph_summary ?? null,

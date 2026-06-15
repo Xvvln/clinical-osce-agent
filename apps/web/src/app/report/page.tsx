@@ -16,10 +16,12 @@ import {
   type ProcedureSimulationAuditItem,
   type ReportCoverageMapItem,
   type ReportCoverageMapPayload,
+  type ReportScoreTrace,
   type RubricScoreItem,
   type SourceReferenceItem,
   type TeacherAnalysisContext,
   type TeacherReasoningTraceSummary,
+  type TrainingGapItem,
 } from "./report-model";
 
 type DimensionInsight = Readonly<{
@@ -125,6 +127,29 @@ const scoreDimensionLabels: Readonly<Record<string, string>> = {
   main_diagnosis: "主诊断",
   differential_diagnosis: "鉴别诊断",
   reasoning: "推理链",
+  narrative_medicine: "叙事医学",
+  communication_skill: "沟通技巧",
+  medical_ethics: "医学伦理",
+  relationship_building: "关系建立",
+};
+
+const scoreGroupLabels: Readonly<Record<string, string>> = {
+  clinical_osce: "临床能力",
+  humanistic_communication: "人文沟通能力",
+};
+
+const humanisticDimensionIds = new Set([
+  "narrative_medicine",
+  "communication_skill",
+  "medical_ethics",
+  "relationship_building",
+]);
+
+const timingStatusLabels: Readonly<Record<string, string>> = {
+  before_action: "动作前完成",
+  late: "动作后补说",
+  missing: "未完成",
+  missing_action: "未触发动作",
 };
 
 const cognitivePatternLabels: Readonly<Record<string, string>> = {
@@ -1052,6 +1077,18 @@ export default function ReportPage() {
                       </div>
                     </div>
                     <p className="mt-5 text-sm leading-6 text-muted-foreground">{report.feedback_summary}</p>
+                    {Object.entries(report.score_groups).length > 0 ? (
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        {Object.entries(report.score_groups).map(([groupId, group]) => (
+                          <div className="rounded-xl border border-brand/15 bg-background px-3 py-2" key={groupId}>
+                            <p className="text-xs text-muted-foreground">{scoreGroupLabels[groupId] ?? groupId}</p>
+                            <p className="mt-1 text-lg font-semibold text-brand">
+                              {group.score} / {group.max_score}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <p className="mt-3 text-sm leading-6 text-muted-foreground">{statusText}</p>
@@ -1099,6 +1136,7 @@ export default function ReportPage() {
             ) : null}
             <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
             {report ? <StudentReportSummary report={report} sectionId="report-feedback" /> : null}
+            {report ? <HumanisticCommunicationSection report={report} /> : null}
 
             <ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} />
             {report ? <CaseRecommendations items={report.knowledge_recommendations} /> : null}
@@ -1327,6 +1365,141 @@ function StudentReportSummary({ report, sectionId }: Readonly<{ report: Feedback
       )}
     </section>
   );
+}
+
+function HumanisticCommunicationSection({ report }: Readonly<{ report: FeedbackReport }>) {
+  const humanisticScores = Object.entries(report.dimension_scores).filter(([dimensionId]) => humanisticDimensionIds.has(dimensionId));
+  const humanisticTraces = Object.entries(report.dimension_traces)
+    .filter(([dimensionId]) => humanisticDimensionIds.has(dimensionId))
+    .flatMap(([, traces]) => traces);
+  const evidenceTraces = humanisticTraces.filter((trace) => trace.matched_evidence.length > 0).slice(0, 4);
+  const timingTraces = humanisticTraces.filter((trace) => trace.timing_status || trace.llm_review_status).slice(0, 4);
+  const humanisticGaps = report.training_gaps.filter(isHumanisticTrainingGap).slice(0, 5);
+  const shouldShow = humanisticScores.length > 0 || evidenceTraces.length > 0 || humanisticGaps.length > 0 || report.missed_opportunities.length > 0;
+  if (!shouldShow) {
+    return null;
+  }
+
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id="report-humanistic">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className={sectionHeadingClassName}>人文沟通闭环</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            展示叙事医学、沟通技巧、医学伦理和关系建立的证据、时序问题、错失机会与下一轮动作。
+          </p>
+        </div>
+        <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {report.score_groups.humanistic_communication ? `${report.score_groups.humanistic_communication.score}/${report.score_groups.humanistic_communication.max_score}` : "人文 30"}
+        </span>
+      </div>
+
+      {humanisticScores.length > 0 ? (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {humanisticScores.map(([dimensionId, score]) => {
+            const maxScore = getDimensionMaxScoresFromRubricScores(report.rubric_scores)[dimensionId] ?? 0;
+            return (
+              <div className="rounded-xl border border-border bg-muted/30 p-3" key={dimensionId}>
+                <p className="text-xs text-muted-foreground">{scoreDimensionLabels[dimensionId] ?? dimensionId}</p>
+                <p className="mt-1 text-lg font-semibold text-brand">{score} / {maxScore || "-"}</p>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <HumanisticEvidenceList report={report} traces={evidenceTraces} />
+        <HumanisticGapList gaps={humanisticGaps} missedOpportunities={report.missed_opportunities} />
+      </div>
+
+      {timingTraces.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold">时序与复核状态</h3>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {timingTraces.map((trace) => (
+              <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs leading-5" key={`${trace.rubric_item_id}-${trace.match_kind}`}>
+                <p className="font-medium text-foreground">{report.rubric_scores[trace.rubric_item_id]?.description ?? trace.rubric_item_id}</p>
+                <p className="mt-1 text-muted-foreground">
+                  {trace.timing_status ? `时序：${timingStatusLabels[trace.timing_status] ?? trace.timing_status}` : null}
+                  {trace.llm_review_status ? `${trace.timing_status ? " · " : ""}复核：${trace.llm_review_status}` : null}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function HumanisticEvidenceList({ report, traces }: Readonly<{ report: FeedbackReport; traces: readonly ReportScoreTrace[] }>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold">命中证据句</h3>
+      {traces.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {traces.map((trace) => (
+            <article className="rounded-lg border border-border bg-background p-3" key={`${trace.rubric_item_id}-${trace.matched_evidence.join("|")}`}>
+              <p className="text-xs font-medium text-brand">{report.rubric_scores[trace.rubric_item_id]?.description ?? trace.rubric_item_id}</p>
+              <p className="mt-1 text-sm leading-6 text-foreground">{trace.matched_evidence[0]}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                方法：{trace.match_method || trace.match_kind}
+                {typeof trace.semantic_score === "number" ? ` · 相似度 ${trace.semantic_score}` : ""}
+              </p>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+          本轮暂未记录人文沟通命中证据。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function HumanisticGapList({ gaps, missedOpportunities }: Readonly<{ gaps: readonly TrainingGapItem[]; missedOpportunities: FeedbackReport["missed_opportunities"] }>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold">下一轮训练动作</h3>
+      {gaps.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {gaps.map((gap) => (
+            <article className="rounded-lg border border-border bg-background p-3" key={`${gap.gap_type}-${gap.rubric_item_id}`}>
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-semibold">{gap.label}</p>
+                <span className="rounded-full border border-brand/20 bg-brand/10 px-2 py-1 text-[11px] text-brand">{gap.missing_score} 分</span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{gap.next_training_action}</p>
+              {gap.evidence_summary ? <p className="mt-1 text-xs leading-5 text-muted-foreground">证据：{gap.evidence_summary}</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+          本轮暂无人文沟通训练缺口。
+        </p>
+      )}
+
+      {missedOpportunities.length > 0 ? (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-xs font-medium text-brand">错失机会</p>
+          <div className="mt-2 grid gap-2">
+            {missedOpportunities.slice(0, 3).map((opportunity) => (
+              <p className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground" key={opportunity.opportunity_id}>
+                患者信号：{opportunity.trigger_evidence}；期望回应：{opportunity.expected_response}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function isHumanisticTrainingGap(gap: TrainingGapItem): boolean {
+  return humanisticDimensionIds.has(gap.dimension_id) || ["narrative_perspective", "communication_structure", "ethics_consent", "relationship_repair"].includes(gap.skill_type);
 }
 
 function ReportCoverageMapOverview({ coverageMap }: Readonly<{ coverageMap: ReportCoverageMapPayload }>) {

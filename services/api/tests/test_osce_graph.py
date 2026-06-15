@@ -1913,6 +1913,50 @@ def test_osce_graph_socratic_hint_uses_training_goal_without_long_term_skill() -
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == []
 
 
+def test_osce_graph_socratic_hint_preserves_training_goal_when_skill_is_selected() -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    skill_context = active_skill_context()
+    skill_context["current_training_gaps"] = [
+        {
+            "gap_type": "ethics_consent_missing",
+            "label": "查体或检查前说明目的并征得同意",
+            "trigger_stage": "physical_exam",
+            "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+            "success_signal": "查体或检查前先说明目的并征得同意。",
+            "skill_type": "ethics_consent",
+            "status": "persistent",
+            "priority": 10,
+        }
+    ]
+    skill_context["humanistic_training_goals"] = list(skill_context["current_training_gaps"])
+
+    result = graph.invoke(
+        base_hint_state(
+            stage="physical_exam",
+            messages=[
+                {"role": "student", "content": "我想查一下腹部。"},
+                {"role": "tool", "content": "已记录查体申请。"},
+            ],
+            asked_questions=["什么时候开始疼的？"],
+            revealed_facts=["appendicitis_001.hf_01"],
+            active_skill_context=skill_context,
+        )
+    )
+
+    assert len(captured_requests) == 2
+    coach_base_hint = str(getattr(captured_requests[1], "base_hint"))
+    assert "查体或检查前先说明目的、可能不适并征得同意" in coach_base_hint
+    assert "腹痛迁移追问训练" in coach_base_hint
+    assert result["hint"] == coach_base_hint
+
+
 def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -> None:
     captured_requests: list[object] = []
 

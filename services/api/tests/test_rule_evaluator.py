@@ -267,7 +267,9 @@ def test_humanistic_sequence_check_rejects_late_consent_and_generates_gap() -> N
     trace = report["rubric_scores"]["eth_exam_consent"]["trace"]
     assert trace["timing_status"] == "late"
     assert "eth_exam_consent" in report["missed_items"]
-    assert any(gap["gap_type"] == "ethics_consent_missing" for gap in report["training_gaps"])
+    consent_gap = next(gap for gap in report["training_gaps"] if gap["gap_type"] == "ethics_consent_missing")
+    assert consent_gap["stage"] == "physical_exam"
+    assert consent_gap["trigger_stage"] == "physical_exam"
 
 
 def test_humanistic_missed_opportunity_records_unanswered_patient_emotion() -> None:
@@ -294,11 +296,14 @@ def test_humanistic_missed_opportunity_records_unanswered_patient_emotion() -> N
             "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
         }
     ]
-    assert any(
-        gap["gap_source"] == "missed_opportunity"
-        and gap["gap_type"] == "relationship_empathy_missing"
+    missed_gap = next(
+        gap
         for gap in report["training_gaps"]
+        if gap["gap_source"] == "missed_opportunity"
+        and gap["gap_type"] == "relationship_empathy_missing"
     )
+    assert missed_gap["stage"] == "history_taking"
+    assert missed_gap["trigger_stage"] == "history_taking"
 
 
 def test_humanistic_scoring_ledger_prevents_repeated_empathy_score() -> None:

@@ -609,8 +609,9 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     _emit_processing_progress(state, "case_context", status="active")
     case_step_started_at, case_step_started_perf = _start_processing_step()
     pedagogy_state = build_pedagogy_state(dict(state))
-    base_hint = _build_socratic_hint(state, pedagogy_state)
-    base_hint = _active_training_goal_hint(state, fallback=base_hint)
+    socratic_base_hint = _build_socratic_hint(state, pedagogy_state)
+    training_goal_hint = _active_training_goal_hint(state, fallback="")
+    base_hint = training_goal_hint or socratic_base_hint
     selected_skill_context: list[str] = []
     selected_skill_ids: list[str] = []
     routed_skill_context: dict[str, Any] | None = None
@@ -682,7 +683,12 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         turn_analysis = {**turn_analysis, "routed_skill_context": routed_skill_context}
     if router_turn_analysis:
         turn_analysis = {**turn_analysis, **router_turn_analysis}
-    coach_base_hint = _build_enabled_skill_hint(selected_skill_context) or base_hint
+    skill_base_hint = _build_enabled_skill_hint(selected_skill_context)
+    coach_base_hint = _compose_coach_base_hint(
+        skill_hint=skill_base_hint,
+        training_goal_hint=training_goal_hint,
+        fallback=base_hint,
+    )
     _emit_processing_progress(state, "coach", status="active")
     coach_step_started_at, coach_step_started_perf = _start_processing_step()
     try:
@@ -1445,6 +1451,16 @@ def _training_goal_action_text(goal: dict[str, Any]) -> str:
         return f"本轮训练目标：{success_signal}"
     label = str(goal.get("label") or "").strip()
     return f"本轮训练目标：{label}。" if label else ""
+
+
+def _compose_coach_base_hint(*, skill_hint: str, training_goal_hint: str, fallback: str) -> str:
+    normalized_skill_hint = skill_hint.strip()
+    normalized_training_goal_hint = training_goal_hint.strip()
+    if normalized_skill_hint and normalized_training_goal_hint:
+        if normalized_training_goal_hint in normalized_skill_hint:
+            return normalized_skill_hint
+        return f"{normalized_training_goal_hint}\n\n{normalized_skill_hint}"
+    return normalized_skill_hint or fallback
 
 
 def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
