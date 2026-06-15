@@ -1973,6 +1973,21 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                 }
             ],
             "frequent_turn_patterns": [],
+            "humanistic_communication": {
+                "report_count": 0,
+                "average_score": 0,
+                "max_score": 30,
+                "dimension_averages": [],
+                "frequent_gaps": [],
+                "frequent_missed_opportunities": [],
+                "anchor_candidate_count": 0,
+                "anchor_candidates_by_status": [],
+                "trend": {
+                    "previous_average_score": 0,
+                    "recent_average_score": 0,
+                    "delta": 0,
+                },
+            },
         }
     }
 

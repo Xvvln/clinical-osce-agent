@@ -463,6 +463,40 @@ type TrainingInsights = Readonly<{
   report_count: number;
   frequent_missed_items?: readonly unknown[];
   frequent_turn_patterns?: readonly unknown[];
+  humanistic_communication?: HumanisticCommunicationInsight;
+}>;
+
+type HumanisticCommunicationInsight = Readonly<{
+  report_count: number;
+  average_score: number;
+  max_score: number;
+  dimension_averages: readonly Readonly<{
+    dimension_id: string;
+    dimension_label: string;
+    average_score: number;
+  }>[];
+  frequent_gaps: readonly Readonly<{
+    gap_type: string;
+    label: string;
+    count: number;
+    missing_score_total: number;
+    skill_type: string;
+  }>[];
+  frequent_missed_opportunities: readonly Readonly<{
+    gap_type: string;
+    expected_response: string;
+    count: number;
+  }>[];
+  anchor_candidate_count: number;
+  anchor_candidates_by_status: readonly Readonly<{
+    status: string;
+    count: number;
+  }>[];
+  trend: Readonly<{
+    previous_average_score: number;
+    recent_average_score: number;
+    delta: number;
+  }>;
 }>;
 
 type ProcedureSimulationAuditItem = Readonly<{
@@ -2719,14 +2753,21 @@ function ProcedureAuditList({
 function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
   const missedItems = toInsightDisplayItems(data.insights?.frequent_missed_items, "未覆盖训练点");
   const turnPatterns = toInsightDisplayItems(data.insights?.frequent_turn_patterns, "训练模式");
+  const humanisticInsight = data.insights?.humanistic_communication;
 
   return (
     <div className="grid gap-4">
       <SectionIntro eyebrow="教学洞察" title="错误模式与训练重点" description="聚合训练报告中的高频问题，供 Skill 生成和教师复盘参考。" />
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard icon={<Stethoscope />} label="洞察 Session" value={formatCount(data.insights?.session_count ?? 0)} helper="进入统计的训练" />
         <MetricCard icon={<FileText />} label="洞察报告" value={formatCount(data.insights?.report_count ?? 0)} helper="进入统计的报告" />
         <MetricCard icon={<Brain />} label="错误模式" value={formatCount(data.insights?.frequent_turn_patterns?.length ?? 0)} helper="训练模式级聚合" />
+        <MetricCard
+          icon={<GraduationCap />}
+          label="人文均分"
+          value={`${formatInsightNumber(humanisticInsight?.average_score ?? 0)}/${formatInsightNumber(humanisticInsight?.max_score ?? 30)}`}
+          helper={`趋势 ${formatTrendDelta(humanisticInsight?.trend.delta ?? 0)}`}
+        />
       </div>
       <Card>
         <CardHeader>
@@ -2738,7 +2779,107 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
           <InsightList items={turnPatterns} title="训练模式" />
         </CardContent>
       </Card>
+      <HumanisticInsightsPanel insight={humanisticInsight} />
       <TeachingFocusList patterns={data.teachingFocusPatterns} />
+    </div>
+  );
+}
+
+function HumanisticInsightsPanel({ insight }: Readonly<{ insight?: HumanisticCommunicationInsight }>) {
+  const dimensionItems = insight?.dimension_averages ?? [];
+  const gapItems = insight?.frequent_gaps ?? [];
+  const missedOpportunityItems = insight?.frequent_missed_opportunities ?? [];
+  const candidateStatusItems = insight?.anchor_candidates_by_status ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>人文沟通能力</CardTitle>
+          <CardDescription>聚合叙事医学、沟通技巧、医学伦理和关系建立的班级训练信号。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(insight?.report_count ?? 0)} 份报告</Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <MiniStat label="人文沟通均分" value={`${formatInsightNumber(insight?.average_score ?? 0)}/${formatInsightNumber(insight?.max_score ?? 30)}`} />
+          <MiniStat label="近期变化" value={formatTrendDelta(insight?.trend.delta ?? 0)} />
+          <MiniStat label="锚点候选" value={formatCount(insight?.anchor_candidate_count ?? 0)} />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold">维度均分</h3>
+              <Badge variant="muted">{formatCount(dimensionItems.length)} 维</Badge>
+            </div>
+            {dimensionItems.length > 0 ? (
+              <div className="mt-4 grid gap-3">
+                {dimensionItems.map((item) => (
+                  <div className="rounded-2xl border border-[#F0E8DC] bg-[#FAF9F5] p-3" key={item.dimension_id}>
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="font-medium">{item.dimension_label}</span>
+                      <span className="text-[#AE5630]">{formatInsightNumber(item.average_score)} 分</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-[#EFE7DA]">
+                      <div className="h-2 rounded-full bg-[#AE5630]" style={{ width: `${Math.min(100, Math.max(0, (item.average_score / 10) * 100))}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyText>暂无人文沟通维度统计。</EmptyText>
+            )}
+          </div>
+          <div className="grid gap-4">
+            <HumanisticInsightList
+              items={gapItems.map((item) => ({
+                count: item.count,
+                meta: `累计缺口 ${formatCount(item.missing_score_total)} 分`,
+                title: item.label || item.gap_type,
+              }))}
+              title="常见人文沟通缺口"
+            />
+            <HumanisticInsightList
+              items={missedOpportunityItems.map((item) => ({
+                count: item.count,
+                meta: item.expected_response,
+                title: getHumanisticGapLabel(item.gap_type),
+              }))}
+              title="反复错失机会"
+            />
+          </div>
+        </div>
+        <CompactList
+          items={candidateStatusItems.map((item) => `${getAnchorCandidateStatusLabel(item.status)} ${formatCount(item.count)}`)}
+          title="锚点候选沉淀"
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function HumanisticInsightList({ items, title }: Readonly<{ items: readonly Pick<InsightDisplayItem, "count" | "meta" | "title">[]; title: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold">{title}</h3>
+        <Badge variant="muted">{formatCount(items.length)} 项</Badge>
+      </div>
+      {items.length > 0 ? (
+        <div className="mt-4 grid gap-3">
+          {items.slice(0, 5).map((item, index) => (
+            <article className="rounded-2xl border border-[#F0E8DC] bg-[#FAF9F5] p-4" key={`${item.title}-${index}`}>
+              <div className="flex items-start justify-between gap-3">
+                <h4 className="text-sm font-semibold leading-6">{item.title}</h4>
+                <Badge variant="warning">{formatCount(item.count)} 次</Badge>
+              </div>
+              {item.meta ? <p className="mt-2 text-xs leading-5 text-[#6F6257]">{item.meta}</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyText>暂无聚合记录。</EmptyText>
+      )}
     </div>
   );
 }
@@ -4238,6 +4379,41 @@ function formatRatioMetric(value: number | undefined): string {
     return "-";
   }
   return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(3);
+}
+
+function formatInsightNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  return Number.isInteger(value) ? formatCount(value) : value.toFixed(1);
+}
+
+function formatTrendDelta(value: number): string {
+  if (!Number.isFinite(value) || value === 0) {
+    return "持平";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${formatInsightNumber(value)} 分`;
+}
+
+function getHumanisticGapLabel(gapType: string): string {
+  const labels: Record<string, string> = {
+    narrative_patient_perspective_missing: "未询问患者视角",
+    narrative_life_impact_missing: "未询问生活影响",
+    communication_summary_missing: "缺少阶段性总结",
+    ethics_consent_missing: "查体/检查前同意缺失",
+    ethics_privacy_comfort_missing: "隐私和舒适度说明不足",
+    relationship_empathy_missing: "患者担忧后缺少共情回应",
+  };
+  return labels[gapType] ?? (gapType || "人文沟通缺口");
+}
+
+function getAnchorCandidateStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    candidate: "待整理",
+    reviewed: "已复核",
+  };
+  return labels[status] ?? (status || "候选");
 }
 
 function getAgentLabel(agentId: string): string {

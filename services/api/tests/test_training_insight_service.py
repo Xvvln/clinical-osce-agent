@@ -2,6 +2,23 @@ from app.services.training_event_store import TrainingEventStore
 from app.services.training_insight_service import TrainingInsightService
 
 
+EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT = {
+    "report_count": 0,
+    "average_score": 0,
+    "max_score": 30,
+    "dimension_averages": [],
+    "frequent_gaps": [],
+    "frequent_missed_opportunities": [],
+    "anchor_candidate_count": 0,
+    "anchor_candidates_by_status": [],
+    "trend": {
+        "previous_average_score": 0,
+        "recent_average_score": 0,
+        "delta": 0,
+    },
+}
+
+
 class BatchOnlyTrainingEventStore:
     def __init__(self, events_by_session: dict[str, list[dict[str, object]]]) -> None:
         self.events_by_session = events_by_session
@@ -43,6 +60,129 @@ def test_training_insight_service_batch_loads_events_for_large_admin_summaries()
     assert store.batch_calls == [["session_one", "session_two"]]
     assert insights["session_count"] == 2
     assert insights["report_count"] == 1
+
+
+def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_path) -> None:
+    database_path = tmp_path / "training_events.sqlite3"
+    store = TrainingEventStore(database_path)
+    store.append_event(
+        session_id="session_one",
+        case_id="appendicitis_001",
+        student_id="student_demo",
+        event_type="report_generated",
+        payload={
+            "report_id": "session_one_report",
+            "score_groups": {"humanistic_communication": {"score": 8, "max_score": 30}},
+            "dimension_scores": {
+                "narrative_medicine": 2,
+                "communication_skill": 3,
+                "medical_ethics": 1,
+                "relationship_building": 2,
+            },
+            "training_gaps": [
+                {
+                    "dimension_id": "medical_ethics",
+                    "gap_type": "ethics_consent_missing",
+                    "label": "查体或检查前说明目的并征得同意",
+                    "missing_score": 3,
+                    "skill_type": "ethics_consent",
+                }
+            ],
+            "missed_opportunities": [
+                {
+                    "gap_type": "relationship_empathy_missing",
+                    "expected_response": "患者表达担忧后，应先回应情绪。",
+                }
+            ],
+            "humanistic_anchor_candidates": [
+                {"status": "candidate"},
+                {"status": "reviewed"},
+            ],
+        },
+    )
+    store.append_event(
+        session_id="session_two",
+        case_id="appendicitis_001",
+        student_id="student_demo",
+        event_type="report_generated",
+        payload={
+            "report_id": "session_two_report",
+            "score_groups": {"humanistic_communication": {"score": 14, "max_score": 30}},
+            "dimension_scores": {
+                "narrative_medicine": 5,
+                "communication_skill": 4,
+                "medical_ethics": 2,
+                "relationship_building": 3,
+            },
+            "training_gaps": [
+                {
+                    "dimension_id": "medical_ethics",
+                    "gap_type": "ethics_consent_missing",
+                    "label": "查体或检查前说明目的并征得同意",
+                    "missing_score": 2,
+                    "skill_type": "ethics_consent",
+                },
+                {
+                    "dimension_id": "relationship_building",
+                    "gap_type": "relationship_empathy_missing",
+                    "label": "患者表达担忧后缺少共情回应",
+                    "missing_score": 2,
+                    "skill_type": "relationship_repair",
+                },
+            ],
+            "missed_opportunities": [],
+            "humanistic_anchor_candidates": [
+                {"status": "reviewed"},
+            ],
+        },
+    )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_one", "session_two"])
+
+    assert insights["humanistic_communication"] == {
+        "report_count": 2,
+        "average_score": 11,
+        "max_score": 30,
+        "dimension_averages": [
+            {"dimension_id": "narrative_medicine", "dimension_label": "叙事医学", "average_score": 3.5},
+            {"dimension_id": "communication_skill", "dimension_label": "沟通技巧", "average_score": 3.5},
+            {"dimension_id": "relationship_building", "dimension_label": "关系建立", "average_score": 2.5},
+            {"dimension_id": "medical_ethics", "dimension_label": "医学伦理", "average_score": 1.5},
+        ],
+        "frequent_gaps": [
+            {
+                "gap_type": "ethics_consent_missing",
+                "label": "查体或检查前说明目的并征得同意",
+                "count": 2,
+                "missing_score_total": 5,
+                "skill_type": "ethics_consent",
+            },
+            {
+                "gap_type": "relationship_empathy_missing",
+                "label": "患者表达担忧后缺少共情回应",
+                "count": 1,
+                "missing_score_total": 2,
+                "skill_type": "relationship_repair",
+            },
+        ],
+        "frequent_missed_opportunities": [
+            {
+                "gap_type": "relationship_empathy_missing",
+                "expected_response": "患者表达担忧后，应先回应情绪。",
+                "count": 1,
+            }
+        ],
+        "anchor_candidate_count": 3,
+        "anchor_candidates_by_status": [
+            {"status": "reviewed", "count": 2},
+            {"status": "candidate", "count": 1},
+        ],
+        "trend": {
+            "previous_average_score": 8,
+            "recent_average_score": 14,
+            "delta": 6,
+        },
+    }
 
 
 def test_training_insight_service_summarizes_frequent_missed_items_from_report_events(tmp_path) -> None:
@@ -188,6 +328,7 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
             },
         ],
         "frequent_turn_patterns": [],
+        "humanistic_communication": EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT,
     }
 
 
