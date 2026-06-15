@@ -117,8 +117,10 @@ class ScoreTrace(BaseModel):
     next_training_action: str | None = None
     match_method: str | None = None
     semantic_score: float | None = None
+    anchor_id: str | None = None
     positive_anchor: str | None = None
     negative_anchor: str | None = None
+    candidate_evidence: str | None = None
     anchor_bank_version: str | None = None
     timing_status: str | None = None
     required_before_action: str | None = None

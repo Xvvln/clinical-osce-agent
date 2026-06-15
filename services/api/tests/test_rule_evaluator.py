@@ -378,6 +378,33 @@ def test_humanistic_semantic_boundary_uses_default_reviewer(monkeypatch) -> None
     assert len(reviewer.requests) == 1
 
 
+def test_humanistic_boundary_review_records_anchor_candidate() -> None:
+    embedding_client = FakeHumanisticEmbeddingClient()
+    reviewer = BoundaryRejectingReviewer()
+    session = OsceSession(
+        session_id="session_humanistic_anchor_candidate",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "student", "content": "也许需要了解你的想法。"},
+        ],
+    )
+
+    report = evaluate_session_rules(
+        session,
+        humanistic_embedding_client=embedding_client,
+        humanistic_semantic_reviewer=reviewer,
+    )
+
+    candidate = report["humanistic_anchor_candidates"][0]
+    assert candidate["rubric_item_id"] == "nm_patient_concern"
+    assert candidate["anchor_id"] == "narrative_patient_concern"
+    assert candidate["candidate_text"] == "也许需要了解你的想法。"
+    assert candidate["review_status"] == "rejected"
+    assert candidate["status"] == "reviewed"
+
+
 def test_openai_humanistic_semantic_reviewer_sends_boundary_payload() -> None:
     fake_client = FakeHumanisticReviewClient()
     reviewer = OpenAICompatibleHumanisticSemanticReviewer(object(), client=fake_client)

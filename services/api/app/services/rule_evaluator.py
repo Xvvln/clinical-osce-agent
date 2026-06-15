@@ -56,6 +56,7 @@ class RuleEvaluationReport:
     scoring_ledger: dict[str, Any]
     missed_opportunities: list[dict[str, Any]]
     training_gaps: list[dict[str, Any]]
+    humanistic_anchor_candidates: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +76,7 @@ class RuleEvaluationReport:
             "scoring_ledger": self.scoring_ledger,
             "missed_opportunities": self.missed_opportunities,
             "training_gaps": self.training_gaps,
+            "humanistic_anchor_candidates": self.humanistic_anchor_candidates,
         }
 
 
@@ -154,6 +156,7 @@ def evaluate_session_rules(
         scoring_ledger=scoring_ledger.to_dict(),
         missed_opportunities=missed_opportunities,
         training_gaps=training_gaps,
+        humanistic_anchor_candidates=_humanistic_anchor_candidates(dimension_traces),
     ).to_dict()
 
 
@@ -317,8 +320,10 @@ def _evaluate_semantic_anchor(
             [event.content] if score else [],
             match_method=str(result["match_method"]),
             semantic_score=float(result["semantic_score"]),
+            anchor_id=anchor_id,
             positive_anchor=result.get("positive_anchor"),
             negative_anchor=result.get("negative_anchor"),
+            candidate_evidence=event.content,
             anchor_bank_version=str(result.get("anchor_bank_version") or ""),
             llm_review_status=result.get("llm_review_status"),
             matched_turn_index=event.turn_index if score else None,
@@ -362,8 +367,10 @@ def _evaluate_sequence_check(
                     [event.content],
                     match_method="sequence_check",
                     semantic_score=float(result["semantic_score"]),
+                    anchor_id=str(spec["anchor_id"]),
                     positive_anchor=result.get("positive_anchor"),
                     negative_anchor=result.get("negative_anchor"),
+                    candidate_evidence=event.content,
                     anchor_bank_version=str(result.get("anchor_bank_version") or ""),
                     llm_review_status=result.get("llm_review_status"),
                     timing_status="before_action",
@@ -382,8 +389,10 @@ def _evaluate_sequence_check(
                 [event.content],
                 match_method="sequence_check",
                 semantic_score=float(result["semantic_score"]),
+                anchor_id=str(spec["anchor_id"]),
                 positive_anchor=result.get("positive_anchor"),
                 negative_anchor=result.get("negative_anchor"),
+                candidate_evidence=event.content,
                 anchor_bank_version=str(result.get("anchor_bank_version") or ""),
                 llm_review_status=result.get("llm_review_status"),
                 timing_status="late",
@@ -439,8 +448,10 @@ def _evaluate_triggered_response(
                 [event.content],
                 match_method="triggered_response",
                 semantic_score=float(result["semantic_score"]),
+                anchor_id=str(spec["anchor_id"]),
                 positive_anchor=result.get("positive_anchor"),
                 negative_anchor=result.get("negative_anchor"),
+                candidate_evidence=event.content,
                 anchor_bank_version=str(result.get("anchor_bank_version") or ""),
                 llm_review_status=result.get("llm_review_status"),
                 matched_turn_index=event.turn_index,
@@ -642,6 +653,36 @@ def _training_gap_from_missed_opportunity(missed_opportunity: dict[str, Any]) ->
         "source_trace": dict(missed_opportunity),
         "recovered": False,
     }
+
+
+def _humanistic_anchor_candidates(dimension_traces: dict[str, list[ScoreTrace]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for dimension_id, traces in dimension_traces.items():
+        if dimension_id not in HUMANISTIC_DIMENSIONS:
+            continue
+        for trace in traces:
+            if not trace.anchor_id or not trace.llm_review_status:
+                continue
+            candidate_text = trace.candidate_evidence or (trace.matched_evidence[0] if trace.matched_evidence else "")
+            if not candidate_text:
+                continue
+            candidates.append(
+                {
+                    "candidate_id": f"{trace.rubric_item_id}:{trace.anchor_id}:{trace.matched_turn_index or 'unknown'}",
+                    "dimension_id": dimension_id,
+                    "rubric_item_id": trace.rubric_item_id,
+                    "anchor_id": trace.anchor_id,
+                    "candidate_text": candidate_text,
+                    "semantic_score": trace.semantic_score,
+                    "review_status": trace.llm_review_status,
+                    "status": "candidate" if trace.llm_review_status == "uncertain" else "reviewed",
+                    "positive_anchor": trace.positive_anchor,
+                    "negative_anchor": trace.negative_anchor,
+                    "match_method": trace.match_method,
+                    "anchor_bank_version": trace.anchor_bank_version,
+                }
+            )
+    return candidates
 
 
 def _gap_evidence_summary(trace: ScoreTrace) -> str:
