@@ -4,6 +4,11 @@ from pathlib import Path
 import yaml
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse, ScoreTrace
+from app.services.humanistic_evaluator import (
+    HumanisticSemanticReviewResponse,
+    OpenAICompatibleHumanisticSemanticReviewer,
+    SemanticReviewRequest,
+)
 from app.services.osce_session_service import OsceSession
 from app.services.rule_evaluator import evaluate_session_rules, score_rubric_item
 
@@ -28,6 +33,24 @@ class BoundaryAcceptingReviewer:
     def review(self, request: object) -> str:
         self.requests.append(request)
         return "accepted"
+
+
+class BoundaryRejectingReviewer:
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    def review(self, request: object) -> str:
+        self.requests.append(request)
+        return "rejected"
+
+
+class FakeHumanisticReviewClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs: object) -> HumanisticSemanticReviewResponse:
+        self.calls.append(dict(kwargs))
+        return HumanisticSemanticReviewResponse(status="accepted", rationale="语义覆盖患者视角。")
 
 
 def _fake_embedding_vector(text: str) -> list[float]:
@@ -328,6 +351,59 @@ def test_humanistic_semantic_boundary_calls_reviewer_and_records_status() -> Non
     assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
     assert trace["llm_review_status"] == "accepted"
     assert len(reviewer.requests) == 1
+
+
+def test_humanistic_semantic_boundary_uses_default_reviewer(monkeypatch) -> None:
+    embedding_client = FakeHumanisticEmbeddingClient()
+    reviewer = BoundaryRejectingReviewer()
+    monkeypatch.setattr(
+        "app.services.rule_evaluator.create_default_humanistic_semantic_reviewer",
+        lambda: reviewer,
+    )
+    session = OsceSession(
+        session_id="session_default_humanistic_reviewer",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "student", "content": "也许需要了解你的想法。"},
+        ],
+    )
+
+    report = evaluate_session_rules(session, humanistic_embedding_client=embedding_client)
+
+    trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert report["rubric_scores"]["nm_patient_concern"]["score"] == 0
+    assert trace["llm_review_status"] == "rejected"
+    assert len(reviewer.requests) == 1
+
+
+def test_openai_humanistic_semantic_reviewer_sends_boundary_payload() -> None:
+    fake_client = FakeHumanisticReviewClient()
+    reviewer = OpenAICompatibleHumanisticSemanticReviewer(object(), client=fake_client)
+
+    status = reviewer.review(
+        SemanticReviewRequest(
+            text="也许需要了解你的想法。",
+            anchor_id="narrative_patient_concern",
+            semantic_score=0.29,
+            threshold=0.28,
+            positive_anchor="你现在最担心的是什么？",
+            negative_anchor="这个不重要，你不用想太多。",
+            match_method="embedding_anchor",
+        )
+    )
+
+    assert status == "accepted"
+    call = fake_client.calls[0]
+    assert call["response_model"] is HumanisticSemanticReviewResponse
+    assert call["temperature"] == 0.0
+    payload = call["payload"]
+    assert isinstance(payload, dict)
+    assert payload["student_text"] == "也许需要了解你的想法。"
+    assert payload["anchor_id"] == "narrative_patient_concern"
+    assert payload["match_method"] == "embedding_anchor"
+    assert "不评价诊断正确性" in str(call["system_prompt"])
 
 
 def test_humanistic_sequence_check_rejects_late_consent_and_generates_gap() -> None:

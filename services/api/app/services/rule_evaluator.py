@@ -16,6 +16,7 @@ from app.services.humanistic_evaluator import (
     TrainingEvent,
     build_humanistic_embedding_client_from_environment,
     build_training_event_stream,
+    create_default_humanistic_semantic_reviewer,
     detect_missed_opportunities,
     event_key,
     load_anchor_bank,
@@ -93,6 +94,8 @@ def evaluate_session_rules(
     anchor_bank = load_anchor_bank()
     if humanistic_embedding_client is None:
         humanistic_embedding_client = build_humanistic_embedding_client_from_environment()
+    if humanistic_semantic_reviewer is None:
+        humanistic_semantic_reviewer = create_default_humanistic_semantic_reviewer()
     semantic_matcher = SemanticAnchorMatcher(
         anchor_bank,
         embedding_client=humanistic_embedding_client,

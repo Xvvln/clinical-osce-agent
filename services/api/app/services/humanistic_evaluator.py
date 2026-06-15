@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 import yaml
+from pydantic import BaseModel, Field
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 ANCHOR_BANK_PATH = ROOT_DIR / "data" / "humanistic_anchor_bank.yaml"
@@ -67,6 +68,46 @@ class SemanticReviewRequest:
 class HumanisticSemanticReviewer(Protocol):
     def review(self, request: SemanticReviewRequest) -> str:
         ...
+
+
+class HumanisticSemanticReviewResponse(BaseModel):
+    status: str = Field(..., description="accepted, rejected, or uncertain")
+    rationale: str = Field(default="", max_length=120)
+
+
+class OpenAICompatibleHumanisticSemanticReviewer:
+    def __init__(self, settings: Any, *, client: Any | None = None) -> None:
+        if client is None:
+            from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient
+
+            client = OpenAICompatibleChatClient(settings)
+        self._client = client
+
+    def review(self, request: SemanticReviewRequest) -> str:
+        response = self._client.complete_json(
+            system_prompt=(
+                "你是医学教育 OSCE 人文沟通评分的边界样本复核器。"
+                "只判断学生表达是否语义上覆盖目标锚点，不评价诊断正确性，不新增病例事实。"
+                "只输出 JSON：status 取 accepted、rejected 或 uncertain；rationale 不超过 120 字。"
+            ),
+            payload={
+                "student_text": request.text,
+                "anchor_id": request.anchor_id,
+                "semantic_score": request.semantic_score,
+                "threshold": request.threshold,
+                "positive_anchor": request.positive_anchor,
+                "negative_anchor": request.negative_anchor,
+                "match_method": request.match_method,
+                "decision_boundary": (
+                    "accepted 表示语义覆盖目标人文沟通能力；"
+                    "rejected 表示只是表面相似或方向错误；"
+                    "uncertain 表示需要人工复核。"
+                ),
+            },
+            response_model=HumanisticSemanticReviewResponse,
+            temperature=0.0,
+        )
+        return _normalized_review_status(response.status)
 
 
 class SemanticAnchorMatcher:
@@ -237,6 +278,23 @@ def build_humanistic_embedding_client_from_environment() -> HumanisticEmbeddingC
         return None
 
 
+def create_default_humanistic_semantic_reviewer() -> HumanisticSemanticReviewer | None:
+    try:
+        from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
+        from app.services.runtime_model_config_store import runtime_model_config_store
+
+        runtime_openai_settings = runtime_model_config_store.get_openai_compatible_settings()
+        if runtime_openai_settings is not None:
+            return OpenAICompatibleHumanisticSemanticReviewer(runtime_openai_settings)
+
+        openai_settings = OpenAICompatibleSettings()
+        if openai_settings.is_configured:
+            return OpenAICompatibleHumanisticSemanticReviewer(openai_settings)
+    except Exception as exc:
+        LOGGER.warning("Humanistic semantic reviewer initialization failed: %s", exc)
+    return None
+
+
 def _lexical_anchor_match(
     text: str,
     anchor_id: str,
@@ -303,19 +361,23 @@ def _apply_boundary_review(
     semantic_score = float(result.get("semantic_score") or 0.0)
     if abs(semantic_score - threshold) > review_margin:
         return result
-    status = _normalized_review_status(
-        reviewer.review(
-            SemanticReviewRequest(
-                text=text,
-                anchor_id=anchor_id,
-                semantic_score=semantic_score,
-                threshold=threshold,
-                positive_anchor=result.get("positive_anchor"),
-                negative_anchor=result.get("negative_anchor"),
-                match_method=str(result.get("match_method") or ""),
+    try:
+        status = _normalized_review_status(
+            reviewer.review(
+                SemanticReviewRequest(
+                    text=text,
+                    anchor_id=anchor_id,
+                    semantic_score=semantic_score,
+                    threshold=threshold,
+                    positive_anchor=result.get("positive_anchor"),
+                    negative_anchor=result.get("negative_anchor"),
+                    match_method=str(result.get("match_method") or ""),
+                )
             )
         )
-    )
+    except Exception as exc:
+        LOGGER.warning("Humanistic semantic boundary review failed: %s", exc)
+        status = "uncertain"
     result["llm_review_status"] = status
     if status == "accepted":
         result["matched"] = True
