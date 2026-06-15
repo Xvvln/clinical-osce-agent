@@ -943,6 +943,8 @@ def evaluation_node(
             requested_tests=state.get("requested_tests", []),
             final_submission=state.get("final_submission"),
             revealed_facts=state.get("revealed_facts", []),
+            messages=state.get("messages", []),
+            action_timeline=state.get("action_timeline", []),
         ),
         llm_scorer=llm_scorer,
     )

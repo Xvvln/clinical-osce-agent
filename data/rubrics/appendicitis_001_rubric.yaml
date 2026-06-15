@@ -5,12 +5,12 @@ total_score: 100
 schema_version: '1.1'
 dimensions:
 - dimension_id: history_taking
-  weight: 25
+  weight: 18
   scoring_mode: rule
   items:
   - item_id: ht_onset
     description: 追问起病时间
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: intent_keyword
       spec:
@@ -25,7 +25,7 @@ dimensions:
     - appendicitis_001.hf_01
   - item_id: ht_migration
     description: 追问疼痛部位及转移特征
-    max_score: 6
+    max_score: 4
     match_rule:
       kind: intent_keyword
       spec:
@@ -40,7 +40,7 @@ dimensions:
     - appendicitis_001.hf_02
   - item_id: ht_character
     description: 追问疼痛性质
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: intent_keyword
       spec:
@@ -69,7 +69,7 @@ dimensions:
     - appendicitis_001.hf_04
   - item_id: ht_associated_gi
     description: 追问恶心呕吐腹泻
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: intent_keyword
       spec:
@@ -84,7 +84,7 @@ dimensions:
     - appendicitis_001.hf_05
   - item_id: ht_associated_fever
     description: 追问发热
-    max_score: 2
+    max_score: 1
     match_rule:
       kind: intent_keyword
       spec:
@@ -125,7 +125,7 @@ dimensions:
     - appendicitis_001.hf_07
   - item_id: ht_ice
     description: 询问患者想法担忧与期望（ICE）
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: intent_keyword
       spec:
@@ -140,12 +140,12 @@ dimensions:
     evidence_expected:
     - appendicitis_001.hf_10
 - dimension_id: physical_exam
-  weight: 15
+  weight: 10
   scoring_mode: rule
   items:
   - item_id: pe_vital_temp
     description: 测量体温
-    max_score: 2
+    max_score: 1
     match_rule:
       kind: exam_code
       spec:
@@ -155,7 +155,7 @@ dimensions:
     - vital.temperature
   - item_id: pe_abd_inspection
     description: 腹部视诊
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: exam_code
       spec:
@@ -165,7 +165,7 @@ dimensions:
     - abd.inspection
   - item_id: pe_tenderness
     description: 检查腹部压痛
-    max_score: 5
+    max_score: 3
     match_rule:
       kind: exam_code
       spec:
@@ -175,7 +175,7 @@ dimensions:
     - abd.palpation.tenderness
   - item_id: pe_rebound
     description: 检查反跳痛
-    max_score: 5
+    max_score: 4
     match_rule:
       kind: exam_code
       spec:
@@ -184,12 +184,12 @@ dimensions:
     evidence_expected:
     - abd.palpation.rebound
 - dimension_id: auxiliary_test
-  weight: 15
+  weight: 10
   scoring_mode: rule
   items:
   - item_id: ax_cbc
     description: 申请血常规
-    max_score: 5
+    max_score: 3
     match_rule:
       kind: test_code
       spec:
@@ -200,7 +200,7 @@ dimensions:
     - lab.cbc
   - item_id: ax_crp
     description: 申请 CRP
-    max_score: 3
+    max_score: 2
     match_rule:
       kind: test_code
       spec:
@@ -211,7 +211,7 @@ dimensions:
     - lab.crp
   - item_id: ax_us
     description: 申请腹部超声
-    max_score: 5
+    max_score: 4
     match_rule:
       kind: test_code
       spec:
@@ -222,7 +222,7 @@ dimensions:
     - img.abd_us
   - item_id: ax_ua
     description: 合理申请尿常规排除输尿管结石
-    max_score: 2
+    max_score: 1
     match_rule:
       kind: test_code
       spec:
@@ -232,12 +232,12 @@ dimensions:
     evidence_expected:
     - lab.urinalysis
 - dimension_id: main_diagnosis
-  weight: 15
+  weight: 10
   scoring_mode: rule
   items:
   - item_id: dx_main
     description: 主要诊断命中急性阑尾炎
-    max_score: 15
+    max_score: 10
     match_rule:
       kind: diagnosis_concept
       spec:
@@ -249,12 +249,12 @@ dimensions:
         icd10_hint: K35
     evidence_expected: []
 - dimension_id: differential_diagnosis
-  weight: 15
+  weight: 10
   scoring_mode: rule
   items:
   - item_id: dxd_urolith
     description: 提出输尿管结石并说明排除依据
-    max_score: 5
+    max_score: 4
     match_rule:
       kind: diagnosis_concept
       spec:
@@ -267,7 +267,7 @@ dimensions:
     - appendicitis_001.rp_05
   - item_id: dxd_crohn
     description: 提出克罗恩病并说明排除依据
-    max_score: 5
+    max_score: 3
     match_rule:
       kind: diagnosis_concept
       spec:
@@ -279,7 +279,7 @@ dimensions:
     evidence_expected: []
   - item_id: dxd_gastroenteritis
     description: 提出急性胃肠炎并说明排除依据
-    max_score: 5
+    max_score: 3
     match_rule:
       kind: diagnosis_concept
       spec:
@@ -292,12 +292,12 @@ dimensions:
     evidence_expected:
     - appendicitis_001.rp_06
 - dimension_id: reasoning
-  weight: 15
+  weight: 12
   scoring_mode: llm
   items:
   - item_id: rs_support
     description: 推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）
-    max_score: 10
+    max_score: 8
     match_rule:
       kind: reasoning_coverage
       spec:
@@ -315,12 +315,197 @@ dimensions:
     - appendicitis_001.rp_04
   - item_id: rs_exclude
     description: 推理表达覆盖关键排除依据
-    max_score: 5
+    max_score: 4
     match_rule:
       kind: llm_rubric
       spec:
         prompt_id: reasoning_exclude_v1
-        max_score: 5
+        max_score: 4
     evidence_expected:
     - appendicitis_001.rp_05
     - appendicitis_001.rp_06
+- dimension_id: narrative_medicine
+  weight: 8
+  scoring_mode: hybrid
+  items:
+  - item_id: nm_patient_concern
+    description: 询问患者最担心的问题或就诊期待
+    max_score: 3
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: narrative_patient_concern
+    gap_type: narrative_patient_perspective_missing
+    stage: history_taking
+    next_training_action: 下一轮问诊阶段主动询问患者最担心什么或希望解决什么。
+    skill_type: narrative_perspective
+  - item_id: nm_life_impact
+    description: 询问症状对生活、工作或睡眠的影响
+    max_score: 3
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: narrative_life_impact
+    gap_type: narrative_life_impact_missing
+    stage: history_taking
+    next_training_action: 下一轮补问症状对生活、工作、学习或睡眠的影响。
+    skill_type: narrative_perspective
+  - item_id: nm_patient_perspective_reflection
+    description: 复述或确认患者视角
+    max_score: 2
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: narrative_patient_perspective_reflection
+    gap_type: narrative_patient_perspective_reflection_missing
+    stage: history_taking
+    next_training_action: 下一轮用一句话复述患者担忧和关注点，并请患者确认。
+    skill_type: narrative_perspective
+- dimension_id: communication_skill
+  weight: 10
+  scoring_mode: hybrid
+  items:
+  - item_id: comm_intro_purpose
+    description: 自我介绍并说明问诊目的
+    max_score: 2
+    match_rule:
+      kind: dialogue_act
+      spec:
+        act_id: intro_purpose
+        any_of_keywords:
+        - 我是
+        - 接诊
+        - 了解一下
+    gap_type: communication_intro_missing
+    stage: history_taking
+    next_training_action: 下一轮开场先完成自我介绍并说明本轮问诊目的。
+    skill_type: communication_structure
+  - item_id: comm_open_question
+    description: 使用开放式问题引导患者叙述
+    max_score: 2
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: communication_open_question
+    gap_type: communication_open_question_missing
+    stage: history_taking
+    next_training_action: 下一轮开场先用开放式问题让患者完整描述主诉。
+    skill_type: communication_structure
+  - item_id: comm_summary_check
+    description: 阶段转换前总结并确认理解
+    max_score: 3
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: communication_summary_check
+    gap_type: communication_summary_missing
+    stage: history_taking
+    next_training_action: 下一轮进入查体或检查前先总结已获得信息并请患者确认。
+    skill_type: communication_structure
+  - item_id: comm_confirm_understanding
+    description: 解释后确认患者是否理解
+    max_score: 3
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: communication_confirm_understanding
+    gap_type: communication_confirm_understanding_missing
+    stage: diagnosis_submission
+    next_training_action: 下一轮解释判断或检查目的后，确认患者是否理解。
+    skill_type: communication_structure
+- dimension_id: medical_ethics
+  weight: 7
+  scoring_mode: hybrid
+  items:
+  - item_id: eth_exam_consent
+    description: 查体或检查前说明目的并征得同意
+    max_score: 3
+    match_rule:
+      kind: sequence_check
+      spec:
+        anchor_id: ethics_exam_consent
+        action_types:
+        - physical_exam_requested
+        - auxiliary_test_requested
+        window_student_turns: 2
+        required_keywords_any:
+        - 可以吗
+        - 同意
+        - 方便
+        - 介意
+        - 愿意
+        - 允许
+        - 能不能
+        - 可不可以
+    gap_type: ethics_consent_missing
+    stage: physical_exam
+    next_training_action: 下一轮查体或检查前先说明目的、可能不适并征得同意。
+    skill_type: ethics_consent
+    ethics_principle: informed_consent
+  - item_id: eth_privacy_comfort
+    description: 关注查体隐私和患者舒适度
+    max_score: 2
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: ethics_privacy_comfort
+    gap_type: ethics_privacy_comfort_missing
+    stage: physical_exam
+    next_training_action: 下一轮查体前补充隐私保护和不适反馈说明。
+    skill_type: ethics_consent
+    ethics_principle: confidentiality
+  - item_id: eth_respect_autonomy
+    description: 解释选择并尊重患者自主
+    max_score: 2
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: ethics_respect_autonomy
+    gap_type: ethics_autonomy_missing
+    stage: auxiliary_test
+    next_training_action: 下一轮说明检查选择理由，并邀请患者表达顾虑。
+    skill_type: ethics_consent
+    ethics_principle: patient_first
+- dimension_id: relationship_building
+  weight: 5
+  scoring_mode: hybrid
+  items:
+  - item_id: rel_empathy_response
+    description: 患者表达担忧后给予共情回应
+    max_score: 2
+    match_rule:
+      kind: triggered_response
+      spec:
+        anchor_id: relationship_empathy_response
+        trigger_keywords:
+        - 担心
+        - 害怕
+        - 焦虑
+        - 怕
+        response_window_turns: 2
+    gap_type: relationship_empathy_missing
+    stage: history_taking
+    next_training_action: 下一轮患者表达担忧后，先回应情绪再继续医学问诊。
+    skill_type: relationship_repair
+  - item_id: rel_supportive_language
+    description: 使用支持性语言稳定患者情绪
+    max_score: 1
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: relationship_supportive_language
+    gap_type: relationship_supportive_language_missing
+    stage: history_taking
+    next_training_action: 下一轮用简短支持性语言说明会一起处理问题。
+    skill_type: relationship_repair
+  - item_id: rel_collaborative_expression
+    description: 用合作式表达建立共同决策关系
+    max_score: 2
+    match_rule:
+      kind: semantic_anchor
+      spec:
+        anchor_id: relationship_collaborative_expression
+    gap_type: relationship_collaborative_expression_missing
+    stage: history_taking
+    next_training_action: 下一轮用“我们一起”式表达说明评估计划。
+    skill_type: relationship_repair

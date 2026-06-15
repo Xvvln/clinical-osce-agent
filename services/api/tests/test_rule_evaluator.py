@@ -48,21 +48,29 @@ def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
 
     assert report["session_id"] == "session_demo"
     assert report["case_id"] == "appendicitis_001"
-    assert report["total_score"] == 32
+    assert report["total_score"] == 22
     assert report["dimension_scores"] == {
-        "history_taking": 3,
-        "physical_exam": 5,
-        "auxiliary_test": 5,
-        "main_diagnosis": 15,
+        "history_taking": 2,
+        "physical_exam": 4,
+        "auxiliary_test": 3,
+        "main_diagnosis": 10,
         "differential_diagnosis": 0,
-        "reasoning": 4,
+        "reasoning": 3,
+        "narrative_medicine": 0,
+        "communication_skill": 0,
+        "medical_ethics": 0,
+        "relationship_building": 0,
     }
-    assert report["rubric_scores"]["ht_onset"]["score"] == 3
+    assert report["score_groups"] == {
+        "clinical_osce": {"score": 22, "max_score": 70},
+        "humanistic_communication": {"score": 0, "max_score": 30},
+    }
+    assert report["rubric_scores"]["ht_onset"]["score"] == 2
     assert report["rubric_scores"]["ht_migration"]["score"] == 0
-    assert report["rubric_scores"]["pe_rebound"]["score"] == 5
-    assert report["rubric_scores"]["ax_cbc"]["score"] == 5
-    assert report["rubric_scores"]["dx_main"]["score"] == 15
-    assert report["rubric_scores"]["rs_support"]["score"] == 4
+    assert report["rubric_scores"]["pe_rebound"]["score"] == 4
+    assert report["rubric_scores"]["ax_cbc"]["score"] == 3
+    assert report["rubric_scores"]["dx_main"]["score"] == 10
+    assert report["rubric_scores"]["rs_support"]["score"] == 3
     assert "ht_migration" in report["missed_items"]
     assert report["feedback_summary"] == "已完成规则评分，LLM 评分维度将在后续阶段补充。"
 
@@ -79,7 +87,7 @@ def test_intent_keyword_item_scores_when_expected_fact_was_revealed() -> None:
 
     report = evaluate_session_rules(session)
 
-    assert report["rubric_scores"]["ht_migration"]["score"] == 6
+    assert report["rubric_scores"]["ht_migration"]["score"] == 4
     assert "appendicitis_001.hf_02" in report["dimension_traces"]["history_taking"][1]["matched_evidence"]
     assert "ht_migration" not in report["missed_items"]
 
@@ -103,10 +111,10 @@ def test_diagnosis_concept_scores_differential_concepts_from_structured_reasonin
 
     report = evaluate_session_rules(session)
 
-    assert report["dimension_scores"]["differential_diagnosis"] == 15
-    assert report["rubric_scores"]["dxd_urolith"]["score"] == 5
-    assert report["rubric_scores"]["dxd_crohn"]["score"] == 5
-    assert report["rubric_scores"]["dxd_gastroenteritis"]["score"] == 5
+    assert report["dimension_scores"]["differential_diagnosis"] == 10
+    assert report["rubric_scores"]["dxd_urolith"]["score"] == 4
+    assert report["rubric_scores"]["dxd_crohn"]["score"] == 3
+    assert report["rubric_scores"]["dxd_gastroenteritis"]["score"] == 3
     assert "dxd_urolith" not in report["missed_items"]
     assert "dxd_crohn" not in report["missed_items"]
     assert "dxd_gastroenteritis" not in report["missed_items"]
@@ -204,6 +212,115 @@ def test_llm_rubric_uses_injected_scorer_contract() -> None:
     ]
 
 
+def test_humanistic_dialogue_and_semantic_items_score_with_trace() -> None:
+    session = OsceSession(
+        session_id="session_humanistic",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        messages=[
+            {"role": "student", "content": "你好，我是今天接诊你的医生。你现在最担心的是什么？"},
+            {"role": "patient", "content": "我很担心是不是很严重。"},
+            {"role": "student", "content": "我理解你现在很担心，我们会一步步把原因弄清楚。"},
+            {"role": "student", "content": "我需要检查一下你的腹部，可能会有些不舒服，可以吗？"},
+        ],
+        action_timeline=[
+            {"turn_index": 4, "action_type": "physical_exam_requested", "source_id": "abd.palpation.tenderness"},
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["dimension_scores"]["narrative_medicine"] >= 3
+    assert report["dimension_scores"]["communication_skill"] >= 2
+    assert report["dimension_scores"]["medical_ethics"] >= 3
+    assert report["dimension_scores"]["relationship_building"] >= 2
+    assert report["score_groups"]["humanistic_communication"]["score"] >= 10
+    empathy_trace = report["rubric_scores"]["rel_empathy_response"]["trace"]
+    assert empathy_trace["match_kind"] == "triggered_response"
+    assert empathy_trace["matched_evidence"] == ["我理解你现在很担心，我们会一步步把原因弄清楚。"]
+    assert empathy_trace["anchor_bank_version"] == "humanistic_anchor_bank_v1"
+    assert empathy_trace["semantic_score"] > 0
+    consent_trace = report["rubric_scores"]["eth_exam_consent"]["trace"]
+    assert consent_trace["timing_status"] == "before_action"
+    assert consent_trace["matched_turn_index"] <= consent_trace["action_turn_index"]
+
+
+def test_humanistic_sequence_check_rejects_late_consent_and_generates_gap() -> None:
+    session = OsceSession(
+        session_id="session_late_consent",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        messages=[
+            {"role": "student", "content": "我先查一下腹部。"},
+            {"role": "student", "content": "刚才查腹部是为了判断压痛，可以吗？"},
+        ],
+        action_timeline=[
+            {"turn_index": 1, "action_type": "physical_exam_requested", "source_id": "abd.palpation.tenderness"},
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["rubric_scores"]["eth_exam_consent"]["score"] < report["rubric_scores"]["eth_exam_consent"]["max_score"]
+    trace = report["rubric_scores"]["eth_exam_consent"]["trace"]
+    assert trace["timing_status"] == "late"
+    assert "eth_exam_consent" in report["missed_items"]
+    assert any(gap["gap_type"] == "ethics_consent_missing" for gap in report["training_gaps"])
+
+
+def test_humanistic_missed_opportunity_records_unanswered_patient_emotion() -> None:
+    session = OsceSession(
+        session_id="session_missed_opportunity",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "patient", "content": "我很担心是不是严重的病。"},
+            {"role": "student", "content": "疼痛是从什么时候开始的？"},
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["missed_opportunities"] == [
+        {
+            "opportunity_id": "relationship_empathy_missing:1",
+            "gap_type": "relationship_empathy_missing",
+            "stage": "history_taking",
+            "trigger_evidence": "我很担心是不是严重的病。",
+            "expected_response": "患者表达担忧后，应先回应情绪，再继续医学问诊。",
+            "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+        }
+    ]
+    assert any(
+        gap["gap_source"] == "missed_opportunity"
+        and gap["gap_type"] == "relationship_empathy_missing"
+        for gap in report["training_gaps"]
+    )
+
+
+def test_humanistic_scoring_ledger_prevents_repeated_empathy_score() -> None:
+    session = OsceSession(
+        session_id="session_repeated_empathy",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "patient", "content": "我很担心。"},
+            {"role": "student", "content": "我理解你现在很担心。"},
+            {"role": "patient", "content": "还是有点害怕。"},
+            {"role": "student", "content": "我理解你现在很担心。"},
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["rubric_scores"]["rel_empathy_response"]["score"] == 2
+    assert report["scoring_ledger"]["awarded_item_ids"].count("rel_empathy_response") == 1
+
+
 def test_evaluate_session_rules_records_llm_rubric_trace() -> None:
     session = OsceSession(
         session_id="session_demo",
@@ -230,14 +347,15 @@ def test_evaluate_session_rules_records_llm_rubric_trace() -> None:
 
     report = evaluate_session_rules(session, llm_scorer=fake_scorer)
 
-    assert report["rubric_scores"]["rs_exclude"] == {
-        "score": 5,
-        "max_score": 5,
+    assert report["rubric_scores"]["rs_exclude"] | {"trace": "<omitted>"} == {
+        "score": 4,
+        "max_score": 4,
         "dimension_id": "reasoning",
         "description": "推理表达覆盖关键排除依据",
         "covered_evidence": ["appendicitis_001.rp_05"],
         "missing_evidence": ["appendicitis_001.rp_06"],
         "rationale": "覆盖尿常规排除依据，缺少性别相关排除依据。",
+        "trace": "<omitted>",
     }
 
 
@@ -277,9 +395,9 @@ def test_llm_rubric_invalid_structured_response_degrades_to_zero_score() -> None
 
     report = evaluate_session_rules(session, llm_scorer=invalid_scorer)
 
-    assert report["rubric_scores"]["rs_exclude"] == {
+    assert report["rubric_scores"]["rs_exclude"] | {"trace": "<omitted>"} == {
         "score": 0,
-        "max_score": 5,
+        "max_score": 4,
         "dimension_id": "reasoning",
         "description": "推理表达覆盖关键排除依据",
         "covered_evidence": [],
@@ -288,6 +406,7 @@ def test_llm_rubric_invalid_structured_response_degrades_to_zero_score() -> None
             "appendicitis_001.rp_06",
         ],
         "rationale": "模型评分输出结构不完整，已按未覆盖处理。",
+        "trace": "<omitted>",
     }
     assert report["dimension_traces"]["reasoning"][1]["fallback_reason"] == "llm_rubric_invalid_response"
 
@@ -331,14 +450,13 @@ def test_score_trace_model_matches_development_document_contract() -> None:
         llm_rationale="覆盖腹痛迁移与反跳痛，缺少血常规证据。",
     )
 
-    assert trace.model_dump() == {
+    assert trace.model_dump(exclude_none=True) == {
         "rubric_item_id": "reasoning_core",
         "awarded_score": 9,
         "max_score": 15,
         "match_kind": "llm_rubric",
         "matched_evidence": ["appendicitis_001.hf_02", "abd.palpation.rebound"],
         "llm_rationale": "覆盖腹痛迁移与反跳痛，缺少血常规证据。",
-        "fallback_reason": None,
     }
 
 
@@ -368,28 +486,28 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
 
     report = evaluate_session_rules(session, llm_scorer=fake_scorer)
 
-    assert report["dimension_traces"]["history_taking"][0] == {
+    assert report["dimension_traces"]["history_taking"][0] | {"llm_rationale": None, "fallback_reason": None} == {
         "rubric_item_id": "ht_onset",
-        "awarded_score": 3,
-        "max_score": 3,
+        "awarded_score": 2,
+        "max_score": 2,
         "match_kind": "intent_keyword",
         "matched_evidence": ["什么时候开始疼的？", "appendicitis_001.hf_01"],
         "llm_rationale": None,
         "fallback_reason": None,
     }
-    assert report["dimension_traces"]["reasoning"][0] == {
+    assert report["dimension_traces"]["reasoning"][0] | {"llm_rationale": None, "fallback_reason": None} == {
         "rubric_item_id": "rs_support",
-        "awarded_score": 4,
-        "max_score": 10,
+        "awarded_score": 3,
+        "max_score": 8,
         "match_kind": "reasoning_coverage",
         "matched_evidence": ["abd.palpation.rebound", "lab.cbc"],
         "llm_rationale": None,
         "fallback_reason": None,
     }
-    assert report["dimension_traces"]["reasoning"][1] == {
+    assert report["dimension_traces"]["reasoning"][1] | {"fallback_reason": None} == {
         "rubric_item_id": "rs_exclude",
-        "awarded_score": 5,
-        "max_score": 5,
+        "awarded_score": 4,
+        "max_score": 4,
         "match_kind": "llm_rubric",
         "matched_evidence": ["appendicitis_001.rp_05", "appendicitis_001.rp_06"],
         "llm_rationale": "覆盖部分关键证据，仍缺少完整论证。",

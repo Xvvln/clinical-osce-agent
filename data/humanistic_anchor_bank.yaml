@@ -1,0 +1,85 @@
+version: humanistic_anchor_bank_v1
+anchors:
+  narrative_patient_concern:
+    positive:
+    - 你现在最担心的是什么？
+    - 这件事让你最放不下的是哪方面？
+    - 你希望这次就诊能解决什么问题？
+    negative:
+    - 别担心，没事的。
+    - 这个不重要，你不用想太多。
+  narrative_life_impact:
+    positive:
+    - 这次不舒服对你的生活有什么影响？
+    - 最近有没有影响工作、学习或睡眠？
+    negative:
+    - 生活影响先不用说。
+  narrative_patient_perspective_reflection:
+    positive:
+    - 我听到你主要担心病情严重，也担心影响生活。
+    - 你的意思是疼痛让你担心会不会有严重问题。
+    negative:
+    - 你不用说这些想法。
+  communication_intro_purpose:
+    positive:
+    - 你好，我是今天接诊你的医生。
+    - 我先了解一下你的情况。
+    negative:
+    - 直接说哪里不舒服。
+  communication_open_question:
+    positive:
+    - 你今天主要哪里不舒服？
+    - 可以从头说说这次不舒服的情况吗？
+    negative:
+    - 你只回答是或不是。
+  communication_summary_check:
+    positive:
+    - 我总结一下目前了解的情况，你看是否准确。
+    - 我复述一下，如果不对请你纠正。
+    negative:
+    - 不用确认了。
+  communication_confirm_understanding:
+    positive:
+    - 我这样解释你能理解吗？
+    - 还有哪里没有说清楚吗？
+    negative:
+    - 你不用理解这么多。
+  ethics_exam_consent:
+    positive:
+    - 我需要检查一下你的腹部，可能会有些不舒服，可以吗？
+    - 接下来做这个检查是为了判断压痛和反跳痛，你同意吗？
+    negative:
+    - 我直接给你检查。
+    - 你不用同意，配合就行。
+  ethics_privacy_comfort:
+    positive:
+    - 检查时我会注意保护你的隐私和舒适度。
+    - 如果不舒服请及时告诉我。
+    negative:
+    - 隐私这些先不用管。
+  ethics_respect_autonomy:
+    positive:
+    - 我会把选择和原因说明清楚，由你一起决定。
+    - 如果你有顾虑可以告诉我，我们一起商量。
+    negative:
+    - 你按我说的做就行。
+  relationship_empathy_response:
+    positive:
+    - 我理解你现在很担心，我们会一步步把原因弄清楚。
+    - 听起来这个情况让你有些焦虑，我会认真帮你评估。
+    - 你的担心是可以理解的。
+    negative:
+    - 别担心，没事的。
+    - 这个不重要，你不用管。
+  relationship_supportive_language:
+    positive:
+    - 我会陪你一步步弄清楚。
+    - 我们一起把现在的问题处理好。
+    negative:
+    - 这跟我没关系。
+  relationship_collaborative_expression:
+    positive:
+    - 我们一起看下一步怎么评估。
+    - 接下来我会和你一起确认风险。
+    negative:
+    - 你只要按流程走。

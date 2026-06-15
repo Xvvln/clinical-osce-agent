@@ -11,6 +11,10 @@ DimensionId = Literal[
     "main_diagnosis",
     "differential_diagnosis",
     "reasoning",
+    "narrative_medicine",
+    "communication_skill",
+    "medical_ethics",
+    "relationship_building",
 ]
 ScoringMode = Literal["rule", "llm", "hybrid"]
 MatchKind = Literal[
@@ -20,6 +24,10 @@ MatchKind = Literal[
     "diagnosis_concept",
     "reasoning_coverage",
     "llm_rubric",
+    "dialogue_act",
+    "semantic_anchor",
+    "sequence_check",
+    "triggered_response",
 ]
 
 REQUIRED_SPEC_KEYS: dict[str, set[str]] = {
@@ -29,6 +37,10 @@ REQUIRED_SPEC_KEYS: dict[str, set[str]] = {
     "diagnosis_concept": {"target", "synonyms", "icd10_hint"},
     "reasoning_coverage": {"required_evidence", "min_coverage_ratio"},
     "llm_rubric": {"prompt_id", "max_score"},
+    "dialogue_act": {"act_id", "any_of_keywords"},
+    "semantic_anchor": {"anchor_id"},
+    "sequence_check": {"anchor_id", "action_types", "window_student_turns"},
+    "triggered_response": {"anchor_id", "trigger_keywords", "response_window_turns"},
 }
 
 
@@ -55,6 +67,11 @@ class RubricItem(BaseModel):
     max_score: int = Field(..., ge=1, le=25)
     match_rule: MatchRule
     evidence_expected: list[str] = Field(default_factory=list)
+    gap_type: str | None = None
+    stage: str | None = None
+    next_training_action: str | None = None
+    skill_type: str | None = None
+    ethics_principle: str | None = None
 
 
 class RubricDimension(BaseModel):
@@ -95,6 +112,21 @@ class ScoreTrace(BaseModel):
     matched_evidence: list[str]
     llm_rationale: str | None = None
     fallback_reason: str | None = None
+    gap_type: str | None = None
+    stage: str | None = None
+    next_training_action: str | None = None
+    match_method: str | None = None
+    semantic_score: float | None = None
+    positive_anchor: str | None = None
+    negative_anchor: str | None = None
+    anchor_bank_version: str | None = None
+    timing_status: str | None = None
+    required_before_action: str | None = None
+    matched_turn_index: int | None = None
+    action_turn_index: int | None = None
+    timing_gap_type: str | None = None
+    llm_review_status: str | None = None
+    ethics_principle: str | None = None
 
 
 class Rubric(BaseModel):

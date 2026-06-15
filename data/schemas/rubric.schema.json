@@ -9,7 +9,11 @@
             "test_code",
             "diagnosis_concept",
             "reasoning_coverage",
-            "llm_rubric"
+            "llm_rubric",
+            "dialogue_act",
+            "semantic_anchor",
+            "sequence_check",
+            "triggered_response"
           ],
           "title": "Kind",
           "type": "string"
@@ -36,7 +40,11 @@
             "auxiliary_test",
             "main_diagnosis",
             "differential_diagnosis",
-            "reasoning"
+            "reasoning",
+            "narrative_medicine",
+            "communication_skill",
+            "medical_ethics",
+            "relationship_building"
           ],
           "title": "Dimension Id",
           "type": "string"
@@ -99,6 +107,26 @@
           },
           "title": "Evidence Expected",
           "type": "array"
+        },
+        "gap_type": {
+          "title": "Gap Type",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "next_training_action": {
+          "title": "Next Training Action",
+          "type": "string"
+        },
+        "skill_type": {
+          "title": "Skill Type",
+          "type": "string"
+        },
+        "ethics_principle": {
+          "title": "Ethics Principle",
+          "type": "string"
         }
       },
       "required": [
