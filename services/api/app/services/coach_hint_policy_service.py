@@ -18,6 +18,7 @@ EMPTY_SESSION_ALLOWED_GAP_TYPES = {
 class HintIntent(StrEnum):
     CASE_ONBOARDING = "case_onboarding"
     HISTORY_PROGRESSION = "history_progression"
+    OPPORTUNITY_PREPARATION = "opportunity_preparation"
     RELATIONSHIP_REPAIR = "relationship_repair"
     ETHICS_CONSENT_BEFORE_ACTION = "ethics_consent_before_action"
     STAGE_SUMMARY = "stage_summary"
@@ -34,6 +35,7 @@ class InteractionContext:
     requested_exams_count: int
     requested_tests_count: int
     student_hypotheses_count: int
+    has_patient_emotion_signal: bool
     has_unanswered_patient_emotion_signal: bool
 
     @property
@@ -47,6 +49,7 @@ class CoachHintPolicyDecision:
     hint: str
     training_goal_hint: str = ""
     selected_goal_type: str = ""
+    trigger_state: str = "none"
     suppressed_goal_types: list[str] = field(default_factory=list)
     candidate_goal_types: list[str] = field(default_factory=list)
 
@@ -57,6 +60,7 @@ class CoachHintPolicyDecision:
             "candidate_goal_types": list(self.candidate_goal_types),
             "suppressed_goal_types": list(self.suppressed_goal_types),
             "training_goal_hint": self.training_goal_hint,
+            "trigger_state": self.trigger_state,
         }
 
 
@@ -77,21 +81,33 @@ def resolve_coach_hint_policy(
         if _goal_status(goal) == "recovered":
             continue
         gap_type = _goal_type(goal)
-        if not _training_goal_stage_applies(context.stage, _goal_trigger_stage(goal)):
-            suppressed_goal_types.append(gap_type)
-            continue
-        if not _training_goal_triggered(goal, context):
-            suppressed_goal_types.append(gap_type)
-            continue
-        training_goal_hint = _training_goal_action_text(goal)
-        if not training_goal_hint:
+
+        stage_applies = _training_goal_stage_applies(context.stage, _goal_trigger_stage(goal))
+        if stage_applies and _training_goal_triggered(goal, context):
+            training_goal_hint = _training_goal_action_text(goal)
+            if not training_goal_hint:
+                suppressed_goal_types.append(gap_type)
+                continue
+            return CoachHintPolicyDecision(
+                intent=_intent_for_goal(gap_type, context),
+                hint=default_hint,
+                training_goal_hint=training_goal_hint,
+                selected_goal_type=gap_type,
+                trigger_state="triggered",
+                suppressed_goal_types=suppressed_goal_types,
+                candidate_goal_types=candidate_goal_types,
+            )
+
+        preparation_hint = _training_goal_preparation_hint(goal, context)
+        if not preparation_hint:
             suppressed_goal_types.append(gap_type)
             continue
         return CoachHintPolicyDecision(
-            intent=_intent_for_goal(gap_type, context),
+            intent=HintIntent.OPPORTUNITY_PREPARATION,
             hint=default_hint,
-            training_goal_hint=training_goal_hint,
+            training_goal_hint=preparation_hint,
             selected_goal_type=gap_type,
+            trigger_state="preparation",
             suppressed_goal_types=suppressed_goal_types,
             candidate_goal_types=candidate_goal_types,
         )
@@ -115,6 +131,7 @@ def active_training_goals_from_state(state: Mapping[str, Any]) -> list[dict[str,
 
 
 def build_interaction_context(state: Mapping[str, Any]) -> InteractionContext:
+    messages = _message_list(state.get("messages"))
     return InteractionContext(
         stage=str(state.get("stage") or "case_intro"),
         has_student_training_action=has_student_training_action(state),
@@ -123,7 +140,8 @@ def build_interaction_context(state: Mapping[str, Any]) -> InteractionContext:
         requested_exams_count=len(_string_list(state.get("requested_exams"))),
         requested_tests_count=len(_string_list(state.get("requested_tests"))),
         student_hypotheses_count=len(_string_list(state.get("student_hypotheses"))),
-        has_unanswered_patient_emotion_signal=_has_unanswered_patient_emotion_signal(_message_list(state.get("messages"))),
+        has_patient_emotion_signal=_has_patient_emotion_signal(messages),
+        has_unanswered_patient_emotion_signal=_has_unanswered_patient_emotion_signal(messages),
     )
 
 
@@ -169,6 +187,31 @@ def _training_goal_triggered(goal: Mapping[str, Any], context: InteractionContex
     }:
         return _normalized_stage(context.stage) in {"case_intro", "history_taking"}
     return True
+
+
+def _training_goal_preparation_hint(goal: Mapping[str, Any], context: InteractionContext) -> str:
+    if not context.has_student_training_action:
+        return ""
+    gap_type = _goal_type(goal)
+    normalized_stage = _normalized_stage(context.stage)
+    if gap_type in {
+        "relationship_empathy_missing",
+        "relationship_supportive_language_missing",
+        "relationship_collaborative_expression_missing",
+    }:
+        if context.has_patient_emotion_signal or normalized_stage not in {"case_intro", "history_taking"}:
+            return ""
+        if context.asked_questions_count == 0 and context.revealed_facts_count == 0:
+            return ""
+        return (
+            "本轮可以主动询问患者最担心什么、希望解决什么，或这次不适对学习生活的影响；"
+            "如果患者表达担忧，再先回应情绪再继续问诊。"
+        )
+    if gap_type in {"ethics_consent_missing", "ethics_privacy_comfort_missing"}:
+        if normalized_stage != "history_taking" or context.collected_evidence_count < 2:
+            return ""
+        return "本轮准备进入查体或检查前，先说明目的、可能不适并征得同意。"
+    return ""
 
 
 def _default_intent(context: InteractionContext) -> HintIntent:
@@ -230,6 +273,13 @@ def _has_unanswered_patient_emotion_signal(messages: list[dict[str, str]]) -> bo
         if message.get("role") == "patient" and _contains_any(str(message.get("content") or ""), PATIENT_EMOTION_KEYWORDS):
             return True
     return True
+
+
+def _has_patient_emotion_signal(messages: list[dict[str, str]]) -> bool:
+    return any(
+        message.get("role") == "patient" and _contains_any(str(message.get("content") or ""), PATIENT_EMOTION_KEYWORDS)
+        for message in messages
+    )
 
 
 def _goal_type(goal: Mapping[str, Any]) -> str:
