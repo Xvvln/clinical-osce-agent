@@ -20,7 +20,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练系统中的 TeacherAgent 训练�
 - 只能生成教学提示、苏格拉底式引导或下一步训练策略。
 - 不得输出诊断答案、病例隐藏事实、rubric 全量、治疗方案、用药剂量或真实医疗建议。
 - 不要新增医学事实；只能围绕 base_hint、hint_context、pedagogy_state、clinical_reasoning_state、skill_context、retrieved_knowledge_context 和已公开对话做教学引导。
-- 如果 hint_context 存在，优先参考其中的 next_step、evidence_coverage、difficulty_policy、skill_selection 和 rag_context，综合判断下一步提示，而不是只复述 base_hint。
+- 如果 hint_context 存在，优先参考其中的 next_step、hint_policy、evidence_coverage、difficulty_policy、skill_selection 和 rag_context，综合判断下一步提示，而不是只复述 base_hint。
+- 如果 hint_context.hint_policy.trigger_state 是 preparation 或 triggered，必须保留 hint_policy.training_goal_hint 的教学目标，不能改写成普通临床下一步提示。
 - 如果 prompt_kind 是 skill_router，只判断 TeacherAgent 此刻是否需要使用候选 Skill：只可从 hint_context.skill_selection.candidate_skills 中选择 selected_skill_ids；空白开局、普通下一步提示或没有明确错误模式时 selected_skill_ids=[]，skill_intervention_level="none"。
 - 如果 prompt_kind 是 socratic_hint，只有 skill_context 非空时才把其中 Skill 作为本轮教学策略；skill_context 为空时不要编造“本轮训练重点”。
 - 如果 prompt_kind 是 socratic_hint，输出必须像“下一步可以怎么问/怎么做 + 为什么这样做”的教学提示，不要写成考试题。
@@ -63,6 +64,7 @@ class CoachResponse(BaseModel):
 
 _EXAM_STYLE_VERBS = ("请说明", "请解释", "请写", "写出", "说出", "阐述")
 _EXAM_STYLE_OBJECTS = ("问诊目的", "检查目的", "查体目的", "操作目的", "申请目的")
+_ACTIVE_HINT_POLICY_TRIGGER_STATES = {"preparation", "triggered"}
 
 
 def _looks_like_exam_style_prompt(hint: str) -> bool:
@@ -72,7 +74,23 @@ def _looks_like_exam_style_prompt(hint: str) -> bool:
     )
 
 
-def _normalize_coach_response_for_request(request: CoachRequest, response: CoachResponse | dict[str, Any]) -> CoachResponse:
+def _active_hint_policy_training_goal(request: CoachRequest) -> str:
+    hint_policy = request.hint_context.get("hint_policy")
+    if not isinstance(hint_policy, dict):
+        return ""
+    trigger_state = str(hint_policy.get("trigger_state") or "").strip()
+    if trigger_state not in _ACTIVE_HINT_POLICY_TRIGGER_STATES:
+        return ""
+    return str(hint_policy.get("training_goal_hint") or "").strip()
+
+
+def _policy_hint_is_overloaded(hint: str, policy_goal: str) -> bool:
+    if not hint or not policy_goal:
+        return False
+    return len(hint) > max(100, len(policy_goal) + 40) or "本轮训练重点" in hint
+
+
+def normalize_coach_response_for_request(request: CoachRequest, response: CoachResponse | dict[str, Any]) -> CoachResponse:
     normalized = normalize_coach_response(response)
     if request.prompt_kind == "skill_router":
         return normalized
@@ -80,8 +98,23 @@ def _normalize_coach_response_for_request(request: CoachRequest, response: Coach
         return normalized.model_copy(update={"hint": ""})
 
     sanitized_hint = sanitize_coach_hint(normalized.hint, request.forbidden_terms)
-    if request.prompt_kind == "socratic_hint" and _looks_like_exam_style_prompt(sanitized_hint):
-        sanitized_hint = sanitize_coach_hint(request.base_hint, request.forbidden_terms)
+    if request.prompt_kind == "socratic_hint":
+        policy_training_goal = _active_hint_policy_training_goal(request)
+        if policy_training_goal:
+            sanitized_policy_goal = sanitize_coach_hint(policy_training_goal, request.forbidden_terms)
+            if sanitized_policy_goal and (
+                sanitized_policy_goal not in sanitized_hint
+                or _policy_hint_is_overloaded(sanitized_hint, sanitized_policy_goal)
+            ):
+                sanitized_base_hint = sanitize_coach_hint(request.base_hint, request.forbidden_terms)
+                sanitized_hint = (
+                    sanitized_base_hint
+                    if sanitized_policy_goal in sanitized_base_hint
+                    and not _policy_hint_is_overloaded(sanitized_base_hint, sanitized_policy_goal)
+                    else sanitized_policy_goal
+                )
+        elif _looks_like_exam_style_prompt(sanitized_hint):
+            sanitized_hint = sanitize_coach_hint(request.base_hint, request.forbidden_terms)
 
     return normalized.model_copy(
         update={
@@ -89,6 +122,9 @@ def _normalize_coach_response_for_request(request: CoachRequest, response: Coach
             "trigger_kind": normalized.trigger_kind or request.prompt_kind,
         }
     )
+
+
+_normalize_coach_response_for_request = normalize_coach_response_for_request
 
 
 class DeterministicCoachAgent:
@@ -335,5 +371,6 @@ __all__ = [
     "OpenAICompatibleCoachAgent",
     "create_default_coach_agent",
     "normalize_coach_response",
+    "normalize_coach_response_for_request",
     "sanitize_coach_hint",
 ]

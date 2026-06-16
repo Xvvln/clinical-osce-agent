@@ -13,7 +13,13 @@ from langgraph.graph import END, START, StateGraph
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.agent_state_service import append_decision_trace, build_pedagogy_state, build_reflection_summary
 from app.services.clinical_reasoning_trace_service import build_clinical_reasoning_trace
-from app.services.coach_agent import CoachRequest, create_default_coach_agent, normalize_coach_response, sanitize_coach_hint
+from app.services.coach_agent import (
+    CoachRequest,
+    create_default_coach_agent,
+    normalize_coach_response,
+    normalize_coach_response_for_request,
+    sanitize_coach_hint,
+)
 from app.services.coach_hint_context_service import build_coach_hint_context
 from app.services.coach_hint_policy_service import (
     active_training_goals_from_state,
@@ -665,8 +671,12 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         base_hint=base_hint,
         retrieved_knowledge_context=retrieved_knowledge_context,
     )
-    hint_context["hint_policy"] = hint_policy_decision.to_context_payload()
-    turn_analysis = _boundary_turn_analysis("socratic_hint", "学生请求教学提示。")
+    hint_policy_payload = hint_policy_decision.to_context_payload()
+    hint_context["hint_policy"] = hint_policy_payload
+    turn_analysis = {
+        **_boundary_turn_analysis("socratic_hint", "学生请求教学提示。"),
+        "hint_policy": hint_policy_payload,
+    }
     turn_policy = "teaching_hint"
     agent_path = ["socratic_hint_node", "coach_agent"]
     _emit_processing_progress(state, "skill", status="active")
@@ -703,26 +713,26 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     _emit_processing_progress(state, "coach", status="active")
     coach_step_started_at, coach_step_started_perf = _start_processing_step()
     try:
+        coach_request = CoachRequest(
+            case_id=case.case_id,
+            case_title=case.case_title,
+            chief_complaint=case.chief_complaint,
+            stage=state.get("stage", "case_intro"),
+            training_difficulty=str(state.get("training_difficulty") or "beginner"),
+            prompt_kind="socratic_hint",
+            base_hint=coach_base_hint,
+            prior_messages=state.get("messages", []),
+            pedagogy_state=pedagogy_state,
+            clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
+            skill_context=selected_skill_context,
+            retrieved_knowledge_context=retrieved_knowledge_context,
+            hint_context=hint_context,
+            forbidden_terms=[],
+        )
         hint = _sanitize_visible_coach_hint(
-            normalize_coach_response(
-                coach_agent(
-                    CoachRequest(
-                        case_id=case.case_id,
-                        case_title=case.case_title,
-                        chief_complaint=case.chief_complaint,
-                        stage=state.get("stage", "case_intro"),
-                        training_difficulty=str(state.get("training_difficulty") or "beginner"),
-                        prompt_kind="socratic_hint",
-                        base_hint=coach_base_hint,
-                        prior_messages=state.get("messages", []),
-                        pedagogy_state=pedagogy_state,
-                        clinical_reasoning_state=pedagogy_state.get("clinical_reasoning_state", {}),
-                        skill_context=selected_skill_context,
-                        retrieved_knowledge_context=retrieved_knowledge_context,
-                        hint_context=hint_context,
-                        forbidden_terms=[],
-                    )
-                )
+            normalize_coach_response_for_request(
+                coach_request,
+                coach_agent(coach_request),
             ).hint,
             visible_forbidden_terms,
         )

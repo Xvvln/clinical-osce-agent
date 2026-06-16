@@ -97,6 +97,14 @@ class FakeExamStyleCoachClient:
         )
 
 
+class FakePolicyDroppingCoachClient:
+    def complete_json(self, **_: object) -> module.CoachResponse:
+        return module.CoachResponse(
+            hint="你已经问清了起病时间。接下来继续追问疼痛部位变化和疼痛性质。",
+            trigger_kind="manual_hint",
+        )
+
+
 def _request() -> module.CoachRequest:
     return module.CoachRequest(
         case_id="appendicitis_001",
@@ -207,6 +215,63 @@ def test_llm_coach_agent_normalizes_exam_style_active_hint() -> None:
     response = agent(request)
 
     assert response.hint == "先追问疼痛部位变化、疼痛性质和伴随症状，再决定查体重点。"
+
+
+def test_llm_coach_agent_preserves_active_hint_policy_training_goal() -> None:
+    request = _request().model_copy(
+        update={
+            "base_hint": (
+                "本轮可以主动询问患者最担心什么、希望解决什么，或这次不适对学习生活的影响；"
+                "如果患者表达担忧，再先回应情绪再继续问诊。"
+            ),
+            "hint_context": {
+                "hint_policy": {
+                    "intent": "opportunity_preparation",
+                    "selected_goal_type": "relationship_empathy_missing",
+                    "training_goal_hint": (
+                        "本轮可以主动询问患者最担心什么、希望解决什么，或这次不适对学习生活的影响；"
+                        "如果患者表达担忧，再先回应情绪再继续问诊。"
+                    ),
+                    "trigger_state": "preparation",
+                }
+            },
+        }
+    )
+    agent = module.OpenAICompatibleCoachAgent(object(), client=FakePolicyDroppingCoachClient())
+
+    response = agent(request)
+
+    assert "最担心" in response.hint
+    assert "回应情绪" in response.hint
+
+
+def test_active_hint_policy_keeps_visible_hint_concise_when_skill_context_is_long() -> None:
+    training_goal_hint = "本轮患者表达担忧后，先回应情绪再继续医学问诊。"
+    request = _request().model_copy(
+        update={
+            "base_hint": (
+                f"{training_goal_hint} 本轮训练重点是系统性问诊与沟通技巧整合不足。"
+                "建议在问诊练习中，有意识地将问诊过程划分为信息收集、患者中心沟通和伦理规范三个阶段。"
+            ),
+            "hint_context": {
+                "hint_policy": {
+                    "intent": "relationship_repair",
+                    "selected_goal_type": "relationship_empathy_missing",
+                    "training_goal_hint": training_goal_hint,
+                    "trigger_state": "triggered",
+                }
+            },
+        }
+    )
+    response = module.CoachResponse(
+        hint=request.base_hint,
+        trigger_kind="socratic_hint",
+    )
+
+    normalized = module._normalize_coach_response_for_request(request, response)
+
+    assert normalized.hint == training_goal_hint
+    assert "本轮训练重点" not in normalized.hint
 
 
 def test_active_hint_keeps_actionable_guidance() -> None:

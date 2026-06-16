@@ -1721,6 +1721,7 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
     assert "急性阑尾炎" not in str(getattr(captured_requests[0], "model_dump")())
     assert len(result["agent_turn_memory"]) == 1
     agent_turn = result["agent_turn_memory"][0]
+    turn_analysis = agent_turn["turn_analysis"]
     assert {
         "turn_id": agent_turn["turn_id"],
         "student_message": agent_turn["student_message"],
@@ -1728,7 +1729,6 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
         "reply_role": agent_turn["reply_role"],
         "current_intents": agent_turn["current_intents"],
         "turn_policy": agent_turn["turn_policy"],
-        "turn_analysis": agent_turn["turn_analysis"],
         "agent_path": agent_turn["agent_path"],
         "revealed_fact_id": agent_turn["revealed_fact_id"],
         "safety_flags": agent_turn["safety_flags"],
@@ -1739,16 +1739,16 @@ def test_osce_graph_uses_injected_coach_agent_for_hint_and_records_agent_turn(mo
         "reply_role": "coach",
         "current_intents": ["socratic_hint"],
         "turn_policy": "teaching_hint",
-        "turn_analysis": {
-            "current_intents": ["socratic_hint"],
-            "confidence": 1.0,
-            "is_off_topic": False,
-            "rationale": "学生请求教学提示。",
-        },
         "agent_path": ["socratic_hint_node", "coach_agent"],
         "revealed_fact_id": None,
         "safety_flags": [],
     }
+    assert turn_analysis["current_intents"] == ["socratic_hint"]
+    assert turn_analysis["confidence"] == 1.0
+    assert turn_analysis["is_off_topic"] is False
+    assert turn_analysis["rationale"] == "学生请求教学提示。"
+    assert turn_analysis["hint_policy"]["intent"] == "history_progression"
+    assert turn_analysis["hint_policy"]["candidate_goal_types"] == []
     assert "rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence" in agent_turn[
         "source_references"
     ]
@@ -1910,6 +1910,9 @@ def test_osce_graph_socratic_hint_keeps_onboarding_before_untriggered_training_g
     hint_context = getattr(captured_requests[0], "hint_context")
     assert hint_context["hint_policy"]["intent"] == "case_onboarding"
     assert hint_context["hint_policy"]["suppressed_goal_types"] == ["relationship_empathy_missing"]
+    turn_hint_policy = result["agent_turn_memory"][-1]["turn_analysis"]["hint_policy"]
+    assert turn_hint_policy["intent"] == "case_onboarding"
+    assert turn_hint_policy["suppressed_goal_types"] == ["relationship_empathy_missing"]
 
 
 def test_osce_graph_socratic_hint_uses_training_goal_without_long_term_skill() -> None:
@@ -2009,7 +2012,9 @@ def test_osce_graph_socratic_hint_preserves_training_goal_when_skill_is_selected
     coach_base_hint = str(getattr(captured_requests[1], "base_hint"))
     assert "查体或检查前先说明目的、可能不适并征得同意" in coach_base_hint
     assert "腹痛迁移追问训练" in coach_base_hint
-    assert result["hint"] == coach_base_hint
+    assert result["hint"] == "本轮查体或检查前先说明目的、可能不适并征得同意。"
+    assert "本轮训练重点" not in result["hint"]
+    assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
 
 
 def test_osce_graph_socratic_hint_passes_comprehensive_hint_context_to_coach() -> None:
