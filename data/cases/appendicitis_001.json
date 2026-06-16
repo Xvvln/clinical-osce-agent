@@ -164,9 +164,7 @@
           "ask_travel"
         ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": [
-          "ht_personal"
-        ]
+        "linked_rubric_items": []
       },
       {
         "fact_id": "appendicitis_001.hf_09",
@@ -180,9 +178,7 @@
           "ask_family"
         ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": [
-          "ht_family"
-        ]
+        "linked_rubric_items": []
       },
       {
         "fact_id": "appendicitis_001.hf_10",

@@ -115,9 +115,7 @@
           "ask_allergy"
         ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": [
-          "ht_allergy"
-        ]
+        "linked_rubric_items": []
       },
       {
         "fact_id": "hyperthyroid_001.hf_07",

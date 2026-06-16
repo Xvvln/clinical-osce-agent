@@ -85,9 +85,7 @@
           "ask_past_medical_history"
         ],
         "blocking_rule": "reveal_on_direct_question",
-        "linked_rubric_items": [
-          "ht_risk_factor"
-        ]
+        "linked_rubric_items": []
       },
       {
         "fact_id": "acs_001.hf_05",

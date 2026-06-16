@@ -825,6 +825,28 @@ def test_learning_path_labels_mixed_case_missed_items_with_readable_text() -> No
         assert "at_thyroid_us" not in labels
 
 
+def test_profile_dimension_averages_label_humanistic_dimensions() -> None:
+    averages = main._get_dimension_averages(
+        [
+            {
+                "dimension_scores": {
+                    "relationship_building": 0,
+                    "medical_ethics": 1,
+                    "narrative_medicine": 3,
+                    "communication_skill": 4,
+                }
+            }
+        ]
+    )
+
+    labels_by_key = {item["key"]: item["label"] for item in averages}
+
+    assert labels_by_key["relationship_building"] == "关系建立"
+    assert labels_by_key["medical_ethics"] == "医学伦理"
+    assert labels_by_key["narrative_medicine"] == "叙事医学"
+    assert labels_by_key["communication_skill"] == "沟通技巧"
+
+
 def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_path) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")

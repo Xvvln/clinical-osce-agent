@@ -495,6 +495,19 @@ def test_rubric_evidence_must_exist_in_case() -> None:
         validate_case_rubric_pair(case_model, rubric_model)
 
 
+def test_case_linked_rubric_items_must_exist_in_rubric() -> None:
+    _, _, validate_case, validate_rubric, validate_case_rubric_pair = _load_step2_contract()
+    case_payload = build_valid_case_payload()
+    rubric_payload = build_valid_rubric_payload(case_id=case_payload["case_id"])
+    case_payload["history"]["hidden_facts"][0]["linked_rubric_items"] = ["ht_removed_legacy_item"]
+
+    case_model = validate_case(case_payload)
+    rubric_model = validate_rubric(rubric_payload)
+
+    with pytest.raises(Exception, match="case linked_rubric_items missing from rubric"):
+        validate_case_rubric_pair(case_model, rubric_model)
+
+
 def test_evidence_graph_node_source_must_exist_in_case() -> None:
     _, _, validate_case, _, _ = _load_step2_contract()
     payload = build_valid_case_payload()

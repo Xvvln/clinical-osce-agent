@@ -290,6 +290,10 @@ PROFILE_DIMENSION_LABELS: dict[str, str] = {
     "main_diagnosis": "主诊断",
     "differential_diagnosis": "鉴别诊断",
     "reasoning": "推理链",
+    "narrative_medicine": "叙事医学",
+    "communication_skill": "沟通技巧",
+    "medical_ethics": "医学伦理",
+    "relationship_building": "关系建立",
 }
 
 app = FastAPI(
