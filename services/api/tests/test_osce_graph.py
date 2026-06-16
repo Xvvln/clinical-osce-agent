@@ -1857,6 +1857,61 @@ def test_osce_graph_socratic_hint_does_not_inject_skill_before_student_action() 
     assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selected_skill_ids"] == []
 
 
+def test_osce_graph_socratic_hint_keeps_onboarding_before_untriggered_training_goal() -> None:
+    captured_requests: list[object] = []
+
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"should_emit": True, "hint": str(getattr(request, "base_hint")), "trigger_kind": "socratic_hint"}
+
+    graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
+
+    result = graph.invoke(
+        base_hint_state(
+            stage="case_intro",
+            active_skill_context={
+                "skill_index": [],
+                "selected_skills": [],
+                "skipped_reasons": [],
+                "current_training_gaps": [
+                    {
+                        "gap_type": "relationship_empathy_missing",
+                        "label": "患者表达担忧后给予共情回应",
+                        "trigger_stage": "history_taking",
+                        "next_training_action": "下一轮患者表达担忧后，先回应情绪再继续医学问诊。",
+                        "success_signal": "患者表达担忧后，先回应情绪再继续推进。",
+                        "skill_type": "relationship_repair",
+                        "status": "persistent",
+                        "priority": 10,
+                    }
+                ],
+                "humanistic_training_goals": [
+                    {
+                        "gap_type": "relationship_empathy_missing",
+                        "label": "患者表达担忧后给予共情回应",
+                        "trigger_stage": "history_taking",
+                        "next_training_action": "下一轮患者表达担忧后，先回应情绪再继续医学问诊。",
+                        "success_signal": "患者表达担忧后，先回应情绪再继续推进。",
+                        "skill_type": "relationship_repair",
+                        "status": "persistent",
+                        "priority": 10,
+                    }
+                ],
+            },
+        )
+    )
+
+    assert len(captured_requests) == 1
+    assert getattr(captured_requests[0], "prompt_kind") == "socratic_hint"
+    assert getattr(captured_requests[0], "base_hint") == (
+        "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
+    )
+    assert result["hint"] == getattr(captured_requests[0], "base_hint")
+    hint_context = getattr(captured_requests[0], "hint_context")
+    assert hint_context["hint_policy"]["intent"] == "case_onboarding"
+    assert hint_context["hint_policy"]["suppressed_goal_types"] == ["relationship_empathy_missing"]
+
+
 def test_osce_graph_socratic_hint_uses_training_goal_without_long_term_skill() -> None:
     captured_requests: list[object] = []
 

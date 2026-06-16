@@ -15,6 +15,11 @@ from app.services.agent_state_service import append_decision_trace, build_pedago
 from app.services.clinical_reasoning_trace_service import build_clinical_reasoning_trace
 from app.services.coach_agent import CoachRequest, create_default_coach_agent, normalize_coach_response, sanitize_coach_hint
 from app.services.coach_hint_context_service import build_coach_hint_context
+from app.services.coach_hint_policy_service import (
+    active_training_goals_from_state,
+    has_student_training_action,
+    resolve_coach_hint_policy,
+)
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.patient_language_service import (
@@ -610,8 +615,13 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     case_step_started_at, case_step_started_perf = _start_processing_step()
     pedagogy_state = build_pedagogy_state(dict(state))
     socratic_base_hint = _build_socratic_hint(state, pedagogy_state)
-    training_goal_hint = _active_training_goal_hint(state, fallback="")
-    base_hint = training_goal_hint or socratic_base_hint
+    hint_policy_decision = resolve_coach_hint_policy(
+        state=dict(state),
+        default_hint=socratic_base_hint,
+        training_goals=active_training_goals_from_state(state),
+    )
+    base_hint = hint_policy_decision.hint
+    training_goal_hint = hint_policy_decision.training_goal_hint
     selected_skill_context: list[str] = []
     selected_skill_ids: list[str] = []
     routed_skill_context: dict[str, Any] | None = None
@@ -655,6 +665,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         base_hint=base_hint,
         retrieved_knowledge_context=retrieved_knowledge_context,
     )
+    hint_context["hint_policy"] = hint_policy_decision.to_context_payload()
     turn_analysis = _boundary_turn_analysis("socratic_hint", "学生请求教学提示。")
     turn_policy = "teaching_hint"
     agent_path = ["socratic_hint_node", "coach_agent"]
@@ -1412,47 +1423,6 @@ def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> st
     return ""
 
 
-def _active_training_goal_hint(state: OsceGraphState, *, fallback: str) -> str:
-    active_skill_context = state.get("active_skill_context", {})
-    if not isinstance(active_skill_context, dict):
-        return fallback
-    goals = active_skill_context.get("humanistic_training_goals") or active_skill_context.get("current_training_gaps")
-    if not isinstance(goals, list):
-        return fallback
-    stage = str(state.get("stage") or "case_intro")
-    for goal in goals:
-        if not isinstance(goal, dict) or str(goal.get("status") or "") == "recovered":
-            continue
-        trigger_stage = str(goal.get("trigger_stage") or goal.get("stage") or "")
-        if not _training_goal_applies_to_stage(stage, trigger_stage):
-            continue
-        action = _training_goal_action_text(goal)
-        if action:
-            return action
-    return fallback
-
-
-def _training_goal_applies_to_stage(stage: str, trigger_stage: str) -> bool:
-    if not trigger_stage:
-        return True
-    normalized_stage = "auxiliary_test" if stage == "auxiliary_testing" else stage
-    normalized_trigger = "auxiliary_test" if trigger_stage == "auxiliary_testing" else trigger_stage
-    if normalized_stage == normalized_trigger:
-        return True
-    return normalized_trigger == "history_taking" and normalized_stage == "case_intro"
-
-
-def _training_goal_action_text(goal: dict[str, Any]) -> str:
-    action = str(goal.get("next_training_action") or "").strip()
-    if action:
-        return action.replace("下一轮", "本轮")
-    success_signal = str(goal.get("success_signal") or "").strip()
-    if success_signal:
-        return f"本轮训练目标：{success_signal}"
-    label = str(goal.get("label") or "").strip()
-    return f"本轮训练目标：{label}。" if label else ""
-
-
 def _compose_coach_base_hint(*, skill_hint: str, training_goal_hint: str, fallback: str) -> str:
     normalized_skill_hint = skill_hint.strip()
     normalized_training_goal_hint = training_goal_hint.strip()
@@ -1460,7 +1430,7 @@ def _compose_coach_base_hint(*, skill_hint: str, training_goal_hint: str, fallba
         if normalized_training_goal_hint in normalized_skill_hint:
             return normalized_skill_hint
         return f"{normalized_training_goal_hint}\n\n{normalized_skill_hint}"
-    return normalized_skill_hint or fallback
+    return normalized_skill_hint or normalized_training_goal_hint or fallback
 
 
 def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
@@ -1478,14 +1448,7 @@ def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:
 
 
 def _has_student_training_action(state: OsceGraphState) -> bool:
-    if state.get("asked_questions") or state.get("revealed_facts"):
-        return True
-    if state.get("requested_exams") or state.get("requested_tests") or state.get("student_hypotheses"):
-        return True
-    for message in state.get("messages", []):
-        if isinstance(message, dict) and message.get("role") == "student" and str(message.get("content") or "").strip():
-            return True
-    return False
+    return has_student_training_action(state)
 
 
 def _selected_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:

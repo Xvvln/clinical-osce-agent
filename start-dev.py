@@ -198,6 +198,8 @@ def _api_command() -> list[str]:
     command = [
         "uv",
         "run",
+        "python",
+        "-m",
         "uvicorn",
         "app.main:app",
         "--host",

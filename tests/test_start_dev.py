@@ -29,10 +29,12 @@ def test_api_command_uses_project_uv_environment() -> None:
     assert sys.executable not in command
     if start_dev.platform.system() == "Windows":
         assert command[:3] == ["cmd", "/c", "uv"]
-        assert command[3:6] == ["run", "uvicorn", "app.main:app"]
+        assert command[3:7] == ["run", "python", "-m", "uvicorn"]
+        assert command[7] == "app.main:app"
     else:
-        assert command[:3] == ["uv", "run", "uvicorn"]
-        assert command[3] == "app.main:app"
+        assert command[:4] == ["uv", "run", "python", "-m"]
+        assert command[4] == "uvicorn"
+        assert command[5] == "app.main:app"
     assert "--reload-dir" in command
     assert str(start_dev.API_DIR) in command
 
