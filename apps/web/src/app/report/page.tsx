@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   normalizeFeedbackReport,
   type AiReflectionReview,
+  type DeepReportAnalysis,
+  type DiagnosticEvidenceItem,
   type EvidenceGraphSummary,
   type ExplanationSourceItem,
   type FeedbackReport,
@@ -1131,6 +1133,7 @@ export default function ReportPage() {
             {report ? (
               <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
+            {report ? <DeepReportAnalysisSection analysis={report.deep_report_analysis} /> : null}
             {report ? (
               <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
@@ -1595,6 +1598,136 @@ function stringifyTeacherAnalysisValue(value: unknown): string {
     return "";
   }
   return String(value);
+}
+
+function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReportAnalysis }>) {
+  if (analysis.status !== "generated") {
+    return null;
+  }
+  const diagnostic = analysis.diagnostic_contrast_analysis;
+  const hasDiagnosticContent = diagnostic.submitted_diagnosis || diagnostic.target_diagnosis || diagnostic.teacher_explanation;
+  if (!hasDiagnosticContent) {
+    return null;
+  }
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2" id="deep-report-analysis">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className={sectionHeadingClassName}>深度训练分析</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            基于本轮已采集证据、鉴别诊断和推理 trace，解释诊断判断为什么成立或为什么需要修正。
+          </p>
+        </div>
+        <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {getDiagnosticClassificationLabel(diagnostic.classification)}
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-border bg-muted/20 p-4">
+          <p className="text-xs font-semibold text-muted-foreground">学生提交诊断</p>
+          <p className="mt-2 text-lg font-semibold text-foreground">{diagnostic.submitted_diagnosis || "未提交"}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-muted/20 p-4">
+          <p className="text-xs font-semibold text-muted-foreground">目标诊断</p>
+          <p className="mt-2 text-lg font-semibold text-foreground">{diagnostic.target_diagnosis || "暂无"}</p>
+        </div>
+      </div>
+      {diagnostic.teacher_explanation ? (
+        <div className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-4">
+          <h3 className="text-sm font-semibold text-foreground">为什么这样判断</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{diagnostic.teacher_explanation}</p>
+        </div>
+      ) : null}
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <DiagnosticTextList title="为什么会想到它" items={diagnostic.why_student_may_choose_it} emptyText="本轮没有足够材料解释该诊断来源。" />
+        <DiagnosticEvidenceList title="反对该诊断的证据" items={diagnostic.evidence_against_submitted} emptyText="本轮未采集到明确反对证据。" />
+        <DiagnosticEvidenceList title="更支持目标诊断的证据" items={diagnostic.evidence_supporting_target} emptyText="本轮目标诊断支持证据仍不足。" />
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <DiagnosticEvidenceList title="还需要补的鉴别证据" items={diagnostic.missed_discriminating_evidence} emptyText="暂无额外鉴别证据缺口。" />
+        <div className="rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">下一轮训练动作</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {diagnostic.next_training_action || "下一轮提交前先整理支持依据、反证依据和仍需补采的问题。"}
+          </p>
+          {diagnostic.reasoning_error_patterns.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {diagnostic.reasoning_error_patterns.map((pattern) => (
+                <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground" key={pattern}>
+                  {pattern}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DiagnosticTextList({
+  title,
+  items,
+  emptyText,
+}: Readonly<{
+  title: string;
+  items: readonly string[];
+  emptyText: string;
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      {items.length > 0 ? (
+        <ul className="mt-2 grid gap-2 text-sm leading-6 text-muted-foreground">
+          {items.map((item) => (
+            <li className="rounded-lg bg-background px-3 py-2" key={item}>
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function DiagnosticEvidenceList({
+  title,
+  items,
+  emptyText,
+}: Readonly<{
+  title: string;
+  items: readonly DiagnosticEvidenceItem[];
+  emptyText: string;
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      {items.length > 0 ? (
+        <ul className="mt-2 grid gap-2 text-sm leading-6 text-muted-foreground">
+          {items.map((item) => (
+            <li className="rounded-lg bg-background px-3 py-2" key={`${item.source_id}-${item.label}`}>
+              {item.label}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function getDiagnosticClassificationLabel(classification: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    correct: "诊断命中",
+    partially_correct: "方向接近",
+    plausible_differential: "合理鉴别",
+    contradicted_by_case: "证据反对",
+    unsupported: "证据不足",
+  };
+  return labels[classification] ?? classification;
 }
 
 function formatTeacherAnalysisKey(key: string): string {

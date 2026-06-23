@@ -1,6 +1,7 @@
 import {
   normalizeFeedbackReport,
   type AiReflectionReview,
+  type DeepReportAnalysis,
   type FeedbackReportPayload,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
@@ -74,6 +75,25 @@ const nextReport = {
       reason: "关联本轮缺失证据：白细胞升高支持急性炎症过程。",
     },
   ],
+  deep_report_analysis: {
+    version: "deep_report_analysis_v1",
+    status: "generated",
+    diagnostic_contrast_analysis: {
+      submitted_diagnosis: "急性胃肠炎",
+      target_diagnosis: "急性阑尾炎",
+      classification: "plausible_differential",
+      matched_target_terms: [],
+      matched_differential_name: "急性胃肠炎",
+      why_student_may_choose_it: ["恶心可能让学生想到胃肠炎。"],
+      evidence_supporting_submitted: [],
+      evidence_against_submitted: [{ source_id: "appendicitis_001.hf_05", label: "没有明显腹泻" }],
+      evidence_supporting_target: [{ source_id: "appendicitis_001.hf_02", label: "转移性右下腹痛" }],
+      missed_discriminating_evidence: [{ source_id: "lab.urinalysis", label: "尿常规" }],
+      reasoning_error_patterns: ["鉴别诊断过窄"],
+      teacher_explanation: "这个诊断有一定诱因，但已有证据更支持阑尾炎。",
+      next_training_action: "先列支持依据，再列反证 / 排除依据，最后提交诊断。",
+    },
+  },
 } satisfies FeedbackReportPayload;
 
 const normalizedLegacyReport = normalizeFeedbackReport(legacyReport);
@@ -81,15 +101,19 @@ const legacyLlmFeedbackItems: readonly LlmReasoningFeedbackItem[] = normalizedLe
 const legacyKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedLegacyReport.knowledge_recommendations;
 const legacyAiReflectionReview: AiReflectionReview = normalizedLegacyReport.ai_reflection_review;
 const legacyPersonalTrainingSkillCandidate: PersonalTrainingSkillCandidate = normalizedLegacyReport.personal_skill_candidate;
+const legacyDeepReportAnalysis: DeepReportAnalysis = normalizedLegacyReport.deep_report_analysis;
 const normalizedNextReport = normalizeFeedbackReport(nextReport);
 const nextKnowledgeRecommendations: readonly KnowledgeRecommendationItem[] = normalizedNextReport.knowledge_recommendations;
 const nextSourceReferenceItems: readonly SourceReferenceItem[] = normalizedNextReport.source_reference_items;
 const nextTrainingGap = normalizedNextReport.training_gaps[0];
+const nextDeepReportAnalysis: DeepReportAnalysis = normalizedNextReport.deep_report_analysis;
 
 void legacyLlmFeedbackItems;
 void legacyKnowledgeRecommendations;
 void legacyAiReflectionReview;
 void legacyPersonalTrainingSkillCandidate;
+void legacyDeepReportAnalysis;
 void nextKnowledgeRecommendations;
 void nextSourceReferenceItems;
 void nextTrainingGap;
+void nextDeepReportAnalysis;

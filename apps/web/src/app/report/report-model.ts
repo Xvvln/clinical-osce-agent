@@ -323,6 +323,39 @@ export type MissedOpportunityItem = Readonly<{
   next_training_action: string;
 }>;
 
+export type DiagnosticEvidenceItem = Readonly<{
+  source_id: string;
+  label: string;
+}>;
+
+export type DiagnosticContrastAnalysis = Readonly<{
+  submitted_diagnosis: string;
+  target_diagnosis: string;
+  classification: string;
+  matched_target_terms: readonly string[];
+  matched_differential_name: string;
+  why_student_may_choose_it: readonly string[];
+  evidence_supporting_submitted: readonly DiagnosticEvidenceItem[];
+  evidence_against_submitted: readonly DiagnosticEvidenceItem[];
+  evidence_supporting_target: readonly DiagnosticEvidenceItem[];
+  missed_discriminating_evidence: readonly DiagnosticEvidenceItem[];
+  reasoning_error_patterns: readonly string[];
+  teacher_explanation: string;
+  next_training_action: string;
+}>;
+
+export type DeepReportAnalysis = Readonly<{
+  version: string;
+  status: string;
+  diagnostic_contrast_analysis: DiagnosticContrastAnalysis;
+}>;
+
+type DeepReportAnalysisPayload = Readonly<
+  Partial<Omit<DeepReportAnalysis, "diagnostic_contrast_analysis">> & {
+    diagnostic_contrast_analysis?: Partial<DiagnosticContrastAnalysis>;
+  }
+>;
+
 export type FeedbackReportPayload = Readonly<{
   session_id: string;
   case_id: string;
@@ -347,6 +380,7 @@ export type FeedbackReportPayload = Readonly<{
   training_progress_snapshot?: ReportTrainingProgressSnapshot | null;
   ai_reflection_review?: Partial<AiReflectionReview>;
   personal_skill_candidate?: Partial<PersonalTrainingSkillCandidate>;
+  deep_report_analysis?: DeepReportAnalysisPayload;
   feedback_summary: string;
 }>;
 
@@ -365,6 +399,7 @@ export type FeedbackReport = FeedbackReportPayload &
     training_progress_snapshot: ReportTrainingProgressSnapshot | null;
     ai_reflection_review: AiReflectionReview;
     personal_skill_candidate: PersonalTrainingSkillCandidate;
+    deep_report_analysis: DeepReportAnalysis;
   }>;
 
 export function normalizeFeedbackReport(report: FeedbackReportPayload): FeedbackReport {
@@ -383,6 +418,48 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     training_progress_snapshot: report.training_progress_snapshot ?? null,
     ai_reflection_review: normalizeAiReflectionReview(report.ai_reflection_review),
     personal_skill_candidate: normalizePersonalTrainingSkillCandidate(report.personal_skill_candidate),
+    deep_report_analysis: normalizeDeepReportAnalysis(report.deep_report_analysis),
+  };
+}
+
+const DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS: DiagnosticContrastAnalysis = {
+  submitted_diagnosis: "",
+  target_diagnosis: "",
+  classification: "unsupported",
+  matched_target_terms: [],
+  matched_differential_name: "",
+  why_student_may_choose_it: [],
+  evidence_supporting_submitted: [],
+  evidence_against_submitted: [],
+  evidence_supporting_target: [],
+  missed_discriminating_evidence: [],
+  reasoning_error_patterns: [],
+  teacher_explanation: "",
+  next_training_action: "",
+};
+
+const DEFAULT_DEEP_REPORT_ANALYSIS: DeepReportAnalysis = {
+  version: "deep_report_analysis_v1",
+  status: "legacy_report",
+  diagnostic_contrast_analysis: DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS,
+};
+
+function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): DeepReportAnalysis {
+  const diagnosticContrast = analysis?.diagnostic_contrast_analysis ?? {};
+  return {
+    ...DEFAULT_DEEP_REPORT_ANALYSIS,
+    ...analysis,
+    diagnostic_contrast_analysis: {
+      ...DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS,
+      ...diagnosticContrast,
+      matched_target_terms: diagnosticContrast.matched_target_terms ?? [],
+      why_student_may_choose_it: diagnosticContrast.why_student_may_choose_it ?? [],
+      evidence_supporting_submitted: diagnosticContrast.evidence_supporting_submitted ?? [],
+      evidence_against_submitted: diagnosticContrast.evidence_against_submitted ?? [],
+      evidence_supporting_target: diagnosticContrast.evidence_supporting_target ?? [],
+      missed_discriminating_evidence: diagnosticContrast.missed_discriminating_evidence ?? [],
+      reasoning_error_patterns: diagnosticContrast.reasoning_error_patterns ?? [],
+    },
   };
 }
 
