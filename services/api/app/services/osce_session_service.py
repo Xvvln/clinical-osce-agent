@@ -29,6 +29,7 @@ from app.services.procedure_request_router import (
     ProcedureRequestRoutingRequest,
     create_default_procedure_request_router,
 )
+from app.services.deep_report_analysis_service import build_legacy_deep_report_analysis
 from app.services.report_store import ReportStore, report_store
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
@@ -1465,6 +1466,7 @@ def _ensure_personal_skill_report_defaults(
     ai_reflection_review.setdefault("source_references", [])
     ai_reflection_review.setdefault("source_reference_items", [])
     normalized_report["ai_reflection_review"] = ai_reflection_review
+    normalized_report.setdefault("deep_report_analysis", build_legacy_deep_report_analysis())
     return normalized_report
 
 

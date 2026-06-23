@@ -47,7 +47,10 @@ def build_diagnostic_contrast_analysis(*, report: Mapping[str, Any], case: Case)
     student_reasoning = str(final_submission.get("reasoning") or "").strip()
     matched_target_terms = _matched_target_terms(submitted_diagnosis, case)
     matched_differential = _matched_differential(submitted_diagnosis, case.diagnosis.differential_diagnoses)
-    covered_nodes = _evidence_nodes(report, "covered_evidence_nodes")
+    covered_nodes = _merge_evidence_nodes(
+        _evidence_nodes(report, "covered_evidence_nodes"),
+        _collected_case_fact_nodes(case, report.get("collected_source_ids")),
+    )
     missing_nodes = _evidence_nodes(report, "missing_evidence_nodes")
 
     classification = _classification(
@@ -187,6 +190,30 @@ def _evidence_nodes(report: Mapping[str, Any], key: str) -> list[dict[str, str]]
         label = str(node.get("label") or source_id).strip()
         if source_id:
             result.append({"source_id": source_id, "label": label})
+    return result
+
+
+def _collected_case_fact_nodes(case: Case, collected_source_ids: Any) -> list[dict[str, str]]:
+    if not isinstance(collected_source_ids, list):
+        return []
+    collected = {str(source_id) for source_id in collected_source_ids if str(source_id).strip()}
+    result: list[dict[str, str]] = []
+    for fact in case.history.hidden_facts:
+        if fact.fact_id in collected:
+            result.append({"source_id": fact.fact_id, "label": fact.canonical_answer})
+    return result
+
+
+def _merge_evidence_nodes(*groups: list[dict[str, str]]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for node in group:
+            source_id = node["source_id"]
+            if source_id in seen:
+                continue
+            seen.add(source_id)
+            result.append(node)
     return result
 
 

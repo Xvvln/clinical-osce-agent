@@ -8,7 +8,7 @@ from app import main
 from app.graph.osce_graph import build_osce_graph
 from app.main import AUTH_COOKIE_NAME, app
 from app.services.auth_store import AuthStore
-from app.services.osce_session_service import osce_session_service
+from app.services.osce_session_service import _ensure_personal_skill_report_defaults, osce_session_service
 from app.services.osce_session_store import OsceSessionStore
 from app.services.procedure_result_simulator import ProcedureResultSimulationResponse
 from app.services.report_store import ReportStore
@@ -103,6 +103,13 @@ def test_create_session_requires_logged_in_user() -> None:
 
     assert create_response.status_code == 401
     assert create_response.json() == {"detail": "not authenticated"}
+
+
+def test_legacy_report_defaults_include_deep_report_analysis() -> None:
+    report = _ensure_personal_skill_report_defaults({"report_id": "legacy_report"})
+
+    assert report["deep_report_analysis"]["status"] == "legacy_report"
+    assert report["deep_report_analysis"]["diagnostic_contrast_analysis"]["classification"] == "unsupported"
 
 
 def test_procedure_catalog_does_not_expose_case_specific_configuration() -> None:

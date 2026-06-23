@@ -1,7 +1,7 @@
 import pytest
 
 from app.graph import osce_graph as osce_graph_module
-from app.graph.osce_graph import build_osce_graph
+from app.graph.osce_graph import build_osce_graph, feedback_node
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
@@ -33,6 +33,44 @@ def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
         ][:limit],
         raising=False,
     )
+
+
+def test_feedback_node_attaches_deep_diagnostic_contrast_analysis() -> None:
+    result = feedback_node(
+        {
+            "session_id": "deep-report-session",
+            "case_id": "appendicitis_001",
+            "stage": "evaluation",
+            "asked_questions": [],
+            "revealed_facts": ["appendicitis_001.hf_02", "appendicitis_001.hf_05"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "final_submission": {
+                "diagnosis": "急性胃肠炎",
+                "reasoning": "患者恶心，我考虑急性胃肠炎。",
+            },
+            "feedback_report": {
+                "session_id": "deep-report-session",
+                "case_id": "appendicitis_001",
+                "total_score": 0,
+                "max_score": 100,
+                "dimension_scores": {},
+                "dimension_traces": {},
+                "rubric_scores": {},
+                "missed_items": [],
+                "training_gaps": [],
+            },
+        }
+    )
+
+    analysis = result["feedback_report"]["deep_report_analysis"]
+    diagnostic_contrast = analysis["diagnostic_contrast_analysis"]
+    assert analysis["status"] == "generated"
+    assert diagnostic_contrast["classification"] == "plausible_differential"
+    assert diagnostic_contrast["submitted_diagnosis"] == "急性胃肠炎"
+    assert diagnostic_contrast["target_diagnosis"] == "急性阑尾炎"
+    assert diagnostic_contrast["matched_differential_name"] == "急性胃肠炎"
+    assert any("明显腹泻" in item["label"] for item in diagnostic_contrast["evidence_against_submitted"])
 
 
 def base_hint_state(**overrides: object) -> dict[str, object]:

@@ -26,6 +26,7 @@ from app.services.coach_hint_policy_service import (
     has_student_training_action,
     resolve_coach_hint_policy,
 )
+from app.services.deep_report_analysis_service import build_deep_report_analysis
 from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.patient_language_service import (
@@ -1026,6 +1027,22 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         case=case,
         report=report,
     )
+    deep_report_analysis = build_deep_report_analysis(
+        report={
+            **report,
+            "final_submission": state.get("final_submission"),
+            "evidence_graph_summary": evidence_graph_summary,
+            "clinical_reasoning_trace": clinical_reasoning_trace,
+            "collected_source_ids": list(
+                _collected_source_ids(
+                    state.get("revealed_facts", []),
+                    state.get("requested_exams", []),
+                    state.get("requested_tests", []),
+                )
+            ),
+        },
+        case=case,
+    )
 
     feedback_report = {
         **report,
@@ -1038,6 +1055,7 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "explanation_source_items": explanation_source_items,
         "evidence_graph_summary": evidence_graph_summary,
         "clinical_reasoning_trace": clinical_reasoning_trace,
+        "deep_report_analysis": deep_report_analysis,
         "source_references": source_references,
         "source_reference_items": [_serialize_feedback_source_item(item) for item in source_items],
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
