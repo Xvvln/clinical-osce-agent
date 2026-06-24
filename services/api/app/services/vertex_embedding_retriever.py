@@ -112,11 +112,13 @@ def build_vertex_embedding_client_from_environment() -> VertexTextEmbeddingClien
         return None
 
     project = _env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT")
-    if not project:
+    api_key = _env("OSCE_VERTEX_EMBEDDING_API_KEY") or _env("OSCE_VERTEX_API_KEY")
+    if not project and not api_key:
         return None
 
     settings = VertexEmbeddingSettings(
         project=project,
+        api_key=api_key,
         location=_env("OSCE_VERTEX_EMBEDDING_LOCATION") or _env("OSCE_VERTEX_LOCATION", DEFAULT_VERTEX_EMBEDDING_LOCATION),
         model=_env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL),
         output_dimensionality=_int_env("OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY", DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY),

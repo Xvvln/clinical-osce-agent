@@ -66,6 +66,16 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_CHROMA_ENABLED",
         "CHROMA_PERSIST_DIRECTORY",
         "OSCE_CHROMA_COLLECTION",
+        "OSCE_DASHSCOPE_RERANK_ENABLED",
+        "OSCE_DASHSCOPE_RERANK_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "OSCE_DASHSCOPE_RERANK_BASE_URL",
+        "OSCE_DASHSCOPE_RERANK_MODEL",
+        "OSCE_DASHSCOPE_RERANK_TOP_K",
+        "OSCE_DASHSCOPE_RERANK_CANDIDATE_K",
+        "OSCE_DASHSCOPE_RERANK_INSTRUCT",
+        "OSCE_DASHSCOPE_RERANK_PROXY_URL",
+        "OSCE_DASHSCOPE_RERANK_TIMEOUT_SECONDS",
         "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING",
     ]:
         monkeypatch.delenv(env_name, raising=False)
@@ -75,6 +85,8 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_ANTHROPIC_API_KEY",
         "OSCE_GEMINI_PATIENT_API_KEY",
         "OSCE_VERTEX_API_KEY",
+        "OSCE_DASHSCOPE_RERANK_API_KEY",
+        "DASHSCOPE_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
     ]:

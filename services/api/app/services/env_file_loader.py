@@ -4,7 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_API_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+DEFAULT_API_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
 
 
 def load_api_env_file(env_file: Path = DEFAULT_API_ENV_FILE) -> bool:

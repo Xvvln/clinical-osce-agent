@@ -8,6 +8,12 @@ from app.services.chroma_retriever import (
     build_chroma_manifest_status,
     resolve_chroma_persist_directory,
 )
+from app.services.dashscope_reranker import (
+    DEFAULT_DASHSCOPE_RERANK_BASE_URL,
+    DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K,
+    DEFAULT_DASHSCOPE_RERANK_MODEL,
+    DEFAULT_DASHSCOPE_RERANK_TOP_K,
+)
 from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
 from app.services.local_embedding_retriever import DEFAULT_LOCAL_EMBEDDING_MODEL
 from app.services.retrieval_index import ROOT_DIR, get_chroma_source_documents
@@ -34,6 +40,7 @@ def build_admin_model_config() -> dict[str, Any]:
             _vertex_embedding_retrieval_config(),
             _local_embedding_retrieval_config(),
             _chroma_retrieval_config(),
+            _dashscope_rerank_config(),
             _openai_compatible_config(),
         ],
     }
@@ -225,6 +232,46 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         ),
         integration_status="wired_optional",
         notes="通过本地 ChromaDB PersistentClient 持久化 RAG 来源片段向量；当前搭配 Vertex embedding 使用，只用于反馈解释、学习推荐和引用展示，不参与诊断或评分裁判。",
+    )
+
+
+def _dashscope_rerank_config() -> dict[str, Any]:
+    enabled = _truthy_env("OSCE_DASHSCOPE_RERANK_ENABLED")
+    api_key = _env("OSCE_DASHSCOPE_RERANK_API_KEY") or _env("DASHSCOPE_API_KEY")
+    base_url = _env("OSCE_DASHSCOPE_RERANK_BASE_URL", DEFAULT_DASHSCOPE_RERANK_BASE_URL)
+    model = _env("OSCE_DASHSCOPE_RERANK_MODEL", DEFAULT_DASHSCOPE_RERANK_MODEL)
+    top_k = _env("OSCE_DASHSCOPE_RERANK_TOP_K", str(DEFAULT_DASHSCOPE_RERANK_TOP_K))
+    candidate_k = _env("OSCE_DASHSCOPE_RERANK_CANDIDATE_K", str(DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K))
+    proxy_url = _env("OSCE_DASHSCOPE_RERANK_PROXY_URL", "direct")
+    secret_configured = bool(api_key)
+    configured = enabled and secret_configured and bool(base_url) and bool(model)
+    return _provider_config(
+        provider_id="dashscope_rerank",
+        label="DashScope Qwen3 RAG 重排序",
+        capability="对向量召回候选片段做可选 rerank，提升 RAG 来源片段排序质量",
+        enabled=enabled,
+        configured=configured,
+        secret_configured=secret_configured,
+        auth_mode="api_key",
+        model=model,
+        base_url=base_url,
+        proxy_url=proxy_url,
+        required_env=[
+            "OSCE_DASHSCOPE_RERANK_ENABLED=true",
+            "OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY",
+            "OSCE_DASHSCOPE_RERANK_BASE_URL",
+            "OSCE_DASHSCOPE_RERANK_MODEL",
+        ],
+        missing_env=[] if configured else _missing_when_enabled(
+            enabled,
+            [
+                ("OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY", "configured" if secret_configured else ""),
+                ("OSCE_DASHSCOPE_RERANK_BASE_URL", base_url),
+                ("OSCE_DASHSCOPE_RERANK_MODEL", model),
+            ],
+        ),
+        integration_status="wired_optional",
+        notes=f"默认关闭；开启后先召回最多 {candidate_k} 个候选，再重排返回最多 {top_k} 个结果。失败时回退原向量排序，不参与评分裁判。",
     )
 
 

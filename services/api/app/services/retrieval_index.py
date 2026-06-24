@@ -5,7 +5,7 @@ import logging
 import math
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
@@ -13,6 +13,7 @@ from typing import Any, Protocol
 import yaml
 
 from app.services.chroma_retriever import ChromaSourceDocument, build_chroma_retrieval_index_from_environment
+from app.services.dashscope_reranker import DashScopeReranker, build_dashscope_reranker_from_environment
 from app.services.local_embedding_retriever import (
     build_local_embedding_client_from_environment,
     get_local_embedding_model_name_from_environment,
@@ -66,6 +67,9 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
         LOGGER.warning("RAG vector retrieval skipped because no embedding client is configured")
         return results_by_query
 
+    reranker = _build_dashscope_reranker()
+    retrieval_limit = _rerank_candidate_limit(limit, reranker)
+
     for embedding_client, embedding_model in embedding_clients:
         try:
             chroma_index = build_chroma_retrieval_index_from_environment(
@@ -77,10 +81,10 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
             if chroma_index is not None:
                 chroma_results_by_query = chroma_index.search_batch(
                     [query for _, query in active_queries],
-                    limit=limit,
+                    limit=retrieval_limit,
                 )
                 for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
-                    results_by_query[original_index] = [
+                    vector_results = [
                         RetrievalDocument(
                             reference=result.reference,
                             source_type=result.source_type,
@@ -90,6 +94,12 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
                         )
                         for result in chroma_results
                     ]
+                    results_by_query[original_index] = _apply_dashscope_rerank(
+                        normalized_queries[original_index],
+                        vector_results,
+                        limit=limit,
+                        reranker=reranker,
+                    )
                 return results_by_query
         except Exception as exc:
             if _is_embedding_quota_error(exc):
@@ -110,6 +120,7 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
                 [query for _, query in active_queries],
                 embedding_client=embedding_client,
                 limit=limit,
+                reranker=reranker,
             )
             for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
                 results_by_query[original_index] = embedding_results
@@ -166,6 +177,7 @@ def search_retrieval_documents_with_embeddings_batch(
     *,
     embedding_client: EmbeddingClient,
     limit: int = 5,
+    reranker: DashScopeReranker | None = None,
 ) -> list[list[RetrievalDocument]]:
     normalized_queries = [str(query).strip() for query in queries]
     results_by_query: list[list[RetrievalDocument]] = [[] for _ in normalized_queries]
@@ -177,6 +189,8 @@ def search_retrieval_documents_with_embeddings_batch(
     if limit <= 0 or not active_queries:
         return results_by_query
 
+    reranker = reranker if reranker is not None else _build_dashscope_reranker()
+    retrieval_limit = _rerank_candidate_limit(limit, reranker)
     documents = list(_retrieval_documents())
     query_vectors = embedding_client.embed_texts(
         [query for _, query in active_queries],
@@ -203,11 +217,17 @@ def search_retrieval_documents_with_embeddings_batch(
             )
             for document, document_vector in zip(documents, document_vectors)
         ]
-        results_by_query[original_index] = [
+        vector_results = [
             document
             for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
             if document.score > 0
-        ][:limit]
+        ][:retrieval_limit]
+        results_by_query[original_index] = _apply_dashscope_rerank(
+            normalized_queries[original_index],
+            vector_results,
+            limit=limit,
+            reranker=reranker,
+        )
     return results_by_query
 
 
@@ -373,6 +393,62 @@ def _rubric_documents() -> list[RetrievalDocument]:
 
 def _document_embedding_text(document: RetrievalDocument) -> str:
     return f"{document.source_type}\n{document.reference}\n{document.title}\n{document.snippet}"
+
+
+def _build_dashscope_reranker() -> DashScopeReranker | None:
+    try:
+        return build_dashscope_reranker_from_environment()
+    except Exception as exc:
+        LOGGER.warning("DashScope reranker initialization failed; continuing without rerank: %s", exc)
+        return None
+
+
+def _rerank_candidate_limit(result_limit: int, reranker: DashScopeReranker | None) -> int:
+    if reranker is None:
+        return result_limit
+    return reranker.candidate_limit(result_limit)
+
+
+def _apply_dashscope_rerank(
+    query: str,
+    documents: Sequence[RetrievalDocument],
+    *,
+    limit: int,
+    reranker: DashScopeReranker | None = None,
+) -> list[RetrievalDocument]:
+    vector_results = list(documents)
+    if limit <= 0 or not vector_results:
+        return []
+
+    reranker = reranker if reranker is not None else _build_dashscope_reranker()
+    if reranker is None or len(vector_results) <= 1:
+        return vector_results[:limit]
+
+    try:
+        rerank_results = reranker.rerank(
+            query,
+            [_document_embedding_text(document) for document in vector_results],
+            top_k=reranker.top_limit(limit, len(vector_results)),
+        )
+    except Exception as exc:
+        LOGGER.warning("DashScope rerank failed; using vector order: %s", exc)
+        return vector_results[:limit]
+
+    reranked_documents: list[RetrievalDocument] = []
+    used_indexes: set[int] = set()
+    for result in rerank_results:
+        if result.index < 0 or result.index >= len(vector_results) or result.index in used_indexes:
+            continue
+        used_indexes.add(result.index)
+        reranked_documents.append(replace(vector_results[result.index], score=result.relevance_score))
+
+    if len(reranked_documents) < limit:
+        reranked_documents.extend(
+            document
+            for index, document in enumerate(vector_results)
+            if index not in used_indexes
+        )
+    return reranked_documents[:limit]
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
