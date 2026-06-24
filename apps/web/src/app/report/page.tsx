@@ -15,8 +15,10 @@ import {
   type ExplanationSourceItem,
   type FeedbackReport,
   type FeedbackReportPayload,
+  type HumanisticCommunicationAnalysis,
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
+  type NextTrainingPlan,
   type PersonalTrainingSkillCandidate,
   type ProcessSequenceFlag,
   type ProcedureSimulationAuditItem,
@@ -1613,6 +1615,8 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
   const clinicalTasks = Object.values(analysis.clinical_task_analysis).filter((item) => item.score > 0 || item.missed_items.length > 0);
   const evidenceUtilization = analysis.evidence_utilization_analysis;
   const processStrategy = analysis.process_strategy_analysis;
+  const humanistic = analysis.humanistic_communication_analysis;
+  const nextTrainingPlan = analysis.next_training_plan;
   const hasDeepContent =
     overall.summary ||
     diagnostic.submitted_diagnosis ||
@@ -1620,7 +1624,10 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
     diagnostic.teacher_explanation ||
     clinicalTasks.length > 0 ||
     evidenceUtilization.evidence_chain_breakpoints.length > 0 ||
-    processStrategy.sequence_flags.length > 0;
+    processStrategy.sequence_flags.length > 0 ||
+    humanistic.matched_evidence.length > 0 ||
+    humanistic.missed_opportunities.length > 0 ||
+    nextTrainingPlan.top_goals.length > 0;
   if (!hasDeepContent) {
     return null;
   }
@@ -1703,6 +1710,10 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
           flags={processStrategy.sequence_flags}
           actions={processStrategy.premature_or_delayed_actions}
         />
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <HumanisticCommunicationCard analysis={humanistic} />
+        <NextTrainingPlanCard plan={nextTrainingPlan} />
       </div>
     </section>
   );
@@ -1850,6 +1861,110 @@ function ProcessStrategyCard({
             <li className="rounded-lg border border-border bg-background p-3" key={action}>
               {action}
             </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function HumanisticCommunicationCard({ analysis }: Readonly<{ analysis: HumanisticCommunicationAnalysis }>) {
+  const activeDimensions = analysis.dimension_scores.filter((item) => item.score > 0 || item.completion_level !== "missing");
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">人文沟通复盘</h3>
+      {activeDimensions.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {activeDimensions.map((item) => (
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground" key={item.dimension_id}>
+              {item.label} {item.score}/{item.max_score}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {analysis.matched_evidence.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold text-muted-foreground">已命中证据句</p>
+          <ul className="mt-2 grid gap-2">
+            {analysis.matched_evidence.slice(0, 3).map((item) => (
+              <li className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground" key={`${item.rubric_item_id}-${item.label}`}>
+                <p className="font-medium text-foreground">{item.label}</p>
+                <p className="mt-1">{item.matched_evidence.join("、")}</p>
+                {item.match_method ? <p className="mt-1">方法：{item.match_method}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {analysis.missed_opportunities.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold text-muted-foreground">错失机会</p>
+          <ul className="mt-2 grid gap-2">
+            {analysis.missed_opportunities.slice(0, 3).map((item) => (
+              <li className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground" key={item.opportunity_id}>
+                <p className="font-medium text-foreground">{item.trigger_evidence}</p>
+                <p className="mt-1">{item.expected_response}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {analysis.relationship_repair_actions.length > 0 ? (
+        <ul className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground">
+          {analysis.relationship_repair_actions.slice(0, 3).map((action) => (
+            <li className="rounded-lg border border-dashed border-border bg-background p-3" key={action}>
+              {action}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {activeDimensions.length === 0 && analysis.matched_evidence.length === 0 && analysis.missed_opportunities.length === 0 ? (
+        <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+          本轮暂无可展示的人文沟通证据。
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function NextTrainingPlanCard({ plan }: Readonly<{ plan: NextTrainingPlan }>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">下一轮训练计划</h3>
+      {plan.top_goals.length > 0 ? (
+        <ol className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground">
+          {plan.top_goals.slice(0, 3).map((goal, index) => (
+            <li className="rounded-lg border border-border bg-background p-3" key={`${goal.gap_type}-${goal.label}`}>
+              <p className="font-medium text-foreground">
+                {index + 1}. {goal.label}
+              </p>
+              <p className="mt-1">触发：{goal.trigger}</p>
+              <p className="mt-1">动作：{goal.next_training_action}</p>
+              <p className="mt-1">成功信号：{goal.success_signal}</p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">
+          暂无结构化下一轮训练目标。
+        </p>
+      )}
+      {plan.stage_triggered_actions.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold text-muted-foreground">阶段触发动作</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {plan.stage_triggered_actions.slice(0, 4).map((item) => (
+              <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground" key={`${item.stage}-${item.gap_type}`}>
+                {item.stage} · {item.trigger}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {plan.success_signals.length > 0 ? (
+        <ul className="mt-3 grid gap-1.5 text-xs leading-5 text-muted-foreground">
+          {plan.success_signals.slice(0, 3).map((signal) => (
+            <li key={signal}>{signal}</li>
           ))}
         </ul>
       ) : null}

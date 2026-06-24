@@ -40,6 +40,15 @@ _CLINICAL_DIMENSIONS: tuple[dict[str, Any], ...] = (
 
 _CLINICAL_DIMENSION_BY_ID = {dimension["dimension_id"]: dimension for dimension in _CLINICAL_DIMENSIONS}
 
+_HUMANISTIC_DIMENSIONS: tuple[dict[str, Any], ...] = (
+    {"dimension_id": "narrative_medicine", "label": "叙事医学", "max_score": 8},
+    {"dimension_id": "communication_skill", "label": "沟通技巧", "max_score": 10},
+    {"dimension_id": "medical_ethics", "label": "医学伦理", "max_score": 7},
+    {"dimension_id": "relationship_building", "label": "关系建立", "max_score": 5},
+)
+
+_HUMANISTIC_DIMENSION_IDS = {str(dimension["dimension_id"]) for dimension in _HUMANISTIC_DIMENSIONS}
+
 
 def build_deep_report_analysis(*, report: Mapping[str, Any], case: Case) -> dict[str, Any]:
     return {
@@ -50,6 +59,8 @@ def build_deep_report_analysis(*, report: Mapping[str, Any], case: Case) -> dict
         "clinical_task_analysis": build_clinical_task_analysis(report=report),
         "evidence_utilization_analysis": build_evidence_utilization_analysis(report=report, case=case),
         "process_strategy_analysis": build_process_strategy_analysis(report=report),
+        "humanistic_communication_analysis": build_humanistic_communication_analysis(report=report),
+        "next_training_plan": build_next_training_plan(report=report),
     }
 
 
@@ -62,6 +73,8 @@ def build_legacy_deep_report_analysis() -> dict[str, Any]:
         "clinical_task_analysis": _empty_clinical_task_analysis(),
         "evidence_utilization_analysis": _empty_evidence_utilization_analysis(),
         "process_strategy_analysis": _empty_process_strategy_analysis(),
+        "humanistic_communication_analysis": _empty_humanistic_communication_analysis(),
+        "next_training_plan": _empty_next_training_plan(),
     }
 
 
@@ -125,6 +138,35 @@ def build_process_strategy_analysis(*, report: Mapping[str, Any]) -> dict[str, A
         "action_order_summary": _action_order_summary_text(action_order_summary, flags),
         "sequence_flags": flags[:6],
         "premature_or_delayed_actions": [_sequence_flag_action(flag) for flag in flags[:4]],
+    }
+
+
+def build_humanistic_communication_analysis(*, report: Mapping[str, Any]) -> dict[str, Any]:
+    missed_opportunities = _missed_opportunities(report)
+    repair_actions = _relationship_repair_actions(report, missed_opportunities)
+    return {
+        **_empty_humanistic_communication_analysis(),
+        "dimension_scores": [_humanistic_dimension_score(report, dimension) for dimension in _HUMANISTIC_DIMENSIONS],
+        "matched_evidence": _humanistic_matched_evidence(report),
+        "missed_opportunities": missed_opportunities,
+        "relationship_repair_actions": repair_actions,
+    }
+
+
+def build_next_training_plan(*, report: Mapping[str, Any]) -> dict[str, Any]:
+    linked_gaps = _linked_training_gaps(report)
+    top_goals = sorted(
+        (_training_goal_from_gap(gap) for gap in linked_gaps),
+        key=lambda item: item["priority"],
+        reverse=True,
+    )[:5]
+    stage_actions = [_stage_triggered_action_from_goal(goal) for goal in top_goals]
+    return {
+        **_empty_next_training_plan(),
+        "top_goals": top_goals,
+        "stage_triggered_actions": stage_actions,
+        "success_signals": [_success_signal_from_goal(goal) for goal in top_goals],
+        "linked_training_gaps": linked_gaps,
     }
 
 
@@ -250,6 +292,33 @@ def _empty_process_strategy_analysis() -> dict[str, Any]:
         "action_order_summary": "本轮暂缺足够事件顺序信息。",
         "sequence_flags": [],
         "premature_or_delayed_actions": [],
+    }
+
+
+def _empty_humanistic_communication_analysis() -> dict[str, Any]:
+    return {
+        "dimension_scores": [
+            {
+                "dimension_id": str(dimension["dimension_id"]),
+                "label": str(dimension["label"]),
+                "score": 0,
+                "max_score": int(dimension["max_score"]),
+                "completion_level": "missing",
+            }
+            for dimension in _HUMANISTIC_DIMENSIONS
+        ],
+        "matched_evidence": [],
+        "missed_opportunities": [],
+        "relationship_repair_actions": [],
+    }
+
+
+def _empty_next_training_plan() -> dict[str, Any]:
+    return {
+        "top_goals": [],
+        "stage_triggered_actions": [],
+        "success_signals": [],
+        "linked_training_gaps": [],
     }
 
 
@@ -568,6 +637,238 @@ def _sequence_flag_action(flag: Mapping[str, Any]) -> str:
     if "testing" in flag_id or "检查" in label:
         return "下一轮申请辅助检查前，先完成关键查体并说明检查要验证什么。"
     return f"下一轮围绕“{label or flag_id}”调整训练顺序。"
+
+
+def _humanistic_dimension_score(report: Mapping[str, Any], dimension: Mapping[str, Any]) -> dict[str, Any]:
+    dimension_id = str(dimension["dimension_id"])
+    score = _dimension_score(report, dimension_id)
+    max_score = int(dimension["max_score"])
+    return {
+        "dimension_id": dimension_id,
+        "label": str(dimension["label"]),
+        "score": int(score) if score.is_integer() else score,
+        "max_score": max_score,
+        "completion_level": _task_completion_level(score, max_score),
+    }
+
+
+def _humanistic_matched_evidence(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for dimension in _HUMANISTIC_DIMENSIONS:
+        dimension_id = str(dimension["dimension_id"])
+        for trace in _dimension_trace_items(report, dimension_id):
+            evidence = _string_list(trace.get("matched_evidence"))
+            if not evidence or _trace_score(trace) <= 0:
+                continue
+            result.append(
+                {
+                    "dimension_id": dimension_id,
+                    "dimension_label": str(dimension["label"]),
+                    "rubric_item_id": _trace_item_id(trace),
+                    "label": str(trace.get("label") or _trace_item_id(trace) or "人文沟通证据"),
+                    "score": _trace_score(trace),
+                    "max_score": _trace_max_score(trace),
+                    "stage": str(trace.get("stage") or ""),
+                    "matched_evidence": evidence,
+                    "match_method": str(trace.get("match_method") or trace.get("match_kind") or ""),
+                    "timing_status": str(trace.get("timing_status") or ""),
+                }
+            )
+    return result[:8]
+
+
+def _missed_opportunities(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    opportunities = report.get("missed_opportunities")
+    if not isinstance(opportunities, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for opportunity in opportunities:
+        if not isinstance(opportunity, Mapping):
+            continue
+        opportunity_id = str(opportunity.get("opportunity_id") or "").strip()
+        gap_type = str(opportunity.get("gap_type") or "").strip()
+        if not opportunity_id and not gap_type:
+            continue
+        result.append(
+            {
+                "opportunity_id": opportunity_id or gap_type,
+                "gap_type": gap_type,
+                "stage": str(opportunity.get("stage") or ""),
+                "trigger_evidence": str(opportunity.get("trigger_evidence") or ""),
+                "expected_response": str(opportunity.get("expected_response") or ""),
+                "next_training_action": str(opportunity.get("next_training_action") or ""),
+            }
+        )
+    return result[:8]
+
+
+def _relationship_repair_actions(
+    report: Mapping[str, Any],
+    missed_opportunities: list[dict[str, Any]],
+) -> list[str]:
+    actions: list[str] = []
+    for opportunity in missed_opportunities:
+        action = str(opportunity.get("next_training_action") or "").strip()
+        if action and action not in actions:
+            actions.append(action)
+    for gap in _linked_training_gaps(report):
+        if str(gap.get("skill_type") or "") != "relationship_repair" and "relationship" not in str(gap.get("gap_type") or ""):
+            continue
+        action = str(gap.get("next_training_action") or "").strip()
+        if action and action not in actions:
+            actions.append(action)
+    return actions[:4]
+
+
+def _linked_training_gaps(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    gaps = report.get("training_gaps")
+    if not isinstance(gaps, list):
+        return []
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for gap in gaps:
+        if not isinstance(gap, Mapping):
+            continue
+        dimension_id = str(gap.get("dimension_id") or "").strip()
+        gap_type = str(gap.get("gap_type") or "").strip()
+        gap_source = str(gap.get("gap_source") or "").strip()
+        if dimension_id not in _HUMANISTIC_DIMENSION_IDS and gap_source != "missed_opportunity" and not _is_humanistic_gap_type(gap_type):
+            continue
+        dedupe_key = f"{gap_type}:{gap.get('rubric_item_id') or ''}:{gap_source}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        result.append(
+            {
+                "dimension_id": dimension_id,
+                "rubric_item_id": str(gap.get("rubric_item_id") or ""),
+                "gap_type": gap_type,
+                "label": str(gap.get("label") or gap_type),
+                "missing_score": _number(gap.get("missing_score")),
+                "severity": str(gap.get("severity") or "medium"),
+                "stage": str(gap.get("stage") or ""),
+                "trigger_stage": str(gap.get("trigger_stage") or gap.get("stage") or ""),
+                "next_training_action": str(gap.get("next_training_action") or ""),
+                "skill_type": str(gap.get("skill_type") or ""),
+                "gap_source": gap_source,
+            }
+        )
+    return result[:10]
+
+
+def _is_humanistic_gap_type(gap_type: str) -> bool:
+    return any(token in gap_type for token in ["narrative", "communication", "ethics", "relationship", "empathy", "consent"])
+
+
+def _training_goal_from_gap(gap: Mapping[str, Any]) -> dict[str, Any]:
+    gap_type = str(gap.get("gap_type") or "")
+    trigger = _trigger_for_gap(gap)
+    action = str(gap.get("next_training_action") or _default_gap_action(gap_type))
+    success_signal = _success_signal_text(gap_type)
+    return {
+        "gap_type": gap_type,
+        "label": str(gap.get("label") or gap_type),
+        "dimension_id": str(gap.get("dimension_id") or ""),
+        "stage": str(gap.get("trigger_stage") or gap.get("stage") or _stage_for_gap_type(gap_type)),
+        "priority": _gap_priority(gap),
+        "severity": str(gap.get("severity") or "medium"),
+        "trigger": trigger,
+        "next_training_action": action,
+        "success_signal": success_signal,
+        "skill_type": str(gap.get("skill_type") or _skill_type_for_gap(gap_type)),
+        "gap_source": str(gap.get("gap_source") or ""),
+    }
+
+
+def _gap_priority(gap: Mapping[str, Any]) -> float:
+    severity_bonus = {"high": 4, "medium": 2, "low": 0}.get(str(gap.get("severity") or "medium"), 1)
+    source_bonus = 3 if str(gap.get("gap_source") or "") == "missed_opportunity" else 0
+    ethics_bonus = 2 if "ethics" in str(gap.get("gap_type") or "") or "consent" in str(gap.get("gap_type") or "") else 0
+    return _number(gap.get("missing_score")) + severity_bonus + source_bonus + ethics_bonus
+
+
+def _stage_triggered_action_from_goal(goal: Mapping[str, Any]) -> dict[str, Any]:
+    gap_type = str(goal.get("gap_type") or "")
+    return {
+        "stage": str(goal.get("stage") or _stage_for_gap_type(gap_type)),
+        "trigger": str(goal.get("trigger") or _trigger_for_gap(goal)),
+        "action": str(goal.get("next_training_action") or _default_gap_action(gap_type)),
+        "gap_type": gap_type,
+        "success_signal": str(goal.get("success_signal") or _success_signal_text(gap_type)),
+    }
+
+
+def _success_signal_from_goal(goal: Mapping[str, Any]) -> str:
+    label = str(goal.get("label") or goal.get("gap_type") or "训练目标")
+    signal = str(goal.get("success_signal") or _success_signal_text(str(goal.get("gap_type") or "")))
+    return f"完成标志：{label}；{signal}"
+
+
+def _trigger_for_gap(gap: Mapping[str, Any]) -> str:
+    gap_type = str(gap.get("gap_type") or "")
+    if "empathy" in gap_type or "relationship" in gap_type:
+        return "患者表达焦虑或担忧"
+    if "consent" in gap_type or "ethics" in gap_type:
+        return "准备查体或辅助检查前"
+    if "summary" in gap_type or "communication" in gap_type:
+        return "阶段转换或提交诊断前"
+    if "narrative" in gap_type or "perspective" in gap_type:
+        return "问诊早期了解患者视角时"
+    return str(gap.get("trigger_stage") or gap.get("stage") or "下一轮对应阶段")
+
+
+def _stage_for_gap_type(gap_type: str) -> str:
+    if "consent" in gap_type or "ethics" in gap_type:
+        return "physical_exam"
+    if "summary" in gap_type:
+        return "stage_transition"
+    return "history_taking"
+
+
+def _default_gap_action(gap_type: str) -> str:
+    if "empathy" in gap_type or "relationship" in gap_type:
+        return "下一轮患者表达焦虑或担忧后，先回应情绪，再继续医学问诊。"
+    if "consent" in gap_type or "ethics" in gap_type:
+        return "下一轮查体或检查前先说明目的、可能不适并征得同意。"
+    if "summary" in gap_type or "communication" in gap_type:
+        return "下一轮阶段转换前先总结已理解内容，并请患者确认。"
+    if "narrative" in gap_type or "perspective" in gap_type:
+        return "下一轮问诊早期主动询问患者担忧、期待和生活影响。"
+    return "下一轮围绕该训练缺口做一次可观察、可记录的动作。"
+
+
+def _success_signal_text(gap_type: str) -> str:
+    if "empathy" in gap_type or "relationship" in gap_type:
+        return "患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。"
+    if "consent" in gap_type or "ethics" in gap_type:
+        return "查体或检查动作发生前，学生已说明目的、可能不适并获得同意。"
+    if "summary" in gap_type or "communication" in gap_type:
+        return "阶段转换前，学生能总结关键信息并确认理解是否准确。"
+    if "narrative" in gap_type or "perspective" in gap_type:
+        return "学生能主动询问患者担忧、期待或生活影响，并在后续推理中使用。"
+    return "学生完成对应可观察动作，并在报告 trace 中记录为 recovered。"
+
+
+def _skill_type_for_gap(gap_type: str) -> str:
+    if "empathy" in gap_type or "relationship" in gap_type:
+        return "relationship_repair"
+    if "consent" in gap_type or "ethics" in gap_type:
+        return "ethics_consent"
+    if "summary" in gap_type or "communication" in gap_type:
+        return "communication_structure"
+    if "narrative" in gap_type or "perspective" in gap_type:
+        return "narrative_perspective"
+    return "clinical_reasoning"
+
+
+def _trace_item_id(trace: Mapping[str, Any]) -> str:
+    return str(trace.get("item_id") or trace.get("rubric_item_id") or "").strip()
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (str(raw).strip() for raw in value) if item]
 
 
 def _collected_case_fact_nodes(case: Case, collected_source_ids: Any) -> list[dict[str, str]]:

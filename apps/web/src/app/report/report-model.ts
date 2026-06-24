@@ -394,6 +394,77 @@ export type ProcessStrategyAnalysis = Readonly<{
   premature_or_delayed_actions: readonly string[];
 }>;
 
+export type HumanisticDimensionScore = Readonly<{
+  dimension_id: string;
+  label: string;
+  score: number;
+  max_score: number;
+  completion_level: string;
+}>;
+
+export type HumanisticMatchedEvidence = Readonly<{
+  dimension_id: string;
+  dimension_label: string;
+  rubric_item_id: string;
+  label: string;
+  score: number;
+  max_score: number;
+  stage: string;
+  matched_evidence: readonly string[];
+  match_method: string;
+  timing_status: string;
+}>;
+
+export type HumanisticCommunicationAnalysis = Readonly<{
+  dimension_scores: readonly HumanisticDimensionScore[];
+  matched_evidence: readonly HumanisticMatchedEvidence[];
+  missed_opportunities: readonly MissedOpportunityItem[];
+  relationship_repair_actions: readonly string[];
+}>;
+
+export type NextTrainingGoal = Readonly<{
+  gap_type: string;
+  label: string;
+  dimension_id: string;
+  stage: string;
+  priority: number;
+  severity: string;
+  trigger: string;
+  next_training_action: string;
+  success_signal: string;
+  skill_type: string;
+  gap_source: string;
+}>;
+
+export type StageTriggeredTrainingAction = Readonly<{
+  stage: string;
+  trigger: string;
+  action: string;
+  gap_type: string;
+  success_signal: string;
+}>;
+
+export type LinkedTrainingGap = Readonly<{
+  dimension_id: string;
+  rubric_item_id: string;
+  gap_type: string;
+  label: string;
+  missing_score: number;
+  severity: string;
+  stage: string;
+  trigger_stage: string;
+  next_training_action: string;
+  skill_type: string;
+  gap_source: string;
+}>;
+
+export type NextTrainingPlan = Readonly<{
+  top_goals: readonly NextTrainingGoal[];
+  stage_triggered_actions: readonly StageTriggeredTrainingAction[];
+  success_signals: readonly string[];
+  linked_training_gaps: readonly LinkedTrainingGap[];
+}>;
+
 export type DiagnosticContrastAnalysis = Readonly<{
   submitted_diagnosis: string;
   target_diagnosis: string;
@@ -418,13 +489,21 @@ export type DeepReportAnalysis = Readonly<{
   clinical_task_analysis: Readonly<Record<string, ClinicalTaskAnalysisItem>>;
   evidence_utilization_analysis: EvidenceUtilizationAnalysis;
   process_strategy_analysis: ProcessStrategyAnalysis;
+  humanistic_communication_analysis: HumanisticCommunicationAnalysis;
+  next_training_plan: NextTrainingPlan;
 }>;
 
 type DeepReportAnalysisPayload = Readonly<
   Partial<
     Omit<
       DeepReportAnalysis,
-      "overall_evaluation" | "diagnostic_contrast_analysis" | "clinical_task_analysis" | "evidence_utilization_analysis" | "process_strategy_analysis"
+      | "overall_evaluation"
+      | "diagnostic_contrast_analysis"
+      | "clinical_task_analysis"
+      | "evidence_utilization_analysis"
+      | "process_strategy_analysis"
+      | "humanistic_communication_analysis"
+      | "next_training_plan"
     >
   > & {
     overall_evaluation?: Partial<OverallEvaluation>;
@@ -432,6 +511,8 @@ type DeepReportAnalysisPayload = Readonly<
     clinical_task_analysis?: Readonly<Record<string, Partial<ClinicalTaskAnalysisItem>>>;
     evidence_utilization_analysis?: Partial<EvidenceUtilizationAnalysis>;
     process_strategy_analysis?: Partial<ProcessStrategyAnalysis>;
+    humanistic_communication_analysis?: Partial<HumanisticCommunicationAnalysis>;
+    next_training_plan?: Partial<NextTrainingPlan>;
   }
 >;
 
@@ -538,6 +619,20 @@ const DEFAULT_PROCESS_STRATEGY_ANALYSIS: ProcessStrategyAnalysis = {
   premature_or_delayed_actions: [],
 };
 
+const DEFAULT_HUMANISTIC_COMMUNICATION_ANALYSIS: HumanisticCommunicationAnalysis = {
+  dimension_scores: [],
+  matched_evidence: [],
+  missed_opportunities: [],
+  relationship_repair_actions: [],
+};
+
+const DEFAULT_NEXT_TRAINING_PLAN: NextTrainingPlan = {
+  top_goals: [],
+  stage_triggered_actions: [],
+  success_signals: [],
+  linked_training_gaps: [],
+};
+
 const DEFAULT_DEEP_REPORT_ANALYSIS: DeepReportAnalysis = {
   version: "deep_report_analysis_v1",
   status: "legacy_report",
@@ -546,6 +641,8 @@ const DEFAULT_DEEP_REPORT_ANALYSIS: DeepReportAnalysis = {
   clinical_task_analysis: {},
   evidence_utilization_analysis: DEFAULT_EVIDENCE_UTILIZATION_ANALYSIS,
   process_strategy_analysis: DEFAULT_PROCESS_STRATEGY_ANALYSIS,
+  humanistic_communication_analysis: DEFAULT_HUMANISTIC_COMMUNICATION_ANALYSIS,
+  next_training_plan: DEFAULT_NEXT_TRAINING_PLAN,
 };
 
 function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): DeepReportAnalysis {
@@ -553,6 +650,8 @@ function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): Deep
   const diagnosticContrast = analysis?.diagnostic_contrast_analysis ?? {};
   const evidenceUtilization = analysis?.evidence_utilization_analysis ?? {};
   const processStrategy = analysis?.process_strategy_analysis ?? {};
+  const humanisticCommunication = analysis?.humanistic_communication_analysis ?? {};
+  const nextTrainingPlan = analysis?.next_training_plan ?? {};
   return {
     ...DEFAULT_DEEP_REPORT_ANALYSIS,
     ...analysis,
@@ -591,6 +690,25 @@ function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): Deep
       ...processStrategy,
       sequence_flags: processStrategy.sequence_flags ?? [],
       premature_or_delayed_actions: processStrategy.premature_or_delayed_actions ?? [],
+    },
+    humanistic_communication_analysis: {
+      ...DEFAULT_HUMANISTIC_COMMUNICATION_ANALYSIS,
+      ...humanisticCommunication,
+      dimension_scores: humanisticCommunication.dimension_scores ?? [],
+      matched_evidence: (humanisticCommunication.matched_evidence ?? []).map((item) => ({
+        ...item,
+        matched_evidence: item.matched_evidence ?? [],
+      })),
+      missed_opportunities: humanisticCommunication.missed_opportunities ?? [],
+      relationship_repair_actions: humanisticCommunication.relationship_repair_actions ?? [],
+    },
+    next_training_plan: {
+      ...DEFAULT_NEXT_TRAINING_PLAN,
+      ...nextTrainingPlan,
+      top_goals: nextTrainingPlan.top_goals ?? [],
+      stage_triggered_actions: nextTrainingPlan.stage_triggered_actions ?? [],
+      success_signals: nextTrainingPlan.success_signals ?? [],
+      linked_training_gaps: nextTrainingPlan.linked_training_gaps ?? [],
     },
   };
 }

@@ -133,6 +133,84 @@ const nextReport = {
       sequence_flags: [{ flag_id: "late_hypothesis", label: "诊断假设生成偏晚", severity: "medium", evidence: "提交前才形成明确假设" }],
       premature_or_delayed_actions: ["下一轮先形成诊断假设，再选择查体和检查。"],
     },
+    humanistic_communication_analysis: {
+      dimension_scores: [
+        {
+          dimension_id: "narrative_medicine",
+          label: "叙事医学",
+          score: 3,
+          max_score: 8,
+          completion_level: "weak",
+        },
+      ],
+      matched_evidence: [
+        {
+          dimension_id: "narrative_medicine",
+          dimension_label: "叙事医学",
+          rubric_item_id: "nm_patient_concern",
+          label: "询问患者担忧",
+          score: 3,
+          max_score: 3,
+          stage: "history_taking",
+          matched_evidence: ["你现在最担心的是什么？"],
+          match_method: "embedding_anchor",
+          timing_status: "",
+        },
+      ],
+      missed_opportunities: [
+        {
+          opportunity_id: "relationship_empathy_missing:1",
+          gap_type: "relationship_empathy_missing",
+          stage: "history_taking",
+          trigger_evidence: "我很担心是不是严重的病。",
+          expected_response: "患者表达担忧后，应先回应情绪，再继续医学问诊。",
+          next_training_action: "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+        },
+      ],
+      relationship_repair_actions: ["下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。"],
+    },
+    next_training_plan: {
+      top_goals: [
+        {
+          gap_type: "relationship_empathy_missing",
+          label: "患者表达担忧后缺少共情回应",
+          dimension_id: "relationship_building",
+          stage: "history_taking",
+          priority: 9,
+          severity: "high",
+          trigger: "患者表达焦虑或担忧",
+          next_training_action: "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+          success_signal: "患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。",
+          skill_type: "relationship_repair",
+          gap_source: "missed_opportunity",
+        },
+      ],
+      stage_triggered_actions: [
+        {
+          stage: "history_taking",
+          trigger: "患者表达焦虑或担忧",
+          action: "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+          gap_type: "relationship_empathy_missing",
+          success_signal: "患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。",
+        },
+      ],
+      success_signals: ["完成标志：患者表达担忧后缺少共情回应；患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。"],
+      linked_training_gaps: [
+        {
+          dimension_id: "relationship_building",
+          rubric_item_id: "rel_empathy_response",
+          gap_type: "relationship_empathy_missing",
+          label: "患者表达担忧后缺少共情回应",
+          missing_score: 2,
+          severity: "high",
+          stage: "history_taking",
+          trigger_stage: "history_taking",
+          next_training_action: "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+          skill_type: "relationship_repair",
+          gap_source: "missed_opportunity",
+        },
+      ],
+    },
   },
 } satisfies FeedbackReportPayload;
 
@@ -152,6 +230,9 @@ const nextPhysicalExamTaskLabel: string = normalizedNextReport.deep_report_analy
 const nextEvidenceBreakpointStatement: string =
   normalizedNextReport.deep_report_analysis.evidence_utilization_analysis.evidence_chain_breakpoints[0].statement;
 const nextProcessAction: string = normalizedNextReport.deep_report_analysis.process_strategy_analysis.premature_or_delayed_actions[0];
+const nextHumanisticMatchedEvidence: string =
+  normalizedNextReport.deep_report_analysis.humanistic_communication_analysis.matched_evidence[0].matched_evidence[0];
+const nextTrainingPlanGoal: string = normalizedNextReport.deep_report_analysis.next_training_plan.top_goals[0].gap_type;
 
 void legacyLlmFeedbackItems;
 void legacyKnowledgeRecommendations;
@@ -166,3 +247,5 @@ void nextDeepReportOverallSummary;
 void nextPhysicalExamTaskLabel;
 void nextEvidenceBreakpointStatement;
 void nextProcessAction;
+void nextHumanisticMatchedEvidence;
+void nextTrainingPlanGoal;

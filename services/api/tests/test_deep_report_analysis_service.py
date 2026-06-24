@@ -165,3 +165,110 @@ def test_deep_report_analysis_builds_overall_task_and_evidence_sections() -> Non
     process = analysis["process_strategy_analysis"]
     assert process["sequence_flags"][0]["label"] == "诊断假设生成偏晚"
     assert "先形成诊断假设" in process["premature_or_delayed_actions"][0]
+
+
+def test_deep_report_analysis_builds_humanistic_review_and_next_training_plan() -> None:
+    case = _load_case()
+    report = _base_report("急性阑尾炎", "转移性右下腹痛支持阑尾炎。") | {
+        "total_score": 64,
+        "max_score": 100,
+        "score_groups": {
+            "clinical_osce": {"score": 54, "max_score": 70},
+            "humanistic_communication": {"score": 10, "max_score": 30},
+        },
+        "dimension_scores": {
+            "narrative_medicine": 3,
+            "communication_skill": 2,
+            "medical_ethics": 1,
+            "relationship_building": 0,
+        },
+        "dimension_traces": {
+            "narrative_medicine": [
+                {
+                    "item_id": "nm_patient_concern",
+                    "label": "询问患者担忧",
+                    "score": 3,
+                    "max_score": 3,
+                    "stage": "history_taking",
+                    "matched_evidence": ["你现在最担心的是什么？"],
+                    "match_method": "embedding_anchor",
+                }
+            ],
+            "medical_ethics": [
+                {
+                    "item_id": "eth_exam_consent",
+                    "label": "查体前说明目的并征得同意",
+                    "score": 1,
+                    "max_score": 3,
+                    "stage": "physical_exam",
+                    "gap_type": "ethics_consent_missing",
+                    "matched_evidence": ["刚才查腹部是为了判断压痛，可以吗？"],
+                    "timing_status": "late",
+                    "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                }
+            ],
+        },
+        "missed_opportunities": [
+            {
+                "opportunity_id": "relationship_empathy_missing:1",
+                "gap_type": "relationship_empathy_missing",
+                "stage": "history_taking",
+                "trigger_evidence": "我很担心是不是严重的病。",
+                "expected_response": "患者表达担忧后，应先回应情绪，再继续医学问诊。",
+                "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+            }
+        ],
+        "training_gaps": [
+            {
+                "dimension_id": "medical_ethics",
+                "rubric_item_id": "eth_exam_consent",
+                "gap_type": "ethics_consent_missing",
+                "label": "查体或检查前说明目的并征得同意",
+                "missing_score": 2,
+                "severity": "high",
+                "stage": "physical_exam",
+                "trigger_stage": "physical_exam",
+                "next_training_action": "下一轮查体或检查前先说明目的、可能不适并征得同意。",
+                "skill_type": "ethics_consent",
+                "gap_source": "score_trace",
+            },
+            {
+                "dimension_id": "relationship_building",
+                "rubric_item_id": "rel_empathy_response",
+                "gap_type": "relationship_empathy_missing",
+                "label": "患者表达担忧后缺少共情回应",
+                "missing_score": 2,
+                "severity": "high",
+                "stage": "history_taking",
+                "trigger_stage": "history_taking",
+                "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+                "skill_type": "relationship_repair",
+                "gap_source": "missed_opportunity",
+            },
+        ],
+    }
+
+    analysis = build_deep_report_analysis(report=report, case=case)
+
+    humanistic = analysis["humanistic_communication_analysis"]
+    assert humanistic["dimension_scores"][0] == {
+        "dimension_id": "narrative_medicine",
+        "label": "叙事医学",
+        "score": 3,
+        "max_score": 8,
+        "completion_level": "weak",
+    }
+    assert humanistic["matched_evidence"][0]["matched_evidence"] == ["你现在最担心的是什么？"]
+    assert humanistic["missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
+    assert any("先用一句话承认情绪" in action for action in humanistic["relationship_repair_actions"])
+
+    plan = analysis["next_training_plan"]
+    assert plan["top_goals"][0]["gap_type"] == "relationship_empathy_missing"
+    assert plan["top_goals"][0]["priority"] > plan["top_goals"][1]["priority"]
+    assert plan["stage_triggered_actions"][0]["stage"] == "history_taking"
+    assert "患者表达焦虑或担忧" in plan["stage_triggered_actions"][0]["trigger"]
+    assert "完成标志" in plan["success_signals"][0]
+    assert {gap["gap_type"] for gap in plan["linked_training_gaps"]} == {
+        "relationship_empathy_missing",
+        "ethics_consent_missing",
+    }
