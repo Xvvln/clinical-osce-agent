@@ -1139,7 +1139,7 @@ export default function ReportPage() {
             {report ? (
               <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
-            {report ? <DeepReportAnalysisSection analysis={report.deep_report_analysis} /> : null}
+            {report ? <DeepReportAnalysisSection analysis={report.deep_report_analysis} trainingPointLabelResolver={trainingPointLabelResolver} /> : null}
             {report ? (
               <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
@@ -1606,7 +1606,13 @@ function stringifyTeacherAnalysisValue(value: unknown): string {
   return String(value);
 }
 
-function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReportAnalysis }>) {
+function DeepReportAnalysisSection({
+  analysis,
+  trainingPointLabelResolver,
+}: Readonly<{
+  analysis: DeepReportAnalysis;
+  trainingPointLabelResolver: (itemId: string) => string;
+}>) {
   if (analysis.status !== "generated") {
     return null;
   }
@@ -1691,7 +1697,7 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
             <div className="mt-3 flex flex-wrap gap-2">
               {diagnostic.reasoning_error_patterns.map((pattern) => (
                 <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground" key={pattern}>
-                  {pattern}
+                  {trainingPointLabelResolver(pattern)}
                 </span>
               ))}
             </div>
