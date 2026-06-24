@@ -480,6 +480,7 @@ def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -
                     "next_training_action": str(gap.get("next_training_action") or ""),
                     "evidence_summary": str(gap.get("evidence_summary") or ""),
                     "missing_score": 0,
+                    "priority_floor": 0,
                     "repeat_count": 0,
                     "latest_present": False,
                     "latest_report_index": report_index,
@@ -489,6 +490,7 @@ def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -
             )
             entry["repeat_count"] = int(entry["repeat_count"]) + 1
             entry["missing_score"] = max(int(entry["missing_score"]), _int_value(gap.get("missing_score")))
+            entry["priority_floor"] = max(int(entry["priority_floor"]), _int_value(gap.get("priority")))
             entry["is_humanistic"] = bool(entry["is_humanistic"]) or _is_humanistic_gap(gap)
             if report_index == 0:
                 entry["latest_present"] = True
@@ -506,10 +508,96 @@ def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -
 
 
 def _report_training_gaps(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    gaps_by_key: dict[str, dict[str, Any]] = {}
+
     gaps = report.get("training_gaps", [])
-    if not isinstance(gaps, list):
-        return []
-    return [gap for gap in gaps if isinstance(gap, Mapping)]
+    if isinstance(gaps, list):
+        for gap in gaps:
+            if isinstance(gap, Mapping):
+                _merge_report_training_gap(gaps_by_key, gap)
+
+    deep_report_analysis = report.get("deep_report_analysis")
+    if isinstance(deep_report_analysis, Mapping):
+        next_training_plan = deep_report_analysis.get("next_training_plan")
+        if isinstance(next_training_plan, Mapping):
+            top_goals = _top_goals_by_gap_type(next_training_plan.get("top_goals"))
+            linked_gaps = next_training_plan.get("linked_training_gaps", [])
+            if isinstance(linked_gaps, list):
+                for gap in linked_gaps:
+                    if not isinstance(gap, Mapping):
+                        continue
+                    gap_type = str(gap.get("gap_type") or "").strip()
+                    _merge_report_training_gap(
+                        gaps_by_key,
+                        gap,
+                        top_goal=top_goals.get(gap_type, {}),
+                    )
+            for goal in top_goals.values():
+                _merge_report_training_gap(gaps_by_key, goal, gap_source="deep_report_next_training_plan")
+
+    return list(gaps_by_key.values())
+
+
+def _merge_report_training_gap(
+    gaps_by_key: dict[str, dict[str, Any]],
+    gap: Mapping[str, Any],
+    *,
+    top_goal: Mapping[str, Any] | None = None,
+    gap_source: str = "",
+) -> None:
+    gap_type = str(gap.get("gap_type") or "").strip()
+    rubric_item_id = str(gap.get("rubric_item_id") or "").strip()
+    key = gap_type or rubric_item_id
+    if not key:
+        return
+    top_goal = top_goal or {}
+    incoming = dict(gap)
+    if top_goal:
+        for field_name in (
+            "label",
+            "dimension_id",
+            "severity",
+            "next_training_action",
+            "success_signal",
+            "skill_type",
+            "gap_source",
+        ):
+            if not str(incoming.get(field_name) or "").strip() and str(top_goal.get(field_name) or "").strip():
+                incoming[field_name] = top_goal[field_name]
+        if not str(incoming.get("trigger_stage") or incoming.get("stage") or "").strip():
+            incoming["trigger_stage"] = top_goal.get("trigger_stage") or top_goal.get("stage")
+        incoming["priority"] = max(_int_value(incoming.get("priority")), _int_value(top_goal.get("priority")))
+    if gap_source and not str(incoming.get("gap_source") or "").strip():
+        incoming["gap_source"] = gap_source
+    if not str(incoming.get("gap_source") or "").strip():
+        incoming["gap_source"] = "score_trace"
+
+    existing = gaps_by_key.get(key)
+    if existing is None:
+        gaps_by_key[key] = incoming
+        return
+    for field_name, field_value in incoming.items():
+        if field_name in {"missing_score", "priority"}:
+            existing[field_name] = max(_int_value(existing.get(field_name)), _int_value(field_value))
+            continue
+        if not str(existing.get(field_name) or "").strip() and str(field_value or "").strip():
+            existing[field_name] = field_value
+
+
+def _top_goals_by_gap_type(value: Any) -> dict[str, Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return {}
+    goals: dict[str, Mapping[str, Any]] = {}
+    for goal in value:
+        if not isinstance(goal, Mapping):
+            continue
+        gap_type = str(goal.get("gap_type") or "").strip()
+        if not gap_type:
+            continue
+        current = goals.get(gap_type)
+        if current is None or _int_value(goal.get("priority")) > _int_value(current.get("priority")):
+            goals[gap_type] = goal
+    return goals
 
 
 def _finalize_training_gap(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -527,7 +615,10 @@ def _finalize_training_gap(entry: Mapping[str, Any]) -> dict[str, Any]:
     ) else 0
     missed_opportunity_bonus = 3 if gap_source == "missed_opportunity" else 0
     recent_recovery_bonus = 4 if not latest_present else 0
-    priority = missing_score + repeat_count * 2 + ethics_or_safety_bonus + missed_opportunity_bonus - recent_recovery_bonus
+    priority = max(
+        missing_score + repeat_count * 2 + ethics_or_safety_bonus + missed_opportunity_bonus - recent_recovery_bonus,
+        _int_value(entry.get("priority_floor")),
+    )
     status = "persistent" if latest_present and repeat_count >= 2 else "current" if latest_present else "recovered"
     trigger_stage = str(entry.get("trigger_stage") or "")
     gap_type = str(entry.get("gap_type") or "")

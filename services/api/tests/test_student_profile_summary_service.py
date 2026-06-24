@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from app.services.coach_hint_policy_service import active_training_goals_from_state
 from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.student_profile_store import StudentProfileStore
+from app.services.training_skill_orchestrator_service import build_active_skill_context
 
 
 def test_student_profile_store_persists_latest_profile_snapshot(tmp_path) -> None:
@@ -262,6 +264,94 @@ def test_profile_summary_prioritizes_humanistic_training_gaps() -> None:
     assert state["state"] == "active"
     assert state["matched_recent_training_gap_types"] == ["ethics_consent_missing"]
     assert "近期训练缺口命中" in state["selection_reason"]
+
+
+def test_profile_summary_consumes_deep_report_next_training_plan_for_next_session() -> None:
+    skill = {
+        "skill_id": "skill_relationship_repair",
+        "title": "患者担忧回应训练",
+        "skill_type": "relationship_repair",
+        "trigger_gap_types": ["relationship_empathy_missing"],
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["history_taking"],
+        "support_count": 2,
+    }
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_with_deep_plan",
+                "missed_items": [],
+                "deep_report_analysis": {
+                    "status": "generated",
+                    "next_training_plan": {
+                        "top_goals": [
+                            {
+                                "gap_type": "relationship_empathy_missing",
+                                "label": "患者表达担忧后缺少共情回应",
+                                "dimension_id": "relationship_building",
+                                "stage": "history_taking",
+                                "priority": 13,
+                                "severity": "high",
+                                "trigger": "患者表达焦虑或担忧",
+                                "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+                                "success_signal": "患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。",
+                                "skill_type": "relationship_repair",
+                                "gap_source": "missed_opportunity",
+                            }
+                        ],
+                        "stage_triggered_actions": [
+                            {
+                                "stage": "history_taking",
+                                "trigger": "患者表达焦虑或担忧",
+                                "action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+                                "gap_type": "relationship_empathy_missing",
+                                "success_signal": "患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。",
+                            }
+                        ],
+                        "success_signals": ["完成标志：患者表达担忧后缺少共情回应；患者表达担忧后，学生下一句能先承认情绪并说明会一起处理。"],
+                        "linked_training_gaps": [
+                            {
+                                "dimension_id": "relationship_building",
+                                "rubric_item_id": "",
+                                "gap_type": "relationship_empathy_missing",
+                                "label": "患者表达担忧后缺少共情回应",
+                                "missing_score": 2,
+                                "severity": "high",
+                                "stage": "history_taking",
+                                "trigger_stage": "history_taking",
+                                "next_training_action": "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。",
+                                "skill_type": "relationship_repair",
+                                "gap_source": "missed_opportunity",
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+        enabled_skills=[skill],
+    )
+
+    top_gap = summary["current_humanistic_gaps"][0]
+    assert top_gap["gap_type"] == "relationship_empathy_missing"
+    assert top_gap["trigger_stage"] == "history_taking"
+    assert top_gap["priority"] >= 13
+    assert top_gap["next_training_action"] == "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。"
+    assert summary["skill_states"]["skill_relationship_repair"]["state"] == "active"
+
+    active_context = build_active_skill_context(
+        [skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="history_taking",
+        rubric_item_ids=[],
+        student_profile=summary,
+        patient_profile={"gender": "男"},
+    )
+
+    assert active_context["humanistic_training_goals"][0]["gap_type"] == "relationship_empathy_missing"
+    assert active_context["selected_skills"][0]["skill_id"] == "skill_relationship_repair"
+    assert active_training_goals_from_state({"active_skill_context": active_context})[0]["gap_type"] == "relationship_empathy_missing"
 
 
 def test_teaching_effect_change_descriptions_are_axis_specific() -> None:
