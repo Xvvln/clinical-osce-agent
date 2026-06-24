@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from app.services import retrieval_index as retrieval_index_module
@@ -25,7 +27,8 @@ def clear_retrieval_document_cache():
 
 
 def _unique_chroma_collection(tmp_path) -> str:  # type: ignore[no-untyped-def]
-    return f"test_retrieval_documents_{tmp_path.name.replace('-', '_')}"
+    digest = hashlib.sha1(str(tmp_path).encode("utf-8")).hexdigest()[:12]
+    return f"test_retrieval_{digest}"
 
 
 class FakeEmbeddingClient:

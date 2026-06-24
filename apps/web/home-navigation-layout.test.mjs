@@ -889,6 +889,14 @@ test("report page derives training point labels from report metadata instead of 
   assert.doesNotMatch(reportSource, /\{triggerItemId\}\s*<\/span>/);
 });
 
+test("report clinical task trace list uses stable keys for legacy unnamed items", () => {
+  assert.match(reportSource, /function getClinicalTaskTraceKey\(item: ClinicalTaskTraceItem, index: number\): string/);
+  assert.match(reportSource, /item\.item_id \|\| `legacy-trace-\$\{index\}`/);
+  assert.match(reportSource, /items\.slice\(0, 3\)\.map\(\(item, index\) =>/);
+  assert.match(reportSource, /key=\{getClinicalTaskTraceKey\(item, index\)\}/);
+  assert.doesNotMatch(reportSource, /key=\{`\$\{item\.item_id\}-\$\{item\.label\}`\}/);
+});
+
 test("report page exposes approval agent review details in expandable records", () => {
   assert.match(reportSource, /function formatApprovalAgentChangedField/);
   assert.match(reportSource, /function getApprovalAgentChangedFieldDisplay/);

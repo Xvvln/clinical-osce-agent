@@ -328,6 +328,11 @@ function getPersonalSkillCompletionNoticeText(status: string): string | null {
   return null;
 }
 
+function getClinicalTaskTraceKey(item: ClinicalTaskTraceItem, index: number): string {
+  const itemIdentity = item.item_id || `legacy-trace-${index}`;
+  return `${itemIdentity}-${item.label}-${item.score}-${item.max_score}-${item.gap_type ?? ""}`;
+}
+
 function createTrainingPointLabelResolver(report: FeedbackReport): (itemId: string) => string {
   const labelById = new Map<string, string>();
   const addLabel = (itemId: string | undefined, label: string | undefined) => {
@@ -1794,8 +1799,8 @@ function ClinicalTaskTraceList({
       <p className="text-xs font-semibold text-muted-foreground">{title}</p>
       {items.length > 0 ? (
         <ul className="mt-1 grid gap-1.5 text-xs leading-5 text-muted-foreground">
-          {items.slice(0, 3).map((item) => (
-            <li className="rounded-lg bg-background px-2.5 py-1.5" key={`${item.item_id}-${item.label}`}>
+          {items.slice(0, 3).map((item, index) => (
+            <li className="rounded-lg bg-background px-2.5 py-1.5" key={getClinicalTaskTraceKey(item, index)}>
               {item.label}
             </li>
           ))}

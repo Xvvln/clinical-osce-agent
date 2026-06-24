@@ -470,8 +470,8 @@ def _clinical_task_item(*, report: Mapping[str, Any], dimension: Mapping[str, An
     score = _dimension_score(report, dimension_id)
     max_score = int(dimension["max_score"])
     traces = _dimension_trace_items(report, dimension_id)
-    missed_items = [_trace_summary(trace) for trace in traces if _trace_score(trace) < _trace_max_score(trace)]
-    completed_items = [_trace_summary(trace) for trace in traces if _trace_score(trace) > 0]
+    missed_items = [_trace_summary(trace, report) for trace in traces if _trace_score(trace) < _trace_max_score(trace)]
+    completed_items = [_trace_summary(trace, report) for trace in traces if _trace_score(trace) > 0]
     return {
         "task_id": dimension_id,
         "label": str(dimension["label"]),
@@ -508,9 +508,16 @@ def _trace_max_score(trace: Mapping[str, Any]) -> float:
     return max(_number(trace.get("max_score")), 0)
 
 
-def _trace_summary(trace: Mapping[str, Any]) -> dict[str, Any]:
-    item_id = str(trace.get("item_id") or "").strip()
-    label = str(trace.get("label") or item_id or "未命名评分项").strip()
+def _trace_summary(trace: Mapping[str, Any], report: Mapping[str, Any]) -> dict[str, Any]:
+    item_id = _trace_item_id(trace)
+    rubric_score = _mapping(_mapping(report.get("rubric_scores")).get(item_id))
+    label = str(
+        trace.get("label")
+        or trace.get("description")
+        or rubric_score.get("description")
+        or item_id
+        or "未命名评分项"
+    ).strip()
     return {
         "item_id": item_id,
         "label": label,

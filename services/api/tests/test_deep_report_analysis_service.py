@@ -167,6 +167,42 @@ def test_deep_report_analysis_builds_overall_task_and_evidence_sections() -> Non
     assert "先形成诊断假设" in process["premature_or_delayed_actions"][0]
 
 
+def test_deep_report_analysis_hydrates_trace_summary_from_rubric_item_id() -> None:
+    case = _load_case()
+    report = _base_report("急性阑尾炎", "转移性右下腹痛支持阑尾炎。") | {
+        "total_score": 30,
+        "max_score": 100,
+        "dimension_scores": {"physical_exam": 0},
+        "rubric_scores": {
+            "pe_tenderness": {"description": "检查压痛", "score": 0, "max_score": 3},
+            "pe_rebound": {"description": "检查反跳痛", "score": 0, "max_score": 4},
+        },
+        "dimension_traces": {
+            "physical_exam": [
+                {
+                    "rubric_item_id": "pe_tenderness",
+                    "score": 0,
+                    "max_score": 3,
+                    "gap_type": "physical_exam_missing",
+                },
+                {
+                    "rubric_item_id": "pe_rebound",
+                    "score": 0,
+                    "max_score": 4,
+                    "gap_type": "physical_exam_missing",
+                },
+            ]
+        },
+    }
+
+    analysis = build_deep_report_analysis(report=report, case=case)
+
+    missed_items = analysis["clinical_task_analysis"]["physical_exam"]["missed_items"]
+    assert [item["item_id"] for item in missed_items[:2]] == ["pe_tenderness", "pe_rebound"]
+    assert [item["label"] for item in missed_items[:2]] == ["检查压痛", "检查反跳痛"]
+    assert all(item["label"] != "未命名评分项" for item in missed_items)
+
+
 def test_deep_report_analysis_builds_humanistic_review_and_next_training_plan() -> None:
     case = _load_case()
     report = _base_report("急性阑尾炎", "转移性右下腹痛支持阑尾炎。") | {
