@@ -326,6 +326,72 @@ export type MissedOpportunityItem = Readonly<{
 export type DiagnosticEvidenceItem = Readonly<{
   source_id: string;
   label: string;
+  node_id?: string;
+}>;
+
+export type OverallEvaluation = Readonly<{
+  summary: string;
+  score_interpretation: string;
+  completion_judgement: string;
+  primary_strengths: readonly string[];
+  primary_weaknesses: readonly string[];
+}>;
+
+export type ClinicalTaskTraceItem = Readonly<{
+  item_id: string;
+  label: string;
+  score: number;
+  max_score: number;
+  gap_type?: string;
+  next_training_action?: string;
+}>;
+
+export type ClinicalTaskAnalysisItem = Readonly<{
+  task_id: string;
+  label: string;
+  score: number;
+  max_score: number;
+  completion_level: string;
+  completed_items: readonly ClinicalTaskTraceItem[];
+  missed_items: readonly ClinicalTaskTraceItem[];
+  next_action: string;
+}>;
+
+export type EvidenceChainBreakpoint = Readonly<{
+  breakpoint_id: string;
+  statement: string;
+  kind: string;
+  status: string;
+  missing_evidence: readonly string[];
+  missing_evidence_labels: readonly string[];
+  teacher_action: string;
+}>;
+
+export type MisusedEvidenceItem = Readonly<{
+  source_id: string;
+  label: string;
+  issue: string;
+  next_training_action: string;
+}>;
+
+export type EvidenceUtilizationAnalysis = Readonly<{
+  collected_key_evidence: readonly DiagnosticEvidenceItem[];
+  missing_key_evidence: readonly DiagnosticEvidenceItem[];
+  evidence_chain_breakpoints: readonly EvidenceChainBreakpoint[];
+  unused_or_misused_evidence: readonly MisusedEvidenceItem[];
+}>;
+
+export type ProcessSequenceFlag = Readonly<{
+  flag_id: string;
+  label: string;
+  severity: string;
+  evidence: string;
+}>;
+
+export type ProcessStrategyAnalysis = Readonly<{
+  action_order_summary: string;
+  sequence_flags: readonly ProcessSequenceFlag[];
+  premature_or_delayed_actions: readonly string[];
 }>;
 
 export type DiagnosticContrastAnalysis = Readonly<{
@@ -347,12 +413,25 @@ export type DiagnosticContrastAnalysis = Readonly<{
 export type DeepReportAnalysis = Readonly<{
   version: string;
   status: string;
+  overall_evaluation: OverallEvaluation;
   diagnostic_contrast_analysis: DiagnosticContrastAnalysis;
+  clinical_task_analysis: Readonly<Record<string, ClinicalTaskAnalysisItem>>;
+  evidence_utilization_analysis: EvidenceUtilizationAnalysis;
+  process_strategy_analysis: ProcessStrategyAnalysis;
 }>;
 
 type DeepReportAnalysisPayload = Readonly<
-  Partial<Omit<DeepReportAnalysis, "diagnostic_contrast_analysis">> & {
+  Partial<
+    Omit<
+      DeepReportAnalysis,
+      "overall_evaluation" | "diagnostic_contrast_analysis" | "clinical_task_analysis" | "evidence_utilization_analysis" | "process_strategy_analysis"
+    >
+  > & {
+    overall_evaluation?: Partial<OverallEvaluation>;
     diagnostic_contrast_analysis?: Partial<DiagnosticContrastAnalysis>;
+    clinical_task_analysis?: Readonly<Record<string, Partial<ClinicalTaskAnalysisItem>>>;
+    evidence_utilization_analysis?: Partial<EvidenceUtilizationAnalysis>;
+    process_strategy_analysis?: Partial<ProcessStrategyAnalysis>;
   }
 >;
 
@@ -438,17 +517,51 @@ const DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS: DiagnosticContrastAnalysis = {
   next_training_action: "",
 };
 
+const DEFAULT_OVERALL_EVALUATION: OverallEvaluation = {
+  summary: "",
+  score_interpretation: "",
+  completion_judgement: "not_ready",
+  primary_strengths: [],
+  primary_weaknesses: [],
+};
+
+const DEFAULT_EVIDENCE_UTILIZATION_ANALYSIS: EvidenceUtilizationAnalysis = {
+  collected_key_evidence: [],
+  missing_key_evidence: [],
+  evidence_chain_breakpoints: [],
+  unused_or_misused_evidence: [],
+};
+
+const DEFAULT_PROCESS_STRATEGY_ANALYSIS: ProcessStrategyAnalysis = {
+  action_order_summary: "",
+  sequence_flags: [],
+  premature_or_delayed_actions: [],
+};
+
 const DEFAULT_DEEP_REPORT_ANALYSIS: DeepReportAnalysis = {
   version: "deep_report_analysis_v1",
   status: "legacy_report",
+  overall_evaluation: DEFAULT_OVERALL_EVALUATION,
   diagnostic_contrast_analysis: DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS,
+  clinical_task_analysis: {},
+  evidence_utilization_analysis: DEFAULT_EVIDENCE_UTILIZATION_ANALYSIS,
+  process_strategy_analysis: DEFAULT_PROCESS_STRATEGY_ANALYSIS,
 };
 
 function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): DeepReportAnalysis {
+  const overall = analysis?.overall_evaluation ?? {};
   const diagnosticContrast = analysis?.diagnostic_contrast_analysis ?? {};
+  const evidenceUtilization = analysis?.evidence_utilization_analysis ?? {};
+  const processStrategy = analysis?.process_strategy_analysis ?? {};
   return {
     ...DEFAULT_DEEP_REPORT_ANALYSIS,
     ...analysis,
+    overall_evaluation: {
+      ...DEFAULT_OVERALL_EVALUATION,
+      ...overall,
+      primary_strengths: overall.primary_strengths ?? [],
+      primary_weaknesses: overall.primary_weaknesses ?? [],
+    },
     diagnostic_contrast_analysis: {
       ...DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS,
       ...diagnosticContrast,
@@ -460,7 +573,49 @@ function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): Deep
       missed_discriminating_evidence: diagnosticContrast.missed_discriminating_evidence ?? [],
       reasoning_error_patterns: diagnosticContrast.reasoning_error_patterns ?? [],
     },
+    clinical_task_analysis: normalizeClinicalTaskAnalysis(analysis?.clinical_task_analysis),
+    evidence_utilization_analysis: {
+      ...DEFAULT_EVIDENCE_UTILIZATION_ANALYSIS,
+      ...evidenceUtilization,
+      collected_key_evidence: evidenceUtilization.collected_key_evidence ?? [],
+      missing_key_evidence: evidenceUtilization.missing_key_evidence ?? [],
+      evidence_chain_breakpoints: (evidenceUtilization.evidence_chain_breakpoints ?? []).map((item) => ({
+        ...item,
+        missing_evidence: item.missing_evidence ?? [],
+        missing_evidence_labels: item.missing_evidence_labels ?? [],
+      })),
+      unused_or_misused_evidence: evidenceUtilization.unused_or_misused_evidence ?? [],
+    },
+    process_strategy_analysis: {
+      ...DEFAULT_PROCESS_STRATEGY_ANALYSIS,
+      ...processStrategy,
+      sequence_flags: processStrategy.sequence_flags ?? [],
+      premature_or_delayed_actions: processStrategy.premature_or_delayed_actions ?? [],
+    },
   };
+}
+
+function normalizeClinicalTaskAnalysis(
+  analysis?: Readonly<Record<string, Partial<ClinicalTaskAnalysisItem>>>,
+): Readonly<Record<string, ClinicalTaskAnalysisItem>> {
+  if (!analysis) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(analysis).map(([taskId, item]) => [
+      taskId,
+      {
+        task_id: item.task_id ?? taskId,
+        label: item.label ?? taskId,
+        score: item.score ?? 0,
+        max_score: item.max_score ?? 0,
+        completion_level: item.completion_level ?? "missing",
+        completed_items: item.completed_items ?? [],
+        missed_items: item.missed_items ?? [],
+        next_action: item.next_action ?? "",
+      },
+    ]),
+  );
 }
 
 function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiReflectionReview {

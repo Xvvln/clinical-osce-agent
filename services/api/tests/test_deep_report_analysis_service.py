@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.services.deep_report_analysis_service import build_diagnostic_contrast_analysis
+from app.services.deep_report_analysis_service import build_deep_report_analysis, build_diagnostic_contrast_analysis
 from app.validators.case_validator import validate_case
 
 
@@ -69,3 +69,99 @@ def test_diagnostic_contrast_marks_main_diagnosis_correct_by_synonym() -> None:
     assert analysis["matched_target_terms"] == ["阑尾炎"]
     assert analysis["matched_differential_name"] == ""
     assert analysis["evidence_against_submitted"] == []
+
+
+def test_deep_report_analysis_builds_overall_task_and_evidence_sections() -> None:
+    case = _load_case()
+    report = _base_report("急性胃肠炎", "患者恶心，我考虑急性胃肠炎。") | {
+        "total_score": 28,
+        "max_score": 100,
+        "score_groups": {
+            "clinical_osce": {"score": 24, "max_score": 70},
+            "humanistic_communication": {"score": 4, "max_score": 30},
+        },
+        "dimension_scores": {
+            "history_taking": 12,
+            "physical_exam": 0,
+            "auxiliary_test": 0,
+            "main_diagnosis": 0,
+            "differential_diagnosis": 0,
+            "reasoning": 2,
+        },
+        "dimension_traces": {
+            "history_taking": [
+                {
+                    "item_id": "ht_migration",
+                    "label": "追问疼痛转移",
+                    "score": 4,
+                    "max_score": 4,
+                    "matched_evidence": ["appendicitis_001.hf_02"],
+                }
+            ],
+            "physical_exam": [
+                {
+                    "item_id": "pe_rebound",
+                    "label": "检查反跳痛",
+                    "score": 0,
+                    "max_score": 4,
+                    "gap_type": "physical_exam_missing",
+                    "next_training_action": "补充腹部局部体征。",
+                }
+            ],
+            "reasoning": [
+                {
+                    "item_id": "rs_exclusion",
+                    "label": "表达排除依据",
+                    "score": 0,
+                    "max_score": 4,
+                    "gap_type": "reasoning_exclusion_missing",
+                    "next_training_action": "提交前写出排除依据。",
+                }
+            ],
+        },
+        "evidence_graph_summary": {
+            "covered_evidence_nodes": [
+                {"node_id": "ev_migratory_rlq_pain", "source_id": "appendicitis_001.hf_02", "label": "转移并固定右下腹痛"},
+                {"node_id": "nf_no_diarrhea", "source_id": "appendicitis_001.hf_05", "label": "无明显腹泻"},
+            ],
+            "missing_evidence_nodes": [
+                {"node_id": "ev_peritoneal_signs", "source_id": "abd.palpation.rebound", "label": "反跳痛"},
+                {"node_id": "nf_urinalysis_negative", "source_id": "lab.urinalysis", "label": "尿常规阴性"},
+            ],
+        },
+        "clinical_reasoning_trace": {
+            "cognitive_patterns": [
+                {"pattern_id": "hypothesis_delayed", "label": "诊断假设生成偏晚", "severity": "medium"}
+            ],
+            "sequence_flags": [
+                {"flag_id": "late_hypothesis", "label": "诊断假设生成偏晚", "severity": "medium", "evidence": "提交前才形成明确假设"}
+            ],
+        },
+        "training_gaps": [
+            {"gap_type": "physical_exam_missing", "label": "缺少腹部局部体征", "severity": "high"},
+            {"gap_type": "reasoning_exclusion_missing", "label": "排除依据不足", "severity": "medium"},
+        ],
+    }
+
+    analysis = build_deep_report_analysis(report=report, case=case)
+
+    overall = analysis["overall_evaluation"]
+    assert overall["score_interpretation"] == "本轮总分 28/100，临床 OSCE 24/70，人文沟通 4/30。"
+    assert overall["completion_judgement"] == "needs_rebuild"
+    assert any("病史采集" in item for item in overall["primary_strengths"])
+    assert "缺少腹部局部体征" in overall["primary_weaknesses"]
+
+    task = analysis["clinical_task_analysis"]["physical_exam"]
+    assert task["label"] == "查体"
+    assert task["completion_level"] == "missing"
+    assert task["missed_items"][0]["label"] == "检查反跳痛"
+    assert "补充腹部局部体征" in task["next_action"]
+
+    evidence = analysis["evidence_utilization_analysis"]
+    assert evidence["collected_key_evidence"][0]["label"] == "转移并固定右下腹痛"
+    assert any(item["label"] == "尿常规阴性" for item in evidence["missing_key_evidence"])
+    assert any("尿常规阴性有助于排除输尿管结石" in item["statement"] for item in evidence["evidence_chain_breakpoints"])
+
+    process = analysis["process_strategy_analysis"]
+    assert process["sequence_flags"][0]["label"] == "诊断假设生成偏晚"
+    assert "先形成诊断假设" in process["premature_or_delayed_actions"][0]

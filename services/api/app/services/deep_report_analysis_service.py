@@ -4,6 +4,11 @@ import re
 from typing import Any, Mapping
 
 from app.models.case import Case, DifferentialDiagnosis, NegativeFinding, ReasoningPoint
+from app.services.clinical_reasoning_trace_service import (
+    action_order_summary_from_report,
+    evidence_chain_breakpoints_from_report,
+    sequence_flags_from_report,
+)
 
 DEEP_REPORT_ANALYSIS_VERSION = "deep_report_analysis_v1"
 DEEP_REPORT_ANALYSIS_PROMPT_VERSION = "deep_report_prompt_v1"
@@ -24,12 +29,27 @@ DEEP_REPORT_ANALYSIS_PROMPT_CONTRACT = """你是 OSCE 深度训练分析 Agent�
 
 _PUNCTUATION_PATTERN = re.compile(r"[\s,，。；;：:、.!！?？()（）【】\\[\\]{}<>《》\"'“”‘’]")
 
+_CLINICAL_DIMENSIONS: tuple[dict[str, Any], ...] = (
+    {"dimension_id": "history_taking", "label": "病史采集", "max_score": 18, "fallback_action": "下一轮先补齐病史主线，再推进查体和检查。"},
+    {"dimension_id": "physical_exam", "label": "查体", "max_score": 10, "fallback_action": "下一轮围绕当前诊断假设选择关键查体。"},
+    {"dimension_id": "auxiliary_test", "label": "辅助检查", "max_score": 10, "fallback_action": "下一轮只申请能验证或排除假设的必要检查。"},
+    {"dimension_id": "main_diagnosis", "label": "主诊断", "max_score": 10, "fallback_action": "下一轮提交前确认诊断名称和关键支持证据一致。"},
+    {"dimension_id": "differential_diagnosis", "label": "鉴别诊断", "max_score": 10, "fallback_action": "下一轮至少列出一个相近诊断及排除依据。"},
+    {"dimension_id": "reasoning", "label": "推理链", "max_score": 12, "fallback_action": "下一轮用支持证据、反证依据和仍需验证点组织诊断推理。"},
+)
+
+_CLINICAL_DIMENSION_BY_ID = {dimension["dimension_id"]: dimension for dimension in _CLINICAL_DIMENSIONS}
+
 
 def build_deep_report_analysis(*, report: Mapping[str, Any], case: Case) -> dict[str, Any]:
     return {
         "version": DEEP_REPORT_ANALYSIS_VERSION,
         "status": "generated",
+        "overall_evaluation": build_overall_evaluation(report=report),
         "diagnostic_contrast_analysis": build_diagnostic_contrast_analysis(report=report, case=case),
+        "clinical_task_analysis": build_clinical_task_analysis(report=report),
+        "evidence_utilization_analysis": build_evidence_utilization_analysis(report=report, case=case),
+        "process_strategy_analysis": build_process_strategy_analysis(report=report),
     }
 
 
@@ -37,7 +57,84 @@ def build_legacy_deep_report_analysis() -> dict[str, Any]:
     return {
         "version": DEEP_REPORT_ANALYSIS_VERSION,
         "status": "legacy_report",
+        "overall_evaluation": _empty_overall_evaluation(),
         "diagnostic_contrast_analysis": _empty_diagnostic_contrast_analysis(),
+        "clinical_task_analysis": _empty_clinical_task_analysis(),
+        "evidence_utilization_analysis": _empty_evidence_utilization_analysis(),
+        "process_strategy_analysis": _empty_process_strategy_analysis(),
+    }
+
+
+def build_overall_evaluation(*, report: Mapping[str, Any]) -> dict[str, Any]:
+    total_score = _number(report.get("total_score"))
+    max_score = _number(report.get("max_score"), fallback=100)
+    score_groups = _mapping(report.get("score_groups"))
+    clinical_group = _mapping(score_groups.get("clinical_osce"))
+    humanistic_group = _mapping(score_groups.get("humanistic_communication"))
+    clinical_score = _number(clinical_group.get("score"))
+    clinical_max = _number(clinical_group.get("max_score"), fallback=70)
+    humanistic_score = _number(humanistic_group.get("score"))
+    humanistic_max = _number(humanistic_group.get("max_score"), fallback=30)
+    score_interpretation = (
+        f"本轮总分 {_format_score(total_score)}/{_format_score(max_score)}，"
+        f"临床 OSCE {_format_score(clinical_score)}/{_format_score(clinical_max)}，"
+        f"人文沟通 {_format_score(humanistic_score)}/{_format_score(humanistic_max)}。"
+    )
+    ratio = total_score / max_score if max_score > 0 else 0
+    judgement = _completion_judgement(ratio)
+    return {
+        **_empty_overall_evaluation(),
+        "summary": _overall_summary(judgement),
+        "score_interpretation": score_interpretation,
+        "completion_judgement": judgement,
+        "primary_strengths": _primary_strengths(report),
+        "primary_weaknesses": _primary_weaknesses(report),
+    }
+
+
+def build_clinical_task_analysis(*, report: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(dimension["dimension_id"]): _clinical_task_item(report=report, dimension=dimension)
+        for dimension in _CLINICAL_DIMENSIONS
+    }
+
+
+def build_evidence_utilization_analysis(*, report: Mapping[str, Any], case: Case) -> dict[str, Any]:
+    covered_nodes = _evidence_nodes(report, "covered_evidence_nodes")
+    missing_nodes = _evidence_nodes(report, "missing_evidence_nodes")
+    breakpoints = evidence_chain_breakpoints_from_report(report)
+    if not breakpoints:
+        breakpoints = _evidence_chain_breakpoints_from_case(case=case, missing_nodes=missing_nodes)
+    return {
+        **_empty_evidence_utilization_analysis(),
+        "collected_key_evidence": covered_nodes[:8],
+        "missing_key_evidence": missing_nodes[:8],
+        "evidence_chain_breakpoints": breakpoints[:8],
+        "unused_or_misused_evidence": _unused_or_misused_evidence(report=report, case=case),
+    }
+
+
+def build_process_strategy_analysis(*, report: Mapping[str, Any]) -> dict[str, Any]:
+    action_order_summary = action_order_summary_from_report(report)
+    trace = _mapping(report.get("clinical_reasoning_trace"))
+    flags = sequence_flags_from_report(report)
+    if not flags:
+        flags = _sequence_flags_from_trace_root(trace)
+    return {
+        **_empty_process_strategy_analysis(),
+        "action_order_summary": _action_order_summary_text(action_order_summary, flags),
+        "sequence_flags": flags[:6],
+        "premature_or_delayed_actions": [_sequence_flag_action(flag) for flag in flags[:4]],
+    }
+
+
+def _empty_overall_evaluation() -> dict[str, Any]:
+    return {
+        "summary": "",
+        "score_interpretation": "",
+        "completion_judgement": "not_ready",
+        "primary_strengths": [],
+        "primary_weaknesses": [],
     }
 
 
@@ -123,8 +220,110 @@ def _empty_diagnostic_contrast_analysis() -> dict[str, Any]:
     }
 
 
+def _empty_clinical_task_analysis() -> dict[str, Any]:
+    return {
+        str(dimension["dimension_id"]): {
+            "task_id": str(dimension["dimension_id"]),
+            "label": str(dimension["label"]),
+            "score": 0,
+            "max_score": int(dimension["max_score"]),
+            "completion_level": "missing",
+            "completed_items": [],
+            "missed_items": [],
+            "next_action": str(dimension["fallback_action"]),
+        }
+        for dimension in _CLINICAL_DIMENSIONS
+    }
+
+
+def _empty_evidence_utilization_analysis() -> dict[str, Any]:
+    return {
+        "collected_key_evidence": [],
+        "missing_key_evidence": [],
+        "evidence_chain_breakpoints": [],
+        "unused_or_misused_evidence": [],
+    }
+
+
+def _empty_process_strategy_analysis() -> dict[str, Any]:
+    return {
+        "action_order_summary": "本轮暂缺足够事件顺序信息。",
+        "sequence_flags": [],
+        "premature_or_delayed_actions": [],
+    }
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _number(value: Any, *, fallback: float = 0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(fallback)
+
+
+def _format_score(value: float | int) -> str:
+    normalized = float(value)
+    return str(int(normalized)) if normalized.is_integer() else f"{normalized:.1f}"
+
+
+def _completion_judgement(ratio: float) -> str:
+    if ratio >= 0.85:
+        return "strong"
+    if ratio >= 0.65:
+        return "mostly_complete"
+    if ratio >= 0.4:
+        return "needs_targeted_repair"
+    return "needs_rebuild"
+
+
+def _overall_summary(judgement: str) -> str:
+    if judgement == "strong":
+        return "本轮整体完成度较高，下一步重点是把证据链表达得更精炼。"
+    if judgement == "mostly_complete":
+        return "本轮已经完成主要训练任务，但仍有少数关键证据或推理表达需要补齐。"
+    if judgement == "needs_targeted_repair":
+        return "本轮已经收集到部分关键线索，但诊断验证、鉴别排除或表达结构仍需要定向修补。"
+    return "本轮关键训练链路尚未闭合，下一轮应先补齐核心证据，再提交诊断与推理。"
+
+
+def _primary_strengths(report: Mapping[str, Any]) -> list[str]:
+    strengths: list[str] = []
+    for task in sorted(
+        (_clinical_task_item(report=report, dimension=dimension) for dimension in _CLINICAL_DIMENSIONS),
+        key=lambda item: (item["score"] / item["max_score"]) if item["max_score"] else 0,
+        reverse=True,
+    ):
+        ratio = (task["score"] / task["max_score"]) if task["max_score"] else 0
+        if task["score"] <= 0 or ratio < 0.5:
+            continue
+        strengths.append(f"{task['label']}完成度相对较高（{_format_score(float(task['score']))}/{task['max_score']}）。")
+        if len(strengths) >= 3:
+            break
+    return strengths or ["本轮尚未形成稳定优势项，先完成一次完整训练链路。"]
+
+
+def _primary_weaknesses(report: Mapping[str, Any]) -> list[str]:
+    weaknesses: list[str] = []
+    training_gaps = report.get("training_gaps")
+    if isinstance(training_gaps, list):
+        for gap in training_gaps:
+            if not isinstance(gap, Mapping):
+                continue
+            label = str(gap.get("label") or gap.get("gap_type") or "").strip()
+            if label and label not in weaknesses:
+                weaknesses.append(label)
+            if len(weaknesses) >= 3:
+                return weaknesses
+    for task in build_clinical_task_analysis(report=report).values():
+        if task["completion_level"] in {"missing", "weak"}:
+            label = str(task["label"])
+            if label not in weaknesses:
+                weaknesses.append(label)
+            if len(weaknesses) >= 3:
+                break
+    return weaknesses or ["暂无明确薄弱项。"]
 
 
 def _normalize_text(value: str) -> str:
@@ -189,8 +388,186 @@ def _evidence_nodes(report: Mapping[str, Any], key: str) -> list[dict[str, str]]
         source_id = str(node.get("source_id") or "").strip()
         label = str(node.get("label") or source_id).strip()
         if source_id:
-            result.append({"source_id": source_id, "label": label})
+            item = {"source_id": source_id, "label": label}
+            node_id = str(node.get("node_id") or "").strip()
+            if node_id:
+                item["node_id"] = node_id
+            result.append(item)
     return result
+
+
+def _clinical_task_item(*, report: Mapping[str, Any], dimension: Mapping[str, Any]) -> dict[str, Any]:
+    dimension_id = str(dimension["dimension_id"])
+    score = _dimension_score(report, dimension_id)
+    max_score = int(dimension["max_score"])
+    traces = _dimension_trace_items(report, dimension_id)
+    missed_items = [_trace_summary(trace) for trace in traces if _trace_score(trace) < _trace_max_score(trace)]
+    completed_items = [_trace_summary(trace) for trace in traces if _trace_score(trace) > 0]
+    return {
+        "task_id": dimension_id,
+        "label": str(dimension["label"]),
+        "score": int(score) if score.is_integer() else score,
+        "max_score": max_score,
+        "completion_level": _task_completion_level(score, max_score),
+        "completed_items": completed_items[:5],
+        "missed_items": missed_items[:5],
+        "next_action": _task_next_action(missed_items, str(dimension["fallback_action"])),
+    }
+
+
+def _dimension_score(report: Mapping[str, Any], dimension_id: str) -> float:
+    dimension_scores = _mapping(report.get("dimension_scores"))
+    value = dimension_scores.get(dimension_id)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
+def _dimension_trace_items(report: Mapping[str, Any], dimension_id: str) -> list[Mapping[str, Any]]:
+    dimension_traces = _mapping(report.get("dimension_traces"))
+    traces = dimension_traces.get(dimension_id)
+    if not isinstance(traces, list):
+        return []
+    return [trace for trace in traces if isinstance(trace, Mapping)]
+
+
+def _trace_score(trace: Mapping[str, Any]) -> float:
+    return _number(trace.get("score"))
+
+
+def _trace_max_score(trace: Mapping[str, Any]) -> float:
+    return max(_number(trace.get("max_score")), 0)
+
+
+def _trace_summary(trace: Mapping[str, Any]) -> dict[str, Any]:
+    item_id = str(trace.get("item_id") or "").strip()
+    label = str(trace.get("label") or item_id or "未命名评分项").strip()
+    return {
+        "item_id": item_id,
+        "label": label,
+        "score": _trace_score(trace),
+        "max_score": _trace_max_score(trace),
+        "gap_type": str(trace.get("gap_type") or "").strip(),
+        "next_training_action": str(trace.get("next_training_action") or "").strip(),
+    }
+
+
+def _task_completion_level(score: float, max_score: int) -> str:
+    ratio = score / max_score if max_score > 0 else 0
+    if score <= 0:
+        return "missing"
+    if ratio < 0.5:
+        return "weak"
+    if ratio < 0.8:
+        return "partial"
+    return "solid"
+
+
+def _task_next_action(missed_items: list[dict[str, Any]], fallback: str) -> str:
+    for item in missed_items:
+        action = str(item.get("next_training_action") or "").strip()
+        if action:
+            return action
+    if missed_items:
+        labels = "、".join(str(item["label"]) for item in missed_items[:3] if item.get("label"))
+        if labels:
+            return f"下一轮优先补齐：{labels}。"
+    return fallback
+
+
+def _evidence_chain_breakpoints_from_case(*, case: Case, missing_nodes: list[dict[str, str]]) -> list[dict[str, Any]]:
+    missing_by_source = {node["source_id"]: node for node in missing_nodes}
+    breakpoints: list[dict[str, Any]] = []
+    for point in case.diagnosis.reasoning_points:
+        missing_evidence = [missing_by_source[source_id] for source_id in point.required_evidence if source_id in missing_by_source]
+        if not missing_evidence:
+            continue
+        kind = _normalized_reasoning_kind(point.kind)
+        breakpoints.append(
+            {
+                "breakpoint_id": point.point_id,
+                "statement": point.statement,
+                "kind": kind,
+                "status": "broken",
+                "missing_evidence": [item["source_id"] for item in missing_evidence],
+                "missing_evidence_labels": [item["label"] for item in missing_evidence],
+                "teacher_action": _teacher_action_for_breakpoint(kind, [item["label"] for item in missing_evidence]),
+            }
+        )
+    return breakpoints
+
+
+def _normalized_reasoning_kind(kind: str) -> str:
+    if kind == "支持":
+        return "support"
+    if kind == "排除":
+        return "exclude"
+    return "reasoning"
+
+
+def _teacher_action_for_breakpoint(kind: str, missing_labels: list[str]) -> str:
+    focus = "、".join(missing_labels[:3]) if missing_labels else "关键证据"
+    if kind == "exclude":
+        return f"先补齐{focus}，再说明这些证据如何排除相近诊断。"
+    return f"先补齐{focus}，再说明这些证据如何支持或修正当前诊断假设。"
+
+
+def _unused_or_misused_evidence(*, report: Mapping[str, Any], case: Case) -> list[dict[str, str]]:
+    final_submission = _mapping(report.get("final_submission"))
+    combined = f"{final_submission.get('diagnosis', '')} {final_submission.get('reasoning', '')}"
+    result: list[dict[str, str]] = []
+    for clue in case.distractor_clues:
+        if clue.patient_expression and clue.patient_expression in combined:
+            result.append(
+                {
+                    "source_id": clue.clue_id,
+                    "label": clue.patient_expression,
+                    "issue": "患者想法不能直接作为诊断依据。",
+                    "next_training_action": "下一轮把患者叙事和医学证据分开记录。",
+                }
+            )
+    return result
+
+
+def _sequence_flags_from_trace_root(trace: Mapping[str, Any]) -> list[dict[str, Any]]:
+    flags = trace.get("sequence_flags")
+    if not isinstance(flags, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for flag in flags:
+        if not isinstance(flag, Mapping):
+            continue
+        flag_id = str(flag.get("flag_id") or "").strip()
+        label = str(flag.get("label") or flag_id).strip()
+        if not label:
+            continue
+        result.append(
+            {
+                "flag_id": flag_id or label,
+                "label": label,
+                "severity": str(flag.get("severity") or "medium"),
+                "evidence": str(flag.get("evidence") or ""),
+            }
+        )
+    return result
+
+
+def _action_order_summary_text(action_order_summary: Mapping[str, Any], flags: list[dict[str, Any]]) -> str:
+    if flags:
+        return "本轮过程顺序存在需要复盘的节点，应在下一轮按病史、假设、查体、检查、诊断表达逐步推进。"
+    if action_order_summary:
+        return "本轮训练过程顺序未发现明显结构性问题。"
+    return "本轮暂缺足够事件顺序信息。"
+
+
+def _sequence_flag_action(flag: Mapping[str, Any]) -> str:
+    flag_id = str(flag.get("flag_id") or "")
+    label = str(flag.get("label") or "")
+    if "hypothesis" in flag_id or "假设" in label:
+        return "下一轮先形成诊断假设，再选择查体和检查去验证支持证据与反证。"
+    if "testing" in flag_id or "检查" in label:
+        return "下一轮申请辅助检查前，先完成关键查体并说明检查要验证什么。"
+    return f"下一轮围绕“{label or flag_id}”调整训练顺序。"
 
 
 def _collected_case_fact_nodes(case: Case, collected_source_ids: Any) -> list[dict[str, str]]:

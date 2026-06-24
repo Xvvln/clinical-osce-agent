@@ -6,8 +6,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   normalizeFeedbackReport,
   type AiReflectionReview,
+  type ClinicalTaskAnalysisItem,
+  type ClinicalTaskTraceItem,
   type DeepReportAnalysis,
   type DiagnosticEvidenceItem,
+  type EvidenceChainBreakpoint,
   type EvidenceGraphSummary,
   type ExplanationSourceItem,
   type FeedbackReport,
@@ -15,6 +18,7 @@ import {
   type KnowledgeRecommendationItem,
   type LlmReasoningFeedbackItem,
   type PersonalTrainingSkillCandidate,
+  type ProcessSequenceFlag,
   type ProcedureSimulationAuditItem,
   type ReportCoverageMapItem,
   type ReportCoverageMapPayload,
@@ -1604,9 +1608,20 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
   if (analysis.status !== "generated") {
     return null;
   }
+  const overall = analysis.overall_evaluation;
   const diagnostic = analysis.diagnostic_contrast_analysis;
-  const hasDiagnosticContent = diagnostic.submitted_diagnosis || diagnostic.target_diagnosis || diagnostic.teacher_explanation;
-  if (!hasDiagnosticContent) {
+  const clinicalTasks = Object.values(analysis.clinical_task_analysis).filter((item) => item.score > 0 || item.missed_items.length > 0);
+  const evidenceUtilization = analysis.evidence_utilization_analysis;
+  const processStrategy = analysis.process_strategy_analysis;
+  const hasDeepContent =
+    overall.summary ||
+    diagnostic.submitted_diagnosis ||
+    diagnostic.target_diagnosis ||
+    diagnostic.teacher_explanation ||
+    clinicalTasks.length > 0 ||
+    evidenceUtilization.evidence_chain_breakpoints.length > 0 ||
+    processStrategy.sequence_flags.length > 0;
+  if (!hasDeepContent) {
     return null;
   }
   return (
@@ -1622,6 +1637,21 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
           {getDiagnosticClassificationLabel(diagnostic.classification)}
         </span>
       </div>
+      {overall.summary || overall.score_interpretation ? (
+        <div className="mt-4 rounded-xl border border-brand/15 bg-brand/5 p-4">
+          <div className="grid gap-4 lg:grid-cols-[1.3fr_1fr]">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">整体评价</h3>
+              {overall.score_interpretation ? <p className="mt-2 text-sm leading-6 text-foreground">{overall.score_interpretation}</p> : null}
+              {overall.summary ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{overall.summary}</p> : null}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <DeepReportInlineList title="本轮优势" items={overall.primary_strengths} emptyText="暂无稳定优势项。" />
+              <DeepReportInlineList title="优先修补" items={overall.primary_weaknesses} emptyText="暂无明确薄弱项。" />
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-border bg-muted/20 p-4">
           <p className="text-xs font-semibold text-muted-foreground">学生提交诊断</p>
@@ -1661,7 +1691,169 @@ function DeepReportAnalysisSection({ analysis }: Readonly<{ analysis: DeepReport
           ) : null}
         </div>
       </div>
+      {clinicalTasks.length > 0 ? <ClinicalTaskAnalysisGrid tasks={clinicalTasks} /> : null}
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <EvidenceUtilizationCard
+          breakpoints={evidenceUtilization.evidence_chain_breakpoints}
+          collectedEvidence={evidenceUtilization.collected_key_evidence}
+          missingEvidence={evidenceUtilization.missing_key_evidence}
+        />
+        <ProcessStrategyCard
+          actionOrderSummary={processStrategy.action_order_summary}
+          flags={processStrategy.sequence_flags}
+          actions={processStrategy.premature_or_delayed_actions}
+        />
+      </div>
     </section>
+  );
+}
+
+function DeepReportInlineList({
+  title,
+  items,
+  emptyText,
+}: Readonly<{
+  title: string;
+  items: readonly string[];
+  emptyText: string;
+}>) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+      {items.length > 0 ? (
+        <ul className="mt-1 grid gap-1 text-xs leading-5 text-muted-foreground">
+          {items.slice(0, 3).map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function ClinicalTaskAnalysisGrid({ tasks }: Readonly<{ tasks: readonly ClinicalTaskAnalysisItem[] }>) {
+  return (
+    <div className="mt-3">
+      <h3 className="text-sm font-semibold text-foreground">任务类型表现</h3>
+      <div className="mt-2 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {tasks.map((task) => (
+          <article className="rounded-xl border border-border bg-muted/20 p-4" key={task.task_id}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">{task.label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {task.score}/{task.max_score} · {getTaskCompletionLevelLabel(task.completion_level)}
+                </p>
+              </div>
+              <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+                {getTaskCompletionLevelLabel(task.completion_level)}
+              </span>
+            </div>
+            <ClinicalTaskTraceList title="已完成" items={task.completed_items} emptyText="暂无明确完成项。" />
+            <ClinicalTaskTraceList title="待修补" items={task.missed_items} emptyText="暂无明确漏项。" />
+            <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+              {task.next_action}
+            </p>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ClinicalTaskTraceList({
+  title,
+  items,
+  emptyText,
+}: Readonly<{
+  title: string;
+  items: readonly ClinicalTaskTraceItem[];
+  emptyText: string;
+}>) {
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+      {items.length > 0 ? (
+        <ul className="mt-1 grid gap-1.5 text-xs leading-5 text-muted-foreground">
+          {items.slice(0, 3).map((item) => (
+            <li className="rounded-lg bg-background px-2.5 py-1.5" key={`${item.item_id}-${item.label}`}>
+              {item.label}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function EvidenceUtilizationCard({
+  breakpoints,
+  collectedEvidence,
+  missingEvidence,
+}: Readonly<{
+  breakpoints: readonly EvidenceChainBreakpoint[];
+  collectedEvidence: readonly DiagnosticEvidenceItem[];
+  missingEvidence: readonly DiagnosticEvidenceItem[];
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">证据链断点</h3>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        已采集 {collectedEvidence.length} 项关键证据，仍缺 {missingEvidence.length} 项关键证据。
+      </p>
+      {breakpoints.length > 0 ? (
+        <ul className="mt-3 grid gap-2">
+          {breakpoints.slice(0, 4).map((item) => (
+            <li className="rounded-lg border border-border bg-background p-3 text-xs leading-5 text-muted-foreground" key={item.breakpoint_id}>
+              <p className="font-medium text-foreground">{item.statement}</p>
+              {item.missing_evidence_labels.length > 0 ? <p className="mt-1">缺口：{item.missing_evidence_labels.join("、")}</p> : null}
+              {item.teacher_action ? <p className="mt-1">动作：{item.teacher_action}</p> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-border bg-background p-3 text-sm leading-6 text-muted-foreground">暂无明确证据链断点。</p>
+      )}
+    </div>
+  );
+}
+
+function ProcessStrategyCard({
+  actionOrderSummary,
+  flags,
+  actions,
+}: Readonly<{
+  actionOrderSummary: string;
+  flags: readonly ProcessSequenceFlag[];
+  actions: readonly string[];
+}>) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-4">
+      <h3 className="text-sm font-semibold text-foreground">过程顺序</h3>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">{actionOrderSummary || "本轮暂缺足够事件顺序信息。"}</p>
+      {flags.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {flags.map((flag) => (
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground" key={flag.flag_id}>
+              {flag.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {actions.length > 0 ? (
+        <ul className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground">
+          {actions.map((action) => (
+            <li className="rounded-lg border border-border bg-background p-3" key={action}>
+              {action}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -1728,6 +1920,16 @@ function getDiagnosticClassificationLabel(classification: string): string {
     unsupported: "证据不足",
   };
   return labels[classification] ?? classification;
+}
+
+function getTaskCompletionLevelLabel(level: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    solid: "完成较好",
+    partial: "部分完成",
+    weak: "薄弱",
+    missing: "缺失",
+  };
+  return labels[level] ?? level;
 }
 
 function formatTeacherAnalysisKey(key: string): string {
