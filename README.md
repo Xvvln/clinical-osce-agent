@@ -175,6 +175,16 @@ python '.\start-admin.py'
 
 `start-admin.py` 不再启动第二套 API，只会将管理端连接到 `http://127.0.0.1:8000`。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md`、`apps/admin/README.md` 和 `docker-compose.yml` 为准。
 
+本地和测试阶段默认采用服务端统一托管模型配置，关键默认值与 `.env.example` 保持一致：
+
+```env
+CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
+OSCE_OPENAI_MODEL=gemini-3.5-flash
+OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
+OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
+OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+```
+
 ## 常用验证
 
 后端测试：

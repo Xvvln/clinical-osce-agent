@@ -2327,6 +2327,7 @@ def _append_action_timeline_events(
     timeline = [dict(item) for item in state.get("action_timeline", []) if isinstance(item, dict)]
     labels = label_by_source or {}
     next_index = len(timeline) + 1
+    message_turn_index = _next_action_message_turn_index(state)
     for source_id in source_ids:
         normalized_source_id = str(source_id or "").strip()
         if not normalized_source_id:
@@ -2334,6 +2335,7 @@ def _append_action_timeline_events(
         timeline.append(
             {
                 "turn_index": next_index,
+                "message_turn_index": message_turn_index,
                 "action_type": action_type,
                 "source_id": normalized_source_id,
                 "label": labels.get(normalized_source_id, normalized_source_id),
@@ -2341,6 +2343,11 @@ def _append_action_timeline_events(
         )
         next_index += 1
     return timeline
+
+
+def _next_action_message_turn_index(state: OsceGraphState) -> int:
+    messages = [message for message in state.get("messages", []) if isinstance(message, dict)]
+    return len(messages) + 1
 
 
 def _history_fact_label(case: Case, fact: HiddenFact) -> str:

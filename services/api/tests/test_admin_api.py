@@ -2087,12 +2087,12 @@ def test_admin_can_read_rubric_detail(tmp_path, monkeypatch) -> None:
     assert rubric["total_score"] == 100
     assert rubric["schema_version"] == "1.1"
     assert rubric["dimensions"][0]["dimension_id"] == "history_taking"
-    assert rubric["dimensions"][0]["weight"] == 25
+    assert rubric["dimensions"][0]["weight"] == 18
     assert rubric["dimensions"][0]["scoring_mode"] == "rule"
     assert rubric["dimensions"][0]["items"][0] == {
         "item_id": "ht_onset",
         "description": "追问起病时间",
-        "max_score": 3,
+        "max_score": 2,
         "match_rule": {
             "kind": "intent_keyword",
             "spec": {

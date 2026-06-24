@@ -65,7 +65,7 @@ class RuleEvaluationReport:
             "total_score": self.total_score,
             "dimension_scores": self.dimension_scores,
             "dimension_traces": {
-                dimension_id: [trace.model_dump(exclude_none=True) for trace in traces]
+                dimension_id: [_score_trace_payload(trace) for trace in traces]
                 for dimension_id, traces in self.dimension_traces.items()
             },
             "rubric_scores": self.rubric_scores,
@@ -78,6 +78,12 @@ class RuleEvaluationReport:
             "training_gaps": self.training_gaps,
             "humanistic_anchor_candidates": self.humanistic_anchor_candidates,
         }
+
+
+def _score_trace_payload(trace: ScoreTrace) -> dict[str, Any]:
+    payload = trace.model_dump(exclude_none=True)
+    payload.setdefault("score", trace.awarded_score)
+    return payload
 
 
 def evaluate_session_rules(
@@ -132,7 +138,7 @@ def evaluate_session_rules(
                 "max_score": max_score,
                 "dimension_id": dimension_id,
                 "description": item["description"],
-                "trace": trace.model_dump(exclude_none=True),
+                "trace": _score_trace_payload(trace),
                 **item_result,
             }
         dimension_scores[dimension_id] = dimension_score
@@ -320,6 +326,7 @@ def _evaluate_semantic_anchor(
             [event.content] if score else [],
             match_method=str(result["match_method"]),
             semantic_score=float(result["semantic_score"]),
+            embedding_score=result.get("embedding_score"),
             anchor_id=anchor_id,
             positive_anchor=result.get("positive_anchor"),
             negative_anchor=result.get("negative_anchor"),
@@ -344,14 +351,8 @@ def _evaluate_sequence_check(
         return {"trace": _build_score_trace(item, 0, [], match_method="sequence_check", timing_status="missing_action")}
     action = actions[0]
     window = int(spec.get("window_student_turns", 2))
-    before_events = [
-        event for event in _student_events(event_stream)
-        if action.turn_index - window <= event.turn_index <= action.turn_index
-    ]
-    after_events = [
-        event for event in _student_events(event_stream)
-        if action.turn_index < event.turn_index <= action.turn_index + window
-    ]
+    before_events = _student_events_before_action(event_stream, action, window)
+    after_events = _student_events_after_action(event_stream, action, window)
     before_events = _events_matching_required_keywords(before_events, spec)
     after_events = _events_matching_required_keywords(after_events, spec)
     before_match = _best_semantic_event(before_events, str(spec["anchor_id"]), semantic_matcher)
@@ -367,6 +368,7 @@ def _evaluate_sequence_check(
                     [event.content],
                     match_method="sequence_check",
                     semantic_score=float(result["semantic_score"]),
+                    embedding_score=result.get("embedding_score"),
                     anchor_id=str(spec["anchor_id"]),
                     positive_anchor=result.get("positive_anchor"),
                     negative_anchor=result.get("negative_anchor"),
@@ -389,6 +391,7 @@ def _evaluate_sequence_check(
                 [event.content],
                 match_method="sequence_check",
                 semantic_score=float(result["semantic_score"]),
+                embedding_score=result.get("embedding_score"),
                 anchor_id=str(spec["anchor_id"]),
                 positive_anchor=result.get("positive_anchor"),
                 negative_anchor=result.get("negative_anchor"),
@@ -475,6 +478,24 @@ def _best_semantic_event(
 
 def _student_events(event_stream: list[TrainingEvent]) -> list[TrainingEvent]:
     return [event for event in event_stream if event.role == "student" and event.event_type == "student_utterance"]
+
+
+def _student_events_before_action(
+    event_stream: list[TrainingEvent],
+    action: TrainingEvent,
+    window: int,
+) -> list[TrainingEvent]:
+    students = [event for event in _student_events(event_stream) if event.turn_index <= action.turn_index]
+    return students[-max(1, window):]
+
+
+def _student_events_after_action(
+    event_stream: list[TrainingEvent],
+    action: TrainingEvent,
+    window: int,
+) -> list[TrainingEvent]:
+    students = [event for event in _student_events(event_stream) if event.turn_index > action.turn_index]
+    return students[:max(1, window)]
 
 
 def _events_matching_required_keywords(events: list[TrainingEvent], spec: dict[str, Any]) -> list[TrainingEvent]:
@@ -631,7 +652,7 @@ def _training_gap_from_trace(
         "next_training_action": str(item.get("next_training_action") or "下一轮训练中补齐该评分点。"),
         "skill_type": str(item.get("skill_type") or _default_skill_type(dimension_id)),
         "gap_source": gap_source,
-        "source_trace": trace.model_dump(exclude_none=True),
+        "source_trace": _score_trace_payload(trace),
         "recovered": False,
     }
 

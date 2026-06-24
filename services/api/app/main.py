@@ -151,7 +151,7 @@ ADMIN_EVALUATION_CASES = [
                 reasoning="转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
             ),
         ],
-        expected_total_score=32,
+        expected_total_score=22,
         forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
     ),
 ]

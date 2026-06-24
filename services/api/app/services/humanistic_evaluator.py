@@ -129,9 +129,24 @@ class SemanticAnchorMatcher:
     def match(self, text: str, anchor_id: str) -> dict[str, Any]:
         if self._embedding_client is not None:
             try:
-                return self._embedding_anchor_match(text, anchor_id)
+                embedding_result = self._embedding_anchor_match(text, anchor_id)
             except Exception as exc:
                 LOGGER.warning("Humanistic embedding anchor match failed; falling back to lexical anchors: %s", exc)
+            else:
+                if embedding_result.get("matched"):
+                    return embedding_result
+                lexical_result = _lexical_anchor_match(
+                    text,
+                    anchor_id,
+                    self._anchor_bank,
+                    reviewer=self._reviewer,
+                    review_margin=self._review_margin,
+                )
+                if lexical_result.get("matched"):
+                    lexical_result["match_method"] = "hybrid_lexical_fallback"
+                    lexical_result["embedding_score"] = float(embedding_result.get("semantic_score") or 0.0)
+                    return lexical_result
+                return embedding_result
         return _lexical_anchor_match(
             text,
             anchor_id,
@@ -228,7 +243,7 @@ def build_training_event_stream(session: Any) -> list[TrainingEvent]:
         action_type = str(action.get("action_type") or "").strip()
         if action_type not in {"physical_exam_requested", "auxiliary_test_requested", "diagnosis_submitted"}:
             continue
-        raw_turn_index = action.get("turn_index")
+        raw_turn_index = action.get("message_turn_index", action.get("turn_index"))
         turn_index = int(raw_turn_index) if str(raw_turn_index).isdigit() else next_turn_index
         events.append(
             TrainingEvent(
@@ -425,7 +440,38 @@ def _text_similarity(left: str, right: str) -> float:
     containment = overlap / min(len(left_tokens), len(right_tokens))
     jaccard = overlap / len(left_tokens | right_tokens)
     synonym_boost = _semantic_hint_boost(left, right)
-    return min(1.0, containment * 0.62 + jaccard * 0.28 + synonym_boost)
+    phrase_boost = _direct_phrase_overlap_boost(left, right)
+    return min(1.0, containment * 0.62 + jaccard * 0.28 + synonym_boost + phrase_boost)
+
+
+def _direct_phrase_overlap_boost(left: str, right: str) -> float:
+    left_normalized = re.sub(r"\s+", "", left.lower())
+    right_normalized = re.sub(r"\s+", "", right.lower())
+    phrases = (
+        "最担心",
+        "担心什么",
+        "希望",
+        "就诊",
+        "解决",
+        "影响",
+        "生活",
+        "工作",
+        "上班",
+        "学习",
+        "睡眠",
+        "总结",
+        "复述",
+        "确认",
+        "理解",
+        "可以吗",
+        "同意",
+        "隐私",
+        "不舒服",
+        "一起",
+        "一步步",
+    )
+    overlap_count = sum(1 for phrase in phrases if phrase in left_normalized and phrase in right_normalized)
+    return min(overlap_count * 0.08, 0.32)
 
 
 def _semantic_hint_boost(left: str, right: str) -> float:
@@ -450,9 +496,14 @@ def _tokens(text: str) -> set[str]:
     tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{1,2}", normalized))
     for phrase in [
         "担心",
+        "最担心",
+        "担心什么",
         "担忧",
         "害怕",
         "焦虑",
+        "希望",
+        "就诊",
+        "解决",
         "理解",
         "一起",
         "一步步",
@@ -463,7 +514,14 @@ def _tokens(text: str) -> set[str]:
         "腹部",
         "不舒服",
         "生活",
+        "工作",
+        "上班",
+        "学习",
+        "睡眠",
         "影响",
+        "总结",
+        "复述",
+        "确认",
         "目的",
         "隐私",
         "选择",

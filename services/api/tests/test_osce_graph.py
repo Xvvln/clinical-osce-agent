@@ -303,7 +303,7 @@ def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() ->
         "appendicitis_001.hf_04",
     ]
     assert result["agent_turn_memory"][0]["current_intents"] == ["ask_location", "ask_character", "ask_severity"]
-    assert result["action_timeline"] == [
+    expected_action_timeline = [
         {
             "turn_index": 1,
             "action_type": "history_fact_revealed",
@@ -323,6 +323,16 @@ def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() ->
             "label": "追问疼痛程度",
         },
     ]
+    assert [
+        {
+            "turn_index": item["turn_index"],
+            "action_type": item["action_type"],
+            "source_id": item["source_id"],
+            "label": item["label"],
+        }
+        for item in result["action_timeline"]
+    ] == expected_action_timeline
+    assert all(isinstance(item.get("message_turn_index"), int) and item["message_turn_index"] >= 1 for item in result["action_timeline"])
 
 
 def test_osce_graph_reveals_case_specific_multi_intent_history_facts() -> None:
@@ -1493,22 +1503,26 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
     assert feedback_report["report_id"] == "session_demo_report"
     assert feedback_report["session_id"] == "session_demo"
     assert feedback_report["case_id"] == "appendicitis_001"
-    assert feedback_report["total_score"] == 32
+    assert feedback_report["total_score"] == 22
     assert feedback_report["dimension_scores"] == {
-        "history_taking": 3,
-        "physical_exam": 5,
-        "auxiliary_test": 5,
-        "main_diagnosis": 15,
+        "history_taking": 2,
+        "physical_exam": 4,
+        "auxiliary_test": 3,
+        "main_diagnosis": 10,
         "differential_diagnosis": 0,
-        "reasoning": 4,
+        "reasoning": 3,
+        "narrative_medicine": 0,
+        "communication_skill": 0,
+        "medical_ethics": 0,
+        "relationship_building": 0,
     }
     assert "dimension_traces" in feedback_report
-    assert result["rubric_scores"]["ht_onset"]["score"] == 3
+    assert result["rubric_scores"]["ht_onset"]["score"] == 2
     assert result["rubric_scores"]["ht_migration"]["score"] == 0
-    assert result["rubric_scores"]["pe_rebound"]["score"] == 5
-    assert result["rubric_scores"]["ax_cbc"]["score"] == 5
-    assert result["rubric_scores"]["dx_main"]["score"] == 15
-    assert result["rubric_scores"]["rs_support"]["score"] == 4
+    assert result["rubric_scores"]["pe_rebound"]["score"] == 4
+    assert result["rubric_scores"]["ax_cbc"]["score"] == 3
+    assert result["rubric_scores"]["dx_main"]["score"] == 10
+    assert result["rubric_scores"]["rs_support"]["score"] == 3
     assert "ht_migration" in result["missed_items"]
     assert "推理表达覆盖关键排除依据：评分轨迹未找到足够证据。" in feedback_report["reasoning_errors"]
     assert feedback_report["strengths"][:4] == [
@@ -1637,17 +1651,17 @@ def test_osce_graph_uses_injected_llm_scorer_for_llm_rubric_items() -> None:
         }
     )
 
-    assert result["feedback_report"]["total_score"] == sum(result["feedback_report"]["dimension_scores"].values()) == 43
+    assert result["feedback_report"]["total_score"] == sum(result["feedback_report"]["dimension_scores"].values()) == 30
     assert result["feedback_report"]["dimension_scores"]["differential_diagnosis"] == 0
-    assert result["feedback_report"]["dimension_scores"]["reasoning"] == 9
-    assert result["rubric_scores"]["rs_support"]["score"] == 4
-    assert result["rubric_scores"]["rs_exclude"]["score"] == 5
+    assert result["feedback_report"]["dimension_scores"]["reasoning"] == 7
+    assert result["rubric_scores"]["rs_support"]["score"] == 3
+    assert result["rubric_scores"]["rs_exclude"]["score"] == 4
     assert result["feedback_report"]["llm_reasoning_feedback"] == [
         {
             "rubric_item_id": "rs_exclude",
             "description": "推理表达覆盖关键排除依据",
-            "score": 5,
-            "max_score": 5,
+            "score": 4,
+            "max_score": 4,
             "covered_evidence": ["appendicitis_001.rp_05"],
             "missing_evidence": ["appendicitis_001.rp_06"],
             "rationale": "排除依据覆盖尿常规，仍缺少完整鉴别说明。",

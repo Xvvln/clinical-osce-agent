@@ -536,7 +536,7 @@ def test_run_evaluation_case_passes_standard_appendicitis_path(tmp_path) -> None
             EvaluationStep(kind="auxiliary_test", value="lab.cbc"),
             EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛、反跳痛和白细胞升高支持诊断。"),
         ],
-        expected_total_score=32,
+        expected_total_score=22,
         forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
     )
 
@@ -544,8 +544,8 @@ def test_run_evaluation_case_passes_standard_appendicitis_path(tmp_path) -> None
 
     assert result.passed is True
     assert result.session_id
-    assert result.actual_total_score == 32
-    assert result.expected_total_score == 32
+    assert result.actual_total_score == 22
+    assert result.expected_total_score == 22
     assert result.forbidden_term_violations == []
     assert result.rag_source_coverage_passed is True
     assert result.source_reference_count >= 3
@@ -894,7 +894,7 @@ def test_load_evaluation_cases_reads_json_file(tmp_path) -> None:
                             "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
                         },
                     ],
-                    "expected_total_score": 32,
+                    "expected_total_score": 22,
                     "forbidden_terms": ["用药剂量", "治疗方案", "手术方案", "处置建议"],
                 },
                 {
@@ -904,7 +904,7 @@ def test_load_evaluation_cases_reads_json_file(tmp_path) -> None:
                         {"kind": "message", "value": "什么时候开始疼的？"},
                         {"kind": "submit_diagnosis", "value": "急性阑尾炎", "reasoning": "建议治疗方案。"},
                     ],
-                    "expected_total_score": 32,
+                    "expected_total_score": 22,
                     "forbidden_terms": ["治疗方案"],
                 },
             ],
@@ -929,7 +929,7 @@ def test_load_evaluation_cases_reads_json_file(tmp_path) -> None:
                     reasoning="转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
                 ),
             ],
-            expected_total_score=32,
+            expected_total_score=22,
             forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
         ),
         EvaluationCase(
@@ -939,7 +939,7 @@ def test_load_evaluation_cases_reads_json_file(tmp_path) -> None:
                 EvaluationStep(kind="message", value="什么时候开始疼的？"),
                 EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="建议治疗方案。"),
             ],
-            expected_total_score=32,
+            expected_total_score=22,
             forbidden_terms=["治疗方案"],
         ),
     ]
@@ -961,7 +961,7 @@ def test_run_evaluation_cases_summarizes_batch_results(tmp_path) -> None:
                 EvaluationStep(kind="auxiliary_test", value="lab.cbc"),
                 EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛、反跳痛和白细胞升高支持诊断。"),
             ],
-            expected_total_score=32,
+            expected_total_score=22,
             forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
         ),
         EvaluationCase(
@@ -971,7 +971,7 @@ def test_run_evaluation_cases_summarizes_batch_results(tmp_path) -> None:
                 EvaluationStep(kind="message", value="什么时候开始疼的？"),
                 EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="建议治疗方案。"),
             ],
-            expected_total_score=32,
+            expected_total_score=22,
             forbidden_terms=["治疗方案"],
         ),
     ]

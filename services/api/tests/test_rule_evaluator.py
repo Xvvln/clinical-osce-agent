@@ -8,6 +8,8 @@ from app.services.humanistic_evaluator import (
     HumanisticSemanticReviewResponse,
     OpenAICompatibleHumanisticSemanticReviewer,
     SemanticReviewRequest,
+    load_anchor_bank,
+    semantic_anchor_match,
 )
 from app.services.osce_session_service import OsceSession
 from app.services.rule_evaluator import evaluate_session_rules, score_rubric_item
@@ -24,6 +26,11 @@ class FakeHumanisticEmbeddingClient:
         normalized_texts = tuple(str(text) for text in texts)
         self.calls.append((normalized_texts, task_type))
         return [_fake_embedding_vector(text) for text in normalized_texts]
+
+
+class FlatHumanisticEmbeddingClient:
+    def embed_texts(self, texts, *, task_type: str):  # type: ignore[no-untyped-def]
+        return [[1.0, 0.0] for _ in texts]
 
 
 class BoundaryAcceptingReviewer:
@@ -328,6 +335,79 @@ def test_humanistic_semantic_scoring_uses_embedding_client_and_reuses_anchor_vec
     assert len([call for call in embedding_client.calls if call[1] == "RETRIEVAL_QUERY"]) >= 1
 
 
+def test_humanistic_trace_payload_exposes_training_contract_fields() -> None:
+    embedding_client = FakeHumanisticEmbeddingClient()
+    session = OsceSession(
+        session_id="session_humanistic_trace_contract",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[{"role": "student", "content": "我想先听听你现在最担心什么。"}],
+    )
+
+    report = evaluate_session_rules(session, humanistic_embedding_client=embedding_client)
+
+    matched_trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert matched_trace["score"] == 3
+    assert matched_trace["max_score"] == 3
+    assert matched_trace["matched_evidence"] == ["我想先听听你现在最担心什么。"]
+    assert matched_trace["stage"] == "history_taking"
+    assert matched_trace["next_training_action"]
+    assert matched_trace["match_method"] == "embedding_anchor"
+
+    gap = next(item for item in report["training_gaps"] if item["rubric_item_id"] == "nm_life_impact")
+    assert gap["source_trace"]["score"] == 0
+    assert gap["source_trace"]["max_score"] == 3
+    assert gap["source_trace"]["gap_type"] == "narrative_life_impact_missing"
+    assert gap["source_trace"]["stage"] == "history_taking"
+    assert gap["source_trace"]["next_training_action"]
+    assert gap["source_trace"]["match_method"] == "embedding_anchor"
+
+
+def test_humanistic_lexical_fallback_matches_clear_chinese_perspective_phrases() -> None:
+    anchor_bank = load_anchor_bank()
+
+    concern = semantic_anchor_match(
+        "你好，我是今天接诊你的医生。你哪里不舒服？现在最担心什么？",
+        "narrative_patient_concern",
+        anchor_bank,
+    )
+    life_impact = semantic_anchor_match(
+        "这个疼痛影响你学习或睡眠了吗？",
+        "narrative_life_impact",
+        anchor_bank,
+    )
+    negative = semantic_anchor_match(
+        "生活影响先不用说。",
+        "narrative_life_impact",
+        anchor_bank,
+    )
+
+    assert concern["matched"] is True
+    assert concern["match_method"] == "semantic_anchor"
+    assert life_impact["matched"] is True
+    assert life_impact["match_method"] == "semantic_anchor"
+    assert negative["matched"] is False
+
+
+def test_humanistic_embedding_miss_uses_trusted_lexical_fallback() -> None:
+    session = OsceSession(
+        session_id="session_humanistic_hybrid_fallback",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[{"role": "student", "content": "你好，我是今天接诊你的医生。你哪里不舒服？现在最担心什么？"}],
+    )
+
+    report = evaluate_session_rules(session, humanistic_embedding_client=FlatHumanisticEmbeddingClient())
+
+    trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
+    assert trace["match_method"] == "hybrid_lexical_fallback"
+    assert trace["matched_evidence"] == ["你好，我是今天接诊你的医生。你哪里不舒服？现在最担心什么？"]
+    assert trace["embedding_score"] == 0.2
+
+
 def test_humanistic_semantic_boundary_calls_reviewer_and_records_status() -> None:
     embedding_client = FakeHumanisticEmbeddingClient()
     reviewer = BoundaryAcceptingReviewer()
@@ -457,6 +537,37 @@ def test_humanistic_sequence_check_rejects_late_consent_and_generates_gap() -> N
     consent_gap = next(gap for gap in report["training_gaps"] if gap["gap_type"] == "ethics_consent_missing")
     assert consent_gap["stage"] == "physical_exam"
     assert consent_gap["trigger_stage"] == "physical_exam"
+
+
+def test_humanistic_sequence_check_uses_recent_student_turns_before_action() -> None:
+    session = OsceSession(
+        session_id="session_consent_with_patient_reply_gap",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="diagnosis_submission",
+        messages=[
+            {"role": "student", "content": "我需要检查你的腹部，可能会按压痛的地方，可以吗？"},
+            {"role": "patient", "content": "可以。"},
+            {"role": "coach", "content": "继续选择关键查体。"},
+        ],
+        action_timeline=[
+            {
+                "turn_index": 1,
+                "message_turn_index": 4,
+                "action_type": "physical_exam_requested",
+                "source_id": "abd.palpation.rebound",
+            },
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    trace = report["rubric_scores"]["eth_exam_consent"]["trace"]
+    assert report["rubric_scores"]["eth_exam_consent"]["score"] == 3
+    assert trace["timing_status"] == "before_action"
+    assert trace["matched_evidence"] == ["我需要检查你的腹部，可能会按压痛的地方，可以吗？"]
+    assert trace["matched_turn_index"] == 1
+    assert trace["action_turn_index"] == 4
 
 
 def test_humanistic_missed_opportunity_records_unanswered_patient_emotion() -> None:
@@ -681,6 +792,7 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
     assert report["dimension_traces"]["history_taking"][0] | {"llm_rationale": None, "fallback_reason": None} == {
         "rubric_item_id": "ht_onset",
         "awarded_score": 2,
+        "score": 2,
         "max_score": 2,
         "match_kind": "intent_keyword",
         "matched_evidence": ["什么时候开始疼的？", "appendicitis_001.hf_01"],
@@ -690,6 +802,7 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
     assert report["dimension_traces"]["reasoning"][0] | {"llm_rationale": None, "fallback_reason": None} == {
         "rubric_item_id": "rs_support",
         "awarded_score": 3,
+        "score": 3,
         "max_score": 8,
         "match_kind": "reasoning_coverage",
         "matched_evidence": ["abd.palpation.rebound", "lab.cbc"],
@@ -699,6 +812,7 @@ def test_evaluate_session_rules_outputs_dimension_score_traces() -> None:
     assert report["dimension_traces"]["reasoning"][1] | {"fallback_reason": None} == {
         "rubric_item_id": "rs_exclude",
         "awarded_score": 4,
+        "score": 4,
         "max_score": 4,
         "match_kind": "llm_rubric",
         "matched_evidence": ["appendicitis_001.rp_05", "appendicitis_001.rp_06"],

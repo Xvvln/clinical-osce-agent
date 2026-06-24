@@ -101,7 +101,7 @@ class AnthropicChatClient:
             endpoint=endpoint,
             success=True,
             duration_ms=(time.perf_counter() - started_at) * 1000,
-            status_code=response.status_code,
+            status_code=getattr(response, "status_code", None),
         )
         return response
 

@@ -24,6 +24,10 @@ def clear_retrieval_document_cache():
     retrieval_index_module._retrieval_documents.cache_clear()
 
 
+def _unique_chroma_collection(tmp_path) -> str:  # type: ignore[no-untyped-def]
+    return f"test_retrieval_documents_{tmp_path.name.replace('-', '_')}"
+
+
 class FakeEmbeddingClient:
     def embed_texts(self, texts: list[str], *, task_type: str) -> list[list[float]]:
         if task_type == "RETRIEVAL_QUERY":
@@ -193,7 +197,7 @@ def test_search_retrieval_documents_skips_same_vertex_in_memory_fallback_after_q
     local_client = CountingFakeEmbeddingClient()
     monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
-    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", _unique_chroma_collection(tmp_path))
     monkeypatch.setattr(
         retrieval_index_module,
         "build_vertex_embedding_client_from_environment",
@@ -669,7 +673,7 @@ def test_chroma_manifest_status_marks_malformed_manifest_invalid(tmp_path) -> No
 def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
-    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", _unique_chroma_collection(tmp_path))
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
     monkeypatch.setattr(
@@ -744,7 +748,7 @@ def test_vertex_embedding_client_batches_multiple_texts(monkeypatch) -> None:
 def test_search_retrieval_documents_uses_chroma_by_default_when_embedding_client_exists(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
-    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", _unique_chroma_collection(tmp_path))
     monkeypatch.setattr(
         retrieval_index_module,
         "build_vertex_embedding_client_from_environment",
@@ -770,7 +774,7 @@ def test_search_retrieval_documents_uses_chroma_by_default_when_embedding_client
 def test_search_retrieval_documents_batch_uses_chroma_once_for_multiple_queries(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("OSCE_CHROMA_ENABLED", raising=False)
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma"))
-    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_retrieval_documents")
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", _unique_chroma_collection(tmp_path))
     counting_client = CountingFakeEmbeddingClient()
     monkeypatch.setattr(
         retrieval_index_module,

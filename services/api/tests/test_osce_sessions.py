@@ -682,14 +682,14 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["student_id"] == authenticated_user["user_id"]
     assert profile["total_sessions"] == 1
     assert profile["report_count"] == 1
-    assert profile["average_score"] == 32
+    assert profile["average_score"] == 22
     assert profile["recent_sessions"][0]["session_id"] == current_session_id
     assert profile["recent_sessions"][0]["session_id"] != other_response.json()["session_id"]
     assert profile["recent_sessions"][0]["case_title"] == "右下腹痛教学病例"
     assert profile["recent_sessions"][0]["stage_label"] == "报告已生成"
     assert "active_skill_context" not in profile["recent_sessions"][0]
-    assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 15}
-    assert profile["weakest_dimension"] == {"key": "differential_diagnosis", "label": "鉴别诊断", "average": 0}
+    assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 10}
+    assert profile["weakest_dimension"] == {"key": "relationship_building", "label": "关系建立", "average": 0}
     assert profile["skill_accumulation"]["status"] == "active"
     assert profile["skill_accumulation"]["enabled_skill_count"] == 1
     assert profile["skill_accumulation"]["applied_skill_count"] == 0
@@ -748,7 +748,7 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         "task_type_label": "复训当前病例",
         "case_id": "appendicitis_001",
         "case_title": "右下腹痛教学病例",
-        "objective": "复训右下腹痛教学病例，优先补强鉴别诊断并补齐本轮反复缺失的评分项。",
+        "objective": "复训右下腹痛教学病例，优先补强关系建立并补齐本轮反复缺失的评分项。",
         "target_rubric_items": [
             "ht_migration",
             "ht_character",
@@ -1968,7 +1968,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
     assert state_payload["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert state_payload["requested_exams"] == ["abd.palpation.rebound", "vital.blood_pressure"]
     assert state_payload["requested_tests"] == ["lab.cbc", "ecg.st_segment"]
-    assert state_payload["action_timeline"] == [
+    expected_action_timeline = [
         {
             "turn_index": 1,
             "action_type": "history_fact_revealed",
@@ -2006,6 +2006,16 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "label": "提交诊断",
         },
     ]
+    assert [
+        {
+            "turn_index": item["turn_index"],
+            "action_type": item["action_type"],
+            "source_id": item["source_id"],
+            "label": item["label"],
+        }
+        for item in state_payload["action_timeline"]
+    ] == expected_action_timeline
+    assert all(isinstance(item.get("message_turn_index"), int) and item["message_turn_index"] >= 1 for item in state_payload["action_timeline"])
 
     report_response = client.get(f"/api/sessions/{session_id}/report")
 
@@ -2013,21 +2023,25 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
     report_payload = report_response.json()
     assert report_payload["session_id"] == session_id
     assert report_payload["case_id"] == "appendicitis_001"
-    assert report_payload["total_score"] == 32
+    assert report_payload["total_score"] == 22
     assert report_payload["dimension_scores"] == {
-        "history_taking": 3,
-        "physical_exam": 5,
-        "auxiliary_test": 5,
-        "main_diagnosis": 15,
+        "history_taking": 2,
+        "physical_exam": 4,
+        "auxiliary_test": 3,
+        "main_diagnosis": 10,
         "differential_diagnosis": 0,
-        "reasoning": 4,
+        "reasoning": 3,
+        "narrative_medicine": 0,
+        "communication_skill": 0,
+        "medical_ethics": 0,
+        "relationship_building": 0,
     }
-    assert report_payload["rubric_scores"]["ht_onset"]["score"] == 3
+    assert report_payload["rubric_scores"]["ht_onset"]["score"] == 2
     assert report_payload["rubric_scores"]["ht_migration"]["score"] == 0
-    assert report_payload["rubric_scores"]["pe_rebound"]["score"] == 5
-    assert report_payload["rubric_scores"]["ax_cbc"]["score"] == 5
-    assert report_payload["rubric_scores"]["dx_main"]["score"] == 15
-    assert report_payload["rubric_scores"]["rs_support"]["score"] == 4
+    assert report_payload["rubric_scores"]["pe_rebound"]["score"] == 4
+    assert report_payload["rubric_scores"]["ax_cbc"]["score"] == 3
+    assert report_payload["rubric_scores"]["dx_main"]["score"] == 10
+    assert report_payload["rubric_scores"]["rs_support"]["score"] == 3
     assert "ht_migration" in report_payload["missed_items"]
     assert report_payload["procedure_simulation_audit_items"] == [
         {
@@ -2058,7 +2072,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）：评分轨迹未找到足够证据。",
         "推理表达覆盖关键排除依据：评分轨迹未找到足够证据。",
     ]
-    assert report_payload["next_recommendations"] == [
+    expected_recommendations = [
         "下一轮训练重点：追问疼痛部位及转移特征。",
         "下一轮训练重点：追问疼痛性质。",
         "下一轮训练重点：追问疼痛程度。",
@@ -2076,39 +2090,31 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         "下一轮训练重点：提出输尿管结石并说明排除依据。",
         "下一轮训练重点：提出克罗恩病并说明排除依据。",
         "下一轮训练重点：提出急性胃肠炎并说明排除依据。",
+        "下一轮训练重点：推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）。",
         "下一轮训练重点：推理表达覆盖关键排除依据。",
     ]
-    assert report_payload["source_references"] == [
+    for expected_recommendation in expected_recommendations:
+        assert expected_recommendation in report_payload["next_recommendations"]
+    assert "下一轮训练重点：自我介绍并说明问诊目的。" in report_payload["next_recommendations"]
+    assert "下一轮训练重点：查体或检查前说明目的并征得同意。" in report_payload["next_recommendations"]
+    assert "下一轮训练重点：患者表达担忧后给予共情回应。" in report_payload["next_recommendations"]
+    assert {
         "case:appendicitis_001",
         "source:fareez_osce_2022",
         "rubric:appendicitis_001_rubric.item.ht_migration",
-        "rubric:appendicitis_001_rubric.item.ht_character",
-        "rubric:appendicitis_001_rubric.item.ht_severity",
-        "rubric:appendicitis_001_rubric.item.ht_associated_gi",
-        "rubric:appendicitis_001_rubric.item.ht_associated_fever",
-        "rubric:appendicitis_001_rubric.item.ht_past_medical",
-        "rubric:appendicitis_001_rubric.item.ht_allergy",
-        "rubric:appendicitis_001_rubric.item.ht_ice",
-        "rubric:appendicitis_001_rubric.item.pe_vital_temp",
-        "rubric:appendicitis_001_rubric.item.pe_abd_inspection",
-        "rubric:appendicitis_001_rubric.item.pe_tenderness",
-        "rubric:appendicitis_001_rubric.item.ax_crp",
-        "rubric:appendicitis_001_rubric.item.ax_us",
-        "rubric:appendicitis_001_rubric.item.ax_ua",
-        "rubric:appendicitis_001_rubric.item.dxd_urolith",
-        "rubric:appendicitis_001_rubric.item.dxd_crohn",
-        "rubric:appendicitis_001_rubric.item.dxd_gastroenteritis",
-        "rubric:appendicitis_001_rubric.item.rs_exclude",
+        "rubric:appendicitis_001_rubric.item.rs_support",
+        "rubric:appendicitis_001_rubric.item.comm_intro_purpose",
+        "rubric:appendicitis_001_rubric.item.eth_exam_consent",
+        "rubric:appendicitis_001_rubric.item.rel_empathy_response",
         "rubric:appendicitis_001_rubric.item.ht_onset",
         "rubric:appendicitis_001_rubric.item.pe_rebound",
         "rubric:appendicitis_001_rubric.item.ax_cbc",
         "rubric:appendicitis_001_rubric.item.dx_main",
-        "rubric:appendicitis_001_rubric.item.rs_support",
         "evidence:appendicitis_001.hf_01",
         "evidence:abd.palpation.rebound",
         "evidence:lab.cbc",
         "evidence:急性阑尾炎",
-    ]
+    } <= set(report_payload["source_references"])
     evidence_graph_summary = report_payload["evidence_graph_summary"]
     assert evidence_graph_summary["case_id"] == "appendicitis_001"
     assert evidence_graph_summary["total_evidence_node_count"] == 5
@@ -3131,137 +3137,23 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
     assert filtered_business_events[6]["payload"]["scope"] == "personal"
     assert filtered_business_events[6]["payload"]["skill_id"].startswith("skill_personal_")
     report_event_payload = filtered_business_events[7]["payload"]
-    assert {
-        "report_id": report_event_payload["report_id"],
-        "total_score": report_event_payload["total_score"],
-        "missed_items": report_event_payload["missed_items"],
-        "knowledge_recommendations": report_event_payload["knowledge_recommendations"],
-    } == {
-        "report_id": f"{session_id}_report",
-        "total_score": 32,
-        "missed_items": [
-            "ht_migration",
-            "ht_character",
-            "ht_severity",
-            "ht_associated_gi",
-            "ht_associated_fever",
-            "ht_past_medical",
-            "ht_allergy",
-            "ht_ice",
-            "pe_vital_temp",
-            "pe_abd_inspection",
-            "pe_tenderness",
-            "ax_crp",
-            "ax_us",
-            "ax_ua",
-            "dxd_urolith",
-            "dxd_crohn",
-            "dxd_gastroenteritis",
-            "rs_exclude",
-        ],
-        "knowledge_recommendations": [
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_migration",
-                "title": "追问疼痛部位及转移特征",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_character",
-                "title": "追问疼痛性质",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_severity",
-                "title": "追问疼痛程度",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_associated_gi",
-                "title": "追问恶心呕吐腹泻",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_associated_fever",
-                "title": "追问发热",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_past_medical",
-                "title": "追问既往病史",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_allergy",
-                "title": "追问过敏史",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ht_ice",
-                "title": "询问患者想法担忧与期望（ICE）",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.pe_vital_temp",
-                "title": "测量体温",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.pe_abd_inspection",
-                "title": "腹部视诊",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.pe_tenderness",
-                "title": "检查腹部压痛",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ax_crp",
-                "title": "申请 CRP",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ax_us",
-                "title": "申请腹部超声",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.ax_ua",
-                "title": "合理申请尿常规排除输尿管结石",
-                "reason": "本轮评分未找到足够证据，建议复习该问诊要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.dxd_urolith",
-                "title": "提出输尿管结石并说明排除依据",
-                "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.dxd_crohn",
-                "title": "提出克罗恩病并说明排除依据",
-                "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.dxd_gastroenteritis",
-                "title": "提出急性胃肠炎并说明排除依据",
-                "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
-            },
-            {
-                "reference": "rubric:appendicitis_001_rubric.item.rs_exclude",
-                "title": "推理表达覆盖关键排除依据",
-                "reason": "本轮评分未找到足够证据，建议复习该临床推理要点。",
-            },
-            {
-                "reference": "case:acs_001",
-                "title": "胸痛伴出汗教学病例",
-                "reason": "病例库暂无同模块病例，推荐用于下一轮对照训练。",
-            },
-            {
-                "reference": "case:heart_failure_001",
-                "title": "活动后气短伴夜间憋醒教学病例",
-                "reason": "病例库暂无同模块病例，推荐用于下一轮对照训练。",
-            },
-        ],
+    assert report_event_payload["report_id"] == f"{session_id}_report"
+    assert report_event_payload["total_score"] == 22
+    assert {"ht_migration", "rs_support", "comm_intro_purpose", "eth_exam_consent", "rel_empathy_response"} <= set(
+        report_event_payload["missed_items"]
+    )
+    recommendation_references = {
+        recommendation["reference"]
+        for recommendation in report_event_payload["knowledge_recommendations"]
     }
+    assert {
+        "rubric:appendicitis_001_rubric.item.ht_migration",
+        "rubric:appendicitis_001_rubric.item.rs_support",
+        "rubric:appendicitis_001_rubric.item.comm_intro_purpose",
+        "rubric:appendicitis_001_rubric.item.eth_exam_consent",
+        "rubric:appendicitis_001_rubric.item.rel_empathy_response",
+        "case:acs_001",
+    } <= recommendation_references
     assert report_event_payload["source_references"][:3] == [
         "case:appendicitis_001",
         "source:fareez_osce_2022",

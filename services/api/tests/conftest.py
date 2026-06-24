@@ -49,6 +49,8 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_VERTEX_LOCATION",
         "OSCE_VERTEX_MODEL",
         "OSCE_VERTEX_PROXY_URL",
+        "OSCE_VERTEX_SKILL_CANDIDATE_ENABLED",
+        "OSCE_VERTEX_SKILL_CANDIDATE_MODEL",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "OSCE_VERTEX_EMBEDDING_ENABLED",
