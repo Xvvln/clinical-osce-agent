@@ -171,6 +171,19 @@ test("admin v2 keeps details in modal surfaces and normalizes unstable backend a
   assert.doesNotMatch(dashboardSource, /<CardTitle>病例内容<\/CardTitle>/);
 });
 
+test("admin v2 uses a chart component for model API observability", () => {
+  for (const label of ["模型调用观测", "调用趋势", "成功失败分布", "用途分布", "Provider 分布", "模型耗时排行"]) {
+    assert.match(dashboardSource, new RegExp(label), `model API observability should expose ${label}`);
+  }
+
+  for (const chartComponent of ["ResponsiveContainer", "LineChart", "BarChart", "PieChart", "Tooltip"]) {
+    assert.match(dashboardSource, new RegExp(chartComponent), `model API charts should use ${chartComponent}`);
+  }
+
+  assert.match(dashboardSource, /from "recharts"/);
+  assert.match(dashboardSource, /buildModelApiChartData/);
+});
+
 test("admin v2 only highlights opened knowledge documents and handles sessions without reports", () => {
   assert.match(dashboardSource, /const activeDocumentId = openDocumentId;/);
   assert.doesNotMatch(dashboardSource, /selectedDocumentId \|\| data\.documents\[0\]\?\.document_id/);

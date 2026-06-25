@@ -19,6 +19,20 @@ import {
   Stethoscope,
   Wrench,
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -456,6 +470,34 @@ type ModelApiLogs = Readonly<{
     avg_duration_ms: number;
   }>[];
   logs: readonly ApiCallLog[];
+}>;
+
+type ModelApiTrendPoint = Readonly<{
+  label: string;
+  total: number;
+  success: number;
+  failed: number;
+  avgDuration: number;
+}>;
+
+type ModelApiDistributionPoint = Readonly<{
+  name: string;
+  value: number;
+}>;
+
+type ModelApiLatencyPoint = Readonly<{
+  name: string;
+  calls: number;
+  avgDuration: number;
+  failed: number;
+}>;
+
+type ModelApiChartData = Readonly<{
+  trend: readonly ModelApiTrendPoint[];
+  status: readonly ModelApiDistributionPoint[];
+  operations: readonly ModelApiDistributionPoint[];
+  providerCalls: readonly ModelApiDistributionPoint[];
+  modelLatency: readonly ModelApiLatencyPoint[];
 }>;
 
 type TrainingInsights = Readonly<{
@@ -3624,6 +3666,11 @@ function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRe
 }
 
 function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
+  const chartData = useMemo(
+    () => buildModelApiChartData(data.apiLogs?.logs ?? [], data.apiLogs?.summary_by_provider ?? []),
+    [data.apiLogs],
+  );
+
   return (
     <div className="grid gap-4">
       <SectionIntro eyebrow="模型调用" title="API 成功率和最近错误" description="用于排查模型中转、embedding、TeacherAgent 和审批 Agent 的调用稳定性。" />
@@ -3632,6 +3679,7 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
         <MetricCard icon={<Gauge />} label="成功率" value={`${Math.round((data.apiLogs?.summary.success_rate ?? 0) * 100)}%`} helper={`平均 ${data.apiLogs?.summary.avg_duration_ms ?? 0} ms`} />
         <MetricCard icon={<Wrench />} label="失败调用" value={formatCount(data.apiLogs?.summary.failed_calls ?? 0)} helper="已脱敏展示" />
       </div>
+      <ModelApiObservabilityPanel chartData={chartData} />
       <Card>
         <CardHeader>
           <CardTitle>最近模型 API 日志</CardTitle>
@@ -3680,6 +3728,128 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
           {(data.apiLogs?.logs ?? []).length === 0 ? <EmptyText>暂无模型调用日志。</EmptyText> : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function ModelApiObservabilityPanel({ chartData }: Readonly<{ chartData: ModelApiChartData }>) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>模型调用观测</CardTitle>
+          <CardDescription>从最近调用日志派生趋势、成功失败、用途分布和耗时排行，用于定位模型链路稳定性问题。</CardDescription>
+        </div>
+        <Badge variant="muted">Recharts</Badge>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold">调用趋势</h4>
+              <Badge variant="muted">最近日志窗口</Badge>
+            </div>
+            <div className="mt-4 h-64">
+              {chartData.trend.length > 0 ? (
+                <ResponsiveContainer height="100%" width="100%">
+                  <LineChart data={chartData.trend} margin={{ bottom: 8, left: -20, right: 8, top: 8 }}>
+                    <CartesianGrid stroke="#E7E0D4" strokeDasharray="4 4" />
+                    <XAxis dataKey="label" minTickGap={18} tick={{ fill: "#6F6257", fontSize: 11 }} />
+                    <YAxis allowDecimals={false} tick={{ fill: "#6F6257", fontSize: 11 }} />
+                    <Tooltip contentStyle={MODEL_API_TOOLTIP_STYLE} />
+                    <Line dataKey="total" name="总调用" stroke="#AE5630" strokeWidth={2.4} type="monotone" />
+                    <Line dataKey="failed" name="失败" stroke="#DC2626" strokeWidth={2} type="monotone" />
+                    <Line dataKey="avgDuration" name="平均耗时 ms" stroke="#2563EB" strokeDasharray="5 5" strokeWidth={2} type="monotone" />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <ChartEmptyState />
+              )}
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+            <ChartCard empty={chartData.status.length === 0} title="成功失败分布">
+              {chartData.status.length > 0 ? (
+                <ResponsiveContainer height="100%" width="100%">
+                  <PieChart>
+                    <Pie data={chartData.status} dataKey="value" innerRadius={48} nameKey="name" outerRadius={78} paddingAngle={3}>
+                      {chartData.status.map((item, index) => (
+                        <Cell fill={MODEL_API_STATUS_COLORS[item.name] ?? MODEL_API_CHART_COLORS[index % MODEL_API_CHART_COLORS.length]} key={item.name} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={MODEL_API_TOOLTIP_STYLE} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : null}
+            </ChartCard>
+            <ChartCard empty={chartData.operations.length === 0} title="用途分布">
+              {chartData.operations.length > 0 ? (
+                <ResponsiveContainer height="100%" width="100%">
+                  <BarChart data={chartData.operations} layout="vertical" margin={{ bottom: 0, left: 6, right: 16, top: 4 }}>
+                    <CartesianGrid stroke="#E7E0D4" strokeDasharray="4 4" horizontal={false} />
+                    <XAxis allowDecimals={false} tick={{ fill: "#6F6257", fontSize: 11 }} type="number" />
+                    <YAxis dataKey="name" tick={{ fill: "#6F6257", fontSize: 11 }} type="category" width={82} />
+                    <Tooltip contentStyle={MODEL_API_TOOLTIP_STYLE} />
+                    <Bar dataKey="value" fill="#AE5630" name="调用次数" radius={[0, 6, 6, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : null}
+            </ChartCard>
+            <ChartCard empty={chartData.providerCalls.length === 0} title="Provider 分布">
+              {chartData.providerCalls.length > 0 ? (
+                <ResponsiveContainer height="100%" width="100%">
+                  <BarChart data={chartData.providerCalls} layout="vertical" margin={{ bottom: 0, left: 6, right: 16, top: 4 }}>
+                    <CartesianGrid stroke="#E7E0D4" strokeDasharray="4 4" horizontal={false} />
+                    <XAxis allowDecimals={false} tick={{ fill: "#6F6257", fontSize: 11 }} type="number" />
+                    <YAxis dataKey="name" tick={{ fill: "#6F6257", fontSize: 11 }} type="category" width={96} />
+                    <Tooltip contentStyle={MODEL_API_TOOLTIP_STYLE} />
+                    <Bar dataKey="value" fill="#059669" name="调用次数" radius={[0, 6, 6, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : null}
+            </ChartCard>
+          </div>
+          <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4 xl:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold">模型耗时排行</h4>
+              <Badge variant="warning">平均耗时</Badge>
+            </div>
+            <div className="mt-4 h-64">
+              {chartData.modelLatency.length > 0 ? (
+                <ResponsiveContainer height="100%" width="100%">
+                  <BarChart data={chartData.modelLatency} margin={{ bottom: 8, left: -14, right: 16, top: 4 }}>
+                    <CartesianGrid stroke="#E7E0D4" strokeDasharray="4 4" />
+                    <XAxis dataKey="name" interval={0} tick={{ fill: "#6F6257", fontSize: 11 }} />
+                    <YAxis allowDecimals={false} tick={{ fill: "#6F6257", fontSize: 11 }} />
+                    <Tooltip contentStyle={MODEL_API_TOOLTIP_STYLE} />
+                    <Bar dataKey="avgDuration" fill="#2563EB" name="平均耗时 ms" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="failed" fill="#DC2626" name="失败次数" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <ChartEmptyState />
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ChartCard({ children, empty, title }: Readonly<{ children: ReactNode; empty?: boolean; title: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+      <h4 className="text-sm font-semibold">{title}</h4>
+      <div className="mt-3 h-56">{empty ? <ChartEmptyState /> : children}</div>
+    </div>
+  );
+}
+
+function ChartEmptyState() {
+  return (
+    <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[#E7E0D4] bg-[#FAF9F5] px-4 text-center text-sm text-[#6F6257]">
+      暂无可绘制的模型调用日志。
     </div>
   );
 }
@@ -4851,6 +5021,120 @@ function getProcedureAuditStatusLabel(audit: ProcedureSimulationAuditItem): stri
     simulated: "已模拟",
   };
   return labels[statusText] ?? (statusText || "已记录");
+}
+
+const MODEL_API_CHART_COLORS = ["#AE5630", "#2563EB", "#059669", "#7C3AED", "#D97706", "#DC2626"];
+const MODEL_API_STATUS_COLORS: Record<string, string> = {
+  成功: "#059669",
+  失败: "#DC2626",
+};
+const MODEL_API_TOOLTIP_STYLE = {
+  background: "#FFFFFF",
+  border: "1px solid #E7E0D4",
+  borderRadius: "12px",
+  color: "#141413",
+  fontSize: "12px",
+};
+
+function buildModelApiChartData(
+  logs: readonly ApiCallLog[],
+  providerSummaries: ModelApiLogs["summary_by_provider"],
+): ModelApiChartData {
+  const normalizedLogs = [...logs]
+    .map((log) => ({ ...log, createdTime: new Date(log.created_at).getTime() }))
+    .filter((log) => Number.isFinite(log.createdTime))
+    .sort((left, right) => left.createdTime - right.createdTime);
+
+  const trendGroups = new Map<string, { total: number; success: number; failed: number; durationTotal: number }>();
+  for (const log of normalizedLogs) {
+    const label = getModelApiTimeBucketLabel(log.created_at);
+    const current = trendGroups.get(label) ?? { total: 0, success: 0, failed: 0, durationTotal: 0 };
+    current.total += 1;
+    current.success += log.success ? 1 : 0;
+    current.failed += log.success ? 0 : 1;
+    current.durationTotal += Math.max(0, Number(log.duration_ms) || 0);
+    trendGroups.set(label, current);
+  }
+
+  const trend = Array.from(trendGroups.entries())
+    .map(([label, item]) => ({
+      label,
+      total: item.total,
+      success: item.success,
+      failed: item.failed,
+      avgDuration: Math.round(item.durationTotal / Math.max(item.total, 1)),
+    }))
+    .slice(-10);
+
+  const successCount = logs.filter((log) => log.success).length;
+  const failedCount = logs.length - successCount;
+  const operations = aggregateModelApiCounts(logs, (log) => getOperationLabel(log.operation), 6);
+  const providerCalls = providerSummaries
+    .map((item) => ({ name: item.provider || "unknown", value: item.total_calls }))
+    .filter((item) => item.value > 0)
+    .slice(0, 6);
+  const modelLatency = aggregateModelApiLatency(logs);
+
+  return {
+    trend,
+    status: [
+      { name: "成功", value: successCount },
+      { name: "失败", value: failedCount },
+    ].filter((item) => item.value > 0),
+    operations,
+    providerCalls,
+    modelLatency,
+  };
+}
+
+function aggregateModelApiCounts(
+  logs: readonly ApiCallLog[],
+  labelFactory: (log: ApiCallLog) => string,
+  limit: number,
+): ModelApiDistributionPoint[] {
+  const counts = new Map<string, number>();
+  for (const log of logs) {
+    const label = labelFactory(log) || "未记录";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([name, value]) => ({ name, value }))
+    .sort((left, right) => right.value - left.value || left.name.localeCompare(right.name, "zh-CN"))
+    .slice(0, limit);
+}
+
+function aggregateModelApiLatency(logs: readonly ApiCallLog[]): ModelApiLatencyPoint[] {
+  const groups = new Map<string, { calls: number; failed: number; durationTotal: number }>();
+  for (const log of logs) {
+    const modelName = log.model || "未记录模型";
+    const name = modelName.length > 18 ? `${modelName.slice(0, 18)}…` : modelName;
+    const current = groups.get(name) ?? { calls: 0, failed: 0, durationTotal: 0 };
+    current.calls += 1;
+    current.failed += log.success ? 0 : 1;
+    current.durationTotal += Math.max(0, Number(log.duration_ms) || 0);
+    groups.set(name, current);
+  }
+  return Array.from(groups.entries())
+    .map(([name, item]) => ({
+      name,
+      calls: item.calls,
+      avgDuration: Math.round(item.durationTotal / Math.max(item.calls, 1)),
+      failed: item.failed,
+    }))
+    .sort((left, right) => right.avgDuration - left.avgDuration || right.calls - left.calls)
+    .slice(0, 6);
+}
+
+function getModelApiTimeBucketLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "未知";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "2-digit",
+    hour: "2-digit",
+    month: "2-digit",
+  }).format(date);
 }
 
 function formatCount(value: number): string {
