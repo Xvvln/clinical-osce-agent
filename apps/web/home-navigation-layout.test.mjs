@@ -352,6 +352,13 @@ test("home dialogue speaker labels render as plain text labels", () => {
   assert.doesNotMatch(pageSource, /<p className=\{messageLabelClass\}>[\s\S]*?\{message\.label\}/);
 });
 
+test("home patient messages render backend emotion metadata as a visible tag", () => {
+  assert.match(pageSource, /readonly emotion\?: string \| null;/);
+  assert.match(pageSource, /emotion: normalizePatientEmotion\(message\.emotion\)/);
+  assert.match(pageSource, /message\.emotion \? \(/);
+  assert.match(pageSource, /情绪：\{message\.emotion\}/);
+});
+
 test("home page replaces the Next dev ball with a polished OSCE floating dock", () => {
   assert.match(pageSource, /type OsceDockMenuGroup = "training" \| "system";/);
   assert.match(pageSource, /const ADMIN_MODEL_CONFIG_URL = `\$\{ADMIN_APP_URL\}#model-config`;/);

@@ -591,6 +591,47 @@ def test_osce_graph_skips_heavy_agents_for_social_greeting_without_revealing_cas
     assert [step["step_id"] for step in result["processing_trace"]] == ["intent", "case_context", "patient_reply", "response"]
 
 
+def test_osce_graph_attaches_patient_emotion_to_visible_patient_reply() -> None:
+    def fake_patient_responder(request: object) -> str:
+        return "我有点害怕是不是很严重。"
+
+    graph = build_osce_graph(patient_responder=fake_patient_responder, coach_agent=silent_coach_agent)
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "你现在最担心什么？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    assert result["reply"] == "我有点害怕是不是很严重。"
+    assert result["messages"][-1] == {
+        "role": "patient",
+        "content": "我有点害怕是不是很严重。",
+        "emotion": "担忧",
+    }
+
+
 def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint() -> None:
     captured_patient_requests: list[object] = []
     captured_coach_requests: list[object] = []

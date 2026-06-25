@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import api_call_log_store
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -25,7 +26,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 - answerable_fact_candidates 是本轮允许披露的病例事实；只能表达 canonical_answer 和 answerable_fact_candidates 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
 - revealed_fact_ids 是此前或本轮已经披露给学生的事实编号；dialogue_context 是最近对话、已问问题和本轮意图摘要，只用于保持上下文连贯。
 - 可以参考 dialogue_context 判断学生是否在延续前文、追问同一主题或切换主题，但仍只能表达 canonical_answer 和 answerable_fact_candidates。
-- 输出 JSON 必须包含 reply 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
+- 输出 JSON 必须包含 reply、emotion 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
+- emotion 只描述患者当前可见情绪，可用担忧、焦虑、痛苦、困惑、犹豫、欣慰等短标签；没有明显情绪时留空或填“平静”。emotion 不得新增病例事实。
 - 如果 current_intents 或 answerable_fact_candidates 显示学生一次问了多个明确问诊点，必须逐一覆盖所有 answerable_fact_candidates，不要只回答第一个；这种多事实回答可用 2-3 个短句。
 - forbidden_context 中的诊断、rubric、治疗、剂量、处置边界均不得泄露。
 - 不得主动说出 forbidden_terms 中的任何词。
@@ -61,6 +63,13 @@ class PatientResponderRequest(BaseModel):
 
 class PatientResponderResponse(BaseModel):
     reply: str = Field(..., min_length=1, max_length=180)
+    emotion: str = Field(default="", max_length=20)
+    fact_ids_used: list[str] = Field(default_factory=list)
+
+
+class PatientResponderOutput(BaseModel):
+    reply: str = Field(..., min_length=1, max_length=180)
+    emotion: str = Field(default="", max_length=20)
     fact_ids_used: list[str] = Field(default_factory=list)
 
 
@@ -96,7 +105,7 @@ class GeminiPatientResponder:
         else:
             self._client = genai.Client(api_key=settings.api_key)
 
-    def __call__(self, request: PatientResponderRequest) -> str:
+    def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         provider = "vertex_gemini_patient" if self._settings.use_vertex else "gemini_patient"
         started_at = time.perf_counter()
         try:
@@ -140,7 +149,7 @@ class OpenAICompatiblePatientResponder:
         self._settings = settings
         self._client = client or OpenAICompatibleChatClient(settings)
 
-    def __call__(self, request: PatientResponderRequest) -> str:
+    def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
             payload=request.model_dump(),
@@ -155,7 +164,7 @@ class AnthropicPatientResponder:
         self._settings = settings
         self._client = client or AnthropicChatClient(settings)
 
-    def __call__(self, request: PatientResponderRequest) -> str:
+    def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
             payload=request.model_dump(),
@@ -166,7 +175,7 @@ class AnthropicPatientResponder:
 
 
 class DeterministicPatientResponder:
-    def __call__(self, request: PatientResponderRequest) -> str:
+    def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         reply = request.canonical_answer.strip() or "这个问题我不太确定，或者病例中没有提供相关信息。"
         for term in request.forbidden_terms:
             if term:
@@ -174,7 +183,7 @@ class DeterministicPatientResponder:
         if len(reply) > 180:
             reply = f"{reply[:177]}..."
         _assert_no_forbidden_terms(reply, request.forbidden_terms)
-        return reply
+        return PatientResponderOutput(reply=reply, emotion=infer_patient_emotion(reply))
 
 
 class LazyGeminiPatientResponder:
@@ -182,7 +191,7 @@ class LazyGeminiPatientResponder:
         self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | AnthropicPatientResponder | DeterministicPatientResponder | None = None
         self._cache_key: tuple[str, ...] | None = None
 
-    def __call__(self, request: PatientResponderRequest) -> str:
+    def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         cache_key = runtime_model_config_store.active_config_cache_key()
         if self._responder is None or self._cache_key != cache_key:
             self._responder = _create_configured_responder()
@@ -280,12 +289,13 @@ def _assert_no_forbidden_terms(reply: str, forbidden_terms: list[str]) -> None:
         raise RuntimeError(f"标准化病人回答包含禁止泄露词：{leaked_terms}")
 
 
-def _validated_patient_reply(response: PatientResponderResponse, request: PatientResponderRequest) -> str:
+def _validated_patient_reply(response: PatientResponderResponse, request: PatientResponderRequest) -> PatientResponderOutput:
     reply = response.reply.strip()
     _assert_no_forbidden_terms(reply, request.forbidden_terms)
     _assert_used_fact_ids_are_answerable(response.fact_ids_used, request.answerable_fact_candidates)
     _assert_multi_intent_fact_coverage(response.fact_ids_used, request)
-    return reply
+    emotion = normalize_patient_emotion(response.emotion) or infer_patient_emotion(reply)
+    return PatientResponderOutput(reply=reply, emotion=emotion, fact_ids_used=list(response.fact_ids_used))
 
 
 def _assert_used_fact_ids_are_answerable(
@@ -333,6 +343,7 @@ __all__ = [
     "GeminiPatientResponder",
     "GeminiPatientSettings",
     "OpenAICompatiblePatientResponder",
+    "PatientResponderOutput",
     "PatientResponderRequest",
     "PatientResponderResponse",
     "create_default_gemini_patient_responder",

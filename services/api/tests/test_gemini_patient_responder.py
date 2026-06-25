@@ -44,6 +44,8 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "repeated_fact_ids" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "fact_ids_used" in module.SYSTEM_PROMPT_TEMPLATE
     assert "必须逐一覆盖所有 answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "emotion" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "患者当前可见情绪" in module.SYSTEM_PROMPT_TEMPLATE
 
 
 def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
@@ -81,7 +83,7 @@ def test_create_configured_patient_responder_falls_back_to_deterministic_without
     )
 
     assert isinstance(responder, module.DeterministicPatientResponder)
-    assert reply == "右下腹疼痛明显。"
+    assert reply.reply == "右下腹疼痛明显。"
 
 
 def test_deterministic_patient_responder_keeps_context_without_repeat_branching() -> None:
@@ -113,7 +115,26 @@ def test_deterministic_patient_responder_keeps_context_without_repeat_branching(
         )
     )
 
-    assert reply == "没有药物过敏，吃东西也没发现过敏。"
+    assert reply.reply == "没有药物过敏，吃东西也没发现过敏。"
+
+
+def test_deterministic_patient_responder_infers_visible_emotion() -> None:
+    responder = module.DeterministicPatientResponder()
+
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="你现在最担心什么？",
+            current_intents=["ask_ideas_concerns_expectations"],
+            canonical_answer="我有点害怕是不是很严重。",
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert reply.reply == "我有点害怕是不是很严重。"
+    assert reply.emotion == "担忧"
 
 
 class FakePatientFactIdClient:
@@ -243,7 +264,7 @@ def test_lazy_patient_responder_uses_canonical_answer_when_model_output_fails_fa
         )
     )
 
-    assert reply == "24 小时前开始，最初是上腹部隐痛。"
+    assert reply.reply == "24 小时前开始，最初是上腹部隐痛。"
 
 
 def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
@@ -274,8 +295,44 @@ def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
         )
     )
 
-    assert reply == "我昨天开始疼的。"
+    assert reply.reply == "我昨天开始疼的。"
     assert fake_client.calls[0]["payload"]["answerable_fact_candidates"][0]["fact_id"] == "appendicitis_001.hf_01"
+
+
+def test_patient_responder_keeps_model_declared_emotion() -> None:
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(
+            reply="我怕这个病会不会很严重。",
+            emotion="anxious",
+            fact_ids_used=["appendicitis_001.hf_01"],
+        )
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="你现在担心什么？",
+            current_intents=["ask_ideas_concerns_expectations"],
+            canonical_answer="担心是不是要开刀。",
+            revealed_fact_id="appendicitis_001.hf_01",
+            answerable_fact_candidates=[
+                {
+                    "fact_id": "appendicitis_001.hf_01",
+                    "canonical_answer": "担心是不是要开刀。",
+                }
+            ],
+            forbidden_terms=["急性阑尾炎"],
+        )
+    )
+
+    assert reply.reply == "我怕这个病会不会很严重。"
+    assert reply.emotion == "焦虑"
 
 
 def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(monkeypatch) -> None:
@@ -493,7 +550,7 @@ def test_create_configured_patient_responder_uses_runtime_openai_compatible_conf
     finally:
         runtime_model_config_store.clear()
 
-    assert reply == "我右下腹疼得比较明显。"
+    assert reply.reply == "我右下腹疼得比较明显。"
     assert FakeOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert FakeOpenAICompatibleHttpClient.calls[0]["headers"]["Authorization"] == "Bearer student-openai-secret"
     assert FakeOpenAICompatibleHttpClient.calls[0]["json"]["model"] == "gemini-via-clprox"
@@ -532,8 +589,8 @@ def test_openai_compatible_patient_responder_accepts_patient_reply_key(monkeypat
     finally:
         runtime_model_config_store.clear()
 
-    assert reply == "现在是持续性的胀痛，走路的时候会更疼一些。"
-    assert "patient_reply" not in reply
+    assert reply.reply == "现在是持续性的胀痛，走路的时候会更疼一些。"
+    assert "patient_reply" not in reply.reply
 
 
 def test_openai_compatible_patient_responder_accepts_plain_text_reply_for_single_field_schema(monkeypatch) -> None:
@@ -569,7 +626,7 @@ def test_openai_compatible_patient_responder_accepts_plain_text_reply_for_single
     finally:
         runtime_model_config_store.clear()
 
-    assert reply == "开始时上腹部疼，现在右下腹最疼。"
+    assert reply.reply == "开始时上腹部疼，现在右下腹最疼。"
     assert FakePlainTextOpenAICompatibleHttpClient.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
 
 
@@ -606,7 +663,7 @@ def test_create_configured_patient_responder_uses_runtime_anthropic_config(monke
     finally:
         runtime_model_config_store.clear()
 
-    assert reply == "我右下腹疼得比较明显。"
+    assert reply.reply == "我右下腹疼得比较明显。"
     assert FakeAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
     assert FakeAnthropicHttpClient.calls[0]["headers"]["x-api-key"] == "student-anthropic-secret"
     assert FakeAnthropicHttpClient.calls[0]["headers"]["anthropic-version"] == "2023-06-01"
@@ -646,7 +703,7 @@ def test_anthropic_patient_responder_accepts_plain_text_reply_for_single_field_s
     finally:
         runtime_model_config_store.clear()
 
-    assert reply == "开始时上腹部疼，现在右下腹最疼。"
+    assert reply.reply == "开始时上腹部疼，现在右下腹最疼。"
     assert FakePlainTextAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
 
 

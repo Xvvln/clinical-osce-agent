@@ -33,6 +33,7 @@ from app.services.patient_language_service import (
     build_patient_context_redirect_utterance,
     patient_friendly_chief_complaint,
 )
+from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
@@ -50,7 +51,7 @@ REFLECTION_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
-PatientResponder = Callable[[PatientResponderRequest], str]
+PatientResponder = Callable[[PatientResponderRequest], Any]
 TurnIntentAgent = Callable[[TurnIntentRequest], Any]
 CoachAgent = Callable[[CoachRequest], Any]
 SAFETY_BOUNDARY_FLAG = "real_medical_advice_request"
@@ -348,7 +349,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     student_message = state.get("student_message", "")
     _emit_processing_progress(state, "patient_reply", status="active")
     patient_reply_started_at, patient_reply_started_perf = _start_processing_step()
-    reply = patient_responder(
+    raw_patient_reply = patient_responder(
         PatientResponderRequest(
             case_id=case.case_id,
             case_title=case.case_title,
@@ -383,6 +384,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             ),
         )
     )
+    reply, patient_emotion = _normalize_patient_responder_output(raw_patient_reply)
     processing_trace = _append_processing_trace_step(
         processing_trace,
         "patient_reply",
@@ -396,7 +398,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         messages.extend(
             [
                 {"role": "student", "content": student_message},
-                {"role": "patient", "content": reply},
+                _patient_message_payload(reply, patient_emotion),
             ]
         )
 
@@ -412,6 +414,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         revealed_fact_id=revealed_fact_id,
         revealed_fact_ids=revealed_fact_ids,
         safety_flags=list(state.get("safety_flags", [])),
+        reply_emotion=patient_emotion,
         processing_trace=processing_trace,
     )
     patient_processing_trace = list(processing_trace)
@@ -1915,6 +1918,40 @@ def _primary_intent_from_current_intents(current_intents: list[str]) -> str:
     return current_intents[0] if current_intents else "unknown_history_intent"
 
 
+def _normalize_patient_responder_output(raw_reply: Any) -> tuple[str, str]:
+    if isinstance(raw_reply, str):
+        reply = raw_reply.strip()
+        return reply, infer_patient_emotion(reply)
+
+    if isinstance(raw_reply, dict):
+        reply = str(
+            raw_reply.get("reply")
+            or raw_reply.get("patient_reply")
+            or raw_reply.get("patient_response")
+            or raw_reply.get("content")
+            or raw_reply.get("text")
+            or ""
+        ).strip()
+        explicit_emotion = normalize_patient_emotion(raw_reply.get("emotion"))
+        return reply, explicit_emotion or infer_patient_emotion(reply)
+
+    model_dump = getattr(raw_reply, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump()
+        if isinstance(payload, dict):
+            return _normalize_patient_responder_output(payload)
+
+    reply = str(raw_reply).strip()
+    return reply, infer_patient_emotion(reply)
+
+
+def _patient_message_payload(reply: str, emotion: str) -> dict[str, str]:
+    payload = {"role": "patient", "content": reply}
+    if emotion:
+        payload["emotion"] = emotion
+    return payload
+
+
 def _patient_context_short_complaint(case: Any) -> str:
     complaint = str(case.chief_complaint)
     if "腹痛" in complaint or "腹疼" in complaint:
@@ -2080,11 +2117,11 @@ def _apply_passive_coach_review(
     primary_intent: str,
     current_intents: list[str],
     revealed_fact_id: str | None,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     agent_turn_memory: list[dict[str, Any]],
     turn_analysis: dict[str, Any],
     processing_trace: list[dict[str, Any]],
-) -> tuple[list[dict[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     if not student_message:
         return messages, agent_turn_memory, processing_trace
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
@@ -2274,6 +2311,7 @@ def _append_agent_turn_memory(
     retrieved_knowledge_context: list[dict[str, Any]] | None = None,
     selected_skill_ids: list[str] | None = None,
     skill_context: list[str] | None = None,
+    reply_emotion: str = "",
     processing_trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
@@ -2309,6 +2347,8 @@ def _append_agent_turn_memory(
             turn_payload["selected_skill_reasons"] = selected_skill_reasons
     if skill_context:
         turn_payload["skill_context"] = list(skill_context)
+    if reply_emotion:
+        turn_payload["reply_emotion"] = reply_emotion
     if processing_trace is not None:
         normalized_processing_trace = _normalize_processing_trace(processing_trace)
         turn_payload["processing_trace"] = normalized_processing_trace

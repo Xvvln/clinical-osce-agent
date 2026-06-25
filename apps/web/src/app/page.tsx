@@ -117,6 +117,7 @@ type CoverageMapPayload = Readonly<{
 type ApiMessage = {
   readonly role: "student" | "patient" | string;
   readonly content: string;
+  readonly emotion?: string | null;
 };
 
 type FinalSubmission = Readonly<{
@@ -536,6 +537,7 @@ type ChatMessage = {
   readonly speaker: "student" | "patient" | "coach";
   readonly label: string;
   readonly text: string;
+  readonly emotion?: string | null;
   readonly apiMessageIndex?: number;
   readonly finalText?: string;
   readonly isPending?: boolean;
@@ -1216,6 +1218,14 @@ function getCoachMessageLabel(content: string): "安全边界" | "答题边界" 
   return "过程提示";
 }
 
+function normalizePatientEmotion(emotion: string | null | undefined): string | null {
+  const normalizedEmotion = emotion?.trim();
+  if (!normalizedEmotion || normalizedEmotion === "平静" || normalizedEmotion === "neutral") {
+    return null;
+  }
+  return normalizedEmotion;
+}
+
 function getDiagnosticRoleLabel(role: string): string {
   const labels: Readonly<Record<string, string>> = {
     supports_primary_diagnosis: "支持主诊断",
@@ -1262,6 +1272,7 @@ function mapApiMessage(
     speaker: "patient",
     label: "标准化病人",
     text: message.content,
+    emotion: normalizePatientEmotion(message.emotion),
     apiMessageIndex: index,
     processingTimeline: session ? buildCompletedAgentProcessingTimeline(session, message.content) : undefined,
   };
@@ -4793,6 +4804,11 @@ function HomeContent() {
                             </span>
                           ) : null}
                           {message.label}
+                          {message.emotion ? (
+                            <span className="ml-2 inline-flex items-center rounded-full border border-[#D8C3AF] bg-background px-2 py-0.5 text-[11px] font-medium text-[#8A5A00]">
+                              情绪：{message.emotion}
+                            </span>
+                          ) : null}
                         </p>
                         {canShowPatientSpeechPlayback(message) ? (
                           <button
