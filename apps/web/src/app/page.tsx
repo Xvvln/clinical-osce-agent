@@ -1647,6 +1647,14 @@ function getVisibleApiMessagesDuringPendingReply(
   return messages.slice(0, pendingPatientMessage.apiMessageIndex + 1);
 }
 
+function getPatientSpeechText(message: ChatMessage): string {
+  return (message.finalText ?? message.text).trim();
+}
+
+function canShowPatientSpeechPlayback(message: ChatMessage): boolean {
+  return message.speaker === "patient" && !message.isPending && getPatientSpeechText(message).length > 0;
+}
+
 function getShortEvidenceId(factId: string): string {
   const separatorIndex = factId.lastIndexOf(".");
   return separatorIndex === -1 ? factId : factId.slice(separatorIndex + 1);
@@ -2332,6 +2340,53 @@ function ChevronIcon({ isOpen }: Readonly<{ isOpen: boolean }>) {
   );
 }
 
+function MicrophoneIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path
+        d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M8 8h8v8H8z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function LoadingSpinnerIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+      <path className="opacity-80" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
+    </svg>
+  );
+}
+
+function SpeakerIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path
+        d="M4 10v4h4l5 4V6L8 10H4Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
 function CollapsiblePanel({
   title,
   description,
@@ -2851,7 +2906,7 @@ function HomeContent() {
   }
 
   async function handlePatientSpeechButtonClick(message: ChatMessage): Promise<void> {
-    const speechText = (message.finalText ?? message.text).trim();
+    const speechText = getPatientSpeechText(message);
     if (!speechText) {
       return;
     }
@@ -3539,7 +3594,8 @@ function HomeContent() {
     || isCreating
     || isSending
     || isSpeechInputTranscribing;
-  const speechInputButtonLabel = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "转写中" : "语音输入";
+  const speechInputButtonAriaLabel = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "正在转写语音" : "开始语音输入";
+  const speechInputButtonTitle = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "正在转写语音" : "语音输入";
   const requestedExamCodeSet = useMemo(() => new Set(session?.requested_exams ?? []), [session?.requested_exams]);
   const requestedTestCodeSet = useMemo(() => new Set(session?.requested_tests ?? []), [session?.requested_tests]);
   const pendingPhysicalExamOptions = physicalExamOptions.filter((examOption) => !requestedExamCodeSet.has(examOption.exam_code));
@@ -4738,15 +4794,16 @@ function HomeContent() {
                           ) : null}
                           {message.label}
                         </p>
-                        {isPatient ? (
+                        {canShowPatientSpeechPlayback(message) ? (
                           <button
-                            aria-label={`${patientSpeechState === null ? "播放" : "停止"}患者回复语音`}
-                            className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!authUser || (message.isPending && !message.finalText) || !(message.finalText ?? message.text).trim()}
+                            aria-label={patientSpeechState === "loading" ? "正在生成患者回复语音" : patientSpeechState === "playing" ? "停止患者回复语音" : "播放患者回复语音"}
+                            className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-xs transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser}
                             onClick={() => void handlePatientSpeechButtonClick(message)}
+                            title={patientSpeechState === "loading" ? "正在生成语音" : patientSpeechState === "playing" ? "停止播放" : "播放患者回复"}
                             type="button"
                           >
-                            {patientSpeechState === "loading" ? "生成中" : patientSpeechState === "playing" ? "停止" : "播放"}
+                            {patientSpeechState === "loading" ? <LoadingSpinnerIcon /> : patientSpeechState === "playing" ? <StopIcon /> : <SpeakerIcon />}
                           </button>
                         ) : null}
                       </div>
@@ -5140,16 +5197,18 @@ function HomeContent() {
                     value={inputValue}
                   />
                   <button
-                    className={`rounded-full border px-3 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    aria-label={speechInputButtonAriaLabel}
+                    className={`flex size-10 shrink-0 items-center justify-center rounded-full border text-sm font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       isSpeechInputRecording
                         ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
                         : "border-border bg-background text-foreground hover:bg-accent"
                     }`}
                     disabled={isSpeechInputButtonDisabled}
                     onClick={() => void handleSpeechInputButtonClick()}
+                    title={speechInputButtonTitle}
                     type="button"
                   >
-                    {speechInputButtonLabel}
+                    {isSpeechInputTranscribing ? <LoadingSpinnerIcon /> : isSpeechInputRecording ? <StopIcon /> : <MicrophoneIcon />}
                   </button>
                   <button
                     className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"

@@ -122,9 +122,16 @@ test("home composer supports speech input and patient reply playback through bac
   assert.match(pageSource, /new File\(\[audioBlob\], `osce-question-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
   assert.match(pageSource, /setInputValue\(\(currentValue\) => \{/);
   assert.match(pageSource, /const isPatient = !isStudent && !isCoach;/);
+  assert.match(pageSource, /function canShowPatientSpeechPlayback\(message: ChatMessage\): boolean/);
+  assert.match(pageSource, /return message\.speaker === "patient" && !message\.isPending && getPatientSpeechText\(message\)\.length > 0;/);
   assert.match(pageSource, /handlePatientSpeechButtonClick\(message\)/);
-  assert.match(pageSource, />\s*\{speechInputButtonLabel\}\s*<\/button>/);
-  assert.match(pageSource, /\{patientSpeechState === "loading" \? "生成中" : patientSpeechState === "playing" \? "停止" : "播放"\}/);
+  assert.match(pageSource, /aria-label=\{speechInputButtonAriaLabel\}/);
+  assert.match(pageSource, /title=\{speechInputButtonTitle\}/);
+  assert.match(pageSource, /<MicrophoneIcon \/>/);
+  assert.match(pageSource, /<SpeakerIcon \/>/);
+  assert.match(pageSource, /canShowPatientSpeechPlayback\(message\) \?/);
+  assert.doesNotMatch(pageSource, />\s*\{speechInputButtonLabel\}\s*<\/button>/);
+  assert.doesNotMatch(pageSource, /\{patientSpeechState === "loading" \? "生成中" : patientSpeechState === "playing" \? "停止" : "播放"\}/);
 
   const speechStopStart = pageSource.indexOf("async function handleSpeechRecordingStopped");
   const speechStopEnd = pageSource.indexOf("async function handleSpeechInputButtonClick");
