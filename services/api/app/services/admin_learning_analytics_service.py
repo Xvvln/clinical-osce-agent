@@ -84,6 +84,9 @@ class AdminLearningAnalyticsService:
                 "case_count": len(case_analytics),
                 "student_count": len(student_analytics),
             },
+            "cohort_analytics": _build_cohort_analytics(
+                [session for grouped_sessions in case_groups.values() for session in grouped_sessions]
+            ),
             "case_analytics": case_analytics,
             "student_analytics": student_analytics,
         }
@@ -91,6 +94,29 @@ class AdminLearningAnalyticsService:
 
 def session_payload_report(session: dict[str, Any], reports_by_session_id: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     return reports_by_session_id.get(str(session.get("session_id") or ""))
+
+
+def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    reports = _reports_from_sessions(sessions)
+    affect_signals = _affect_signal_summary(sessions)
+    frequent_humanistic_gaps = _frequent_humanistic_gaps(reports)
+    frequent_missed_opportunities = _frequent_missed_opportunities(reports)
+    return {
+        "scope": "all_users",
+        "scope_label": "全用户",
+        "session_count": len(sessions),
+        "report_count": len(reports),
+        "case_count": len({str(session.get("case_id") or "") for session in sessions if session.get("case_id")}),
+        "student_count": len({str(session.get("student_id") or "") for session in sessions if session.get("student_id")}),
+        "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
+        "average_clinical_score": _average([_score_group_value(report, "clinical_osce") for report in reports]),
+        "average_humanistic_score": _average([_score_group_value(report, "humanistic_communication") for report in reports]),
+        "frequent_missed_items": _frequent_missed_items(reports),
+        "frequent_humanistic_gaps": frequent_humanistic_gaps,
+        "frequent_missed_opportunities": frequent_missed_opportunities,
+        "affect_signals": affect_signals,
+        "teaching_actions": _cohort_teaching_actions(frequent_humanistic_gaps, frequent_missed_opportunities, affect_signals),
+    }
 
 
 def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -282,6 +308,28 @@ def _case_teaching_actions(
         actions.append("把反复错失机会加入病例复盘，要求学生说出触发信号和应该回应的话术。")
     if affect_signals.get("ignored_count", 0) > 0:
         actions.append("患者情绪信号被忽略时，教师应观察学生是否先回应情绪再继续推进问诊或查体。")
+    return actions[:3]
+
+
+def _cohort_teaching_actions(
+    gaps: list[dict[str, Any]],
+    missed_opportunities: list[dict[str, Any]],
+    affect_signals: dict[str, int],
+) -> list[str]:
+    actions: list[str] = []
+    if gaps:
+        gap_label = str(gaps[0].get("label") or gaps[0].get("gap_type") or "人文沟通缺口")
+        gap_action = str(gaps[0].get("next_training_action") or "").strip()
+        if gap_action:
+            actions.append(f"全用户高频问题集中在「{gap_label}」，下一轮群体训练可采用：{gap_action}")
+        else:
+            actions.append(f"全用户高频问题集中在「{gap_label}」，建议纳入下一轮群体训练复盘。")
+    if missed_opportunities:
+        actions.append("全用户反复错失机会需要进入教师共性讲评，要求学生说出触发信号和应答句式。")
+    if affect_signals.get("ignored_count", 0) > 0:
+        actions.append("全用户训练中出现患者情绪信号被忽略时，应把情绪识别和回应作为班级共性训练目标。")
+    if not actions:
+        actions.append("全用户暂无稳定高频缺口，继续积累报告后再形成群体教学动作。")
     return actions[:3]
 
 

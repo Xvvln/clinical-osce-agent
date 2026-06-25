@@ -2113,6 +2113,11 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
         "case_count": 1,
         "student_count": 1,
     }
+    assert analytics["cohort_analytics"]["scope"] == "all_users"
+    assert analytics["cohort_analytics"]["student_count"] == 1
+    assert analytics["cohort_analytics"]["average_total_score"] == 65
+    assert analytics["cohort_analytics"]["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert any("全用户" in action for action in analytics["cohort_analytics"]["teaching_actions"])
     assert analytics["case_analytics"][0]["case_id"] == "appendicitis_001"
     assert analytics["case_analytics"][0]["average_total_score"] == 65
     assert analytics["case_analytics"][0]["frequent_missed_items"][0] == {"item_id": "reasoning_core", "count": 2}

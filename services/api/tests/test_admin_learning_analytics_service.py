@@ -126,6 +126,21 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert analytics["summary"]["case_count"] == 1
     assert analytics["summary"]["student_count"] == 1
 
+    cohort_analytics = analytics["cohort_analytics"]
+    assert cohort_analytics["scope"] == "all_users"
+    assert cohort_analytics["session_count"] == 2
+    assert cohort_analytics["report_count"] == 2
+    assert cohort_analytics["case_count"] == 1
+    assert cohort_analytics["student_count"] == 1
+    assert cohort_analytics["average_total_score"] == 65
+    assert cohort_analytics["average_clinical_score"] == 46.5
+    assert cohort_analytics["average_humanistic_score"] == 18.5
+    assert cohort_analytics["frequent_missed_items"][0]["item_id"] == "reasoning_core"
+    assert cohort_analytics["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert cohort_analytics["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
+    assert cohort_analytics["affect_signals"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
+    assert any("全用户" in action for action in cohort_analytics["teaching_actions"])
+
     case_analytics = analytics["case_analytics"][0]
     assert case_analytics["case_id"] == "appendicitis_001"
     assert case_analytics["session_count"] == 2

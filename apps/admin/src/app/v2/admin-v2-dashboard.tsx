@@ -544,6 +544,23 @@ type AdminStudentLearningAnalytics = Readonly<{
   recommended_next_actions: readonly string[];
 }>;
 
+type AdminCohortLearningAnalytics = Readonly<{
+  scope: "all_users" | string;
+  scope_label?: string;
+  session_count: number;
+  report_count: number;
+  case_count: number;
+  student_count: number;
+  average_total_score: number;
+  average_clinical_score: number;
+  average_humanistic_score: number;
+  frequent_missed_items: readonly AdminLearningGap[];
+  frequent_humanistic_gaps: readonly AdminLearningGap[];
+  frequent_missed_opportunities: readonly AdminLearningGap[];
+  affect_signals: AdminLearningAffectSignals;
+  teaching_actions: readonly string[];
+}>;
+
 type AdminLearningAnalytics = Readonly<{
   summary: Readonly<{
     session_count: number;
@@ -551,6 +568,7 @@ type AdminLearningAnalytics = Readonly<{
     case_count: number;
     student_count: number;
   }>;
+  cohort_analytics?: AdminCohortLearningAnalytics;
   case_analytics: readonly AdminCaseLearningAnalytics[];
   student_analytics: readonly AdminStudentLearningAnalytics[];
 }>;
@@ -2849,8 +2867,9 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
 }
 
 function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearningAnalytics | null }>) {
-  const [view, setView] = useState<"case" | "student">("case");
+  const [view, setView] = useState<"cohort" | "case" | "student">("cohort");
   const summary = analytics?.summary;
+  const cohort = analytics?.cohort_analytics ?? null;
   const caseItems = analytics?.case_analytics ?? [];
   const studentItems = analytics?.student_analytics ?? [];
 
@@ -2858,8 +2877,8 @@ function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearni
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-4">
         <div>
-          <CardTitle>病例与学生学情分析</CardTitle>
-          <CardDescription>把报告、训练缺口、错失机会和患者情绪回应汇总到病例级与学生级，供教师安排下一轮训练。</CardDescription>
+          <CardTitle>全用户、病例与学生学情分析</CardTitle>
+          <CardDescription>把报告、训练缺口、错失机会和患者情绪回应汇总到全用户、病例级与学生级，供教师安排下一轮训练。</CardDescription>
         </div>
         <Badge variant="muted">{formatCount(summary?.report_count ?? 0)} 份报告</Badge>
       </CardHeader>
@@ -2871,6 +2890,16 @@ function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearni
           <MiniStat label="分析报告" value={formatCount(summary?.report_count ?? 0)} />
         </div>
         <div className="inline-flex w-fit rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-1">
+          <button
+            className={cn(
+              "rounded-xl px-4 py-2 text-sm font-semibold transition",
+              view === "cohort" ? "bg-white text-[#141413] shadow-sm" : "text-[#6F6257] hover:text-[#141413]",
+            )}
+            onClick={() => setView("cohort")}
+            type="button"
+          >
+            全用户总览
+          </button>
           <button
             className={cn(
               "rounded-xl px-4 py-2 text-sm font-semibold transition",
@@ -2892,9 +2921,46 @@ function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearni
             学生视角
           </button>
         </div>
-        {view === "case" ? <CaseLearningAnalyticsList items={caseItems} /> : <StudentLearningAnalyticsList items={studentItems} />}
+        {view === "cohort" ? <CohortLearningAnalyticsOverview item={cohort} /> : null}
+        {view === "case" ? <CaseLearningAnalyticsList items={caseItems} /> : null}
+        {view === "student" ? <StudentLearningAnalyticsList items={studentItems} /> : null}
       </CardContent>
     </Card>
+  );
+}
+
+function CohortLearningAnalyticsOverview({ item }: Readonly<{ item: AdminCohortLearningAnalytics | null }>) {
+  if (!item) {
+    return <EmptyText>暂无全用户学情分析。</EmptyText>;
+  }
+
+  const topGap = item.frequent_humanistic_gaps[0] ?? item.frequent_missed_items[0];
+  const missedOpportunity = item.frequent_missed_opportunities[0];
+
+  return (
+    <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold">{item.scope_label || "全用户"}</h3>
+          <p className="mt-1 text-xs text-[#6F6257]">
+            {formatCount(item.student_count)} 名用户 · {formatCount(item.case_count)} 个病例 · {formatCount(item.report_count)} 份报告
+          </p>
+        </div>
+        <Badge variant="warning">总体均分 {formatInsightNumber(item.average_total_score)}</Badge>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
+        <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+        <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_signals)} />
+        <LearningCompactMetric label="Top 缺口" value={getLearningGapTitle(topGap)} />
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <LearningTextBlock title="全用户高频临床漏项" value={getLearningGapDetail(item.frequent_missed_items[0])} />
+        <LearningTextBlock title="全用户人文沟通 gap" value={getLearningGapDetail(topGap)} />
+        <LearningTextBlock title="全用户错失机会" value={getLearningGapDetail(missedOpportunity)} />
+      </div>
+      <CompactList items={item.teaching_actions.slice(0, 3)} title="全用户下一轮教学动作" />
+    </article>
   );
 }
 
