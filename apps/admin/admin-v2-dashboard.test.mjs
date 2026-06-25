@@ -12,6 +12,14 @@ const dashboardSource = existsSync(dashboardUrl) ? readFileSync(dashboardUrl, "u
 const oldPageSource = existsSync(oldPageUrl) ? readFileSync(oldPageUrl, "utf8") : "";
 const docsSource = existsSync(docsUrl) ? readFileSync(docsUrl, "utf8") : "";
 
+function sourceBetween(source, startToken, endToken) {
+  const start = source.indexOf(startToken);
+  const end = source.indexOf(endToken, start + startToken.length);
+  assert.notEqual(start, -1, `${startToken} should exist`);
+  assert.notEqual(end, -1, `${endToken} should exist after ${startToken}`);
+  return source.slice(start, end);
+}
+
 test("admin v2 replaces the root admin entry while keeping the /v2 route available", () => {
   assert.ok(existsSync(pageUrl), "v2 page should exist");
   assert.ok(existsSync(dashboardUrl), "v2 dashboard client should exist");
@@ -182,6 +190,19 @@ test("admin v2 uses a chart component for model API observability", () => {
 
   assert.match(dashboardSource, /from "recharts"/);
   assert.match(dashboardSource, /buildModelApiChartData/);
+});
+
+test("admin v2 lays out model API charts as balanced responsive cards", () => {
+  const modelApiPanelSource = sourceBetween(dashboardSource, "function ModelApiObservabilityPanel", "function ModelApiChartCard");
+  assert.match(modelApiPanelSource, /ModelApiChartCard/);
+  assert.match(modelApiPanelSource, /grid gap-4 lg:grid-cols-2/);
+  assert.match(modelApiPanelSource, /width=\{150\}/);
+  assert.match(modelApiPanelSource, /width=\{170\}/);
+  assert.doesNotMatch(modelApiPanelSource, /xl:grid-cols-\[1\.15fr_0\.85fr\]/);
+  assert.doesNotMatch(modelApiPanelSource, /xl:grid-cols-1/);
+  assert.doesNotMatch(modelApiPanelSource, /left: -20/);
+  assert.doesNotMatch(modelApiPanelSource, /width=\{82\}/);
+  assert.doesNotMatch(modelApiPanelSource, /width=\{96\}/);
 });
 
 test("admin v2 renders model API logs as responsive rows instead of a wide table", () => {
