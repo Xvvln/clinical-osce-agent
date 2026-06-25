@@ -46,6 +46,9 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "必须逐一覆盖所有 answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
     assert "emotion" in module.SYSTEM_PROMPT_TEMPLATE
     assert "患者当前可见情绪" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "patient_affect_state" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "只能影响语气" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "不能新增病例事实" in module.SYSTEM_PROMPT_TEMPLATE
 
 
 def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:

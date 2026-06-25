@@ -630,6 +630,91 @@ def test_osce_graph_attaches_patient_emotion_to_visible_patient_reply() -> None:
         "content": "我有点害怕是不是很严重。",
         "emotion": "担忧",
     }
+    assert result["patient_affect_state"]["current_emotion"] == "anxious"
+    assert result["patient_affect_state"]["unanswered_signal"] is True
+    assert result["patient_affect_state"]["last_transition"] == "patient_signal_detected"
+    patient_turn = next(turn for turn in result["agent_turn_memory"] if turn.get("reply_role") == "patient")
+    assert patient_turn["patient_affect_transition"]["event"] == "patient_signal_detected"
+
+
+def test_osce_graph_injects_patient_affect_state_and_student_repair_into_patient_responder() -> None:
+    captured_requests: list[object] = []
+
+    def fake_turn_intent_agent(request: object) -> dict[str, object]:
+        return {
+            "current_intent": "ask_onset",
+            "current_intents": ["ask_onset"],
+            "confidence": 0.9,
+            "is_off_topic": False,
+            "rationale": "测试中固定为问诊意图。",
+        }
+
+    def fake_patient_responder(request: object) -> dict[str, object]:
+        captured_requests.append(request)
+        return {"reply": "谢谢，你这么说我稍微安心一点。", "emotion": "欣慰", "fact_ids_used": []}
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        turn_intent_agent=fake_turn_intent_agent,
+        coach_agent=silent_coach_agent,
+    )
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "student_message": "我理解你的担心，我们先把疼痛情况问清楚，再判断下一步。",
+            "current_intent": "",
+            "reply": "",
+            "messages": [
+                {"role": "student", "content": "你现在最担心什么？"},
+                {"role": "patient", "content": "我有点害怕是不是要开刀。", "emotion": "担忧"},
+            ],
+            "patient_affect_state": {
+                "current_emotion": "anxious",
+                "current_emotion_label": "担忧",
+                "intensity": 2,
+                "unanswered_signal": True,
+                "last_transition": "patient_signal_detected",
+                "last_student_response": "",
+                "trajectory": [
+                    {
+                        "turn_id": "turn:1",
+                        "event": "patient_signal_detected",
+                        "emotion": "anxious",
+                        "evidence": "我有点害怕是不是要开刀。",
+                    }
+                ],
+            },
+            "asked_questions": ["你现在最担心什么？"],
+            "intent_history": ["ask_ideas_concerns_expectations"],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+            "active_skill_context": {"skill_index": [], "selected_skills": [], "skipped_reasons": []},
+        }
+    )
+
+    assert len(captured_requests) == 1
+    dialogue_context = getattr(captured_requests[0], "dialogue_context")
+    assert dialogue_context["patient_affect_state"]["current_emotion"] == "relieved"
+    assert dialogue_context["patient_affect_state"]["unanswered_signal"] is False
+    assert dialogue_context["student_affect_response"]["response_type"] == "empathy_acknowledged"
+    assert result["patient_affect_state"]["current_emotion"] == "relieved"
+    assert result["patient_affect_state"]["unanswered_signal"] is False
+    patient_turn = next(turn for turn in result["agent_turn_memory"] if turn.get("reply_role") == "patient")
+    assert patient_turn["patient_affect_transition"]["event"] == "patient_relief_observed"
 
 
 def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint() -> None:
@@ -1433,6 +1518,53 @@ def test_osce_graph_returns_physical_exam_result_from_case_library() -> None:
     assert result["exam_name_cn"] == "反跳痛（Blumberg 征）"
     assert result["exam_result"] == "右下腹反跳痛阳性。"
     assert result["requested_exams"] == ["abd.palpation.rebound"]
+
+
+def test_osce_graph_marks_patient_affect_ignored_when_exam_requested_before_emotion_response() -> None:
+    graph = build_osce_graph()
+
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "history_taking",
+            "case_title": "右下腹痛教学病例",
+            "chief_complaint": "转移性右下腹痛 24 小时，伴恶心、低热",
+            "exam_code": "abd.palpation.rebound",
+            "exam_name_cn": "",
+            "exam_result": "",
+            "messages": [
+                {"role": "student", "content": "你现在最担心什么？"},
+                {"role": "patient", "content": "我有点害怕是不是要开刀。", "emotion": "担忧"},
+            ],
+            "patient_affect_state": {
+                "current_emotion": "anxious",
+                "current_emotion_label": "担忧",
+                "intensity": 2,
+                "unanswered_signal": True,
+                "last_transition": "patient_signal_detected",
+                "trajectory": [],
+            },
+            "asked_questions": ["你现在最担心什么？"],
+            "intent_history": ["ask_ideas_concerns_expectations"],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+            "agent_turn_memory": [],
+            "action_timeline": [],
+        }
+    )
+
+    assert result["patient_affect_state"]["unanswered_signal"] is True
+    assert result["patient_affect_state"]["last_transition"] == "emotion_ignored"
+    assert any(event["action_type"] == "patient_affect_ignored" for event in result["action_timeline"])
 
 
 def test_osce_graph_returns_auxiliary_test_result_from_case_library() -> None:

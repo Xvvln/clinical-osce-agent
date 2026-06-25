@@ -69,6 +69,75 @@ def test_policy_selects_empathy_goal_only_after_patient_emotion_signal() -> None
     assert decision.training_goal_hint == "本轮患者表达担忧后，先回应情绪再继续医学问诊。"
 
 
+def test_policy_uses_patient_affect_state_before_message_keyword_fallback() -> None:
+    decision = resolve_coach_hint_policy(
+        state={
+            "stage": "history_taking",
+            "messages": [
+                {"role": "student", "content": "以前有什么病吗？"},
+                {"role": "patient", "content": "这个我不太确定。"},
+            ],
+            "patient_affect_state": {
+                "current_emotion": "anxious",
+                "current_emotion_label": "焦虑",
+                "intensity": 2,
+                "unanswered_signal": True,
+            },
+            "asked_questions": ["以前有什么病吗？"],
+            "revealed_facts": ["appendicitis_001.hf_06"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+        },
+        default_hint="先继续补齐腹痛相关病史。",
+        training_goals=[
+            _goal(
+                "relationship_empathy_missing",
+                trigger_stage="history_taking",
+                action="下一轮患者表达担忧后，先回应情绪再继续医学问诊。",
+            )
+        ],
+    )
+
+    assert decision.intent == HintIntent.RELATIONSHIP_REPAIR
+    assert decision.trigger_state == "triggered"
+
+
+def test_policy_treats_repaired_patient_affect_state_as_answered_even_if_message_has_worry_keyword() -> None:
+    decision = resolve_coach_hint_policy(
+        state={
+            "stage": "history_taking",
+            "messages": [
+                {"role": "student", "content": "您现在最担心什么？"},
+                {"role": "patient", "content": "我有点害怕是不是要开刀。"},
+                {"role": "student", "content": "我理解你的担心，我们先把情况问清楚再判断。"},
+            ],
+            "patient_affect_state": {
+                "current_emotion": "relieved",
+                "current_emotion_label": "欣慰",
+                "intensity": 1,
+                "unanswered_signal": False,
+            },
+            "asked_questions": ["您现在最担心什么？"],
+            "revealed_facts": ["appendicitis_001.hf_08"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+        },
+        default_hint="先继续补齐腹痛相关病史。",
+        training_goals=[
+            _goal(
+                "relationship_empathy_missing",
+                trigger_stage="history_taking",
+                action="下一轮患者表达担忧后，先回应情绪再继续医学问诊。",
+            )
+        ],
+    )
+
+    assert decision.intent == HintIntent.HISTORY_PROGRESSION
+    assert decision.trigger_state == "none"
+
+
 def test_policy_prepares_relationship_goal_before_patient_emotion_signal() -> None:
     decision = resolve_coach_hint_policy(
         state={

@@ -15,6 +15,7 @@ import yaml
 from app.graph.osce_graph import build_osce_graph, reflection_node, training_strategy_node
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
+from app.services.patient_affect_state_service import build_initial_patient_affect_state
 from app.services.patient_language_service import build_patient_opening_utterance
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.procedure_result_simulator import (
@@ -72,6 +73,7 @@ class OsceSession:
     active_skill_context: dict[str, Any] = field(default_factory=dict)
     agent_turn_memory: list[dict[str, Any]] = field(default_factory=list)
     action_timeline: list[dict[str, Any]] = field(default_factory=list)
+    patient_affect_state: dict[str, Any] = field(default_factory=build_initial_patient_affect_state)
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
@@ -1203,6 +1205,7 @@ def _graph_state_from_session(
         "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
         "action_timeline": session.action_timeline,
+        "patient_affect_state": session.patient_affect_state,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,
@@ -1228,6 +1231,7 @@ def _apply_graph_state(session: OsceSession, graph_state: dict[str, Any]) -> Non
     session.evolution_candidates = graph_state["evolution_candidates"]
     session.agent_turn_memory = graph_state.get("agent_turn_memory", session.agent_turn_memory)
     session.action_timeline = graph_state.get("action_timeline", session.action_timeline)
+    session.patient_affect_state = graph_state.get("patient_affect_state", session.patient_affect_state)
     session.pedagogy_state = graph_state.get("pedagogy_state", session.pedagogy_state)
     session.agent_decision_trace = graph_state.get("agent_decision_trace", session.agent_decision_trace)
     session.reflection_summary = graph_state.get("reflection_summary", session.reflection_summary)
@@ -1516,6 +1520,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "active_skill_context": _empty_active_skill_context(),
         "agent_turn_memory": [],
         "action_timeline": [],
+        "patient_affect_state": build_initial_patient_affect_state(),
         "pedagogy_state": {},
         "agent_decision_trace": [],
         "reflection_summary": None,
@@ -2654,6 +2659,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
         "agent_turn_memory": session.agent_turn_memory,
         "action_timeline": session.action_timeline,
+        "patient_affect_state": session.patient_affect_state,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
         "reflection_summary": session.reflection_summary,

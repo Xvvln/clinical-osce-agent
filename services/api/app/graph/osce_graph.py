@@ -33,6 +33,11 @@ from app.services.patient_language_service import (
     build_patient_context_redirect_utterance,
     patient_friendly_chief_complaint,
 )
+from app.services.patient_affect_state_service import (
+    normalize_patient_affect_state,
+    update_affect_after_patient_reply,
+    update_affect_before_patient_reply,
+)
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
@@ -114,6 +119,7 @@ class OsceGraphState(TypedDict, total=False):
     active_skill_context: dict[str, Any]
     agent_turn_memory: list[dict[str, Any]]
     action_timeline: list[dict[str, Any]]
+    patient_affect_state: dict[str, Any]
     processing_trace: list[dict[str, Any]]
     processing_progress_callback: Callable[[dict[str, Any]], None] | None
     pedagogy_state: dict[str, Any]
@@ -347,6 +353,12 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     )
 
     student_message = state.get("student_message", "")
+    turn_id = _next_agent_turn_id(state)
+    patient_affect_state, student_affect_transition = update_affect_before_patient_reply(
+        state.get("patient_affect_state"),
+        student_message=student_message,
+        turn_id=turn_id,
+    )
     _emit_processing_progress(state, "patient_reply", status="active")
     patient_reply_started_at, patient_reply_started_perf = _start_processing_step()
     raw_patient_reply = patient_responder(
@@ -370,6 +382,8 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
                 current_intents=current_intents,
                 answerable_fact_ids=answerable_fact_ids,
                 revealed_fact_ids=revealed_facts,
+                patient_affect_state=patient_affect_state,
+                student_affect_response=student_affect_transition,
             ),
             turn_policy=turn_policy,
             deterministic_hints=_deterministic_turn_hints(
@@ -385,6 +399,16 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         )
     )
     reply, patient_emotion = _normalize_patient_responder_output(raw_patient_reply)
+    patient_affect_state, patient_affect_transition = update_affect_after_patient_reply(
+        patient_affect_state,
+        patient_reply=reply,
+        patient_emotion=patient_emotion,
+        turn_id=turn_id,
+    )
+    selected_patient_affect_transition = _select_patient_affect_transition(
+        student_affect_transition,
+        patient_affect_transition,
+    )
     processing_trace = _append_processing_trace_step(
         processing_trace,
         "patient_reply",
@@ -415,6 +439,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         revealed_fact_ids=revealed_fact_ids,
         safety_flags=list(state.get("safety_flags", [])),
         reply_emotion=patient_emotion,
+        patient_affect_transition=selected_patient_affect_transition,
         processing_trace=processing_trace,
     )
     patient_processing_trace = list(processing_trace)
@@ -473,6 +498,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         "revealed_facts": revealed_facts,
         "agent_turn_memory": agent_turn_memory,
         "action_timeline": action_timeline,
+        "patient_affect_state": patient_affect_state,
         "processing_trace": processing_trace,
     }
 
@@ -485,31 +511,47 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
         requested_exams.append(exam_code)
     for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
         if exam.exam_code == exam_code:
+            action_timeline = _append_action_timeline_events(
+                state,
+                action_type="physical_exam_requested",
+                source_ids=[exam.exam_code],
+                label_by_source={exam.exam_code: exam.exam_name_cn},
+            )
+            patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+                state,
+                action_type="physical_exam_requested",
+                action_label=exam.exam_name_cn,
+                action_timeline=action_timeline,
+            )
             return {
                 "stage": "physical_exam",
                 "exam_code": exam.exam_code,
                 "exam_name_cn": exam.exam_name_cn,
                 "exam_result": exam.result,
                 "requested_exams": requested_exams,
-                "action_timeline": _append_action_timeline_events(
-                    state,
-                    action_type="physical_exam_requested",
-                    source_ids=[exam.exam_code],
-                    label_by_source={exam.exam_code: exam.exam_name_cn},
-                ),
+                "action_timeline": action_timeline,
+                "patient_affect_state": patient_affect_state,
             }
+    action_timeline = _append_action_timeline_events(
+        state,
+        action_type="physical_exam_requested",
+        source_ids=[exam_code] if exam_code else [],
+        label_by_source={exam_code: "未提供查体"} if exam_code else {},
+    )
+    patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+        state,
+        action_type="physical_exam_requested",
+        action_label="未提供查体",
+        action_timeline=action_timeline,
+    )
     return {
         "stage": "physical_exam",
         "exam_code": exam_code,
         "exam_name_cn": "未提供查体",
         "exam_result": "该项目已记录，但本训练站点未提供该查体结果。",
         "requested_exams": requested_exams,
-        "action_timeline": _append_action_timeline_events(
-            state,
-            action_type="physical_exam_requested",
-            source_ids=[exam_code] if exam_code else [],
-            label_by_source={exam_code: "未提供查体"} if exam_code else {},
-        ),
+        "action_timeline": action_timeline,
+        "patient_affect_state": patient_affect_state,
     }
 
 
@@ -521,31 +563,47 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
         requested_tests.append(test_code)
     for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
         if test.test_code == test_code:
+            action_timeline = _append_action_timeline_events(
+                state,
+                action_type="auxiliary_test_requested",
+                source_ids=[test.test_code],
+                label_by_source={test.test_code: test.test_name_cn},
+            )
+            patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+                state,
+                action_type="auxiliary_test_requested",
+                action_label=test.test_name_cn,
+                action_timeline=action_timeline,
+            )
             return {
                 "stage": "auxiliary_test",
                 "test_code": test.test_code,
                 "test_name_cn": test.test_name_cn,
                 "test_result": test.result,
                 "requested_tests": requested_tests,
-                "action_timeline": _append_action_timeline_events(
-                    state,
-                    action_type="auxiliary_test_requested",
-                    source_ids=[test.test_code],
-                    label_by_source={test.test_code: test.test_name_cn},
-                ),
+                "action_timeline": action_timeline,
+                "patient_affect_state": patient_affect_state,
             }
+    action_timeline = _append_action_timeline_events(
+        state,
+        action_type="auxiliary_test_requested",
+        source_ids=[test_code] if test_code else [],
+        label_by_source={test_code: "未提供检查"} if test_code else {},
+    )
+    patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+        state,
+        action_type="auxiliary_test_requested",
+        action_label="未提供检查",
+        action_timeline=action_timeline,
+    )
     return {
         "stage": "auxiliary_test",
         "test_code": test_code,
         "test_name_cn": "未提供检查",
         "test_result": "该项目已记录，但本训练站点未提供该辅助检查结果。",
         "requested_tests": requested_tests,
-        "action_timeline": _append_action_timeline_events(
-            state,
-            action_type="auxiliary_test_requested",
-            source_ids=[test_code] if test_code else [],
-            label_by_source={test_code: "未提供检查"} if test_code else {},
-        ),
+        "action_timeline": action_timeline,
+        "patient_affect_state": patient_affect_state,
     }
 
 
@@ -2046,7 +2104,12 @@ def _build_patient_dialogue_context(
     current_intents: list[str],
     answerable_fact_ids: list[str],
     revealed_fact_ids: list[str],
+    patient_affect_state: dict[str, Any],
+    student_affect_response: dict[str, Any],
 ) -> dict[str, Any]:
+    student_affect_payload = dict(student_affect_response)
+    if "response_type" not in student_affect_payload and "student_response_type" in student_affect_payload:
+        student_affect_payload["response_type"] = student_affect_payload["student_response_type"]
     return {
         "student_message": student_message,
         "recent_messages": _recent_dialogue_messages(state.get("messages", []), limit=8),
@@ -2055,6 +2118,8 @@ def _build_patient_dialogue_context(
         "current_intents": list(current_intents),
         "answerable_fact_ids": list(answerable_fact_ids),
         "revealed_fact_ids": list(revealed_fact_ids),
+        "patient_affect_state": normalize_patient_affect_state(patient_affect_state),
+        "student_affect_response": student_affect_payload,
     }
 
 
@@ -2312,6 +2377,7 @@ def _append_agent_turn_memory(
     selected_skill_ids: list[str] | None = None,
     skill_context: list[str] | None = None,
     reply_emotion: str = "",
+    patient_affect_transition: dict[str, Any] | None = None,
     processing_trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     turn_memory = list(state.get("agent_turn_memory", []))
@@ -2349,6 +2415,11 @@ def _append_agent_turn_memory(
         turn_payload["skill_context"] = list(skill_context)
     if reply_emotion:
         turn_payload["reply_emotion"] = reply_emotion
+    if patient_affect_transition and patient_affect_transition.get("event") not in {
+        "no_pending_patient_affect_signal",
+        "no_visible_patient_affect_change",
+    }:
+        turn_payload["patient_affect_transition"] = dict(patient_affect_transition)
     if processing_trace is not None:
         normalized_processing_trace = _normalize_processing_trace(processing_trace)
         turn_payload["processing_trace"] = normalized_processing_trace
@@ -2385,9 +2456,56 @@ def _append_action_timeline_events(
     return timeline
 
 
+def _apply_patient_affect_process_action(
+    state: OsceGraphState,
+    *,
+    action_type: str,
+    action_label: str,
+    action_timeline: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    patient_affect_state, transition = update_affect_before_patient_reply(
+        state.get("patient_affect_state"),
+        student_message=action_label,
+        turn_id=_next_agent_turn_id(state),
+        action_type=action_type,
+    )
+    if transition.get("event") != "emotion_ignored":
+        return patient_affect_state, action_timeline
+    timeline = [dict(item) for item in action_timeline if isinstance(item, dict)]
+    timeline.append(
+        {
+            "turn_index": len(timeline) + 1,
+            "message_turn_index": _next_action_message_turn_index(state),
+            "action_type": "patient_affect_ignored",
+            "source_id": str(transition.get("event") or "emotion_ignored"),
+            "label": "患者情绪信号未先回应",
+            "metadata": dict(transition),
+        }
+    )
+    return patient_affect_state, timeline
+
+
 def _next_action_message_turn_index(state: OsceGraphState) -> int:
     messages = [message for message in state.get("messages", []) if isinstance(message, dict)]
     return len(messages) + 1
+
+
+def _next_agent_turn_id(state: OsceGraphState) -> str:
+    turn_memory = [item for item in state.get("agent_turn_memory", []) if isinstance(item, dict)]
+    return f"turn:{len(turn_memory) + 1}"
+
+
+def _select_patient_affect_transition(
+    student_transition: dict[str, Any],
+    patient_transition: dict[str, Any],
+) -> dict[str, Any]:
+    patient_event = str(patient_transition.get("event") or "")
+    if patient_event not in {"", "no_visible_patient_affect_change"}:
+        return dict(patient_transition)
+    student_event = str(student_transition.get("event") or "")
+    if student_event not in {"", "no_pending_patient_affect_signal"}:
+        return dict(student_transition)
+    return {}
 
 
 def _history_fact_label(case: Case, fact: HiddenFact) -> str:

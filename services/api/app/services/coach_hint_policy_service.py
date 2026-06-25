@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from app.services.patient_affect_state_service import normalize_patient_affect_state
+
 
 PATIENT_EMOTION_KEYWORDS = ("担心", "担忧", "害怕", "焦虑", "怕", "紧张")
 EMPATHY_RESPONSE_KEYWORDS = ("理解", "担心", "害怕", "焦虑", "别担心", "正常", "一起", "会帮", "我明白")
@@ -132,6 +134,14 @@ def active_training_goals_from_state(state: Mapping[str, Any]) -> list[dict[str,
 
 def build_interaction_context(state: Mapping[str, Any]) -> InteractionContext:
     messages = _message_list(state.get("messages"))
+    affect_state = state.get("patient_affect_state")
+    if isinstance(affect_state, Mapping) and affect_state:
+        normalized_affect_state = normalize_patient_affect_state(affect_state)
+        has_patient_emotion_signal = _affect_state_has_patient_signal(normalized_affect_state)
+        has_unanswered_patient_emotion_signal = bool(normalized_affect_state.get("unanswered_signal"))
+    else:
+        has_patient_emotion_signal = _has_patient_emotion_signal(messages)
+        has_unanswered_patient_emotion_signal = _has_unanswered_patient_emotion_signal(messages)
     return InteractionContext(
         stage=str(state.get("stage") or "case_intro"),
         has_student_training_action=has_student_training_action(state),
@@ -140,8 +150,8 @@ def build_interaction_context(state: Mapping[str, Any]) -> InteractionContext:
         requested_exams_count=len(_string_list(state.get("requested_exams"))),
         requested_tests_count=len(_string_list(state.get("requested_tests"))),
         student_hypotheses_count=len(_string_list(state.get("student_hypotheses"))),
-        has_patient_emotion_signal=_has_patient_emotion_signal(messages),
-        has_unanswered_patient_emotion_signal=_has_unanswered_patient_emotion_signal(messages),
+        has_patient_emotion_signal=has_patient_emotion_signal,
+        has_unanswered_patient_emotion_signal=has_unanswered_patient_emotion_signal,
     )
 
 
@@ -279,6 +289,18 @@ def _has_patient_emotion_signal(messages: list[dict[str, str]]) -> bool:
     return any(
         message.get("role") == "patient" and _contains_any(str(message.get("content") or ""), PATIENT_EMOTION_KEYWORDS)
         for message in messages
+    )
+
+
+def _affect_state_has_patient_signal(affect_state: Mapping[str, Any]) -> bool:
+    if affect_state.get("unanswered_signal"):
+        return True
+    if str(affect_state.get("current_emotion") or "") == "relieved":
+        return True
+    trajectory = affect_state.get("trajectory")
+    return isinstance(trajectory, list) and any(
+        isinstance(item, Mapping) and str(item.get("event") or "") == "patient_signal_detected"
+        for item in trajectory
     )
 
 
