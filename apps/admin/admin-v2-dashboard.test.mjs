@@ -184,6 +184,16 @@ test("admin v2 uses a chart component for model API observability", () => {
   assert.match(dashboardSource, /buildModelApiChartData/);
 });
 
+test("admin v2 renders model API logs as responsive rows instead of a wide table", () => {
+  assert.match(dashboardSource, /ModelApiLogList/);
+  assert.match(dashboardSource, /日志摘要/);
+  assert.match(dashboardSource, /失败详情/);
+  assert.match(dashboardSource, /lg:grid-cols-\[minmax\(0,1fr\)_auto\]/);
+  assert.match(dashboardSource, /w-full grid-cols-1 gap-2 sm:grid-cols-3 lg:w-auto/);
+  assert.doesNotMatch(dashboardSource, /min-w-\[1080px\]/);
+  assert.doesNotMatch(dashboardSource, /shrink-0 grid-cols-2/);
+});
+
 test("admin v2 only highlights opened knowledge documents and handles sessions without reports", () => {
   assert.match(dashboardSource, /const activeDocumentId = openDocumentId;/);
   assert.doesNotMatch(dashboardSource, /selectedDocumentId \|\| data\.documents\[0\]\?\.document_id/);

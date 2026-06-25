@@ -3686,48 +3686,65 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
           <CardDescription>最近 60 条调用记录；不显示密钥或完整 URL，只显示脱敏后的调用结果。</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1080px] text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
-                <tr className="border-b border-[#E7E0D4]">
-                  <th className="py-3 pr-4">时间</th>
-                  <th className="py-3 pr-4">调用人</th>
-                  <th className="py-3 pr-4">Provider</th>
-                  <th className="py-3 pr-4">用途</th>
-                  <th className="py-3 pr-4">模型</th>
-                  <th className="py-3 pr-4">耗时</th>
-                  <th className="py-3 pr-4">状态</th>
-                  <th className="py-3 pr-4">失败详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data.apiLogs?.logs ?? []).slice(0, 18).map((log, index) => (
-                  <tr className="border-b border-[#F0E8DC]" key={`${log.created_at}-${log.operation}-${index}`}>
-                    <td className="py-3 pr-4 text-[#6F6257]">{formatDateTime(log.created_at)}</td>
-                    <td className="py-3 pr-4 text-[#6F6257]">{getCallerLabel(log)}</td>
-                    <td className="py-3 pr-4 font-medium">{log.provider || "unknown"}</td>
-                    <td className="py-3 pr-4 text-[#6F6257]">{getOperationLabel(log.operation)}</td>
-                    <td className="py-3 pr-4 text-[#6F6257]">{log.model || "未记录"}</td>
-                    <td className="py-3 pr-4 text-[#6F6257]">{log.duration_ms} ms</td>
-                    <td className="py-3 pr-4">
-                      <Badge variant={log.success ? "success" : "danger"}>{log.success ? "成功" : `失败 ${log.status_code ?? ""}`}</Badge>
-                    </td>
-                    <td className="max-w-[22rem] py-3 pr-4 text-[#6F6257]">
-                      {log.success ? "无" : (
-                        <div>
-                          <p className="font-medium text-red-700">{log.error_type || "错误"}</p>
-                          <p className="mt-1 line-clamp-3 text-xs leading-5">{log.error_message || "后端未记录具体错误。"}</p>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {(data.apiLogs?.logs ?? []).length === 0 ? <EmptyText>暂无模型调用日志。</EmptyText> : null}
+          <ModelApiLogList logs={data.apiLogs?.logs ?? []} />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function ModelApiLogList({ logs }: Readonly<{ logs: readonly ApiCallLog[] }>) {
+  const items = logs.slice(0, 18);
+  if (items.length === 0) {
+    return <EmptyText>暂无模型调用日志。</EmptyText>;
+  }
+
+  return (
+    <div className="grid gap-3">
+      {items.map((log, index) => (
+        <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={`${log.created_at}-${log.operation}-${index}`}>
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={log.success ? "success" : "danger"}>{log.success ? "成功" : `失败 ${log.status_code ?? ""}`}</Badge>
+                <span className="text-sm font-semibold">{getOperationLabel(log.operation)}</span>
+                <span className="text-xs text-[#8A7D6F]">{formatDateTime(log.created_at)}</span>
+              </div>
+              <p className="mt-2 truncate text-sm text-[#6F6257]">
+                {log.model || "未记录模型"}
+              </p>
+            </div>
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3 lg:w-auto">
+              <LogMeta label="Provider" value={log.provider || "unknown"} />
+              <LogMeta label="耗时" value={`${formatCount(Math.round(log.duration_ms || 0))} ms`} />
+              <LogMeta label="调用人" value={getCallerLabel(log)} />
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 rounded-xl border border-[#F0E8DC] bg-white p-3 text-sm md:grid-cols-[8rem_1fr]">
+            <p className="font-semibold text-[#141413]">日志摘要</p>
+            <p className="min-w-0 break-words text-[#6F6257]">
+              {log.provider || "unknown"} · {getOperationLabel(log.operation)} · {log.endpoint || "未记录 endpoint"}
+            </p>
+          </div>
+          {!log.success ? (
+            <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-3 text-sm">
+              <p className="font-semibold text-red-700">失败详情：{log.error_type || "错误"}</p>
+              <p className="mt-1 break-words text-xs leading-5 text-red-700">{log.error_message || "后端未记录具体错误。"}</p>
+            </div>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function LogMeta({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="rounded-xl border border-[#F0E8DC] bg-white px-3 py-2">
+      <p className="text-[11px] text-[#8A7D6F]">{label}</p>
+      <p className="mt-1 min-w-0 max-w-full truncate text-xs font-semibold text-[#141413] lg:max-w-[10rem]" title={value}>
+        {value}
+      </p>
     </div>
   );
 }
