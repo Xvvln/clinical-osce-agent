@@ -17,6 +17,7 @@ DEFAULT_DASHSCOPE_ASR_MODEL = "qwen3-asr-flash"
 DEFAULT_DASHSCOPE_TTS_MODEL = "qwen3-tts-flash"
 DEFAULT_DASHSCOPE_TTS_VOICE = "Serena"
 DEFAULT_DASHSCOPE_SPEECH_TIMEOUT_SECONDS = 60.0
+MAX_DASHSCOPE_TTS_INSTRUCTIONS_LENGTH = 1000
 
 MIME_FORMAT_MAP = {
     "audio/webm": "webm",
@@ -147,12 +148,15 @@ class DashScopeSpeechService:
         *,
         voice: str | None = None,
         model: str | None = None,
+        instructions: str | None = None,
+        optimize_instructions: bool | None = None,
     ) -> SpeechSynthesisResult:
         clean_text = text.strip()
         if not clean_text:
             raise ValueError("TTS 文本不能为空。")
         selected_model = model.strip() if model else self._settings.tts_model
         selected_voice = voice.strip() if voice else self._settings.tts_voice
+        clean_instructions = instructions.strip()[:MAX_DASHSCOPE_TTS_INSTRUCTIONS_LENGTH] if instructions else None
         payload = {
             "model": selected_model,
             "input": {
@@ -161,6 +165,10 @@ class DashScopeSpeechService:
                 "language_type": "Chinese",
             },
         }
+        if clean_instructions:
+            payload["input"]["instructions"] = clean_instructions
+        if optimize_instructions is not None:
+            payload["input"]["optimize_instructions"] = optimize_instructions
 
         started_at = time.perf_counter()
         try:

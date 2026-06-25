@@ -61,7 +61,8 @@ from app.services.dashscope_speech_service import (
 )
 from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
-from app.services.osce_session_service import CASES_DIR, OsceSessionService, osce_session_service
+from app.services.osce_session_service import CASES_DIR, OsceSessionService, load_case_node, osce_session_service
+from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rag_document_ingestion_service import (
     RagDocumentParseError,
@@ -349,6 +350,9 @@ class AudioSpeechRequest(BaseModel):
     input: str
     voice: str | None = None
     model: str | None = None
+    session_id: str | None = None
+    message_index: int | None = None
+    emotion: str | None = None
 
 
 class PhysicalExamRequest(BaseModel):
@@ -794,6 +798,34 @@ def _require_owned_session(session_id: str, auth_token: str | None) -> dict[str,
     if session is None or session.get("student_id") != user["user_id"]:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+def _resolve_patient_speech_request(request: AudioSpeechRequest, auth_token: str | None) -> tuple[str, PatientSpeechProfile]:
+    if not request.session_id or request.message_index is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="患者语音上下文不完整。")
+
+    session = _require_owned_session(request.session_id, auth_token)
+    messages = session.get("messages")
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="训练会话没有可播放的消息。")
+    if request.message_index < 0 or request.message_index >= len(messages):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="患者消息不存在。")
+
+    message = messages[request.message_index]
+    if not isinstance(message, dict) or message.get("role") != "patient":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能播放标准化病人消息。")
+
+    speech_text = str(message.get("content") or "").strip()
+    if not speech_text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="患者消息为空，无法生成语音。")
+
+    case_id = str(session.get("case_id") or "")
+    case = load_case_node(case_id)
+    speech_profile = build_patient_speech_profile(
+        case.patient_profile,
+        emotion=str(message.get("emotion") or request.emotion or ""),
+    )
+    return speech_text, speech_profile
 
 
 def _require_readable_session(session_id: str, auth_token: str | None) -> dict[str, object]:
@@ -1449,11 +1481,26 @@ async def synthesize_audio(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> StreamingResponse:
     _require_current_user(auth_token)
+    speech_text = request.input
+    voice = request.voice
+    model = request.model
+    instructions: str | None = None
+    optimize_instructions: bool | None = None
+    speech_profile: PatientSpeechProfile | None = None
+    if request.session_id or request.message_index is not None:
+        speech_text, speech_profile = _resolve_patient_speech_request(request, auth_token)
+        voice = speech_profile.voice
+        model = speech_profile.model
+        instructions = speech_profile.instructions
+        optimize_instructions = speech_profile.optimize_instructions
+
     try:
         result = await build_dashscope_speech_service_from_environment().synthesize(
-            request.input,
-            voice=request.voice,
-            model=request.model,
+            speech_text,
+            voice=voice,
+            model=model,
+            instructions=instructions,
+            optimize_instructions=optimize_instructions,
         )
     except SpeechServiceConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
@@ -1467,6 +1514,15 @@ async def synthesize_audio(
         "X-OSCE-Speech-Model": result.model,
         "X-OSCE-Speech-Voice": result.voice,
     }
+    if speech_profile is not None:
+        headers.update(
+            {
+                "X-OSCE-Speech-Policy": speech_profile.policy,
+                "X-OSCE-Speech-Patient-Gender": speech_profile.normalized_gender,
+                "X-OSCE-Speech-Patient-Age-Band": speech_profile.age_band,
+                "X-OSCE-Speech-Emotion": speech_profile.normalized_emotion,
+            }
+        )
     if result.request_id:
         headers["X-OSCE-Speech-Request-Id"] = result.request_id
     return StreamingResponse(BytesIO(result.audio_bytes), media_type=result.mime_type, headers=headers)

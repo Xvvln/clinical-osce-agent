@@ -74,6 +74,12 @@ type SpeechTranscriptionResponse = Readonly<{
   duration_seconds?: number | null;
 }>;
 
+type PatientSpeechContext = Readonly<{
+  sessionId?: string;
+  messageIndex?: number;
+  emotion?: string | null;
+}>;
+
 type ApiConfigProviderOption = Readonly<{
   id: ApiConfigProvider;
   label: string;
@@ -2026,14 +2032,19 @@ async function transcribeSpeechAudio(file: File): Promise<SpeechTranscriptionRes
   return (await response.json()) as SpeechTranscriptionResponse;
 }
 
-async function synthesizePatientSpeech(text: string): Promise<Blob> {
+async function synthesizePatientSpeech(text: string, context: PatientSpeechContext): Promise<Blob> {
   const response = await fetch("/api/audio/speech", {
     method: "POST",
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ input: text }),
+    body: JSON.stringify({
+      input: text,
+      session_id: context.sessionId,
+      message_index: context.messageIndex,
+      emotion: context.emotion,
+    }),
   });
 
   if (!response.ok) {
@@ -2931,7 +2942,11 @@ function HomeContent() {
     setErrorText(null);
 
     try {
-      const audioBlob = await synthesizePatientSpeech(speechText);
+      const audioBlob = await synthesizePatientSpeech(speechText, {
+        sessionId: session?.session_id,
+        messageIndex: message.apiMessageIndex,
+        emotion: message.emotion,
+      });
       const audioUrl = URL.createObjectURL(audioBlob);
       patientSpeechObjectUrlRef.current = audioUrl;
       const audio = new Audio(audioUrl);

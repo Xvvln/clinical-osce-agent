@@ -116,8 +116,10 @@ test("home composer supports speech input and patient reply playback through bac
   assert.match(pageSource, /type SpeechTranscriptionResponse = Readonly<\{/);
   assert.match(pageSource, /async function transcribeSpeechAudio\(file: File\): Promise<SpeechTranscriptionResponse>/);
   assert.match(pageSource, /fetch\("\/api\/audio\/transcriptions"/);
-  assert.match(pageSource, /async function synthesizePatientSpeech\(text: string\): Promise<Blob>/);
+  assert.match(pageSource, /type PatientSpeechContext = Readonly<\{/);
+  assert.match(pageSource, /async function synthesizePatientSpeech\(text: string, context: PatientSpeechContext\): Promise<Blob>/);
   assert.match(pageSource, /fetch\("\/api\/audio\/speech"/);
+  assert.match(pageSource, /body: JSON\.stringify\(\{[\s\S]*?input: text,[\s\S]*?session_id: context\.sessionId,[\s\S]*?message_index: context\.messageIndex,[\s\S]*?emotion: context\.emotion,[\s\S]*?\}\),/);
   assert.match(pageSource, /new MediaRecorder\(stream/);
   assert.match(pageSource, /new File\(\[audioBlob\], `osce-question-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
   assert.match(pageSource, /setInputValue\(\(currentValue\) => \{/);
@@ -130,6 +132,7 @@ test("home composer supports speech input and patient reply playback through bac
   assert.match(pageSource, /<MicrophoneIcon \/>/);
   assert.match(pageSource, /<SpeakerIcon \/>/);
   assert.match(pageSource, /canShowPatientSpeechPlayback\(message\) \?/);
+  assert.match(pageSource, /await synthesizePatientSpeech\(speechText, \{[\s\S]*?sessionId: session\?\.session_id,[\s\S]*?messageIndex: message\.apiMessageIndex,[\s\S]*?emotion: message\.emotion,[\s\S]*?\}\);/);
   assert.doesNotMatch(pageSource, />\s*\{speechInputButtonLabel\}\s*<\/button>/);
   assert.doesNotMatch(pageSource, /\{patientSpeechState === "loading" \? "生成中" : patientSpeechState === "playing" \? "停止" : "播放"\}/);
 

@@ -132,6 +132,31 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["model"], "qwen3-tts-flash")
         self.assertEqual(payload["input"]["voice"], "Serena")  # type: ignore[index]
 
+    @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
+    async def test_synthesize_sends_patient_voice_instructions_to_dashscope(self) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(
+                api_key="sk-test",
+                tts_endpoint="https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+                tts_model="qwen3-tts-flash",
+                tts_voice="Serena",
+            )
+        )
+
+        await service.synthesize(
+            "我有点担心是不是要开刀。",
+            voice="Ethan",
+            model="qwen3-tts-instruct-flash",
+            instructions="年轻男性患者，语气带焦虑和紧张，真实克制，不要播报舞台说明。",
+            optimize_instructions=True,
+        )
+
+        payload = FakeAsyncClient.posts[0]["json"]
+        self.assertEqual(payload["model"], "qwen3-tts-instruct-flash")
+        self.assertEqual(payload["input"]["voice"], "Ethan")  # type: ignore[index]
+        self.assertEqual(payload["input"]["instructions"], "年轻男性患者，语气带焦虑和紧张，真实克制，不要播报舞台说明。")  # type: ignore[index]
+        self.assertIs(payload["input"]["optimize_instructions"], True)  # type: ignore[index]
+
 
 if __name__ == "__main__":
     unittest.main()
