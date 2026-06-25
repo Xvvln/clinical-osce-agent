@@ -142,3 +142,109 @@ def test_speech_endpoint_uses_patient_profile_and_message_emotion(
     assert response.headers["x-osce-speech-patient-gender"] == "male"
     assert response.headers["x-osce-speech-patient-age-band"] == "young_adult"
     assert response.headers["x-osce-speech-emotion"] == "anxious"
+
+
+def test_patient_speech_endpoint_reuses_cached_audio_for_same_patient_message(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_user = authenticated_client.get("/api/auth/me").json()["user"]
+    synthesize_calls: list[str] = []
+
+    class FakeSessionService:
+        def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "session-cache"
+            return {
+                "session_id": session_id,
+                "student_id": current_user["user_id"],
+                "case_id": "appendicitis_001",
+                "messages": [
+                    {
+                        "role": "patient",
+                        "content": "我有点害怕，是不是需要马上开刀？",
+                        "emotion": "焦虑",
+                    }
+                ],
+            }
+
+    class FakeSpeechService:
+        async def synthesize(
+            self,
+            text: str,
+            *,
+            voice: str | None = None,
+            model: str | None = None,
+            instructions: str | None = None,
+            optimize_instructions: bool | None = None,
+        ) -> SpeechSynthesisResult:
+            assert text == "我有点害怕，是不是需要马上开刀？"
+            synthesize_calls.append(text)
+            return SpeechSynthesisResult(
+                audio_bytes=b"RIFFcachedpatientvoice",
+                mime_type="audio/wav",
+                provider="dashscope",
+                model=model or "qwen3-tts-instruct-flash",
+                voice=voice or "Ethan",
+                request_id=f"tts-request-{len(synthesize_calls)}",
+            )
+
+    monkeypatch.setattr(main, "osce_session_service", FakeSessionService())
+    monkeypatch.setattr(main, "build_dashscope_speech_service_from_environment", lambda: FakeSpeechService())
+
+    request_payload = {
+        "input": "前端文本不能覆盖后端患者消息。",
+        "session_id": "session-cache",
+        "message_index": 0,
+    }
+
+    first_response = authenticated_client.post("/api/audio/speech", json=request_payload)
+    second_response = authenticated_client.post("/api/audio/speech", json=request_payload)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.content == b"RIFFcachedpatientvoice"
+    assert second_response.content == b"RIFFcachedpatientvoice"
+    assert first_response.headers["x-osce-speech-cache"] == "miss"
+    assert second_response.headers["x-osce-speech-cache"] == "hit"
+    assert second_response.headers["x-osce-speech-request-id"] == "tts-request-1"
+    assert synthesize_calls == ["我有点害怕，是不是需要马上开刀？"]
+
+
+def test_plain_speech_endpoint_bypasses_patient_audio_cache(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    synthesize_calls: list[str] = []
+
+    class FakeSpeechService:
+        async def synthesize(
+            self,
+            text: str,
+            *,
+            voice: str | None = None,
+            model: str | None = None,
+            instructions: str | None = None,
+            optimize_instructions: bool | None = None,
+        ) -> SpeechSynthesisResult:
+            synthesize_calls.append(text)
+            return SpeechSynthesisResult(
+                audio_bytes=f"audio-{len(synthesize_calls)}".encode(),
+                mime_type="audio/wav",
+                provider="dashscope",
+                model=model or "qwen3-tts-flash",
+                voice=voice or "Serena",
+                request_id=f"plain-request-{len(synthesize_calls)}",
+            )
+
+    monkeypatch.setattr(main, "build_dashscope_speech_service_from_environment", lambda: FakeSpeechService())
+
+    first_response = authenticated_client.post("/api/audio/speech", json={"input": "我现在右下腹疼。", "voice": "Serena"})
+    second_response = authenticated_client.post("/api/audio/speech", json={"input": "我现在右下腹疼。", "voice": "Serena"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.headers["x-osce-speech-cache"] == "bypass"
+    assert second_response.headers["x-osce-speech-cache"] == "bypass"
+    assert first_response.content == b"audio-1"
+    assert second_response.content == b"audio-2"
+    assert synthesize_calls == ["我现在右下腹疼。", "我现在右下腹疼。"]

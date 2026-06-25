@@ -57,6 +57,7 @@ from app.services.deployment_config import (
 from app.services.dashscope_speech_service import (
     DashScopeSpeechServiceError,
     SpeechServiceConfigurationError,
+    SpeechSynthesisResult,
     build_dashscope_speech_service_from_environment,
 )
 from app.services.demo_seed_service import seed_demo_data
@@ -74,6 +75,7 @@ from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.startup_config_service import build_startup_config_self_check
+from app.services.speech_synthesis_cache_service import speech_synthesis_cache
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.user_model_config_store import user_model_config_store
@@ -828,6 +830,33 @@ def _resolve_patient_speech_request(request: AudioSpeechRequest, auth_token: str
     return speech_text, speech_profile
 
 
+def _build_speech_streaming_response(
+    result: SpeechSynthesisResult,
+    *,
+    speech_profile: PatientSpeechProfile | None,
+    cache_status: str,
+) -> StreamingResponse:
+    headers = {
+        "Cache-Control": "no-store",
+        "X-OSCE-Speech-Provider": result.provider,
+        "X-OSCE-Speech-Model": result.model,
+        "X-OSCE-Speech-Voice": result.voice,
+        "X-OSCE-Speech-Cache": cache_status,
+    }
+    if speech_profile is not None:
+        headers.update(
+            {
+                "X-OSCE-Speech-Policy": speech_profile.policy,
+                "X-OSCE-Speech-Patient-Gender": speech_profile.normalized_gender,
+                "X-OSCE-Speech-Patient-Age-Band": speech_profile.age_band,
+                "X-OSCE-Speech-Emotion": speech_profile.normalized_emotion,
+            }
+        )
+    if result.request_id:
+        headers["X-OSCE-Speech-Request-Id"] = result.request_id
+    return StreamingResponse(BytesIO(result.audio_bytes), media_type=result.mime_type, headers=headers)
+
+
 def _require_readable_session(session_id: str, auth_token: str | None) -> dict[str, object]:
     user = _require_current_user(auth_token)
     session = osce_session_service.get_session(session_id)
@@ -1487,12 +1516,32 @@ async def synthesize_audio(
     instructions: str | None = None
     optimize_instructions: bool | None = None
     speech_profile: PatientSpeechProfile | None = None
+    cache_key: str | None = None
+    cache_status = "bypass"
     if request.session_id or request.message_index is not None:
         speech_text, speech_profile = _resolve_patient_speech_request(request, auth_token)
         voice = speech_profile.voice
         model = speech_profile.model
         instructions = speech_profile.instructions
         optimize_instructions = speech_profile.optimize_instructions
+        cache_key = speech_synthesis_cache.build_key(
+            session_id=str(request.session_id or ""),
+            message_index=int(request.message_index if request.message_index is not None else -1),
+            text=speech_text,
+            model=model,
+            voice=voice,
+            instructions=instructions,
+            optimize_instructions=optimize_instructions,
+            emotion=speech_profile.normalized_emotion,
+        )
+        cached_result = speech_synthesis_cache.get(cache_key)
+        if cached_result is not None:
+            return _build_speech_streaming_response(
+                cached_result,
+                speech_profile=speech_profile,
+                cache_status="hit",
+            )
+        cache_status = "miss"
 
     try:
         result = await build_dashscope_speech_service_from_environment().synthesize(
@@ -1508,24 +1557,13 @@ async def synthesize_audio(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except DashScopeSpeechServiceError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    headers = {
-        "Cache-Control": "no-store",
-        "X-OSCE-Speech-Provider": result.provider,
-        "X-OSCE-Speech-Model": result.model,
-        "X-OSCE-Speech-Voice": result.voice,
-    }
-    if speech_profile is not None:
-        headers.update(
-            {
-                "X-OSCE-Speech-Policy": speech_profile.policy,
-                "X-OSCE-Speech-Patient-Gender": speech_profile.normalized_gender,
-                "X-OSCE-Speech-Patient-Age-Band": speech_profile.age_band,
-                "X-OSCE-Speech-Emotion": speech_profile.normalized_emotion,
-            }
-        )
-    if result.request_id:
-        headers["X-OSCE-Speech-Request-Id"] = result.request_id
-    return StreamingResponse(BytesIO(result.audio_bytes), media_type=result.mime_type, headers=headers)
+    if cache_key is not None:
+        speech_synthesis_cache.set(cache_key, result)
+    return _build_speech_streaming_response(
+        result,
+        speech_profile=speech_profile,
+        cache_status=cache_status,
+    )
 
 
 @app.post("/api/model-config/test")
