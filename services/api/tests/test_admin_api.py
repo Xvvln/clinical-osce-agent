@@ -169,6 +169,7 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
             unauthenticated_client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
             unauthenticated_client.get("/api/admin/insights"),
+            unauthenticated_client.get("/api/admin/learning-analytics"),
             unauthenticated_client.get("/api/admin/evaluations"),
             unauthenticated_client.get("/api/admin/evaluations/missing_batch"),
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
@@ -223,6 +224,7 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.post("/api/admin/evolution/approve", json={"candidate_id": "missing_candidate"}),
             client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
             client.get("/api/admin/insights"),
+            client.get("/api/admin/learning-analytics"),
             client.get("/api/admin/evaluations"),
             client.get("/api/admin/evaluations/missing_batch"),
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
@@ -1990,6 +1992,136 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             },
         }
     }
+
+
+def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_learning_one",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="feedback",
+            patient_affect_state={
+                "trajectory": [
+                    {"event": "patient_signal_detected", "turn_id": "turn:1"},
+                    {"event": "emotion_ignored", "turn_id": "turn:2"},
+                ]
+            },
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_learning_two",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="feedback",
+            patient_affect_state={
+                "trajectory": [
+                    {"event": "patient_signal_detected", "turn_id": "turn:1"},
+                    {"event": "emotion_repaired", "turn_id": "turn:2"},
+                ]
+            },
+        )
+    )
+    session_store.save_session(
+        OsceSession(
+            session_id="session_admin_learning_other",
+            student_id="student_b",
+            case_id="pneumonia_001",
+            stage="feedback",
+        )
+    )
+    report_store.save_report(
+        {
+            "session_id": "session_admin_learning_one",
+            "case_id": "appendicitis_001",
+            "student_id": "student_a",
+            "total_score": 60,
+            "score_groups": {
+                "clinical_osce": {"score": 43, "max_score": 70},
+                "humanistic_communication": {"score": 17, "max_score": 30},
+            },
+            "missed_items": ["reasoning_core"],
+            "training_gaps": [
+                {
+                    "gap_type": "relationship_empathy_missing",
+                    "dimension_id": "relationship_building",
+                    "label": "未回应患者担忧",
+                    "missing_score": 3,
+                    "next_training_action": "患者表达担忧后先回应情绪。",
+                }
+            ],
+            "missed_opportunities": [
+                {
+                    "gap_type": "relationship_empathy_missing",
+                    "expected_response": "先承认患者担忧，再继续问诊。",
+                }
+            ],
+        }
+    )
+    report_store.save_report(
+        {
+            "session_id": "session_admin_learning_two",
+            "case_id": "appendicitis_001",
+            "student_id": "student_a",
+            "total_score": 70,
+            "score_groups": {
+                "clinical_osce": {"score": 50, "max_score": 70},
+                "humanistic_communication": {"score": 20, "max_score": 30},
+            },
+            "missed_items": ["reasoning_core"],
+            "training_gaps": [
+                {
+                    "gap_type": "ethics_consent_missing",
+                    "dimension_id": "medical_ethics",
+                    "label": "查体前缺少同意",
+                    "missing_score": 2,
+                    "next_training_action": "查体前说明目的并征得同意。",
+                }
+            ],
+            "missed_opportunities": [],
+        }
+    )
+    report_store.save_report(
+        {
+            "session_id": "session_admin_learning_other",
+            "case_id": "pneumonia_001",
+            "student_id": "student_b",
+            "total_score": 82,
+            "score_groups": {
+                "clinical_osce": {"score": 59, "max_score": 70},
+                "humanistic_communication": {"score": 23, "max_score": 30},
+            },
+            "missed_items": [],
+            "training_gaps": [],
+            "missed_opportunities": [],
+        }
+    )
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        response = client.get("/api/admin/learning-analytics?case_id=appendicitis_001&student_id=student_a")
+
+    assert response.status_code == 200
+    analytics = response.json()["learning_analytics"]
+    assert analytics["summary"] == {
+        "session_count": 2,
+        "report_count": 2,
+        "case_count": 1,
+        "student_count": 1,
+    }
+    assert analytics["case_analytics"][0]["case_id"] == "appendicitis_001"
+    assert analytics["case_analytics"][0]["average_total_score"] == 65
+    assert analytics["case_analytics"][0]["frequent_missed_items"][0] == {"item_id": "reasoning_core", "count": 2}
+    assert analytics["case_analytics"][0]["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert analytics["case_analytics"][0]["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
+    assert analytics["case_analytics"][0]["affect_signals"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
+    assert analytics["student_analytics"][0]["student_id"] == "student_a"
+    assert analytics["student_analytics"][0]["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert any("查体前说明目的" in action for action in analytics["student_analytics"][0]["recommended_next_actions"])
 
 
 def test_admin_can_read_training_skill_effect_summary_with_insufficient_samples(tmp_path, monkeypatch) -> None:

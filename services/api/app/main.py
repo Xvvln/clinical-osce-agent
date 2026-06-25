@@ -48,6 +48,7 @@ from app.services.derived_teaching_focus_service import (
 )
 from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
+from app.services.admin_learning_analytics_service import AdminLearningAnalyticsService
 from app.services.deployment_config import (
     get_deployment_mode,
     is_account_registration_supported,
@@ -2372,6 +2373,27 @@ def get_admin_training_insights(
     session_ids = _real_training_session_ids()
     insights = TrainingInsightService(osce_session_service.training_event_store).summarize_sessions(session_ids)
     return {"insights": insights}
+
+
+@app.get("/api/admin/learning-analytics")
+def get_admin_learning_analytics(
+    case_id: str = Query(default=""),
+    student_id: str = Query(default=""),
+    limit: int | None = Query(default=None, ge=1),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    session_ids = _real_training_session_ids()
+    analytics = AdminLearningAnalyticsService(
+        session_store=osce_session_service.session_store,
+        report_store=osce_session_service.report_store,
+    ).summarize(
+        session_ids=session_ids,
+        case_id=case_id,
+        student_id=student_id,
+        limit=limit,
+    )
+    return {"learning_analytics": analytics}
 
 
 @app.get("/api/admin/evolution/skill-effects")

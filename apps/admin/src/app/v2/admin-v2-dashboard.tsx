@@ -499,6 +499,62 @@ type HumanisticCommunicationInsight = Readonly<{
   }>;
 }>;
 
+type AdminLearningGap = Readonly<{
+  gap_type?: string;
+  item_id?: string;
+  label?: string;
+  count?: number;
+  missing_score_total?: number;
+  next_training_action?: string;
+  expected_response?: string;
+}>;
+
+type AdminLearningAffectSignals = Readonly<{
+  signal_count: number;
+  repaired_count: number;
+  ignored_count: number;
+}>;
+
+type AdminCaseLearningAnalytics = Readonly<{
+  case_id: string;
+  case_title?: string;
+  session_count: number;
+  report_count: number;
+  average_total_score: number;
+  average_clinical_score: number;
+  average_humanistic_score: number;
+  frequent_missed_items: readonly AdminLearningGap[];
+  frequent_humanistic_gaps: readonly AdminLearningGap[];
+  frequent_missed_opportunities: readonly AdminLearningGap[];
+  affect_signals: AdminLearningAffectSignals;
+  teaching_actions: readonly string[];
+}>;
+
+type AdminStudentLearningAnalytics = Readonly<{
+  student_id: string;
+  session_count: number;
+  report_count: number;
+  average_total_score: number;
+  average_clinical_score: number;
+  average_humanistic_score: number;
+  case_titles: readonly string[];
+  persistent_gaps: readonly AdminLearningGap[];
+  current_humanistic_gaps: readonly AdminLearningGap[];
+  affect_response: AdminLearningAffectSignals;
+  recommended_next_actions: readonly string[];
+}>;
+
+type AdminLearningAnalytics = Readonly<{
+  summary: Readonly<{
+    session_count: number;
+    report_count: number;
+    case_count: number;
+    student_count: number;
+  }>;
+  case_analytics: readonly AdminCaseLearningAnalytics[];
+  student_analytics: readonly AdminStudentLearningAnalytics[];
+}>;
+
 type ProcedureSimulationAuditItem = Readonly<{
   approval_decision?: string;
   approval_mode?: string;
@@ -598,6 +654,7 @@ type DashboardData = Readonly<{
   documents: readonly AdminRagDocument[];
   knowledgeItems: readonly AdminRagKnowledgeItem[];
   insights: TrainingInsights | null;
+  learningAnalytics: AdminLearningAnalytics | null;
   procedureAudits: readonly ProcedureSimulationAuditItem[];
   procedureAuditSummary: ProcedureSimulationAuditSummary | null;
   teachingFocusPatterns: readonly AdminTeachingFocusPattern[];
@@ -625,6 +682,7 @@ const emptyDashboardData: DashboardData = {
   documents: [],
   knowledgeItems: [],
   insights: null,
+  learningAnalytics: null,
   procedureAudits: [],
   procedureAuditSummary: null,
   teachingFocusPatterns: [],
@@ -678,6 +736,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     documentsPayload,
     knowledgePayload,
     insightsPayload,
+    learningAnalyticsPayload,
     procedureAuditPayload,
     teachingFocusPayload,
     auditEventsPayload,
@@ -696,6 +755,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ documents: readonly AdminRagDocument[] }>("/api/admin/rag/documents"),
     fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[] }>("/api/admin/rag/knowledge"),
     fetchJson<{ insights: TrainingInsights }>("/api/admin/insights"),
+    fetchJson<{ learning_analytics: AdminLearningAnalytics }>("/api/admin/learning-analytics"),
     fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
     fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"),
     fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"),
@@ -719,6 +779,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     documents: documentsPayload.documents,
     knowledgeItems: knowledgePayload.knowledge_items,
     insights: insightsPayload.insights,
+    learningAnalytics: learningAnalyticsPayload.learning_analytics,
     procedureAudits: procedureAuditPayload.procedure_simulation_audits,
     procedureAuditSummary: procedureAuditPayload.summary ?? null,
     teachingFocusPatterns: teachingFocusPayload.patterns,
@@ -2754,6 +2815,7 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
   const missedItems = toInsightDisplayItems(data.insights?.frequent_missed_items, "未覆盖训练点");
   const turnPatterns = toInsightDisplayItems(data.insights?.frequent_turn_patterns, "训练模式");
   const humanisticInsight = data.insights?.humanistic_communication;
+  const learningAnalytics = data.learningAnalytics;
 
   return (
     <div className="grid gap-4">
@@ -2780,7 +2842,151 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
         </CardContent>
       </Card>
       <HumanisticInsightsPanel insight={humanisticInsight} />
+      <LearningAnalyticsPanel analytics={learningAnalytics} />
       <TeachingFocusList patterns={data.teachingFocusPatterns} />
+    </div>
+  );
+}
+
+function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearningAnalytics | null }>) {
+  const [view, setView] = useState<"case" | "student">("case");
+  const summary = analytics?.summary;
+  const caseItems = analytics?.case_analytics ?? [];
+  const studentItems = analytics?.student_analytics ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>病例与学生学情分析</CardTitle>
+          <CardDescription>把报告、训练缺口、错失机会和患者情绪回应汇总到病例级与学生级，供教师安排下一轮训练。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(summary?.report_count ?? 0)} 份报告</Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <MiniStat label="统计 Session" value={formatCount(summary?.session_count ?? 0)} />
+          <MiniStat label="覆盖病例" value={formatCount(summary?.case_count ?? 0)} />
+          <MiniStat label="覆盖学生" value={formatCount(summary?.student_count ?? 0)} />
+          <MiniStat label="分析报告" value={formatCount(summary?.report_count ?? 0)} />
+        </div>
+        <div className="inline-flex w-fit rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-1">
+          <button
+            className={cn(
+              "rounded-xl px-4 py-2 text-sm font-semibold transition",
+              view === "case" ? "bg-white text-[#141413] shadow-sm" : "text-[#6F6257] hover:text-[#141413]",
+            )}
+            onClick={() => setView("case")}
+            type="button"
+          >
+            病例视角
+          </button>
+          <button
+            className={cn(
+              "rounded-xl px-4 py-2 text-sm font-semibold transition",
+              view === "student" ? "bg-white text-[#141413] shadow-sm" : "text-[#6F6257] hover:text-[#141413]",
+            )}
+            onClick={() => setView("student")}
+            type="button"
+          >
+            学生视角
+          </button>
+        </div>
+        {view === "case" ? <CaseLearningAnalyticsList items={caseItems} /> : <StudentLearningAnalyticsList items={studentItems} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CaseLearningAnalyticsList({ items }: Readonly<{ items: readonly AdminCaseLearningAnalytics[] }>) {
+  if (items.length === 0) {
+    return <EmptyText>暂无病例级学情分析。</EmptyText>;
+  }
+
+  return (
+    <div className="grid gap-3">
+      {items.slice(0, 6).map((item) => {
+        const topGap = item.frequent_humanistic_gaps[0] ?? item.frequent_missed_items[0];
+        const missedOpportunity = item.frequent_missed_opportunities[0];
+        return (
+          <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={item.case_id}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">{item.case_title || item.case_id}</h3>
+                <p className="mt-1 text-xs text-[#6F6257]">
+                  {formatCount(item.session_count)} 次训练 · {formatCount(item.report_count)} 份报告
+                </p>
+              </div>
+              <Badge variant="warning">均分 {formatInsightNumber(item.average_total_score)}</Badge>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
+              <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+              <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_signals)} />
+              <LearningCompactMetric label="Top 缺口" value={getLearningGapTitle(topGap)} />
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <LearningTextBlock title="高频人文沟通缺口" value={getLearningGapDetail(topGap)} />
+              <LearningTextBlock title="错失机会" value={getLearningGapDetail(missedOpportunity)} />
+            </div>
+            <CompactList items={item.teaching_actions.slice(0, 3)} title="教师下一步动作" />
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function StudentLearningAnalyticsList({ items }: Readonly<{ items: readonly AdminStudentLearningAnalytics[] }>) {
+  if (items.length === 0) {
+    return <EmptyText>暂无学生级学情分析。</EmptyText>;
+  }
+
+  return (
+    <div className="grid gap-3">
+      {items.slice(0, 8).map((item) => {
+        const currentGap = item.current_humanistic_gaps[0] ?? item.persistent_gaps[0];
+        return (
+          <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={item.student_id}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">{item.student_id}</h3>
+                <p className="mt-1 text-xs text-[#6F6257]">{joinText(item.case_titles, "未绑定病例")}</p>
+              </div>
+              <Badge variant="warning">均分 {formatInsightNumber(item.average_total_score)}</Badge>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <LearningCompactMetric label="训练报告" value={`${formatCount(item.report_count)}/${formatCount(item.session_count)}`} />
+              <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
+              <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+              <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_response)} />
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <LearningTextBlock title="当前人文沟通 gap" value={getLearningGapDetail(currentGap)} />
+              <LearningTextBlock title="长期反复 gap" value={getLearningGapDetail(item.persistent_gaps[0])} />
+            </div>
+            <CompactList items={item.recommended_next_actions.slice(0, 3)} title="下一轮训练动作" />
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function LearningCompactMetric({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#F0E8DC] bg-white p-3">
+      <p className="text-xs text-[#8A7D6F]">{label}</p>
+      <p className="mt-2 line-clamp-2 text-sm font-semibold leading-5">{value}</p>
+    </div>
+  );
+}
+
+function LearningTextBlock({ title, value }: Readonly<{ title: string; value: string }>) {
+  return (
+    <div className="rounded-2xl border border-[#F0E8DC] bg-white p-3">
+      <h4 className="text-sm font-semibold">{title}</h4>
+      <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#6F6257]">{value}</p>
     </div>
   );
 }
@@ -4406,6 +4612,33 @@ function getHumanisticGapLabel(gapType: string): string {
     relationship_empathy_missing: "患者担忧后缺少共情回应",
   };
   return labels[gapType] ?? (gapType || "人文沟通缺口");
+}
+
+function getLearningGapTitle(gap?: AdminLearningGap): string {
+  if (!gap) {
+    return "暂无缺口";
+  }
+  return gap.label || getHumanisticGapLabel(gap.gap_type ?? "") || gap.item_id || "未命名训练点";
+}
+
+function getLearningGapDetail(gap?: AdminLearningGap): string {
+  if (!gap) {
+    return "暂无记录。";
+  }
+  const title = getLearningGapTitle(gap);
+  const metrics = [
+    typeof gap.count === "number" ? `${formatCount(gap.count)} 次` : "",
+    typeof gap.missing_score_total === "number" ? `累计缺口 ${formatCount(gap.missing_score_total)} 分` : "",
+  ].filter(Boolean);
+  const evidence = gap.next_training_action || gap.expected_response || "";
+  return [title, metrics.join(" · "), evidence].filter(Boolean).join("。");
+}
+
+function formatAffectSignalText(signals?: AdminLearningAffectSignals): string {
+  if (!signals) {
+    return "暂无信号";
+  }
+  return `信号 ${formatCount(signals.signal_count)} · 缓解 ${formatCount(signals.repaired_count)} · 忽略 ${formatCount(signals.ignored_count)}`;
 }
 
 function getAnchorCandidateStatusLabel(status: string): string {
