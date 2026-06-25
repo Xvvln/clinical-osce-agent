@@ -4,12 +4,14 @@ import hashlib
 import json
 import os
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import httpx
 import yaml
-from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import BackgroundTasks, Cookie, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -51,6 +53,11 @@ from app.services.deployment_config import (
     is_account_registration_supported,
     is_demo_admin_effectively_enabled,
     is_runtime_model_config_write_supported,
+)
+from app.services.dashscope_speech_service import (
+    DashScopeSpeechServiceError,
+    SpeechServiceConfigurationError,
+    build_dashscope_speech_service_from_environment,
 )
 from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
@@ -336,6 +343,12 @@ class CreateSessionRequest(BaseModel):
 
 class MessageRequest(BaseModel):
     message: str
+
+
+class AudioSpeechRequest(BaseModel):
+    input: str
+    voice: str | None = None
+    model: str | None = None
 
 
 class PhysicalExamRequest(BaseModel):
@@ -1397,6 +1410,66 @@ def health_check() -> dict[str, str]:
 @app.get("/api/health/config")
 def startup_config_health_check() -> dict[str, object]:
     return build_startup_config_self_check()
+
+
+@app.post("/api/audio/transcriptions")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: str | None = Form(default=None),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_current_user(auth_token)
+    audio_bytes = await file.read()
+    try:
+        result = await build_dashscope_speech_service_from_environment().transcribe(
+            audio_bytes,
+            mime_type=file.content_type,
+            filename=file.filename,
+            language=language,
+        )
+    except SpeechServiceConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except DashScopeSpeechServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return {
+        "text": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "language": result.language,
+        "emotion": result.emotion,
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+@app.post("/api/audio/speech")
+async def synthesize_audio(
+    request: AudioSpeechRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> StreamingResponse:
+    _require_current_user(auth_token)
+    try:
+        result = await build_dashscope_speech_service_from_environment().synthesize(
+            request.input,
+            voice=request.voice,
+            model=request.model,
+        )
+    except SpeechServiceConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except DashScopeSpeechServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    headers = {
+        "Cache-Control": "no-store",
+        "X-OSCE-Speech-Provider": result.provider,
+        "X-OSCE-Speech-Model": result.model,
+        "X-OSCE-Speech-Voice": result.voice,
+    }
+    if result.request_id:
+        headers["X-OSCE-Speech-Request-Id"] = result.request_id
+    return StreamingResponse(BytesIO(result.audio_bytes), media_type=result.mime_type, headers=headers)
 
 
 @app.post("/api/model-config/test")

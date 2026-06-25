@@ -112,6 +112,28 @@ test("home chat keeps patient streaming before coach process hints", () => {
   assert.match(pageSource, /getVisibleApiMessagesDuringPendingReply\(session\.messages, pendingPatientMessage\)/);
 });
 
+test("home composer supports speech input and patient reply playback through backend audio APIs", () => {
+  assert.match(pageSource, /type SpeechTranscriptionResponse = Readonly<\{/);
+  assert.match(pageSource, /async function transcribeSpeechAudio\(file: File\): Promise<SpeechTranscriptionResponse>/);
+  assert.match(pageSource, /fetch\("\/api\/audio\/transcriptions"/);
+  assert.match(pageSource, /async function synthesizePatientSpeech\(text: string\): Promise<Blob>/);
+  assert.match(pageSource, /fetch\("\/api\/audio\/speech"/);
+  assert.match(pageSource, /new MediaRecorder\(stream/);
+  assert.match(pageSource, /new File\(\[audioBlob\], `osce-question-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
+  assert.match(pageSource, /setInputValue\(\(currentValue\) => \{/);
+  assert.match(pageSource, /const isPatient = !isStudent && !isCoach;/);
+  assert.match(pageSource, /handlePatientSpeechButtonClick\(message\)/);
+  assert.match(pageSource, />\s*\{speechInputButtonLabel\}\s*<\/button>/);
+  assert.match(pageSource, /\{patientSpeechState === "loading" \? "生成中" : patientSpeechState === "playing" \? "停止" : "播放"\}/);
+
+  const speechStopStart = pageSource.indexOf("async function handleSpeechRecordingStopped");
+  const speechStopEnd = pageSource.indexOf("async function handleSpeechInputButtonClick");
+  assert.ok(speechStopStart >= 0 && speechStopEnd > speechStopStart, "should define speech transcription handler before input button handler");
+  const speechStopSource = pageSource.slice(speechStopStart, speechStopEnd);
+  assert.match(speechStopSource, /setInputValue/);
+  assert.doesNotMatch(speechStopSource, /sendHistoryMessage|handleSubmit/, "speech transcription should fill the composer instead of auto-sending");
+});
+
 test("home pending patient reply renders a collapsible agent processing timeline", () => {
   assert.match(pageSource, /type BackendProcessingTraceItem = Readonly<\{/);
   assert.match(pageSource, /processing_trace\?: readonly BackendProcessingTraceItem\[];/);
@@ -1237,7 +1259,7 @@ test("home workspace can resume current user's persisted backend session", () =>
 test("home workspace treats completed sessions as read-only training records", () => {
   assert.match(pageSource, /const isCurrentSessionCompleted = isCompletedOsceSession\(session\);/);
   assert.match(pageSource, /if \(isCompletedOsceSession\(activeSession\)\) \{[\s\S]*?setErrorText\("训练已结束，请查看报告。"\);[\s\S]*?return;/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| isSpeechInputBusy\}/);
   assert.match(pageSource, /const isPhysicalExamActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
   assert.match(pageSource, /const isAuxiliaryTestActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
   assert.match(pageSource, /disabled=\{isPhysicalExamActionDisabled\}/);
@@ -1287,7 +1309,7 @@ test("home workspace keeps implicit session creation and exposes explicit restar
   assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
   assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
   assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| isSpeechInputBusy\}/);
   assert.ok(pageSource.indexOf("if (!isTrainingModelConfigReady)") < pageSource.indexOf("setOptimisticHistoryMessage({"));
   assert.ok(pageSource.indexOf("const activeSession = await ensureActiveSession();") < pageSource.indexOf("setOptimisticHistoryMessage({"));
 });
@@ -1393,10 +1415,10 @@ test("home workspace keeps the composer sticky and moves final diagnosis into th
   assert.match(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-0 z-0 h-20 bg-background"/);
   assert.match(pageSource, /aria-hidden="true" className="absolute bottom-20 left-1\/2 z-0 h-10 w-full max-w-3xl -translate-x-1\/2 bg-background\/75 backdrop-blur-md \[mask-image:linear-gradient\(to_top,black,black_52%,transparent\)\]"/);
   assert.doesNotMatch(pageSource, /aria-hidden="true" className="absolute inset-x-0 bottom-20 z-0 h-10 bg-background\/75 backdrop-blur-md/);
-  assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
+  assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-2xl border border-border bg-background px-3 py-2 shadow-\[0_10px_30px_rgba\(20,20,19,0\.12\)\]"/);
   assert.match(pageSource, /className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"/);
   const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
-  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-2xl border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
   assert.notEqual(quickActionRowIndex, -1);
   assert.notEqual(inputComposerIndex, -1);
   assert.ok(quickActionRowIndex < inputComposerIndex);
@@ -1729,7 +1751,7 @@ test("home current case card can show student-visible patient profile modal", ()
   const leftAsideEndIndex = pageSource.indexOf("</aside>", leftAsideIndex);
   const leftAsideSource = pageSource.slice(leftAsideIndex, leftAsideEndIndex);
   const quickActionRowIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2"');
-  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
+  const inputComposerIndex = pageSource.indexOf('className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-2xl border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]"');
   const quickActionRowSource = pageSource.slice(quickActionRowIndex, inputComposerIndex);
   assert.doesNotMatch(leftAsideSource, />\s*患者信息\s*<\/button>/);
   assert.match(quickActionRowSource, /onClick=\{\(\) => setIsPatientProfileOpen\(true\)\}/);

@@ -185,6 +185,15 @@ OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
+语音输入与患者回复播放通过后端 `/api/audio/*` 统一接入 DashScope。浏览器不保存阿里云 key；如需启用，在 API 服务端环境配置：
+
+```env
+OSCE_DASHSCOPE_SPEECH_API_KEY=
+OSCE_DASHSCOPE_ASR_MODEL=qwen3-asr-flash
+OSCE_DASHSCOPE_TTS_MODEL=qwen3-tts-flash
+OSCE_DASHSCOPE_TTS_VOICE=Serena
+```
+
 ## 常用验证
 
 后端测试：

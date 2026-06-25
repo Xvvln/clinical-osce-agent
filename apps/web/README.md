@@ -24,6 +24,8 @@
 
 训练记录页 `/history` 已改为读取 `/api/me/sessions` 的后端持久记录，支持继续训练、打开评分报告和删除记录；独立评分报告页会读取 `/api/me/sessions/{session_id}/report` 和 session 快照；学习画像页 `/profile` 会读取 `/api/me/profile` 聚合训练次数、报告均分、维度强弱项、Skill 应用次数和样本不足提示。旧的 `training-history.ts` 仅作为遗留兼容工具保留，不是官方训练记录链路。
 
+工作台问诊输入栏已接入语音输入：浏览器录音会上传到 `/api/audio/transcriptions` 转写，并只填入输入框，不自动发送。标准化病人消息支持逐条播放，前端调用 `/api/audio/speech` 获取后端生成的音频；阿里云 DashScope key 只放在 API 服务端环境变量中，前端不保存语音密钥。
+
 本阶段尚未接入 LangGraph SDK streaming、跨设备协同分享、完整 thread history 面板或 artifact panel。
 
 ## 设计风格

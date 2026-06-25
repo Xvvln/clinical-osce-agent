@@ -76,6 +76,14 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_DASHSCOPE_RERANK_INSTRUCT",
         "OSCE_DASHSCOPE_RERANK_PROXY_URL",
         "OSCE_DASHSCOPE_RERANK_TIMEOUT_SECONDS",
+        "OSCE_DASHSCOPE_SPEECH_API_KEY",
+        "OSCE_DASHSCOPE_ASR_ENDPOINT",
+        "OSCE_DASHSCOPE_TTS_ENDPOINT",
+        "OSCE_DASHSCOPE_ASR_MODEL",
+        "OSCE_DASHSCOPE_TTS_MODEL",
+        "OSCE_DASHSCOPE_TTS_VOICE",
+        "OSCE_DASHSCOPE_SPEECH_PROXY_URL",
+        "OSCE_DASHSCOPE_SPEECH_TIMEOUT_SECONDS",
         "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING",
     ]:
         monkeypatch.delenv(env_name, raising=False)
@@ -86,6 +94,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_GEMINI_PATIENT_API_KEY",
         "OSCE_VERTEX_API_KEY",
         "OSCE_DASHSCOPE_RERANK_API_KEY",
+        "OSCE_DASHSCOPE_SPEECH_API_KEY",
         "DASHSCOPE_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",

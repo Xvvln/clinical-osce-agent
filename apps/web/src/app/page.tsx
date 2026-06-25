@@ -65,6 +65,15 @@ type StudentApiConfigRuntimeResponse = Readonly<{
   message: string;
 }>;
 
+type SpeechTranscriptionResponse = Readonly<{
+  text: string;
+  provider: string;
+  model: string;
+  language?: string | null;
+  emotion?: string | null;
+  duration_seconds?: number | null;
+}>;
+
 type ApiConfigProviderOption = Readonly<{
   id: ApiConfigProvider;
   label: string;
@@ -849,6 +858,7 @@ const OSCE_DOCK_DRAG_THRESHOLD = 4;
 const PATIENT_REPLY_TYPEWRITER_DELAY_MS = 14;
 const BACKEND_HEALTH_CHECK_INTERVAL_MS = 30000;
 const AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS = 600;
+const SPEECH_INPUT_DEFAULT_MIME_TYPE = "audio/webm";
 const TEACHER_CONTEXT_EVALUATION_STEP_ID = "dialogue_context";
 const TEACHER_CONTEXT_EVALUATION_STEP_LABEL = "正在评估当前对话上下文";
 
@@ -1979,6 +1989,41 @@ async function requestJson<TResponse>(path: string, init: RequestInit): Promise<
   return (await response.json()) as TResponse;
 }
 
+async function transcribeSpeechAudio(file: File): Promise<SpeechTranscriptionResponse> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("language", "zh");
+
+  const response = await fetch("/api/audio/transcriptions", {
+    method: "POST",
+    body,
+    credentials: "same-origin",
+  });
+
+  if (!response.ok) {
+    throw new Error(await getRequestErrorMessage(response));
+  }
+
+  return (await response.json()) as SpeechTranscriptionResponse;
+}
+
+async function synthesizePatientSpeech(text: string): Promise<Blob> {
+  const response = await fetch("/api/audio/speech", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ input: text }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getRequestErrorMessage(response));
+  }
+
+  return response.blob();
+}
+
 async function checkBackendConnection(): Promise<boolean> {
   const response = await fetch("/api/health/config", {
     cache: "no-store",
@@ -2596,6 +2641,9 @@ function HomeContent() {
   });
   const [session, setSession] = useState<OsceSession | null>(null);
   const [inputValue, setInputValue] = useState("");
+  const [speechInputState, setSpeechInputState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [speechStatusText, setSpeechStatusText] = useState<string | null>(null);
+  const [speechPlaybackState, setSpeechPlaybackState] = useState<Readonly<{ messageId: string; status: "loading" | "playing" }> | null>(null);
   const [statusText, setStatusText] = useState("选择病例后，发送问诊或点击训练操作会自动创建训练会话。");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -2653,10 +2701,16 @@ function HomeContent() {
   const osceDockContainerRef = useRef<HTMLDivElement | null>(null);
   const procedureActionContainerRef = useRef<HTMLDivElement | null>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const questionInputRef = useRef<HTMLInputElement | null>(null);
   const latestEvidenceItemRef = useRef<HTMLDivElement | null>(null);
   const previousRevealedFactIdsRef = useRef<readonly string[] | null>(null);
   const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
   const clientChatMessageSequenceRef = useRef(0);
+  const speechInputMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechInputStreamRef = useRef<MediaStream | null>(null);
+  const speechInputChunksRef = useRef<Blob[]>([]);
+  const patientSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const patientSpeechObjectUrlRef = useRef<string | null>(null);
   const isNextStepRequired = trainingDifficultyMode !== "beginner";
   const canOpenAdminCoverageMap = canViewAdminCoverageMap(authUser);
 
@@ -2664,6 +2718,183 @@ function HomeContent() {
     clientChatMessageSequenceRef.current += 1;
     return `${prefix}-${clientChatMessageSequenceRef.current}`;
   }
+
+  function stopSpeechInputStream(): void {
+    speechInputStreamRef.current?.getTracks().forEach((track) => track.stop());
+    speechInputStreamRef.current = null;
+    speechInputMediaRecorderRef.current = null;
+  }
+
+  function stopPatientSpeechPlayback(options: { updateState?: boolean } = {}): void {
+    patientSpeechAudioRef.current?.pause();
+    patientSpeechAudioRef.current = null;
+    if (patientSpeechObjectUrlRef.current) {
+      URL.revokeObjectURL(patientSpeechObjectUrlRef.current);
+      patientSpeechObjectUrlRef.current = null;
+    }
+    if (options.updateState !== false) {
+      setSpeechPlaybackState(null);
+    }
+  }
+
+  function getSpeechInputRecorderOptions(): MediaRecorderOptions | undefined {
+    if (typeof MediaRecorder === "undefined") {
+      return undefined;
+    }
+    const opusMimeType = "audio/webm;codecs=opus";
+    if (MediaRecorder.isTypeSupported(opusMimeType)) {
+      return { mimeType: opusMimeType };
+    }
+    if (MediaRecorder.isTypeSupported(SPEECH_INPUT_DEFAULT_MIME_TYPE)) {
+      return { mimeType: SPEECH_INPUT_DEFAULT_MIME_TYPE };
+    }
+    return undefined;
+  }
+
+  async function handleSpeechRecordingStopped(recordedMimeType: string): Promise<void> {
+    const chunks = speechInputChunksRef.current;
+    speechInputChunksRef.current = [];
+    stopSpeechInputStream();
+    if (chunks.length === 0) {
+      setSpeechInputState("idle");
+      setSpeechStatusText(null);
+      setErrorText("没有录到有效语音，请检查麦克风后重试。");
+      return;
+    }
+
+    setSpeechInputState("transcribing");
+    setSpeechStatusText("正在转写语音...");
+    setErrorText(null);
+
+    try {
+      const mimeType = recordedMimeType || SPEECH_INPUT_DEFAULT_MIME_TYPE;
+      const audioBlob = new Blob(chunks, { type: mimeType });
+      const extension = mimeType.includes("wav") ? "wav" : "webm";
+      const audioFile = new File([audioBlob], `osce-question-${Date.now()}.${extension}`, { type: mimeType });
+      const result = await transcribeSpeechAudio(audioFile);
+      const transcript = result.text.trim();
+      if (!transcript) {
+        setSpeechStatusText(null);
+        setErrorText("语音已处理，但没有识别到可用文字。");
+        return;
+      }
+      setInputValue((currentValue) => {
+        const cleanCurrentValue = currentValue.trim();
+        return cleanCurrentValue ? `${cleanCurrentValue} ${transcript}` : transcript;
+      });
+      setSpeechStatusText("已转写到输入框，发送前可以修改。");
+      questionInputRef.current?.focus();
+    } catch (error) {
+      setSpeechStatusText(null);
+      setErrorText(error instanceof Error ? error.message : "语音转写失败。");
+    } finally {
+      setSpeechInputState("idle");
+    }
+  }
+
+  async function handleSpeechInputButtonClick(): Promise<void> {
+    if (speechInputState === "recording") {
+      const recorder = speechInputMediaRecorderRef.current;
+      setSpeechStatusText("正在结束录音并转写...");
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      } else {
+        await handleSpeechRecordingStopped(SPEECH_INPUT_DEFAULT_MIME_TYPE);
+      }
+      return;
+    }
+
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setErrorText("当前浏览器不支持录音输入。");
+      return;
+    }
+
+    try {
+      setErrorText(null);
+      setSpeechStatusText("正在请求麦克风权限...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const recorderOptions = getSpeechInputRecorderOptions();
+      const recorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
+      speechInputStreamRef.current = stream;
+      speechInputMediaRecorderRef.current = recorder;
+      speechInputChunksRef.current = [];
+      const recordedMimeType = recorder.mimeType || recorderOptions?.mimeType || SPEECH_INPUT_DEFAULT_MIME_TYPE;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          speechInputChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        void handleSpeechRecordingStopped(recordedMimeType);
+      };
+      recorder.onerror = () => {
+        stopSpeechInputStream();
+        setSpeechInputState("idle");
+        setSpeechStatusText(null);
+        setErrorText("录音过程中出现错误，请重新尝试。");
+      };
+      recorder.start();
+      setSpeechInputState("recording");
+      setSpeechStatusText("正在录音，点击结束后转写到输入框。");
+    } catch (error) {
+      stopSpeechInputStream();
+      setSpeechInputState("idle");
+      setSpeechStatusText(null);
+      setErrorText(error instanceof Error ? error.message : "无法访问麦克风。");
+    }
+  }
+
+  async function handlePatientSpeechButtonClick(message: ChatMessage): Promise<void> {
+    const speechText = (message.finalText ?? message.text).trim();
+    if (!speechText) {
+      return;
+    }
+    if (speechPlaybackState?.messageId === message.id) {
+      stopPatientSpeechPlayback();
+      return;
+    }
+
+    stopPatientSpeechPlayback({ updateState: false });
+    setSpeechPlaybackState({ messageId: message.id, status: "loading" });
+    setErrorText(null);
+
+    try {
+      const audioBlob = await synthesizePatientSpeech(speechText);
+      const audioUrl = URL.createObjectURL(audioBlob);
+      patientSpeechObjectUrlRef.current = audioUrl;
+      const audio = new Audio(audioUrl);
+      patientSpeechAudioRef.current = audio;
+      audio.onended = () => stopPatientSpeechPlayback();
+      audio.onerror = () => {
+        stopPatientSpeechPlayback();
+        setErrorText("患者语音播放失败。");
+      };
+      await audio.play();
+      setSpeechPlaybackState({ messageId: message.id, status: "playing" });
+    } catch (error) {
+      stopPatientSpeechPlayback({ updateState: false });
+      setSpeechPlaybackState(null);
+      setErrorText(error instanceof Error ? error.message : "患者语音生成失败。");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      const recorder = speechInputMediaRecorderRef.current;
+      if (recorder?.state === "recording") {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      stopSpeechInputStream();
+      stopPatientSpeechPlayback({ updateState: false });
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -3297,6 +3528,18 @@ function HomeContent() {
   const intermediatePhysicalExamOptions = procedureCatalog?.physical_exams ?? [];
   const intermediateAuxiliaryTestOptions = procedureCatalog?.auxiliary_tests ?? [];
   const isCurrentSessionCompleted = isCompletedOsceSession(session);
+  const isSpeechInputRecording = speechInputState === "recording";
+  const isSpeechInputTranscribing = speechInputState === "transcribing";
+  const isSpeechInputBusy = isSpeechInputRecording || isSpeechInputTranscribing;
+  const isSpeechInputButtonDisabled =
+    !authUser
+    || !selectedCaseId
+    || !isTrainingModelConfigReady
+    || isCurrentSessionCompleted
+    || isCreating
+    || isSending
+    || isSpeechInputTranscribing;
+  const speechInputButtonLabel = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "转写中" : "语音输入";
   const requestedExamCodeSet = useMemo(() => new Set(session?.requested_exams ?? []), [session?.requested_exams]);
   const requestedTestCodeSet = useMemo(() => new Set(session?.requested_tests ?? []), [session?.requested_tests]);
   const pendingPhysicalExamOptions = physicalExamOptions.filter((examOption) => !requestedExamCodeSet.has(examOption.exam_code));
@@ -3811,7 +4054,7 @@ function HomeContent() {
     event.preventDefault();
     const message = inputValue.trim();
 
-    if (!authUser || !selectedCaseId || !message || isCreating || isSending) {
+    if (!authUser || !selectedCaseId || !message || isCreating || isSending || isSpeechInputBusy) {
       return;
     }
 
@@ -3840,6 +4083,7 @@ function HomeContent() {
       pendingPatientReplyId = createClientChatMessageId("pending-patient");
       const patientReplyProcessingStartedAtMs = Date.now();
       setInputValue("");
+      setSpeechStatusText(null);
       setPendingCoachHintMessage(null);
       setOptimisticHistoryMessage({
         id: optimisticQuestionId,
@@ -4466,9 +4710,11 @@ function HomeContent() {
               {chatMessages.map((message) => {
                 const isStudent = message.speaker === "student";
                 const isCoach = message.speaker === "coach";
+                const isPatient = !isStudent && !isCoach;
                 const isSafetyBoundary = isCoach && message.label === "安全边界";
                 const processingTimeline = message.processingTimeline;
                 const isPendingProcessingTimeline = message.processingTimeline?.state === "pending";
+                const patientSpeechState = speechPlaybackState?.messageId === message.id ? speechPlaybackState.status : null;
                 const messageRowClass = isStudent ? "justify-end" : isCoach ? "justify-center" : "justify-start";
                 const messageBubbleClass = isStudent
                   ? "max-w-[76%] rounded-xl border border-brand bg-brand px-4 py-3 text-sm leading-6 text-white shadow-xs"
@@ -4480,17 +4726,30 @@ function HomeContent() {
                 return (
                   <div className={`flex ${messageRowClass}`} key={message.id}>
                     <div className={messageBubbleClass}>
-                      <p className={isStudent ? "text-white/80" : isSafetyBoundary ? "flex items-center gap-2 font-medium text-red-700" : isCoach ? "text-[#8A5A00]" : "text-muted-foreground"}>
-                        {isSafetyBoundary ? (
-                          <span
-                            aria-label="安全边界提示"
-                            className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold leading-none text-white"
+                      <div className="flex items-center justify-between gap-3">
+                        <p className={isStudent ? "text-white/80" : isSafetyBoundary ? "flex items-center gap-2 font-medium text-red-700" : isCoach ? "text-[#8A5A00]" : "text-muted-foreground"}>
+                          {isSafetyBoundary ? (
+                            <span
+                              aria-label="安全边界提示"
+                              className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold leading-none text-white"
+                            >
+                              !
+                            </span>
+                          ) : null}
+                          {message.label}
+                        </p>
+                        {isPatient ? (
+                          <button
+                            aria-label={`${patientSpeechState === null ? "播放" : "停止"}患者回复语音`}
+                            className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium whitespace-nowrap text-foreground shadow-xs transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!authUser || (message.isPending && !message.finalText) || !(message.finalText ?? message.text).trim()}
+                            onClick={() => void handlePatientSpeechButtonClick(message)}
+                            type="button"
                           >
-                            !
-                          </span>
+                            {patientSpeechState === "loading" ? "生成中" : patientSpeechState === "playing" ? "停止" : "播放"}
+                          </button>
                         ) : null}
-                        {message.label}
-                      </p>
+                      </div>
                       {message.isPending && !message.finalText && isPendingProcessingTimeline ? (
                         <AgentProcessingTimelineView timeline={processingTimeline ?? buildPendingAgentProcessingTimeline()} />
                       ) : (
@@ -4863,15 +5122,16 @@ function HomeContent() {
                   </>
                 ) : null}
               </div>
-              <form className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-full border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]" onSubmit={handleSubmit}>
+              <form className="pointer-events-auto relative z-10 mx-auto max-w-3xl rounded-2xl border border-border bg-background px-3 py-2 shadow-[0_10px_30px_rgba(20,20,19,0.12)]" onSubmit={handleSubmit}>
                 <label className="sr-only" htmlFor="history-question">
                   输入下一句问诊问题
                 </label>
                 <div className="flex items-center gap-2">
                   <input
                     className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSending || isSpeechInputBusy}
                     id="history-question"
+                    ref={questionInputRef}
                     autoComplete="off"
                     autoCorrect="off"
                     onChange={(event) => setInputValue(event.target.value)}
@@ -4880,13 +5140,28 @@ function HomeContent() {
                     value={inputValue}
                   />
                   <button
+                    className={`rounded-full border px-3 py-2 text-sm font-medium whitespace-nowrap shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isSpeechInputRecording
+                        ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        : "border-border bg-background text-foreground hover:bg-accent"
+                    }`}
+                    disabled={isSpeechInputButtonDisabled}
+                    onClick={() => void handleSpeechInputButtonClick()}
+                    type="button"
+                  >
+                    {speechInputButtonLabel}
+                  </button>
+                  <button
                     className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || !inputValue.trim() || isSending}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || !inputValue.trim() || isSending || isSpeechInputBusy}
                     type="submit"
                   >
                     {isSending ? "发送中" : "发送问诊"}
                   </button>
                 </div>
+                {speechStatusText ? (
+                  <p className="px-3 pb-1 text-xs leading-5 text-muted-foreground">{speechStatusText}</p>
+                ) : null}
               </form>
             </div>
           </div>
