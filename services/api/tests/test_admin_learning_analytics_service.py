@@ -140,6 +140,19 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert cohort_analytics["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
     assert cohort_analytics["affect_signals"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
     assert any("全用户" in action for action in cohort_analytics["teaching_actions"])
+    assert any(
+        drill["scope"] == "all_users"
+        and drill["source"] == "humanistic_gap"
+        and drill["target_gap_type"] == "ethics_consent_missing"
+        and "查体前说明目的" in drill["student_action"]
+        for drill in cohort_analytics["training_drills"]
+    )
+    assert any(
+        drill["scope"] == "all_users"
+        and drill["source"] == "affect_response"
+        and "情绪" in drill["success_signal"]
+        for drill in cohort_analytics["training_drills"]
+    )
 
     case_analytics = analytics["case_analytics"][0]
     assert case_analytics["case_id"] == "appendicitis_001"
@@ -153,6 +166,11 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert case_analytics["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
     assert case_analytics["affect_signals"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
     assert any("患者情绪" in action for action in case_analytics["teaching_actions"])
+    assert case_analytics["training_drills"][0]["scope"] == "case"
+    assert case_analytics["training_drills"][0]["scope_id"] == "appendicitis_001"
+    assert case_analytics["training_drills"][0]["trigger_stage"]
+    assert case_analytics["training_drills"][0]["student_action"]
+    assert case_analytics["training_drills"][0]["success_signal"]
 
     student_analytics = analytics["student_analytics"][0]
     assert student_analytics["student_id"] == "student_a"
@@ -161,6 +179,13 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert student_analytics["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert student_analytics["affect_response"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
     assert any("查体前说明目的" in action for action in student_analytics["recommended_next_actions"])
+    assert any(
+        drill["scope"] == "student"
+        and drill["scope_id"] == "student_a"
+        and drill["target_gap_type"] == "ethics_consent_missing"
+        and "查体前说明目的" in drill["student_action"]
+        for drill in student_analytics["training_drills"]
+    )
 
 
 def test_admin_learning_analytics_filters_by_case_and_student(tmp_path) -> None:

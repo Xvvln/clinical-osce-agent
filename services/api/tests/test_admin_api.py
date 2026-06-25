@@ -2118,15 +2118,21 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
     assert analytics["cohort_analytics"]["average_total_score"] == 65
     assert analytics["cohort_analytics"]["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert any("全用户" in action for action in analytics["cohort_analytics"]["teaching_actions"])
+    assert any(
+        drill["scope"] == "all_users" and drill["target_gap_type"] == "ethics_consent_missing"
+        for drill in analytics["cohort_analytics"]["training_drills"]
+    )
     assert analytics["case_analytics"][0]["case_id"] == "appendicitis_001"
     assert analytics["case_analytics"][0]["average_total_score"] == 65
     assert analytics["case_analytics"][0]["frequent_missed_items"][0] == {"item_id": "reasoning_core", "count": 2}
     assert analytics["case_analytics"][0]["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert analytics["case_analytics"][0]["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
     assert analytics["case_analytics"][0]["affect_signals"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
+    assert analytics["case_analytics"][0]["training_drills"][0]["scope"] == "case"
     assert analytics["student_analytics"][0]["student_id"] == "student_a"
     assert analytics["student_analytics"][0]["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert any("查体前说明目的" in action for action in analytics["student_analytics"][0]["recommended_next_actions"])
+    assert analytics["student_analytics"][0]["training_drills"][0]["scope"] == "student"
 
 
 def test_admin_can_read_training_skill_effect_summary_with_insufficient_samples(tmp_path, monkeypatch) -> None:

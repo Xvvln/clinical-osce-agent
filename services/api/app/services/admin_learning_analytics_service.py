@@ -116,6 +116,13 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "frequent_missed_opportunities": frequent_missed_opportunities,
         "affect_signals": affect_signals,
         "teaching_actions": _cohort_teaching_actions(frequent_humanistic_gaps, frequent_missed_opportunities, affect_signals),
+        "training_drills": _build_training_drills(
+            scope="all_users",
+            scope_id="",
+            gaps=frequent_humanistic_gaps,
+            missed_opportunities=frequent_missed_opportunities,
+            affect_signals=affect_signals,
+        ),
     }
 
 
@@ -137,6 +144,13 @@ def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[
         "frequent_missed_opportunities": frequent_missed_opportunities,
         "affect_signals": affect_signals,
         "teaching_actions": _case_teaching_actions(frequent_humanistic_gaps, frequent_missed_opportunities, affect_signals),
+        "training_drills": _build_training_drills(
+            scope="case",
+            scope_id=case_id,
+            gaps=frequent_humanistic_gaps,
+            missed_opportunities=frequent_missed_opportunities,
+            affect_signals=affect_signals,
+        ),
     }
 
 
@@ -158,6 +172,13 @@ def _build_student_analytics(student_id: str, sessions: list[dict[str, Any]]) ->
         "current_humanistic_gaps": current_humanistic_gaps,
         "affect_response": affect_response,
         "recommended_next_actions": _student_next_actions(current_humanistic_gaps, frequent_humanistic_gaps, affect_response),
+        "training_drills": _build_training_drills(
+            scope="student",
+            scope_id=student_id,
+            gaps=[*current_humanistic_gaps, *frequent_humanistic_gaps],
+            missed_opportunities=[],
+            affect_signals=affect_response,
+        ),
     }
 
 
@@ -348,6 +369,204 @@ def _student_next_actions(
     if affect_response.get("ignored_count", 0) > affect_response.get("repaired_count", 0):
         actions.append("下一轮患者表达担忧时，先承认情绪，再继续医学问诊或查体。")
     return actions[:3]
+
+
+def _build_training_drills(
+    *,
+    scope: str,
+    scope_id: str,
+    gaps: list[dict[str, Any]],
+    missed_opportunities: list[dict[str, Any]],
+    affect_signals: dict[str, int],
+) -> list[dict[str, Any]]:
+    drills: list[dict[str, Any]] = []
+    seen_targets: set[tuple[str, str]] = set()
+
+    for gap in gaps:
+        drill = _gap_training_drill(scope=scope, scope_id=scope_id, gap=gap)
+        if _append_unique_drill(drills, seen_targets, drill) and len(drills) >= 3:
+            break
+
+    for missed_opportunity in missed_opportunities:
+        drill = _missed_opportunity_training_drill(
+            scope=scope,
+            scope_id=scope_id,
+            missed_opportunity=missed_opportunity,
+        )
+        _append_unique_drill(drills, seen_targets, drill)
+
+    if affect_signals.get("ignored_count", 0) > 0:
+        _append_unique_drill(
+            drills,
+            seen_targets,
+            _affect_response_training_drill(scope=scope, scope_id=scope_id, affect_signals=affect_signals),
+        )
+
+    drills.sort(key=lambda item: (-int(item.get("priority") or 0), str(item.get("drill_id") or "")))
+    return drills[:4]
+
+
+def _append_unique_drill(
+    drills: list[dict[str, Any]],
+    seen_targets: set[tuple[str, str]],
+    drill: dict[str, Any],
+) -> bool:
+    key = (str(drill.get("source") or ""), str(drill.get("target_gap_type") or ""))
+    if not key[1] or key in seen_targets:
+        return False
+    seen_targets.add(key)
+    drills.append(drill)
+    return True
+
+
+def _gap_training_drill(*, scope: str, scope_id: str, gap: dict[str, Any]) -> dict[str, Any]:
+    gap_type = _gap_identifier(gap)
+    label = _training_gap_label(gap)
+    contract = _training_drill_contract(gap_type)
+    source_count = int(_float_value(gap.get("count") or 1))
+    missing_score = int(_float_value(gap.get("missing_score_total") or gap.get("missing_score")))
+    student_action = str(gap.get("next_training_action") or contract["student_action"])
+    priority = missing_score + source_count * 2 + _training_drill_priority_bonus(gap_type)
+    return {
+        "drill_id": _training_drill_id(scope, scope_id, "gap", gap_type),
+        "scope": scope,
+        "scope_id": scope_id,
+        "source": "humanistic_gap",
+        "priority": priority,
+        "title": f"{label}训练",
+        "target_gap_type": gap_type,
+        "target_label": label,
+        "trigger_stage": contract["trigger_stage"],
+        "trigger_signal": contract["trigger_signal"],
+        "student_action": student_action,
+        "success_signal": contract["success_signal"],
+        "source_count": source_count,
+    }
+
+
+def _missed_opportunity_training_drill(
+    *,
+    scope: str,
+    scope_id: str,
+    missed_opportunity: dict[str, Any],
+) -> dict[str, Any]:
+    gap_type = str(missed_opportunity.get("gap_type") or "missed_opportunity")
+    label = _training_gap_label(missed_opportunity)
+    contract = _training_drill_contract(gap_type)
+    source_count = int(_float_value(missed_opportunity.get("count") or 1))
+    expected_response = str(missed_opportunity.get("expected_response") or contract["student_action"])
+    return {
+        "drill_id": _training_drill_id(scope, scope_id, "missed", gap_type),
+        "scope": scope,
+        "scope_id": scope_id,
+        "source": "missed_opportunity",
+        "priority": source_count * 3 + _training_drill_priority_bonus(gap_type),
+        "title": f"{label}错失机会复盘",
+        "target_gap_type": gap_type,
+        "target_label": label,
+        "trigger_stage": contract["trigger_stage"],
+        "trigger_signal": contract["trigger_signal"],
+        "student_action": expected_response,
+        "success_signal": contract["success_signal"],
+        "source_count": source_count,
+    }
+
+
+def _affect_response_training_drill(
+    *,
+    scope: str,
+    scope_id: str,
+    affect_signals: dict[str, int],
+) -> dict[str, Any]:
+    ignored_count = int(affect_signals.get("ignored_count", 0))
+    signal_count = int(affect_signals.get("signal_count", 0))
+    return {
+        "drill_id": _training_drill_id(scope, scope_id, "affect", "patient_affect_response_ignored"),
+        "scope": scope,
+        "scope_id": scope_id,
+        "source": "affect_response",
+        "priority": ignored_count * 2 + signal_count,
+        "title": "患者情绪信号回应训练",
+        "target_gap_type": "patient_affect_response_ignored",
+        "target_label": "患者情绪信号回应",
+        "trigger_stage": "问诊或查体推进前",
+        "trigger_signal": "患者表达焦虑、担忧、疼痛、困惑或迟疑",
+        "student_action": "先识别并回应患者情绪，再继续医学问诊或查体。",
+        "success_signal": "学生能在患者情绪信号后的下一轮先回应情绪，并观察到患者情绪缓解或不再升级。",
+        "source_count": ignored_count,
+    }
+
+
+def _training_drill_contract(gap_type: str) -> dict[str, str]:
+    if gap_type.startswith("ethics_") or "consent" in gap_type:
+        return {
+            "trigger_stage": "查体或检查前",
+            "trigger_signal": "学生准备进行查体、申请检查或推进可能影响患者自主性的动作",
+            "student_action": "说明动作目的、关注隐私和舒适度，并征得患者同意。",
+            "success_signal": "学生能在动作前完成目的说明、隐私舒适度说明和同意确认。",
+        }
+    if gap_type.startswith("relationship_") or "empathy" in gap_type:
+        return {
+            "trigger_stage": "问诊中",
+            "trigger_signal": "患者表达焦虑、担忧、疼痛、困惑或对诊疗不信任",
+            "student_action": "先承认患者情绪，表达会一起处理，再继续医学问诊。",
+            "success_signal": "学生能先回应情绪，再推进医学问题，患者情绪不再升级。",
+        }
+    if gap_type.startswith("narrative_") or "perspective" in gap_type:
+        return {
+            "trigger_stage": "病史采集阶段",
+            "trigger_signal": "患者描述症状、生活影响、担心或期待",
+            "student_action": "追问患者担忧、期待和生活影响，并复述患者视角。",
+            "success_signal": "学生能说出患者最担心什么、症状如何影响生活，以及患者期待。",
+        }
+    if gap_type.startswith("communication_") or "summary" in gap_type:
+        return {
+            "trigger_stage": "阶段转换前",
+            "trigger_signal": "学生准备结束问诊、转入查体/检查，或患者表示不理解",
+            "student_action": "阶段性总结已获得信息，并确认患者理解是否准确。",
+            "success_signal": "学生能用简短总结确认理解，再进入下一阶段。",
+        }
+    return {
+        "trigger_stage": "下一轮相关训练阶段",
+        "trigger_signal": "再次出现同类训练缺口或患者给出相关信号",
+        "student_action": "补齐当前训练缺口，并说明这样做如何影响下一步判断。",
+        "success_signal": "学生能在正确阶段补齐动作，并把动作与后续推理连接起来。",
+    }
+
+
+def _training_drill_priority_bonus(gap_type: str) -> int:
+    if gap_type.startswith("ethics_") or "consent" in gap_type:
+        return 4
+    if gap_type.startswith("relationship_") or "empathy" in gap_type:
+        return 3
+    if gap_type.startswith("communication_"):
+        return 2
+    if gap_type.startswith("narrative_"):
+        return 1
+    return 0
+
+
+def _training_gap_label(gap: dict[str, Any]) -> str:
+    label = str(gap.get("label") or "").strip()
+    if label:
+        return label
+    gap_type = _gap_identifier(gap)
+    labels = {
+        "ethics_consent_missing": "查体/检查前同意",
+        "relationship_empathy_missing": "患者情绪回应",
+        "narrative_patient_perspective_missing": "患者视角叙事",
+        "communication_summary_missing": "阶段性总结确认",
+    }
+    return labels.get(gap_type, gap_type.replace("_", " ") or "训练缺口")
+
+
+def _gap_identifier(gap: dict[str, Any]) -> str:
+    return str(gap.get("gap_type") or gap.get("item_id") or gap.get("rubric_item_id") or "training_gap")
+
+
+def _training_drill_id(scope: str, scope_id: str, source: str, target: str) -> str:
+    normalized_scope_id = scope_id or "all"
+    return f"{scope}:{normalized_scope_id}:{source}:{target}"
 
 
 def _score_group_value(report: dict[str, Any], group_id: str) -> float:

@@ -515,6 +515,22 @@ type AdminLearningAffectSignals = Readonly<{
   ignored_count: number;
 }>;
 
+type AdminLearningTrainingDrill = Readonly<{
+  drill_id: string;
+  scope: "all_users" | "case" | "student" | string;
+  scope_id?: string;
+  source: "humanistic_gap" | "missed_opportunity" | "affect_response" | string;
+  priority: number;
+  title: string;
+  target_gap_type: string;
+  target_label: string;
+  trigger_stage: string;
+  trigger_signal: string;
+  student_action: string;
+  success_signal: string;
+  source_count: number;
+}>;
+
 type AdminCaseLearningAnalytics = Readonly<{
   case_id: string;
   case_title?: string;
@@ -528,6 +544,7 @@ type AdminCaseLearningAnalytics = Readonly<{
   frequent_missed_opportunities: readonly AdminLearningGap[];
   affect_signals: AdminLearningAffectSignals;
   teaching_actions: readonly string[];
+  training_drills?: readonly AdminLearningTrainingDrill[];
 }>;
 
 type AdminStudentLearningAnalytics = Readonly<{
@@ -542,6 +559,7 @@ type AdminStudentLearningAnalytics = Readonly<{
   current_humanistic_gaps: readonly AdminLearningGap[];
   affect_response: AdminLearningAffectSignals;
   recommended_next_actions: readonly string[];
+  training_drills?: readonly AdminLearningTrainingDrill[];
 }>;
 
 type AdminCohortLearningAnalytics = Readonly<{
@@ -559,6 +577,7 @@ type AdminCohortLearningAnalytics = Readonly<{
   frequent_missed_opportunities: readonly AdminLearningGap[];
   affect_signals: AdminLearningAffectSignals;
   teaching_actions: readonly string[];
+  training_drills?: readonly AdminLearningTrainingDrill[];
 }>;
 
 type AdminLearningAnalytics = Readonly<{
@@ -2960,6 +2979,7 @@ function CohortLearningAnalyticsOverview({ item }: Readonly<{ item: AdminCohortL
         <LearningTextBlock title="全用户错失机会" value={getLearningGapDetail(missedOpportunity)} />
       </div>
       <CompactList items={item.teaching_actions.slice(0, 3)} title="全用户下一轮教学动作" />
+      <TrainingDrillList items={item.training_drills ?? []} title="可执行训练任务" />
     </article>
   );
 }
@@ -2996,6 +3016,7 @@ function CaseLearningAnalyticsList({ items }: Readonly<{ items: readonly AdminCa
               <LearningTextBlock title="错失机会" value={getLearningGapDetail(missedOpportunity)} />
             </div>
             <CompactList items={item.teaching_actions.slice(0, 3)} title="教师下一步动作" />
+            <TrainingDrillList items={item.training_drills ?? []} title="可执行训练任务" />
           </article>
         );
       })}
@@ -3032,6 +3053,7 @@ function StudentLearningAnalyticsList({ items }: Readonly<{ items: readonly Admi
               <LearningTextBlock title="长期反复 gap" value={getLearningGapDetail(item.persistent_gaps[0])} />
             </div>
             <CompactList items={item.recommended_next_actions.slice(0, 3)} title="下一轮训练动作" />
+            <TrainingDrillList items={item.training_drills ?? []} title="可执行训练任务" />
           </article>
         );
       })}
@@ -3053,6 +3075,50 @@ function LearningTextBlock({ title, value }: Readonly<{ title: string; value: st
     <div className="rounded-2xl border border-[#F0E8DC] bg-white p-3">
       <h4 className="text-sm font-semibold">{title}</h4>
       <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#6F6257]">{value}</p>
+    </div>
+  );
+}
+
+function TrainingDrillList({ items, title }: Readonly<{ items: readonly AdminLearningTrainingDrill[]; title: string }>) {
+  return (
+    <div className="mt-4 rounded-2xl border border-[#E7E0D4] bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold">{title}</h4>
+        <Badge variant="muted">{formatCount(items.length)} 项</Badge>
+      </div>
+      {items.length > 0 ? (
+        <div className="mt-3 grid gap-3">
+          {items.slice(0, 3).map((item) => (
+            <div className="rounded-2xl border border-[#F0E8DC] bg-[#FAF9F5] p-3" key={item.drill_id}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold">{item.title || item.target_label}</p>
+                  <p className="mt-1 text-xs text-[#8A7D6F]">
+                    {getTrainingDrillSourceLabel(item.source)} · 来源 {formatCount(item.source_count)} 次 · 优先级 {formatCount(item.priority)}
+                  </p>
+                </div>
+                <Badge variant="warning">{item.trigger_stage || "相关阶段"}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 text-xs leading-5 text-[#6F6257] md:grid-cols-3">
+                <p>
+                  <span className="font-semibold text-[#141413]">触发：</span>
+                  {item.trigger_signal || "再次出现同类训练信号"}
+                </p>
+                <p>
+                  <span className="font-semibold text-[#141413]">学生动作：</span>
+                  {item.student_action || "补齐当前训练动作"}
+                </p>
+                <p>
+                  <span className="font-semibold text-[#141413]">成功信号：</span>
+                  {item.success_signal || "学生能在正确阶段完成动作"}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-[#6F6257]">暂无稳定训练任务。</p>
+      )}
     </div>
   );
 }
@@ -4705,6 +4771,15 @@ function formatAffectSignalText(signals?: AdminLearningAffectSignals): string {
     return "暂无信号";
   }
   return `信号 ${formatCount(signals.signal_count)} · 缓解 ${formatCount(signals.repaired_count)} · 忽略 ${formatCount(signals.ignored_count)}`;
+}
+
+function getTrainingDrillSourceLabel(source: string): string {
+  const labels: Record<string, string> = {
+    humanistic_gap: "人文沟通缺口",
+    missed_opportunity: "错失机会",
+    affect_response: "情绪回应",
+  };
+  return labels[source] ?? "训练信号";
 }
 
 function getAnchorCandidateStatusLabel(status: string): string {
