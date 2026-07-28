@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -20,6 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_API_CALL_LOG_PATH = PROJECT_ROOT / "data" / "runtime" / "model_api_calls.jsonl"
 MAX_ERROR_MESSAGE_LENGTH = 220
 MAX_LOG_ENTRIES_READ = 2000
+DEFAULT_API_CALL_LOG_MAX_BYTES = 5 * 1024 * 1024
+DEFAULT_API_CALL_LOG_BACKUP_COUNT = 3
 API_CALL_CONTEXT: ContextVar[dict[str, str]] = ContextVar("api_call_context", default={})
 SECRET_PATTERNS = [
     re.compile(r"(?i)((?:x-goog-api-key|api[_-]?key|key)\s*[=:]\s*)[\"']?[^\s,;&#\"']+"),
@@ -32,8 +35,16 @@ URL_PATTERN = re.compile(r"(?i)\b(?:https?|wss?)://[^\s<>'\"]+")
 
 
 class ApiCallLogStore:
-    def __init__(self, path: Path = DEFAULT_API_CALL_LOG_PATH) -> None:
+    def __init__(
+        self,
+        path: Path = DEFAULT_API_CALL_LOG_PATH,
+        *,
+        max_bytes: int = DEFAULT_API_CALL_LOG_MAX_BYTES,
+        backup_count: int = DEFAULT_API_CALL_LOG_BACKUP_COUNT,
+    ) -> None:
         self._path = path
+        self._max_bytes = max(1, int(max_bytes))
+        self._backup_count = max(1, int(backup_count))
         self._lock = threading.Lock()
 
     def record(
@@ -67,9 +78,16 @@ class ApiCallLogStore:
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            serialized_entry = (
+                json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+                + "\n"
+            )
+            serialized_size = len(serialized_entry.encode("utf-8"))
             with self._lock:
+                self._rotate_if_needed(serialized_size)
                 with self._path.open("a", encoding="utf-8") as file:
-                    file.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    file.write(serialized_entry)
+                os.chmod(self._path, 0o600)
         except OSError:
             return
 
@@ -83,21 +101,62 @@ class ApiCallLogStore:
         }
 
     def _read_entries(self) -> list[dict[str, Any]]:
-        if not self._path.exists():
-            return []
-        try:
-            lines = self._path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return []
+        with self._lock:
+            return self._read_entries_unlocked()
+
+    def _read_entries_unlocked(self) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
-        for line in lines[-MAX_LOG_ENTRIES_READ:]:
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
+        for path in self._ordered_log_paths():
+            if not path.exists():
                 continue
-            if isinstance(parsed, dict):
-                entries.append(parsed)
-        return entries
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    entries.append(parsed)
+            if len(entries) > MAX_LOG_ENTRIES_READ:
+                entries = entries[-MAX_LOG_ENTRIES_READ:]
+        return entries[-MAX_LOG_ENTRIES_READ:]
+
+    def _rotate_if_needed(self, incoming_size: int) -> None:
+        if not self._path.exists():
+            return
+        try:
+            current_size = self._path.stat().st_size
+        except OSError:
+            return
+        if current_size + incoming_size <= self._max_bytes:
+            return
+
+        for index in range(self._backup_count, 0, -1):
+            destination = self._backup_path(index)
+            source = (
+                self._path
+                if index == 1
+                else self._backup_path(index - 1)
+            )
+            if destination.exists():
+                destination.unlink()
+            if source.exists():
+                source.replace(destination)
+
+    def _ordered_log_paths(self) -> list[Path]:
+        return [
+            *[
+                self._backup_path(index)
+                for index in range(self._backup_count, 0, -1)
+            ],
+            self._path,
+        ]
+
+    def _backup_path(self, index: int) -> Path:
+        return self._path.with_name(f"{self._path.name}.{index}")
 
 
 def _build_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:

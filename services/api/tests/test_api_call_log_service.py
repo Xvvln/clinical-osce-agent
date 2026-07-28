@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import stat
 
 from app.services.api_call_log_service import ApiCallLogStore
 
@@ -125,3 +126,31 @@ def test_api_call_log_store_extracts_generic_provider_status_code(tmp_path) -> N
     )
 
     assert store.build_admin_payload(limit=1)["logs"][0]["status_code"] == 429
+
+
+def test_api_call_log_store_rotates_and_reads_bounded_backups(tmp_path) -> None:
+    path = tmp_path / "model_api_calls.jsonl"
+    store = ApiCallLogStore(path, max_bytes=900, backup_count=2)
+
+    for index in range(30):
+        store.record(
+            provider="openai_compatible",
+            operation="chat.completions",
+            model="test-model",
+            endpoint="https://gateway.example/v1/chat/completions",
+            success=True,
+            duration_ms=index,
+        )
+
+    log_files = sorted(tmp_path.glob("model_api_calls.jsonl*"))
+    payload = store.build_admin_payload(limit=200)
+
+    assert [file.name for file in log_files] == [
+        "model_api_calls.jsonl",
+        "model_api_calls.jsonl.1",
+        "model_api_calls.jsonl.2",
+    ]
+    assert len(payload["logs"]) < 30
+    assert payload["logs"][0]["duration_ms"] == 29
+    assert payload["summary"]["total_calls"] == len(payload["logs"])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
