@@ -17,8 +17,10 @@ from app.services.gemini_patient_responder import (
     _build_patient_provider_payload,
 )
 from app.services.model_context_window import (
+    MAX_PROVIDER_PRIOR_MESSAGE_BYTES,
     MAX_PROVIDER_PRIOR_MESSAGE_CHARS,
     MAX_PROVIDER_PRIOR_MESSAGES,
+    PROVIDER_DIALOGUE_ROLES,
     bounded_provider_messages,
 )
 from app.services.turn_intent_agent import (
@@ -41,15 +43,17 @@ def _history(count: int, *, content_size: int = 0) -> list[dict[str, str]]:
     ]
 
 
-def test_bounded_provider_messages_keeps_recent_order_and_character_budget() -> None:
+def _history_content_utf8_bytes(messages: list[dict[str, str]]) -> int:
+    return sum(len(message["content"].encode("utf-8")) for message in messages)
+
+
+def test_bounded_provider_messages_keeps_recent_order_and_byte_budget() -> None:
     messages = _history(30)
 
     bounded = bounded_provider_messages(messages)
 
     assert bounded == messages[-MAX_PROVIDER_PRIOR_MESSAGES:]
-    assert sum(len(message["content"]) for message in bounded) <= (
-        MAX_PROVIDER_PRIOR_MESSAGE_CHARS
-    )
+    assert _history_content_utf8_bytes(bounded) <= MAX_PROVIDER_PRIOR_MESSAGE_BYTES
 
     oversized = bounded_provider_messages(_history(12, content_size=1_000))
     assert [message["content"][:2] for message in oversized] == [
@@ -58,9 +62,74 @@ def test_bounded_provider_messages_keeps_recent_order_and_character_budget() -> 
         "10",
         "11",
     ]
-    assert sum(len(message["content"]) for message in oversized) == (
-        MAX_PROVIDER_PRIOR_MESSAGE_CHARS
+    assert _history_content_utf8_bytes(oversized) == MAX_PROVIDER_PRIOR_MESSAGE_BYTES
+
+
+def test_bounded_provider_messages_truncates_4000_emoji_without_splitting_unicode() -> None:
+    bounded = bounded_provider_messages(
+        [{"role": "student", "content": "🙂" * 4_000}],
     )
+
+    assert bounded == [{"role": "student", "content": "🙂" * 1_000}]
+    assert _history_content_utf8_bytes(bounded) == MAX_PROVIDER_PRIOR_MESSAGE_BYTES
+    assert bounded[0]["content"].encode("utf-8").decode("utf-8") == bounded[0]["content"]
+
+
+def test_bounded_provider_messages_spends_utf8_budget_newest_first() -> None:
+    messages = [
+        {"role": "student", "content": "最旧消息"},
+        {"role": "patient", "content": "中" * 1_000},
+        {"role": "coach", "content": "🙂" * 500},
+    ]
+
+    bounded = bounded_provider_messages(messages)
+
+    assert bounded == [
+        {"role": "patient", "content": "中" * 666},
+        {"role": "coach", "content": "🙂" * 500},
+    ]
+    assert _history_content_utf8_bytes(bounded) == 3_998
+    assert _history_content_utf8_bytes(bounded) <= MAX_PROVIDER_PRIOR_MESSAGE_BYTES
+
+
+def test_bounded_provider_messages_filters_system_and_respects_dialogue_roles() -> None:
+    messages = [
+        {"role": "student", "content": "保留学生消息"},
+        {"role": "system", "content": "系统指令" * 4_000},
+        {"role": "tool", "content": "工具结果"},
+        {"role": "assistant", "content": "未知角色"},
+        {"role": "patient", "content": "保留患者消息"},
+    ]
+
+    assert bounded_provider_messages(messages) == [
+        {"role": "student", "content": "保留学生消息"},
+        {"role": "tool", "content": "工具结果"},
+        {"role": "patient", "content": "保留患者消息"},
+    ]
+    assert bounded_provider_messages(
+        messages,
+        allowed_roles=PROVIDER_DIALOGUE_ROLES,
+    ) == [
+        {"role": "student", "content": "保留学生消息"},
+        {"role": "patient", "content": "保留患者消息"},
+    ]
+
+
+def test_bounded_provider_messages_keeps_legacy_max_chars_keyword_as_byte_budget() -> None:
+    expected = [{"role": "student", "content": "中🙂"}]
+
+    assert bounded_provider_messages(
+        [{"role": "student", "content": "中🙂文"}],
+        max_bytes=7,
+    ) == expected
+    bounded_from_legacy_keyword = bounded_provider_messages(
+        [{"role": "student", "content": "中🙂文"}],
+        max_chars=7,
+    )
+
+    assert MAX_PROVIDER_PRIOR_MESSAGE_CHARS == MAX_PROVIDER_PRIOR_MESSAGE_BYTES
+    assert bounded_from_legacy_keyword == expected
+    assert _history_content_utf8_bytes(bounded_from_legacy_keyword) == 7
 
 
 def test_realtime_conversation_providers_use_a_single_bounded_history() -> None:
@@ -105,9 +174,7 @@ def test_realtime_conversation_providers_use_a_single_bounded_history() -> None:
     assert "prior_messages" not in patient_payload
     assert patient_payload["dialogue_context"]["recent_messages"] == expected
     assert len(expected) <= MAX_PROVIDER_PRIOR_MESSAGES
-    assert sum(len(message["content"]) for message in expected) <= (
-        MAX_PROVIDER_PRIOR_MESSAGE_CHARS
-    )
+    assert _history_content_utf8_bytes(expected) <= MAX_PROVIDER_PRIOR_MESSAGE_BYTES
 
 
 def test_provider_history_stays_bounded_after_redaction_and_is_not_duplicated() -> None:
@@ -155,9 +222,7 @@ def test_provider_history_stays_bounded_after_redaction_and_is_not_duplicated() 
     patient_history = patient_payload["dialogue_context"]["recent_messages"]
     for history in (coach_history, patient_history):
         assert len(history) <= MAX_PROVIDER_PRIOR_MESSAGES
-        assert sum(len(message["content"]) for message in history) <= (
-            MAX_PROVIDER_PRIOR_MESSAGE_CHARS
-        )
+        assert _history_content_utf8_bytes(history) <= MAX_PROVIDER_PRIOR_MESSAGE_BYTES
 
 
 def test_current_student_message_appears_once_and_never_enters_prior_history() -> None:
