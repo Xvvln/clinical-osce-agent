@@ -132,6 +132,7 @@ class VertexGeminiTrainingSkillCandidateGenerator:
 
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         try:
+            model_payload = _model_generation_payload(context)
             response = call_with_api_logging(
                 provider="vertex_gemini_skill_candidate",
                 operation="generate_content",
@@ -140,18 +141,7 @@ class VertexGeminiTrainingSkillCandidateGenerator:
                 call=lambda: self._client.models.generate_content(
                     model=self._settings.skill_candidate_model,
                     contents=json.dumps(
-                        {
-                            "pattern_id": context.pattern_id,
-                            "missed_items": _missed_item_payloads(context.missed_items),
-                            "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
-                            "support_count": context.support_count,
-                            "case_ids": context.case_ids,
-                            "source_report_count": context.source_report_count,
-                            "source_report_ids": _context_source_report_ids(context),
-                            "related_recommendations": context.related_recommendations,
-                            "retrieved_knowledge_context": context.retrieved_knowledge_context,
-                            "teacher_analysis_context": context.teacher_analysis_context,
-                        },
+                        model_payload,
                         ensure_ascii=False,
                     ),
                     config=types.GenerateContentConfig(
@@ -177,18 +167,7 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
         try:
             content = self._client.complete_json(
                 system_prompt=SKILL_CANDIDATE_SYSTEM_PROMPT,
-                payload={
-                    "pattern_id": context.pattern_id,
-                    "missed_items": _missed_item_payloads(context.missed_items),
-                    "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
-                    "support_count": context.support_count,
-                    "case_ids": context.case_ids,
-                    "source_report_count": context.source_report_count,
-                    "source_report_ids": _context_source_report_ids(context),
-                    "related_recommendations": context.related_recommendations,
-                    "retrieved_knowledge_context": context.retrieved_knowledge_context,
-                    "teacher_analysis_context": context.teacher_analysis_context,
-                },
+                payload=_model_generation_payload(context),
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
             )
@@ -207,18 +186,7 @@ class AnthropicTrainingSkillCandidateGenerator:
         try:
             content = self._client.complete_json(
                 system_prompt=SKILL_CANDIDATE_SYSTEM_PROMPT,
-                payload={
-                    "pattern_id": context.pattern_id,
-                    "missed_items": _missed_item_payloads(context.missed_items),
-                    "turn_patterns": _turn_pattern_payloads(context.turn_patterns),
-                    "support_count": context.support_count,
-                    "case_ids": context.case_ids,
-                    "source_report_count": context.source_report_count,
-                    "source_report_ids": _context_source_report_ids(context),
-                    "related_recommendations": context.related_recommendations,
-                    "retrieved_knowledge_context": context.retrieved_knowledge_context,
-                    "teacher_analysis_context": context.teacher_analysis_context,
-                },
+                payload=_model_generation_payload(context),
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
             )
@@ -459,7 +427,125 @@ def _pattern_case_ids(missed_items: list[TrainingSkillCandidateMissedItem]) -> l
     return sorted({case_id for item in missed_items for case_id in item.case_ids})
 
 
-def _missed_item_payloads(missed_items: list[TrainingSkillCandidateMissedItem]) -> list[dict[str, Any]]:
+def _model_generation_payload(context: TrainingSkillCandidateContext) -> dict[str, Any]:
+    """Build the provider payload without exporting local audit identifiers.
+
+    Session and report IDs remain on ``context`` so the returned candidate can
+    retain complete local provenance. The model only needs aggregate support
+    counts and teaching signals; sending every historical source identifier
+    would make the request grow linearly without improving generation quality.
+    """
+
+    return {
+        "pattern_id": context.pattern_id,
+        "missed_items": _model_missed_item_payloads(context.missed_items),
+        "turn_patterns": _model_turn_pattern_payloads(context.turn_patterns),
+        "support_count": context.support_count,
+        "case_ids": context.case_ids,
+        "source_report_count": context.source_report_count,
+        "related_recommendations": context.related_recommendations,
+        "retrieved_knowledge_context": _model_knowledge_context(
+            context.retrieved_knowledge_context
+        ),
+        "teacher_analysis_context": _model_teacher_analysis_context(
+            context.teacher_analysis_context
+        ),
+    }
+
+
+def _model_missed_item_payloads(
+    missed_items: list[TrainingSkillCandidateMissedItem],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "item_id": item.item_id,
+            "count": item.count,
+            "case_ids": item.case_ids,
+        }
+        for item in missed_items
+    ]
+
+
+def _model_turn_pattern_payloads(
+    turn_patterns: list[TrainingSkillCandidateTurnPattern],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "pattern_id": pattern.pattern_id,
+            "pattern_type": pattern.pattern_type,
+            "title": pattern.title,
+            "count": pattern.count,
+            "trigger_item_ids": pattern.trigger_item_ids,
+            "case_ids": pattern.case_ids,
+            "source_report_count": pattern.source_report_count,
+        }
+        for pattern in turn_patterns
+    ]
+
+
+def _model_knowledge_context(
+    knowledge_context: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            key: item[key]
+            for key in ("title", "snippet", "case_id", "visibility")
+            if key in item
+        }
+        for item in knowledge_context
+    ]
+
+
+def _model_teacher_analysis_context(
+    teacher_analysis_context: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        key: teacher_analysis_context[key]
+        for key in (
+            "agent_id",
+            "analysis_mode",
+            "analysis_summary",
+            "student_thinking_hypothesis",
+            "major_issue_titles",
+            "source_anchor_labels",
+            "teaching_prompt_version",
+        )
+        if key in teacher_analysis_context
+    }
+    clinical_thinking_profile = teacher_analysis_context.get(
+        "clinical_thinking_profile"
+    )
+    if isinstance(clinical_thinking_profile, dict):
+        payload["clinical_thinking_profile"] = {
+            key: clinical_thinking_profile[key]
+            for key in (
+                "problem_representation",
+                "hypothesis_management",
+                "verification_strategy",
+                "differential_reasoning",
+                "metacognitive_next_move",
+                "next_teacher_move",
+            )
+            if key in clinical_thinking_profile
+        }
+    skill_memory_focus = teacher_analysis_context.get("skill_memory_focus")
+    if isinstance(skill_memory_focus, dict):
+        payload["skill_memory_focus"] = {
+            key: skill_memory_focus[key]
+            for key in (
+                "problem_pattern_summary",
+                "recommended_intervention",
+            )
+            if key in skill_memory_focus
+        }
+    return payload
+
+
+def _local_missed_item_provenance_payloads(
+    missed_items: list[TrainingSkillCandidateMissedItem],
+) -> list[dict[str, Any]]:
+    """Serialize missed-item source associations for local audit only."""
+
     return [
         {
             "item_id": item.item_id,
@@ -469,10 +555,15 @@ def _missed_item_payloads(missed_items: list[TrainingSkillCandidateMissedItem]) 
             "source_report_ids": item.source_report_ids,
         }
         for item in missed_items
+        if item.session_ids or item.source_report_ids
     ]
 
 
-def _turn_pattern_payloads(turn_patterns: list[TrainingSkillCandidateTurnPattern]) -> list[dict[str, Any]]:
+def _local_turn_pattern_provenance_payloads(
+    turn_patterns: list[TrainingSkillCandidateTurnPattern],
+) -> list[dict[str, Any]]:
+    """Serialize the full source chain for local persistence and audit only."""
+
     return [
         {
             "pattern_id": pattern.pattern_id,
@@ -801,6 +892,11 @@ def _context_source_report_ids(context: TrainingSkillCandidateContext) -> list[s
             *context.source_report_ids,
             *{
                 report_id
+                for item in context.missed_items
+                for report_id in item.source_report_ids
+            },
+            *{
+                report_id
                 for pattern in context.turn_patterns
                 for report_id in pattern.source_report_ids
             },
@@ -812,6 +908,11 @@ def _context_source_session_ids(context: TrainingSkillCandidateContext) -> list[
     return sorted(
         {
             *context.source_session_ids,
+            *{
+                session_id
+                for item in context.missed_items
+                for session_id in item.session_ids
+            },
             *{
                 session_id
                 for pattern in context.turn_patterns
@@ -858,8 +959,13 @@ def _add_turn_pattern_source_fields(candidate: dict[str, Any], context: Training
         candidate["source_report_ids"] = source_report_ids
     if source_session_ids:
         candidate["source_session_ids"] = source_session_ids
+    source_missed_items = _local_missed_item_provenance_payloads(
+        context.missed_items
+    )
+    if source_missed_items:
+        candidate["source_missed_items"] = source_missed_items
     if context.turn_patterns:
-        candidate["source_turn_patterns"] = _turn_pattern_payloads(
+        candidate["source_turn_patterns"] = _local_turn_pattern_provenance_payloads(
             context.turn_patterns
         )
 

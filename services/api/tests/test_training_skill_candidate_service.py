@@ -1,3 +1,4 @@
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -9,10 +10,13 @@ from app.services import anthropic_chat_client as anthropic_module
 from app.services import agent_rag_context_service as agent_rag_context_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services import training_skill_candidate_service as candidate_module
+from app.services.anthropic_chat_client import AnthropicSettings
+from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
 from app.services.runtime_model_config_store import RuntimeModelConfig, runtime_model_config_store
 from app.services.training_skill_candidate_service import (
+    AnthropicTrainingSkillCandidateGenerator,
     OpenAICompatibleTrainingSkillCandidateGenerator,
     TemplateTrainingSkillCandidateGenerator,
     TrainingSkillCandidateContext,
@@ -24,6 +28,7 @@ from app.services.training_skill_candidate_service import (
     VertexGeminiTrainingSkillCandidateGenerator,
     create_default_training_skill_candidate_generator,
 )
+from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 
 FORBIDDEN_EVALUATION_TERMS = ["治疗方案", "用药剂量", "手术方案"]
 
@@ -72,6 +77,32 @@ class FakeSkillCandidateClient:
         self.models = FakeSkillCandidateModels()
 
 
+class FakeStructuredSkillCandidateClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        payload: dict[str, object],
+        response_model: type,
+        temperature: float,
+    ) -> object:
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "payload": payload,
+                "temperature": temperature,
+            }
+        )
+        return response_model(
+            title="有界来源统计生成的训练模式 Skill",
+            description="模型只接收训练信号与聚合统计，本地候选继续保留完整来源链。",
+            suggested_strategy="围绕反复出现的证据链断点复盘，不传输原始训练会话或报告标识。",
+        )
+
+
 class FakeFailingSkillCandidateModels:
     def generate_content(self, *, model: str, contents: str, config: object) -> object:
         raise RuntimeError("vertex service unavailable")
@@ -117,6 +148,73 @@ def _training_pattern_candidate_context() -> TrainingSkillCandidateContext:
             "rubric:appendicitis_001_rubric.item.reasoning_core",
             "knowledge:appendicitis_001.rp_03",
         ],
+    )
+
+
+def _training_pattern_candidate_context_with_provenance(
+    source_count: int,
+) -> TrainingSkillCandidateContext:
+    session_ids = [f"session_private_{index:05d}" for index in range(source_count)]
+    report_ids = [f"report_private_{index:05d}" for index in range(source_count)]
+    return TrainingSkillCandidateContext(
+        pattern_id="turn_pattern_evidence_chain_breakpoint",
+        missed_items=[
+            TrainingSkillCandidateMissedItem(
+                item_id="reasoning_core",
+                count=10_000,
+                case_ids=["appendicitis_001"],
+                session_ids=session_ids,
+                source_report_ids=report_ids,
+            )
+        ],
+        support_count=10_000,
+        case_ids=["appendicitis_001"],
+        source_report_count=10_000,
+        related_recommendations=[
+            "rubric:appendicitis_001_rubric.item.reasoning_core",
+        ],
+        source_session_ids=session_ids,
+        source_report_ids=report_ids,
+        turn_patterns=[
+            TrainingSkillCandidateTurnPattern(
+                pattern_id="turn_pattern_evidence_chain_breakpoint",
+                pattern_type="evidence_chain_breakpoint",
+                title="诊断假设形成后缺少验证路径",
+                count=10_000,
+                trigger_item_ids=["reasoning_core"],
+                case_ids=["appendicitis_001"],
+                session_ids=session_ids,
+                source_report_ids=report_ids,
+                source_report_count=10_000,
+            )
+        ],
+        retrieved_knowledge_context=[
+            {
+                "reference": "rag_knowledge:reasoning_bridge",
+                "knowledge_id": "reasoning_bridge",
+                "title": "证据链复盘",
+                "snippet": "引导学生说明下一项证据将支持或排除哪个假设。",
+                "source_id": report_ids[0],
+                "case_id": "appendicitis_001",
+                "visibility": "post_submit_review",
+                "allowed_agents": ["skill_generation"],
+            }
+        ],
+        teacher_analysis_context={
+            "analysis_mode": "post_session_teacher_analysis",
+            "analysis_summary": "学生形成假设后没有继续组织验证证据。",
+            "major_issue_titles": ["证据链断点"],
+            "clinical_thinking_profile": {
+                "verification_strategy": "下一步证据需对应待验证假设。",
+                "source_report_ids": report_ids,
+            },
+            "skill_memory_focus": {
+                "recommended_intervention": "追问下一项证据要验证什么。",
+                "source_session_ids": session_ids,
+            },
+            "source_report_ids": report_ids,
+            "source_session_ids": session_ids,
+        },
     )
 
 
@@ -266,6 +364,146 @@ def test_vertex_gemini_training_skill_candidate_generator_uses_training_pattern_
     assert call["config"].response_mime_type == "application/json"
     assert call["config"].response_schema.__name__ == "GeneratedTrainingSkillCandidateContent"
     assert "不得生成真实诊疗建议" in call["config"].system_instruction
+
+
+def test_skill_candidate_model_payload_does_not_grow_with_source_provenance_and_local_candidate_retains_it(
+    tmp_path,
+) -> None:
+    small_context = _training_pattern_candidate_context_with_provenance(1)
+    large_context = _training_pattern_candidate_context_with_provenance(10_000)
+    serialized_payloads: list[str] = []
+    generated_candidates: list[dict[str, object]] = []
+
+    for context in (small_context, large_context):
+        vertex_client = FakeSkillCandidateClient()
+        vertex_generator = VertexGeminiTrainingSkillCandidateGenerator(
+            settings=VertexGeminiSkillCandidateSettings(
+                project="demo-project",
+                skill_candidate_enabled=True,
+                _env_file=None,
+            ),
+            client=vertex_client,
+        )
+        generated_candidates.append(vertex_generator.generate_candidate(context))
+        serialized_payloads.append(
+            str(vertex_client.models.calls[0]["contents"])
+        )
+
+        openai_client = FakeStructuredSkillCandidateClient()
+        OpenAICompatibleTrainingSkillCandidateGenerator(
+            settings=OpenAICompatibleSettings(_env_file=None),
+            client=openai_client,
+        ).generate_candidate(context)
+        serialized_payloads.append(
+            json.dumps(openai_client.calls[0]["payload"], ensure_ascii=False)
+        )
+
+        anthropic_client = FakeStructuredSkillCandidateClient()
+        AnthropicTrainingSkillCandidateGenerator(
+            settings=AnthropicSettings(_env_file=None),
+            client=anthropic_client,
+        ).generate_candidate(context)
+        serialized_payloads.append(
+            json.dumps(anthropic_client.calls[0]["payload"], ensure_ascii=False)
+        )
+
+    assert len({payload.encode("utf-8") for payload in serialized_payloads}) == 1
+    model_payload = json.loads(serialized_payloads[0])
+    assert model_payload["source_report_count"] == 10_000
+    assert model_payload["missed_items"] == [
+        {
+            "item_id": "reasoning_core",
+            "count": 10_000,
+            "case_ids": ["appendicitis_001"],
+        }
+    ]
+    assert model_payload["turn_patterns"] == [
+        {
+            "pattern_id": "turn_pattern_evidence_chain_breakpoint",
+            "pattern_type": "evidence_chain_breakpoint",
+            "title": "诊断假设形成后缺少验证路径",
+            "count": 10_000,
+            "trigger_item_ids": ["reasoning_core"],
+            "case_ids": ["appendicitis_001"],
+            "source_report_count": 10_000,
+        }
+    ]
+    assert model_payload["retrieved_knowledge_context"] == [
+        {
+            "title": "证据链复盘",
+            "snippet": "引导学生说明下一项证据将支持或排除哪个假设。",
+            "case_id": "appendicitis_001",
+            "visibility": "post_submit_review",
+        }
+    ]
+    assert model_payload["teacher_analysis_context"] == {
+        "analysis_mode": "post_session_teacher_analysis",
+        "analysis_summary": "学生形成假设后没有继续组织验证证据。",
+        "major_issue_titles": ["证据链断点"],
+        "clinical_thinking_profile": {
+            "verification_strategy": "下一步证据需对应待验证假设。",
+        },
+        "skill_memory_focus": {
+            "recommended_intervention": "追问下一项证据要验证什么。",
+        },
+    }
+    serialized_model_payload = serialized_payloads[0]
+    assert "session_private_" not in serialized_model_payload
+    assert "report_private_" not in serialized_model_payload
+    assert "session_ids" not in serialized_model_payload
+    assert "source_report_ids" not in serialized_model_payload
+
+    large_candidate = generated_candidates[1]
+    expected_session_ids = large_context.source_session_ids
+    expected_report_ids = large_context.source_report_ids
+    assert large_candidate["source_session_ids"] == expected_session_ids
+    assert large_candidate["source_report_ids"] == expected_report_ids
+    assert large_candidate["source_missed_items"] == [
+        {
+            "item_id": "reasoning_core",
+            "count": 10_000,
+            "case_ids": ["appendicitis_001"],
+            "session_ids": expected_session_ids,
+            "source_report_ids": expected_report_ids,
+        }
+    ]
+    assert large_candidate["source_turn_patterns"][0]["session_ids"] == (
+        expected_session_ids
+    )
+    assert large_candidate["source_turn_patterns"][0]["source_report_ids"] == (
+        expected_report_ids
+    )
+    assert large_candidate["retrieved_knowledge_context"] == (
+        large_context.retrieved_knowledge_context
+    )
+    assert large_candidate["teacher_analysis_context"] == (
+        large_context.teacher_analysis_context
+    )
+
+    candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    review = {
+        "candidate_id": large_candidate["candidate_id"],
+        "status": "ready_for_review",
+    }
+    candidate_store.save_candidate(large_candidate, review)
+    stored_candidate = candidate_store.get_candidate(
+        str(large_candidate["candidate_id"])
+    )
+
+    assert stored_candidate is not None
+    assert stored_candidate["source_session_ids"] == expected_session_ids
+    assert stored_candidate["source_report_ids"] == expected_report_ids
+    assert stored_candidate["source_missed_items"] == (
+        large_candidate["source_missed_items"]
+    )
+    assert stored_candidate["source_turn_patterns"][0]["session_ids"] == (
+        expected_session_ids
+    )
+    assert stored_candidate["source_turn_patterns"][0]["source_report_ids"] == (
+        expected_report_ids
+    )
 
 
 def test_vertex_gemini_training_skill_candidate_generator_passes_teacher_analysis_context_to_model() -> None:
