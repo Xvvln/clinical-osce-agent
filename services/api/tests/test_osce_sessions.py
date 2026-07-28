@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 import httpx
@@ -1416,6 +1417,92 @@ def test_current_user_can_delete_only_owned_session(tmp_path) -> None:
     assert detail_response.json() == {"detail": "session not found"}
     assert list_response.status_code == 200
     assert list_response.json() == {"sessions": []}
+
+
+def test_current_user_can_recover_and_delete_owned_legacy_tombstone(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.session_store = OsceSessionStore(
+        tmp_path / "osce_sessions.sqlite3"
+    )
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(
+        tmp_path / "training_events.sqlite3"
+    )
+    osce_session_service.training_skill_store = TrainingSkillStore(
+        tmp_path / "training_skills.sqlite3"
+    )
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service.student_profile_store = StudentProfileStore(
+        tmp_path / "student_profiles.sqlite3"
+    )
+    osce_session_service._sessions.clear()
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001"},
+    )
+    session_id = create_response.json()["session_id"]
+    osce_session_service.report_store.create_base_report(
+        {
+            "report_id": f"{session_id}_report",
+            "session_id": session_id,
+            "case_id": "appendicitis_001",
+            "student_id": authenticated_user["user_id"],
+            "total_score": 80,
+            "missed_items": [],
+        },
+        enrichment_required=False,
+    )
+    assert osce_session_service.session_store.delete_session(session_id) is True
+    with sqlite3.connect(
+        osce_session_service.session_store.database_path
+    ) as connection:
+        connection.execute(
+            """
+            UPDATE osce_session_tombstones
+            SET user_id = '', case_id = '', cleanup_status = 'completed',
+                cleanup_completed_at = deleted_at
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        )
+
+    other_user = main.auth_store.create_user(
+        "other-legacy-delete@example.test",
+        "safe-password-456",
+        "学生乙",
+    )
+    assert other_user is not None
+    other_token = main.auth_store.create_session(other_user["user_id"])
+    with TestClient(app) as other_client:
+        other_client.cookies.set(AUTH_COOKIE_NAME, other_token)
+        other_response = other_client.delete(
+            f"/api/me/sessions/{session_id}"
+        )
+
+    delete_response = client.delete(f"/api/me/sessions/{session_id}")
+
+    assert other_response.status_code == 404
+    assert other_response.json() == {"detail": "session not found"}
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "status": "deleted",
+        "session_id": session_id,
+    }
+    deletion = osce_session_service.session_store.get_session_deletion(
+        session_id
+    )
+    assert deletion is not None
+    assert deletion.user_id == authenticated_user["user_id"]
+    assert deletion.cleanup_status == "completed"
+    assert osce_session_service.report_store.get_report(session_id) is None
+    assert (
+        osce_session_service.training_event_store.list_session_events(session_id)
+        == []
+    )
 
 
 def test_session_deletion_conflict_returns_generic_http_409(

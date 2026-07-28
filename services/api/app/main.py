@@ -3,8 +3,8 @@ import binascii
 import hashlib
 import json
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -339,10 +339,31 @@ PROFILE_DIMENSION_LABELS: dict[str, str] = {
     "relationship_building": "关系建立",
 }
 
+
+@asynccontextmanager
+async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    recovery_enabled = getattr(
+        application.state,
+        "pending_session_deletion_recovery_enabled",
+        True,
+    )
+    if recovery_enabled:
+        recovery_service = getattr(
+            application.state,
+            "session_deletion_recovery_service",
+            osce_session_service,
+        )
+        application.state.session_deletion_recovery_stats = (
+            recovery_service.resume_pending_session_deletions()
+        )
+    yield
+
+
 app = FastAPI(
     title="临境 OSCE 智能体（TraceOSCE）API",
     version="0.1.0",
     description="临境 OSCE 智能体（TraceOSCE）的 OSCE 训练后端服务。",
+    lifespan=_app_lifespan,
 )
 
 

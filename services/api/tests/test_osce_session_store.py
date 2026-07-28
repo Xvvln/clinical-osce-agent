@@ -176,8 +176,75 @@ def test_v2_tombstones_migrate_as_completed_without_inventing_ownership(
     )
     assert store.is_session_deleted("legacy-deleted") is True
     assert store.begin_session_deletion("legacy-deleted", "student-a") is None
+    assert store.list_ownerless_legacy_deletions() == [
+        store.get_session_deletion("legacy-deleted")
+    ]
     with sqlite3.connect(database_path) as connection:
         assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+
+
+def test_legacy_tombstone_adoption_is_atomic_and_becomes_pending(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "sessions.sqlite3"
+    _create_v2_tombstone_database(database_path)
+    store = OsceSessionStore(database_path)
+
+    adopted = store.adopt_legacy_session_deletion(
+        "legacy-deleted",
+        user_id="student-a",
+        case_id="appendicitis_001",
+    )
+
+    assert adopted == SessionDeletionRecord(
+        session_id="legacy-deleted",
+        user_id="student-a",
+        case_id="appendicitis_001",
+        deleted_revision=7,
+        deleted_at="2026-01-02T00:00:00+00:00",
+        cleanup_status="pending",
+        cleanup_completed_at=None,
+    )
+    assert store.list_pending_deletions() == [adopted]
+    assert (
+        store.adopt_legacy_session_deletion(
+            "legacy-deleted",
+            user_id="student-b",
+            case_id="other-case",
+        )
+        is None
+    )
+    assert store.get_session_deletion("legacy-deleted") == adopted
+    assert store.list_ownerless_legacy_deletions() == []
+
+    completed = store.mark_session_deletion_complete("legacy-deleted")
+    assert completed is not None
+    assert completed.cleanup_status == "completed"
+    assert store.list_pending_deletions() == []
+
+
+def test_pending_deletion_listing_is_bounded_and_ordered(tmp_path: Path) -> None:
+    store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    first = _session("session-first")
+    second = _session("session-second")
+    store.create_session(first)
+    store.create_session(second)
+    first_deletion = store.begin_session_deletion(
+        first.session_id,
+        first.student_id,
+    )
+    second_deletion = store.begin_session_deletion(
+        second.session_id,
+        second.student_id,
+    )
+
+    assert first_deletion is not None
+    assert second_deletion is not None
+    assert len(store.list_pending_deletions(limit=1)) == 1
+    assert {
+        deletion.session_id for deletion in store.list_pending_deletions()
+    } == {first.session_id, second.session_id}
+    assert store.list_pending_deletions(limit=0) == []
 
 
 def test_revision_is_internal_stable_on_reads_and_monotonic_on_updates(tmp_path: Path) -> None:

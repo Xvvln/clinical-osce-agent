@@ -19,6 +19,7 @@ from app.graph.osce_graph import build_osce_graph, reflection_node, training_str
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import (
     OsceSessionStore,
+    SessionDeletionRecord,
     SessionPersistenceError,
     SessionNotFoundError,
     osce_session_store,
@@ -1116,9 +1117,19 @@ class OsceSessionService:
         try:
             existing_deletion = self.session_store.get_session_deletion(session_id)
             if existing_deletion is not None:
-                if student_id is None or existing_deletion.user_id != student_id:
+                if not existing_deletion.user_id:
+                    if student_id is None:
+                        raise SessionNotFoundError(session_id)
+                    deletion = self._adopt_legacy_deletion_from_evidence(
+                        session_id=session_id,
+                        expected_student_id=student_id,
+                    )
+                    if deletion is None:
+                        raise SessionNotFoundError(session_id)
+                elif student_id is None or existing_deletion.user_id != student_id:
                     raise SessionNotFoundError(session_id)
-                deletion = existing_deletion
+                else:
+                    deletion = existing_deletion
             else:
                 stored_session = self.session_store.get_session(session_id)
                 if stored_session is None:
@@ -1193,6 +1204,135 @@ class OsceSessionService:
                 self._sessions.pop(session_id, None)
                 with self._message_processing_status_lock:
                     self._message_processing_statuses.pop(session_id, None)
+
+    def resume_pending_session_deletions(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> dict[str, int]:
+        pending_deletions = self.session_store.list_pending_deletions(limit=limit)
+        legacy_deletions = self.session_store.list_ownerless_legacy_deletions(
+            limit=limit,
+        )
+        deletions_by_session_id = {
+            deletion.session_id: deletion
+            for deletion in [*pending_deletions, *legacy_deletions]
+        }
+        recoverable_deletions = sorted(
+            deletions_by_session_id.values(),
+            key=lambda deletion: (deletion.deleted_at, deletion.session_id),
+        )
+        if limit is not None:
+            recoverable_deletions = recoverable_deletions[:limit]
+        stats = {
+            "scanned": len(recoverable_deletions),
+            "adopted": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        for deletion in recoverable_deletions:
+            if not deletion.user_id:
+                try:
+                    adopted_deletion = self._adopt_legacy_deletion_from_evidence(
+                        session_id=deletion.session_id,
+                    )
+                except Exception:
+                    stats["failed"] += 1
+                    continue
+                if adopted_deletion is None:
+                    stats["skipped"] += 1
+                    continue
+                deletion = adopted_deletion
+                stats["adopted"] += 1
+            try:
+                self.delete_session(
+                    deletion.session_id,
+                    expected_student_id=deletion.user_id,
+                )
+            except Exception:
+                stats["failed"] += 1
+            else:
+                stats["completed"] += 1
+        return stats
+
+    def _adopt_legacy_deletion_from_evidence(
+        self,
+        *,
+        session_id: str,
+        expected_student_id: str | None = None,
+    ) -> SessionDeletionRecord | None:
+        recovered_identity = self._recover_legacy_deletion_identity(
+            session_id=session_id,
+        )
+        if recovered_identity is None:
+            return None
+        recovered_student_id, recovered_case_id = recovered_identity
+        if (
+            expected_student_id is not None
+            and recovered_student_id != expected_student_id
+        ):
+            return None
+        try:
+            self._validate_personal_artifact_ownership(
+                session_id=session_id,
+                student_id=recovered_student_id,
+            )
+        except SessionDeletionConflictError:
+            return None
+
+        deletion = self.session_store.adopt_legacy_session_deletion(
+            session_id,
+            user_id=recovered_student_id,
+            case_id=recovered_case_id,
+        )
+        if deletion is not None:
+            return deletion
+        current_deletion = self.session_store.get_session_deletion(session_id)
+        if (
+            current_deletion is None
+            or current_deletion.user_id != recovered_student_id
+            or current_deletion.case_id != recovered_case_id
+        ):
+            return None
+        return current_deletion
+
+    def _recover_legacy_deletion_identity(
+        self,
+        *,
+        session_id: str,
+    ) -> tuple[str, str] | None:
+        report = self.report_store.get_report(session_id)
+        event_stream = self.training_event_store.list_session_events(session_id)
+        student_ids: set[str] = set()
+        case_ids: set[str] = set()
+
+        if report is not None:
+            report_session_id = str(report.get("session_id", "")).strip()
+            report_student_id = str(report.get("student_id", "")).strip()
+            report_case_id = str(report.get("case_id", "")).strip()
+            if (
+                report_session_id != session_id
+                or not report_student_id
+                or not report_case_id
+            ):
+                return None
+            student_ids.add(report_student_id)
+            case_ids.add(report_case_id)
+
+        for event in event_stream:
+            if str(event.get("session_id", "")).strip() != session_id:
+                return None
+            event_student_id = str(event.get("student_id", "")).strip()
+            event_case_id = str(event.get("case_id", "")).strip()
+            if event_student_id:
+                student_ids.add(event_student_id)
+            if event_case_id:
+                case_ids.add(event_case_id)
+
+        if len(student_ids) != 1 or len(case_ids) != 1:
+            return None
+        return next(iter(student_ids)), next(iter(case_ids))
 
     def _validate_personal_artifact_ownership(
         self,

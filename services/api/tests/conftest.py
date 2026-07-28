@@ -11,6 +11,12 @@ from app.services.user_model_config_store import UserModelConfigStore
 def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     test_user_model_config_store = UserModelConfigStore(tmp_path / "user_model_configs.sqlite3")
     test_skill_candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
+    monkeypatch.setattr(
+        main.app.state,
+        "pending_session_deletion_recovery_enabled",
+        False,
+        raising=False,
+    )
     monkeypatch.setattr(main, "user_model_config_store", test_user_model_config_store)
     monkeypatch.setattr(main, "training_skill_candidate_store", test_skill_candidate_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_skill_candidate_store", test_skill_candidate_store, raising=False)

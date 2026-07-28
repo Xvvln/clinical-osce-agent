@@ -361,10 +361,125 @@ class OsceSessionStore:
                 )
             return deletion
 
+    def adopt_legacy_session_deletion(
+        self,
+        session_id: str,
+        *,
+        user_id: str,
+        case_id: str,
+    ) -> SessionDeletionRecord | None:
+        """Claim an ownerless legacy tombstone without overwriting owned data.
+
+        Ownership evidence lives in the report/event stores, so callers must
+        validate it before asking this store to persist the recovered owner.
+        The conditional update keeps that validation safe under concurrent
+        adoption attempts.
+        """
+
+        normalized_user_id = user_id.strip()
+        normalized_case_id = case_id.strip()
+        if not normalized_user_id or not normalized_case_id:
+            return None
+
+        self._initialize()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active_row = connection.execute(
+                "SELECT 1 FROM osce_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if active_row is not None:
+                return None
+            cursor = connection.execute(
+                """
+                UPDATE osce_session_tombstones
+                SET
+                    user_id = ?,
+                    case_id = ?,
+                    cleanup_status = ?,
+                    cleanup_completed_at = NULL
+                WHERE session_id = ?
+                  AND user_id = ''
+                """,
+                (
+                    normalized_user_id,
+                    normalized_case_id,
+                    SESSION_DELETION_PENDING,
+                    session_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return self._tombstone_record(connection, session_id)
+
     def get_session_deletion(self, session_id: str) -> SessionDeletionRecord | None:
         self._initialize()
         with self._connect() as connection:
             return self._tombstone_record(connection, session_id)
+
+    def list_pending_deletions(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> list[SessionDeletionRecord]:
+        self._initialize()
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = "" if limit is None else "LIMIT ?"
+        parameters: tuple[object, ...] = (
+            (SESSION_DELETION_PENDING,)
+            if limit is None
+            else (SESSION_DELETION_PENDING, limit)
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    session_id,
+                    user_id,
+                    case_id,
+                    deleted_revision,
+                    deleted_at,
+                    cleanup_status,
+                    cleanup_completed_at
+                FROM osce_session_tombstones
+                WHERE cleanup_status = ?
+                ORDER BY deleted_at, session_id
+                {limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        return [_session_deletion_record_from_row(row) for row in rows]
+
+    def list_ownerless_legacy_deletions(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> list[SessionDeletionRecord]:
+        self._initialize()
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = "" if limit is None else "LIMIT ?"
+        parameters: tuple[object, ...] = () if limit is None else (limit,)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    session_id,
+                    user_id,
+                    case_id,
+                    deleted_revision,
+                    deleted_at,
+                    cleanup_status,
+                    cleanup_completed_at
+                FROM osce_session_tombstones
+                WHERE user_id = ''
+                ORDER BY deleted_at, session_id
+                {limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        return [_session_deletion_record_from_row(row) for row in rows]
 
     def mark_session_deletion_complete(
         self,
@@ -525,18 +640,24 @@ class OsceSessionStore:
         ).fetchone()
         if row is None:
             return None
-        return SessionDeletionRecord(
-            session_id=str(row[0]),
-            user_id=str(row[1]),
-            case_id=str(row[2]),
-            deleted_revision=int(row[3]),
-            deleted_at=str(row[4]),
-            cleanup_status=str(row[5]),
-            cleanup_completed_at=None if row[6] is None else str(row[6]),
-        )
+        return _session_deletion_record_from_row(row)
 
 
 osce_session_store = OsceSessionStore()
+
+
+def _session_deletion_record_from_row(
+    row: tuple[object, ...],
+) -> SessionDeletionRecord:
+    return SessionDeletionRecord(
+        session_id=str(row[0]),
+        user_id=str(row[1]),
+        case_id=str(row[2]),
+        deleted_revision=int(row[3]),
+        deleted_at=str(row[4]),
+        cleanup_status=str(row[5]),
+        cleanup_completed_at=None if row[6] is None else str(row[6]),
+    )
 
 
 def _session_completion_summary(session_json: str, stage: str, case_id: str) -> dict[str, object]:
