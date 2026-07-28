@@ -857,8 +857,24 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
     assert profile["recent_sessions"][0]["case_title"] == "右下腹痛教学病例"
     assert profile["recent_sessions"][0]["stage_label"] == "报告已生成"
     assert "active_skill_context" not in profile["recent_sessions"][0]
-    assert profile["strongest_dimension"] == {"key": "main_diagnosis", "label": "主诊断", "average": 10}
-    assert profile["weakest_dimension"] == {"key": "relationship_building", "label": "关系建立", "average": 0}
+    assert profile["strongest_dimension"] == {
+        "key": "main_diagnosis",
+        "label": "主诊断",
+        "average": 10,
+        "sample_count": 1,
+        "average_score": 10,
+        "average_max_score": 10,
+        "average_percentage": 100,
+    }
+    assert profile["weakest_dimension"] == {
+        "key": "relationship_building",
+        "label": "关系建立",
+        "average": 0,
+        "sample_count": 1,
+        "average_score": 0,
+        "average_max_score": 5,
+        "average_percentage": 0,
+    }
     assert profile["skill_accumulation"]["status"] == "active"
     assert profile["skill_accumulation"]["enabled_skill_count"] == 1
     assert profile["skill_accumulation"]["applied_skill_count"] == 0
@@ -1010,7 +1026,25 @@ def test_profile_dimension_averages_label_humanistic_dimensions() -> None:
                     "medical_ethics": 1,
                     "narrative_medicine": 3,
                     "communication_skill": 4,
-                }
+                },
+                "rubric_scores": {
+                    "relationship": {
+                        "dimension_id": "relationship_building",
+                        "max_score": 5,
+                    },
+                    "ethics": {
+                        "dimension_id": "medical_ethics",
+                        "max_score": 7,
+                    },
+                    "narrative": {
+                        "dimension_id": "narrative_medicine",
+                        "max_score": 8,
+                    },
+                    "communication": {
+                        "dimension_id": "communication_skill",
+                        "max_score": 10,
+                    },
+                },
             }
         ]
     )
@@ -1021,6 +1055,67 @@ def test_profile_dimension_averages_label_humanistic_dimensions() -> None:
     assert labels_by_key["medical_ethics"] == "医学伦理"
     assert labels_by_key["narrative_medicine"] == "叙事医学"
     assert labels_by_key["communication_skill"] == "沟通技巧"
+
+
+def test_profile_dimension_averages_rank_mixed_rubrics_by_completion_percentage() -> None:
+    averages = main._get_dimension_averages(
+        [
+            {
+                "dimension_scores": {
+                    "history_taking": 9,
+                    "relationship_building": 5,
+                },
+                "rubric_scores": {
+                    "history": {
+                        "dimension_id": "history_taking",
+                        "max_score": 18,
+                    },
+                    "relationship": {
+                        "dimension_id": "relationship_building",
+                        "max_score": 5,
+                    },
+                },
+            },
+            {
+                "dimension_scores": {
+                    "history_taking": 20,
+                },
+                "rubric_scores": {
+                    "history": {
+                        "dimension_id": "history_taking",
+                        "max_score": 25,
+                    },
+                },
+            },
+            {
+                "dimension_scores": {
+                    "history_taking": 99,
+                },
+                "rubric_scores": {},
+            },
+        ]
+    )
+
+    assert averages == [
+        {
+            "key": "relationship_building",
+            "label": "关系建立",
+            "average": 5,
+            "sample_count": 1,
+            "average_score": 5,
+            "average_max_score": 5,
+            "average_percentage": 100,
+        },
+        {
+            "key": "history_taking",
+            "label": "问诊",
+            "average": 14.5,
+            "sample_count": 2,
+            "average_score": 14.5,
+            "average_max_score": 21.5,
+            "average_percentage": 65,
+        },
+    ]
 
 
 def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_path) -> None:

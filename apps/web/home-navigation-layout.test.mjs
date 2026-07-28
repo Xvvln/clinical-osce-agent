@@ -1025,6 +1025,15 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /训练次数/);
   assert.match(profileSource, /平均分/);
   assert.match(profileSource, /薄弱项/);
+  assert.match(profileSource, /average_score: number;/);
+  assert.match(profileSource, /average_max_score: number;/);
+  assert.match(profileSource, /average_percentage: number;/);
+  assert.match(profileSource, /sample_count: number;/);
+  assert.match(profileSource, /right\.average_percentage - left\.average_percentage/);
+  assert.match(profileSource, /平均完成度 \{dimension\.average_percentage\}%/);
+  assert.match(profileSource, /getDimensionPercentageWidth\(dimension\.average_percentage\)/);
+  assert.doesNotMatch(profileSource, /getDimensionRelativeWidth/);
+  assert.doesNotMatch(profileSource, /right\.average - left\.average/);
   assert.match(profileSource, /type LearningPathItem = Readonly<\{/);
   assert.match(profileSource, /task_type_label: string;/);
   assert.match(profileSource, /case_title: string;/);

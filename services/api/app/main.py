@@ -95,6 +95,11 @@ from app.services.rag_document_ingestion_service import (
     chunk_rag_document,
     generate_rag_document_id,
 )
+from app.services.report_score_metrics import (
+    NormalizedScoreMetric,
+    aggregate_score_metrics,
+    dimension_score_metrics,
+)
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import (
     RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
@@ -1006,23 +1011,24 @@ def _get_average_score(reports: list[dict[str, Any]]) -> int:
 
 
 def _get_dimension_averages(reports: list[dict[str, Any]]) -> list[dict[str, object]]:
-    dimension_totals: dict[str, dict[str, int]] = {}
+    metrics_by_dimension: dict[str, list[NormalizedScoreMetric]] = {}
     for report in reports:
-        for key, score in dict(report.get("dimension_scores", {})).items():
-            current = dimension_totals.setdefault(str(key), {"count": 0, "total": 0})
-            current["count"] += 1
-            current["total"] += int(score)
+        for key, metric in dimension_score_metrics(report).items():
+            metrics_by_dimension.setdefault(key, []).append(metric)
 
     return sorted(
         [
             {
                 "key": key,
                 "label": PROFILE_DIMENSION_LABELS.get(key, key),
-                "average": round(value["total"] / value["count"]),
+                "average": summary["average_score"],
+                **summary,
             }
-            for key, value in dimension_totals.items()
+            for key, metrics in metrics_by_dimension.items()
+            if (summary := aggregate_score_metrics(metrics))["average_percentage"]
+            is not None
         ],
-        key=lambda item: int(item["average"]),
+        key=lambda item: float(item["average_percentage"]),
         reverse=True,
     )
 

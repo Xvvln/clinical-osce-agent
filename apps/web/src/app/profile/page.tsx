@@ -21,6 +21,10 @@ type DimensionAverage = Readonly<{
   key: string;
   label: string;
   average: number;
+  average_score: number;
+  average_max_score: number;
+  average_percentage: number;
+  sample_count: number;
 }>;
 
 type EnabledSkillSummary = Readonly<{
@@ -393,12 +397,8 @@ async function getCurrentUserProfile(): Promise<LearningProfile> {
   return toLearningProfile(payload.profile);
 }
 
-function getDimensionRelativeWidth(average: number, maxAverage: number): string {
-  if (maxAverage <= 0) {
-    return "0%";
-  }
-
-  return `${Math.max(8, Math.min(100, (average / maxAverage) * 100))}%`;
+function getDimensionPercentageWidth(averagePercentage: number): string {
+  return `${Math.max(0, Math.min(100, averagePercentage))}%`;
 }
 
 function isEmptyLearningProfile(profile: LearningProfile): boolean {
@@ -1021,8 +1021,9 @@ export default function ProfilePage() {
   const shouldRenderProfile = loadState === "ready" || loadState === "empty";
   const primaryLearningTask = profile.learningPath[0] ?? null;
   const secondaryLearningTasks = profile.learningPath.slice(1, 3);
-  const sortedDimensionAverages = [...profile.dimensionAverages].sort((left, right) => right.average - left.average);
-  const maxDimensionAverage = Math.max(...profile.dimensionAverages.map((dimension) => dimension.average), 0);
+  const sortedDimensionAverages = [...profile.dimensionAverages].sort(
+    (left, right) => right.average_percentage - left.average_percentage,
+  );
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6 text-foreground">
@@ -1147,7 +1148,11 @@ export default function ProfilePage() {
             <section className="rounded-2xl border border-border bg-background p-5 shadow-xs">
               <p className="text-xs font-medium text-muted-foreground">优势项</p>
               <h2 className="mt-2 text-lg font-semibold text-brand">{profile.strongestDimension?.label ?? "暂无"}</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">用于后续推荐更高阶病例或巩固型训练。</p>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {profile.strongestDimension
+                  ? `平均完成度 ${profile.strongestDimension.average_percentage}%`
+                  : "用于后续推荐更高阶病例或巩固型训练。"}
+              </p>
             </section>
           </aside>
         </section>
@@ -1157,7 +1162,7 @@ export default function ProfilePage() {
             <div>
               <h2 className="text-sm font-semibold">能力维度趋势</h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                条形长度按当前最高维度相对归一化，避免不同评分项直接用原始分误导比较。
+                每份报告先按各自 Rubric 分母换算为完成度，再跨报告求平均，避免不同评分上限误导比较。
               </p>
             </div>
             <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
@@ -1170,10 +1175,12 @@ export default function ProfilePage() {
                 <article className="rounded-xl border border-border bg-muted/30 p-4" key={dimension.key}>
                   <div className="flex items-center justify-between gap-3 text-sm">
                     <p className="font-medium">{dimension.label}</p>
-                    <p className="text-muted-foreground">平均 {dimension.average} 分</p>
+                    <p className="text-muted-foreground">
+                      平均完成度 {dimension.average_percentage}% · {dimension.sample_count} 份报告
+                    </p>
                   </div>
                   <div className="mt-3 h-2 overflow-hidden rounded-full bg-background">
-                    <div className="h-full rounded-full bg-brand" style={{ width: getDimensionRelativeWidth(dimension.average, maxDimensionAverage) }} />
+                    <div className="h-full rounded-full bg-brand" style={{ width: getDimensionPercentageWidth(dimension.average_percentage) }} />
                   </div>
                 </article>
               ))}
