@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, cast
 
+from app.services.account_model_endpoint_policy import (
+    validate_account_model_endpoint_policy,
+)
 from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.google_genai_http_options import (
     require_direct_runtime_vertex_adc_proxy,
@@ -150,6 +153,11 @@ class RuntimeModelConfigStore:
         raw_base_url = _normalize_text(config.get("base_url", ""))
         base_url = raw_base_url or "https://api.openai.com/v1"
         proxy_url = _normalize_text(config.get("proxy_url", ""))
+        validate_account_model_endpoint_policy(
+            provider=provider,
+            base_url=raw_base_url,
+            proxy_url=proxy_url,
+        )
         if provider == "openai_compatible" and not api_key:
             raise ValueError("api_key is required for openai_compatible")
         if provider == "anthropic" and not api_key:

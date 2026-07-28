@@ -564,6 +564,7 @@ def test_create_configured_turn_intent_agent_uses_runtime_anthropic_config(monke
     assert FakeAnthropicHttpClient.calls[0]["url"] == "https://api.anthropic.com/v1/messages"
     assert FakeAnthropicHttpClient.calls[0]["headers"]["x-api-key"] == "student-anthropic-secret"
     assert FakeAnthropicHttpClient.calls[0]["json"]["model"] == "claude-3-5-sonnet-latest"
+    assert FakeAnthropicHttpClient.calls[0]["kwargs"]["follow_redirects"] is False
 
 
 def test_create_configured_turn_intent_agent_uses_runtime_vertex_adc_config(monkeypatch) -> None:

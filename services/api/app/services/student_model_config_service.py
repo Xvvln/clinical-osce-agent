@@ -7,6 +7,9 @@ import httpx
 from google import genai
 from google.genai import types
 
+from app.services.account_model_endpoint_policy import (
+    validate_account_model_endpoint_policy,
+)
 from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
@@ -36,6 +39,11 @@ def test_student_model_config_connectivity(config: dict[str, str]) -> dict[str, 
     model = _normalize_text(config.get("model", ""))
     base_url = _normalize_text(config.get("base_url", ""))
     proxy_url = _normalize_text(config.get("proxy_url", ""))
+    validate_account_model_endpoint_policy(
+        provider=provider,
+        base_url=base_url,
+        proxy_url=proxy_url,
+    )
 
     if provider == "custom_backend":
         endpoint = _join_url(base_url or DEFAULT_CUSTOM_BACKEND_BASE_URL, "/health")
@@ -163,7 +171,7 @@ def _test_http_endpoint(
     try:
         client_options: dict[str, Any] = {
             "timeout": STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
-            "follow_redirects": True,
+            "follow_redirects": False,
             "trust_env": False,
         }
         if _should_use_proxy(proxy_url):
@@ -189,13 +197,7 @@ def _test_http_endpoint(
             checked_url=endpoint,
         )
 
-    error_detail = _extract_http_error_detail(
-        response,
-        sensitive_values=_build_sensitive_header_values(headers),
-    )
     error_message = f"连通性测试失败：HTTP {response.status_code}"
-    if error_detail:
-        error_message = f"{error_message}：{error_detail}"
     return _connectivity_result(
         ok=False,
         provider=provider,
@@ -211,74 +213,6 @@ def _connectivity_result(*, ok: bool, provider: str, message: str, checked_url: 
         "message": message,
         "checked_url": checked_url,
     }
-
-
-def _extract_http_error_detail(response: object, *, sensitive_values: list[str]) -> str:
-    detail_parts: list[str] = []
-    try:
-        response_json = response.json()  # type: ignore[attr-defined]
-    except Exception:
-        response_json = None
-
-    if isinstance(response_json, dict):
-        detail_parts.extend(_extract_json_error_parts(response_json))
-    elif isinstance(response_json, str):
-        detail_parts.append(response_json)
-
-    if not detail_parts:
-        response_text = _normalize_text(getattr(response, "text", ""))
-        if response_text:
-            detail_parts.append(response_text)
-
-    compact_parts = [_sanitize_error_detail(part, sensitive_values=sensitive_values) for part in detail_parts]
-    compact_parts = [_truncate_error_detail(part) for part in compact_parts if part]
-    return "；".join(dict.fromkeys(compact_parts))
-
-
-def _extract_json_error_parts(payload: dict[str, object]) -> list[str]:
-    parts: list[str] = []
-    error_payload = payload.get("error")
-    if isinstance(error_payload, dict):
-        for key in ("message", "param", "detail", "type"):
-            value = _normalize_text(error_payload.get(key))
-            if value:
-                parts.append(value)
-    elif isinstance(error_payload, str):
-        parts.append(error_payload)
-
-    for key in ("detail", "message"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            parts.append(value)
-        elif isinstance(value, dict):
-            parts.extend(_extract_json_error_parts(value))
-    return parts
-
-
-def _build_sensitive_header_values(headers: dict[str, str]) -> list[str]:
-    values: list[str] = []
-    for value in headers.values():
-        normalized_value = _normalize_text(value)
-        if not normalized_value:
-            continue
-        values.append(normalized_value)
-        if normalized_value.lower().startswith("bearer "):
-            values.append(normalized_value[7:].strip())
-    return values
-
-
-def _sanitize_error_detail(detail: str, *, sensitive_values: list[str]) -> str:
-    sanitized_detail = _normalize_text(detail)
-    for sensitive_value in sensitive_values:
-        if sensitive_value:
-            sanitized_detail = sanitized_detail.replace(sensitive_value, "[redacted]")
-    return sanitized_detail
-
-
-def _truncate_error_detail(detail: str) -> str:
-    if len(detail) <= 320:
-        return detail
-    return f"{detail[:317]}..."
 
 
 def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_url: str) -> dict[str, object]:

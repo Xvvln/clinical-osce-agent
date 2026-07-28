@@ -262,6 +262,14 @@ def test_compose_health_path_remains_valid() -> None:
         == "${CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG:-true}"
     )
     assert (
+        api_service["environment"]["CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS"]
+        == "${CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS:-api.openai.com,api.anthropic.com,generativelanguage.googleapis.com}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS"]
+        == "${CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS:-false}"
+    )
+    assert (
         api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"]
         == "${CLINICAL_OSCE_DEMO_ADMIN_ENABLED:-false}"
     )
@@ -311,6 +319,14 @@ def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_pa
 
     assert "CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo" in env_example_source
     assert "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true" in env_example_source
+    assert (
+        "CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS=api.openai.com,api.anthropic.com,generativelanguage.googleapis.com"
+        in env_example_source
+    )
+    assert (
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=false"
+        in env_example_source
+    )
     assert "CLINICAL_OSCE_BIND_HOST=127.0.0.1" in env_example_source
     assert "CLINICAL_OSCE_DEMO_ADMIN_ENABLED=false" in env_example_source
     assert "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=" in env_example_lines

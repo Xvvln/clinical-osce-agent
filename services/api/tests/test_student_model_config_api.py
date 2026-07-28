@@ -4,6 +4,11 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.main import AUTH_COOKIE_NAME
+from app.services.account_model_endpoint_policy import (
+    ACCOUNT_MODEL_ENDPOINT_POLICY_ERROR,
+    ACCOUNT_MODEL_PROVIDER_POLICY_ERROR,
+    ACCOUNT_MODEL_PROXY_POLICY_ERROR,
+)
 from app.services.auth_store import AuthStore
 from app.services.runtime_model_config_store import (
     RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
@@ -37,9 +42,10 @@ class _FakeConnectivityErrorResponse:
 class _FakeHttpxClient:
     requested_urls: list[str] = []
     requested_headers: list[dict[str, str]] = []
+    created_options: list[dict[str, object]] = []
 
-    def __init__(self, **_: object) -> None:
-        pass
+    def __init__(self, **options: object) -> None:
+        self.created_options.append(options)
 
     def __enter__(self) -> "_FakeHttpxClient":
         return self
@@ -57,9 +63,10 @@ class _FakeOpenAICompatibleProbeClient:
     requested_urls: list[str] = []
     requested_headers: list[dict[str, str]] = []
     requested_bodies: list[dict[str, object]] = []
+    created_options: list[dict[str, object]] = []
 
-    def __init__(self, **_: object) -> None:
-        pass
+    def __init__(self, **options: object) -> None:
+        self.created_options.append(options)
 
     def __enter__(self) -> "_FakeOpenAICompatibleProbeClient":
         return self
@@ -103,6 +110,12 @@ class _FakeVertexGeminiClient:
 
 
 def _authenticated_client(tmp_path, monkeypatch, email: str) -> TestClient:
+    # Existing provider-adapter tests intentionally exercise the explicit
+    # single-user escape hatch. Security-default tests override this below.
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
+        "true",
+    )
     auth_store = AuthStore(tmp_path / "auth.sqlite3")
     monkeypatch.setattr(main, "auth_store", auth_store)
     user = auth_store.create_user(email, "safe-password-123", email)
@@ -199,6 +212,134 @@ def test_authenticated_student_model_config_test_accepts_custom_byok_backend_wit
     assert "student-secret-value" not in response.text
 
 
+def test_shared_account_model_endpoints_reject_ssrf_proxy_and_server_adc_before_io(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _FakeHttpxClient.requested_urls = []
+    _FakeHttpxClient.requested_headers = []
+    _FakeVertexGeminiClient.created = []
+    _FakeVertexGeminiModels.calls = []
+    monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeHttpxClient)
+    monkeypatch.setattr(
+        student_model_config_service.genai,
+        "Client",
+        _FakeVertexGeminiClient,
+    )
+    client = _authenticated_client(
+        tmp_path,
+        monkeypatch,
+        "student-shared-policy@example.test",
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+
+    custom_response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "custom_backend",
+            "api_key": "student-secret",
+            "model": "",
+            "base_url": "http://127.0.0.1:8765/internal",
+            "proxy_url": "direct",
+        },
+    )
+    private_url_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-secret",
+            "model": "student-model",
+            "base_url": "http://127.0.0.1:8765/v1",
+            "proxy_url": "direct",
+        },
+    )
+    proxy_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-secret",
+            "model": "student-model",
+            "base_url": "https://api.openai.com/v1",
+            "proxy_url": "http://127.0.0.1:7897",
+        },
+    )
+    adc_response = client.post(
+        "/api/model-config/runtime",
+        json={
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-pro-preview",
+            "base_url": "server-project",
+            "proxy_url": "direct",
+        },
+    )
+
+    assert custom_response.status_code == 400
+    assert custom_response.json() == {
+        "detail": ACCOUNT_MODEL_PROVIDER_POLICY_ERROR,
+    }
+    assert private_url_response.status_code == 400
+    assert private_url_response.json() == {
+        "detail": ACCOUNT_MODEL_ENDPOINT_POLICY_ERROR,
+    }
+    assert proxy_response.status_code == 400
+    assert proxy_response.json() == {
+        "detail": ACCOUNT_MODEL_PROXY_POLICY_ERROR,
+    }
+    assert adc_response.status_code == 400
+    assert adc_response.json() == {
+        "detail": ACCOUNT_MODEL_PROVIDER_POLICY_ERROR,
+    }
+    assert _FakeHttpxClient.requested_urls == []
+    assert _FakeHttpxClient.requested_headers == []
+    assert _FakeVertexGeminiClient.created == []
+    assert _FakeVertexGeminiModels.calls == []
+
+
+def test_previously_saved_unsafe_account_config_is_not_bound_to_real_calls(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    client = _authenticated_client(
+        tmp_path,
+        monkeypatch,
+        "student-stale-unsafe@example.test",
+    )
+    saved_user = main.auth_store.get_user_by_session_token(
+        client.cookies.get(AUTH_COOKIE_NAME)
+    )
+    assert saved_user is not None
+    main.user_model_config_store.save_runtime_config(
+        saved_user["user_id"],
+        RuntimeModelConfig(
+            provider="openai_compatible",
+            api_key="stale-secret",
+            model="stale-model",
+            base_url="http://127.0.0.1:8765/v1",
+            proxy_url="direct",
+        ),
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+
+    status_response = client.get("/api/model-config/runtime")
+    resolved_config = main._resolve_user_runtime_model_config(
+        saved_user["user_id"]
+    )
+    with main._use_user_runtime_model_config(
+        saved_user["user_id"],
+        require_for_training=False,
+    ):
+        bound_config = runtime_model_config_store.get_active_config()
+
+    assert status_response.status_code == 200
+    assert status_response.json()["active"] is False
+    assert status_response.json()["base_url"] == ""
+    assert "127.0.0.1" not in status_response.text
+    assert "stale-secret" not in status_response.text
+    assert resolved_config is None
+    assert bound_config is None
+
+
 def test_student_model_config_test_rejects_remote_provider_without_api_key(tmp_path, monkeypatch) -> None:
     client = _authenticated_client(tmp_path, monkeypatch, "student-gemini-missing-key@example.test")
     response = client.post(
@@ -265,6 +406,7 @@ def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(
         {"role": "system", "content": "只输出 JSON。"},
         {"role": "user", "content": '{"ping":"clinical-osce-agent"}'},
     ]
+    assert _FakeOpenAICompatibleProbeClient.created_options[-1]["follow_redirects"] is False
 
 
 def test_student_model_config_test_includes_sanitized_provider_error_detail(tmp_path, monkeypatch) -> None:
@@ -288,7 +430,9 @@ def test_student_model_config_test_includes_sanitized_provider_error_detail(tmp_
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is False
-    assert payload["message"] == "连通性测试失败：HTTP 400：Param Incorrect；Not supported model unsupported-model"
+    assert payload["message"] == "连通性测试失败：HTTP 400"
+    assert "Param Incorrect" not in response.text
+    assert "unsupported-model" not in response.text
     assert "student-openai-secret" not in response.text
     assert "student-openai-secret" not in response.text
 

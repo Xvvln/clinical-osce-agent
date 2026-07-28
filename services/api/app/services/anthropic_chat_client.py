@@ -65,7 +65,7 @@ class AnthropicChatClient:
     def _post_message(self, payload: dict[str, Any]) -> httpx.Response:
         client_options: dict[str, Any] = {
             "timeout": self._settings.timeout_seconds,
-            "follow_redirects": True,
+            "follow_redirects": False,
             "trust_env": False,
         }
         if _should_use_proxy(self._settings.proxy_url):

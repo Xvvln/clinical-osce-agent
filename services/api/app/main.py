@@ -603,7 +603,13 @@ def _is_training_model_config_required() -> bool:
 def _resolve_user_runtime_model_config(user_id: str) -> RuntimeModelConfig | None:
     if not is_runtime_model_config_write_supported():
         return None
-    return user_model_config_store.get_runtime_config(user_id)
+    saved_config = user_model_config_store.get_runtime_config(user_id)
+    if saved_config is None:
+        return None
+    try:
+        return runtime_model_config_store.build_config(saved_config.to_config_dict())
+    except ValueError:
+        return None
 
 
 def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, object]:
@@ -621,7 +627,7 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
             "api_key_saved": False,
             "message": "当前服务端未配置可用模型。",
         }
-    saved_config = user_model_config_store.get_runtime_config(user_id)
+    saved_config = _resolve_user_runtime_model_config(user_id)
     if saved_config is None:
         return {
             "active": False,

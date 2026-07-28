@@ -20,6 +20,27 @@ from app.services.runtime_model_config_store import RuntimeModelConfig, runtime_
 from app.services.osce_session_service import OsceSessionService
 
 
+@pytest.fixture(autouse=True)
+def allow_runtime_context_test_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS",
+        ",".join(
+            [
+                "lazy-provider-a.example",
+                "lazy-provider-b.example",
+                "process-provider.example",
+                "provider-a.example",
+                "provider-b.example",
+                "report-provider.example",
+                "request-provider.example",
+                "scorer-provider-a.example",
+                "scorer-provider-b.example",
+                "user-provider.example",
+            ]
+        ),
+    )
+
+
 class _ConcurrentSessionService:
     def __init__(self, sessions: dict[str, dict[str, object]], barrier: Barrier) -> None:
         self._sessions = sessions
@@ -402,7 +423,13 @@ def test_report_background_enrichment_rebinds_session_owner_runtime_config(tmp_p
     assert runtime_model_config_store.get_active_config() == process_fallback
 
 
-def test_runtime_vertex_adc_rejects_account_proxy_before_changing_process_fallback() -> None:
+def test_runtime_vertex_adc_rejects_account_proxy_before_changing_process_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
+        "true",
+    )
     process_fallback = runtime_model_config_store.apply_config(
         {
             "provider": "openai_compatible",
@@ -427,7 +454,13 @@ def test_runtime_vertex_adc_rejects_account_proxy_before_changing_process_fallba
     assert runtime_model_config_store.get_active_config() == process_fallback
 
 
-def test_runtime_vertex_adc_requires_explicit_project() -> None:
+def test_runtime_vertex_adc_requires_explicit_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
+        "true",
+    )
     with pytest.raises(ValueError, match="project is required for vertex_gemini_adc"):
         runtime_model_config_store.build_config(
             {
@@ -440,7 +473,13 @@ def test_runtime_vertex_adc_requires_explicit_project() -> None:
         )
 
 
-def test_runtime_vertex_api_key_rejects_invalid_proxy_before_save() -> None:
+def test_runtime_vertex_api_key_rejects_invalid_proxy_before_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
+        "true",
+    )
     with pytest.raises(ValueError, match=INVALID_GOOGLE_GENAI_PROXY_MESSAGE):
         runtime_model_config_store.build_config(
             {

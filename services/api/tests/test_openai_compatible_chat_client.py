@@ -124,6 +124,7 @@ def test_openai_compatible_chat_client_posts_chat_completion_with_proxy_and_auth
     assert len(FakeHttpxClient.instances) == 1
     http_client = FakeHttpxClient.instances[0]
     assert http_client.kwargs["proxy"] == "http://127.0.0.1:7897"
+    assert http_client.kwargs["follow_redirects"] is False
     assert http_client.calls[0]["url"] == "https://api.proxy.example/v1/chat/completions"
     assert http_client.calls[0]["headers"]["Authorization"] == "Bearer openai-secret-value"
     request_body = http_client.calls[0]["json"]

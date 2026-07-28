@@ -10,6 +10,8 @@ services:
     environment:
       CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
       CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG: "true"
+      CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS: api.openai.com,api.anthropic.com,generativelanguage.googleapis.com
+      CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS: "false"
       CLINICAL_OSCE_ADMIN_EMAILS: ${E2E_ADMIN_EMAIL:-admin@e2e.test}
       CLINICAL_OSCE_DEMO_ADMIN_ENABLED: "true"
       CLINICAL_OSCE_DEMO_ADMIN_EMAIL: ${E2E_ADMIN_EMAIL:-admin@e2e.test}

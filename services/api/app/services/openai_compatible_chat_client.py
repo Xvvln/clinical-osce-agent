@@ -126,7 +126,7 @@ class OpenAICompatibleChatClient:
     def _post_chat_completion(self, payload: dict[str, Any], *, settings: OpenAICompatibleSettings, provider_label: str) -> httpx.Response:
         client_options: dict[str, Any] = {
             "timeout": settings.timeout_seconds,
-            "follow_redirects": True,
+            "follow_redirects": False,
             "trust_env": False,
         }
         if _should_use_proxy(settings.proxy_url):

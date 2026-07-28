@@ -186,13 +186,15 @@ Session 主记录使用 SQLite revision 的 compare-and-swap（比较并交换�
 
 ```env
 CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
+CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS=api.openai.com,api.anthropic.com,generativelanguage.googleapis.com
+CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=false
 OSCE_OPENAI_MODEL=gemini-3.5-flash
 OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
 OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
-仅在本地显式启用账号级模型配置时，后端才会按当前登录账号读取配置，并在单次训练或报告请求的上下文中绑定；读取配置状态不会改写进程级模型状态，后台报告增强也会按 session 所属账号重新绑定。Provider 客户端按配置快照隔离缓存，OpenAI / Anthropic / Google GenAI 请求均使用客户端级代理且不继承进程代理环境。由于 ADC 凭据刷新无法做到账号级代理隔离，账号级 Vertex ADC 只允许直连；需要代理时应改用 Vertex API Key，或由运维配置服务端托管代理。
+仅在本地显式启用账号级模型配置时，后端才会按当前登录账号读取配置，并在单次训练或报告请求的上下文中绑定；读取配置状态不会改写进程级模型状态，后台报告增强也会按 session 所属账号重新绑定。共享模式默认只允许服务端批准清单中的 HTTPS provider 主机，账号级请求必须直连，不接受自定义后端、代理、内网 / 回环地址或服务端 Vertex ADC，也不跟随 HTTP 重定向；实际保存、连通性测试和训练调用共用同一策略。只有单人本机 `local-dev` 可显式设置 `CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=true` 恢复上述开发能力，该开关在 `local-demo` 和生产模式中无效。
 
 语音输入与患者回复播放通过后端 `/api/audio/*` 统一接入 DashScope。浏览器不保存阿里云 key；如需启用，在 API 服务端环境配置：
 

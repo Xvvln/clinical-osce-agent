@@ -24,6 +24,8 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     for env_name in [
         "CLINICAL_OSCE_DEPLOYMENT_MODE",
         "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG",
+        "CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS",
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
         "CLINICAL_OSCE_ADMIN_EMAILS",
         "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
         "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
@@ -116,6 +118,39 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "false")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
     monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "0")
+    # Legacy provider adapter tests intentionally exercise the explicit
+    # single-user local-dev escape hatch. Shared-mode security tests override
+    # the deployment mode and verify that this flag is ignored there.
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",
+        "true",
+    )
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS",
+        ",".join(
+            [
+                "api.openai.example",
+                "api.proxy.example",
+                "candidate-provider-a.example",
+                "candidate-provider-b.example",
+                "fallback-gateway.example",
+                "gateway.example",
+                "lazy-provider-a.example",
+                "lazy-provider-b.example",
+                "managed-gateway.example",
+                "primary.example",
+                "process-provider.example",
+                "provider-a.example",
+                "provider-b.example",
+                "report-provider.example",
+                "request-provider.example",
+                "scorer-provider-a.example",
+                "scorer-provider-b.example",
+                "student-old.example",
+                "user-provider.example",
+            ]
+        ),
+    )
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "admin@osce.test")
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", "admin")

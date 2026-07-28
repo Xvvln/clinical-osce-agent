@@ -42,6 +42,7 @@ test("E2E Compose isolates persistence and disables network model dependencies",
   assert.match(composeSource, /e2e_runtime:\/app\/data\/runtime/);
   assert.doesNotMatch(composeSource, /\.\/data\/runtime:\/app\/data\/runtime/);
   assert.match(composeSource, /OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING:\s*"false"/);
+  assert.match(composeSource, /CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS:\s*"false"/);
   for (const setting of [
     "OSCE_VERTEX_ENABLED",
     "OSCE_VERTEX_SKILL_CANDIDATE_ENABLED",
