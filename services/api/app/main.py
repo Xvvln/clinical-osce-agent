@@ -50,9 +50,16 @@ from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.admin_learning_analytics_service import AdminLearningAnalyticsService
 from app.services.deployment_config import (
+    DEMO_ADMIN_ENABLED_ENV_NAME,
+    DEMO_ADMIN_EMAIL_ENV_NAME,
+    DEMO_ADMIN_PASSWORD_ENV_NAME,
+    DEMO_STUDENT_ENABLED_ENV_NAME,
+    DEMO_STUDENT_EMAIL_ENV_NAME,
+    DEMO_STUDENT_PASSWORD_ENV_NAME,
     get_deployment_mode,
     is_account_registration_supported,
     is_demo_admin_effectively_enabled,
+    is_demo_student_effectively_enabled,
     is_runtime_model_config_write_supported,
 )
 from app.services.dashscope_speech_service import (
@@ -61,7 +68,7 @@ from app.services.dashscope_speech_service import (
     SpeechSynthesisResult,
     build_dashscope_speech_service_from_environment,
 )
-from app.services.demo_seed_service import seed_demo_data
+from app.services.demo_seed_service import DEMO_SEED_CONFIG_ERROR_MESSAGE, seed_demo_data
 from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import (
     CASES_DIR,
@@ -103,16 +110,11 @@ from app.validators.case_validator import validate_case, validate_case_rubric_pa
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
-DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
-DEMO_ADMIN_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_EMAIL"
-DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
-DEFAULT_DEMO_ADMIN_EMAIL = "admin@osce.test"
-DEFAULT_DEMO_ADMIN_PASSWORD = "admin"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
-DEFAULT_DEMO_STUDENT_EMAIL = "student@osce.test"
-DEFAULT_DEMO_STUDENT_PASSWORD = "student"
 DEFAULT_DEMO_STUDENT_DISPLAY_NAME = "演示学生"
-FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = "当前演示仅开放固定学生和管理员账号，不允许创建新账号。"
+FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = (
+    "不允许创建新账号；固定学生和管理员账号仅在本地模式下显式配置后可用。"
+)
 TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME = "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING"
 TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。"
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
@@ -503,12 +505,6 @@ def _require_current_user(auth_token: str | None) -> dict[str, str]:
     return user
 
 
-def _get_optional_current_user(auth_token: str | None) -> dict[str, str] | None:
-    if not auth_token:
-        return None
-    return auth_store.get_user_by_session_token(auth_token)
-
-
 def _is_training_model_config_required() -> bool:
     value = os.getenv(TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME, "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -747,19 +743,23 @@ def _is_demo_admin_enabled() -> bool:
 
 
 def _get_demo_admin_email() -> str:
-    return os.environ.get(DEMO_ADMIN_EMAIL_ENV_NAME, DEFAULT_DEMO_ADMIN_EMAIL).strip().lower()
+    return os.environ.get(DEMO_ADMIN_EMAIL_ENV_NAME, "").strip().lower()
 
 
 def _get_demo_admin_password() -> str:
-    return os.environ.get(DEMO_ADMIN_PASSWORD_ENV_NAME, DEFAULT_DEMO_ADMIN_PASSWORD)
+    return os.environ.get(DEMO_ADMIN_PASSWORD_ENV_NAME, "")
+
+
+def _is_demo_student_enabled() -> bool:
+    return is_demo_student_effectively_enabled()
 
 
 def _get_demo_student_email() -> str:
-    return DEFAULT_DEMO_STUDENT_EMAIL
+    return os.environ.get(DEMO_STUDENT_EMAIL_ENV_NAME, "").strip().lower()
 
 
 def _get_demo_student_password() -> str:
-    return DEFAULT_DEMO_STUDENT_PASSWORD
+    return os.environ.get(DEMO_STUDENT_PASSWORD_ENV_NAME, "")
 
 
 def _build_auth_user_payload(user: dict[str, str]) -> dict[str, object]:
@@ -778,7 +778,11 @@ def _ensure_demo_admin_user(email: str, password: str) -> dict[str, str]:
 
 
 def _matches_demo_student_credentials(email: str, password: str) -> bool:
-    return email.strip().lower() == _get_demo_student_email() and password == _get_demo_student_password()
+    return (
+        _is_demo_student_enabled()
+        and email.strip().lower() == _get_demo_student_email()
+        and password == _get_demo_student_password()
+    )
 
 
 def _ensure_demo_student_user(email: str, password: str) -> dict[str, str]:
@@ -1582,18 +1586,8 @@ def test_model_config(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="runtime model config is disabled in production deployment mode",
         )
-    user = _get_optional_current_user(auth_token)
-    config_request = (
-        _build_user_runtime_model_config_request(user["user_id"], request)
-        if user is not None
-        else {
-            "provider": request.provider,
-            "api_key": request.api_key,
-            "model": request.model,
-            "base_url": request.base_url,
-            "proxy_url": request.proxy_url,
-        }
-    )
+    user = _require_current_user(auth_token)
+    config_request = _build_user_runtime_model_config_request(user["user_id"], request)
     try:
         return test_student_model_config_connectivity(config_request)
     except ValueError as exc:
@@ -2135,14 +2129,29 @@ def seed_admin_demo_data(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
-    return seed_demo_data(
-        auth_store=auth_store,
-        osce_service=osce_session_service,
-        candidate_store=training_skill_candidate_store,
-        reviewer_email=reviewer["email"],
-        admin_email=_get_demo_admin_email(),
-        admin_password=_get_demo_admin_password(),
-    )
+    if not (_is_demo_admin_enabled() and _is_demo_student_enabled()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=DEMO_SEED_CONFIG_ERROR_MESSAGE,
+        )
+    try:
+        return seed_demo_data(
+            auth_store=auth_store,
+            osce_service=osce_session_service,
+            candidate_store=training_skill_candidate_store,
+            reviewer_email=reviewer["email"],
+            admin_email=_get_demo_admin_email(),
+            admin_password=_get_demo_admin_password(),
+            student_email=_get_demo_student_email(),
+            student_password=_get_demo_student_password(),
+        )
+    except ValueError as exc:
+        if str(exc) == DEMO_SEED_CONFIG_ERROR_MESSAGE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=DEMO_SEED_CONFIG_ERROR_MESSAGE,
+            ) from exc
+        raise
 
 
 @app.get("/api/admin/evolution/candidates")

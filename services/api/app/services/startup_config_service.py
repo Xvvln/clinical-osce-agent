@@ -6,9 +6,15 @@ from typing import Any
 from app.services.deployment_config import (
     ALLOWED_DEPLOYMENT_MODES,
     DEMO_ADMIN_ENABLED_ENV_NAME,
+    DEMO_ADMIN_EMAIL_ENV_NAME,
+    DEMO_ADMIN_PASSWORD_ENV_NAME,
+    DEMO_STUDENT_ENABLED_ENV_NAME,
+    DEMO_STUDENT_EMAIL_ENV_NAME,
+    DEMO_STUDENT_PASSWORD_ENV_NAME,
     DEPLOYMENT_MODE_ENV_NAME,
     get_deployment_mode,
     is_demo_admin_effectively_enabled,
+    is_demo_student_effectively_enabled,
     is_known_deployment_mode,
     is_production_deployment_mode,
     is_account_registration_supported,
@@ -44,6 +50,7 @@ def build_startup_config_self_check() -> dict[str, Any]:
         },
         "policy": {
             "demo_admin_effective_enabled": is_demo_admin_effectively_enabled(mode),
+            "demo_student_effective_enabled": is_demo_student_effectively_enabled(mode),
             "runtime_write_supported": is_runtime_model_config_write_supported(mode),
             "account_registration_supported": is_account_registration_supported(mode),
             "configuration_source": "environment_only" if production else "environment_or_runtime_memory",
@@ -77,15 +84,51 @@ def _build_startup_config_issues(
             )
         )
 
-    if production and is_demo_admin_effectively_enabled(mode):
+    if production and _truthy_env(DEMO_ADMIN_ENABLED_ENV_NAME):
         issues.append(
             _issue(
                 code="demo_admin_enabled_in_production",
                 severity="warning",
-                message=f"{DEMO_ADMIN_ENABLED_ENV_NAME}=true is intended only for controlled demo deployments.",
+                message=f"{DEMO_ADMIN_ENABLED_ENV_NAME}=true is ignored in production deployment modes.",
                 missing_env=[],
             )
         )
+    elif _truthy_env(DEMO_ADMIN_ENABLED_ENV_NAME):
+        missing_demo_admin_env = _missing_env(
+            DEMO_ADMIN_EMAIL_ENV_NAME,
+            DEMO_ADMIN_PASSWORD_ENV_NAME,
+        )
+        if missing_demo_admin_env:
+            issues.append(
+                _issue(
+                    code="demo_admin_incomplete",
+                    message="Demo admin is enabled but its explicit email or password is missing.",
+                    missing_env=missing_demo_admin_env,
+                )
+            )
+
+    if production and _truthy_env(DEMO_STUDENT_ENABLED_ENV_NAME):
+        issues.append(
+            _issue(
+                code="demo_student_enabled_in_production",
+                severity="warning",
+                message=f"{DEMO_STUDENT_ENABLED_ENV_NAME}=true is ignored in production deployment modes.",
+                missing_env=[],
+            )
+        )
+    elif _truthy_env(DEMO_STUDENT_ENABLED_ENV_NAME):
+        missing_demo_student_env = _missing_env(
+            DEMO_STUDENT_EMAIL_ENV_NAME,
+            DEMO_STUDENT_PASSWORD_ENV_NAME,
+        )
+        if missing_demo_student_env:
+            issues.append(
+                _issue(
+                    code="demo_student_incomplete",
+                    message="Demo student is enabled but its explicit email or password is missing.",
+                    missing_env=missing_demo_student_env,
+                )
+            )
 
     for provider in providers:
         if not provider.get("enabled"):
@@ -136,6 +179,14 @@ def _issue(
 
 def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
+
+
+def _truthy_env(name: str) -> bool:
+    return _env(name).lower() in {"1", "true", "yes", "on"}
+
+
+def _missing_env(*names: str) -> list[str]:
+    return [name for name in names if not _env(name)]
 
 
 __all__ = ["build_startup_config_self_check"]

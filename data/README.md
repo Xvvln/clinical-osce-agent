@@ -174,6 +174,19 @@ MediTOD canonicalized dataset 是 MediTOD 使用 UMLS 词表标准化后的版�
 - `processed/`：目前为空。
 - `runtime/*.sqlite3`：本地报告、训练事件和训练 Skill 数据库，是运行时产物。
 
+## 容器镜像数据边界
+
+API 镜像只复制运行所需的公开静态资产：
+
+- `cases/`
+- `rubrics/`
+- `schemas/`
+- `attribution/`
+- `rag_knowledge/`
+- `humanistic_anchor_bank.yaml`
+
+`raw/`、`processed/` 和 `runtime/` 不会被烘焙进镜像。本地环境示例仍可把 Chroma 索引写入 `./data/processed/chroma`；Docker Compose 则显式将 Chroma 索引、Hugging Face 缓存和 FastEmbed 缓存改到 `/app/data/runtime/*`，并把宿主机 `./data/runtime` 挂载到该目录。因此在 Compose 部署中，训练记录、账号库、日志、上传文档、向量索引与模型缓存都属于挂载卷中的运行状态，应单独备份和控制访问。
+
 ## Git 与合规注意事项
 
 - `data/raw/`、`runtime/*.sqlite3` 和大体积受限数据默认不应提交。

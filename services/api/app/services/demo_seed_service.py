@@ -7,10 +7,11 @@ from app.services.osce_session_service import OsceSessionService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_policy import build_prohibited_content_policy, build_success_metrics, build_teaching_action_plan
 
-DEMO_STUDENT_EMAIL = "student@osce.test"
-DEMO_STUDENT_PASSWORD = "student"
 DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
+DEMO_SEED_CONFIG_ERROR_MESSAGE = (
+    "demo admin and student credentials must be explicitly configured in a local deployment"
+)
 DEMO_CANDIDATE_ID = "demo_skill_candidate_abdominal_pain_history_bundle"
 DEMO_TRIGGER_ITEM_ID = "training_pattern_abdominal_pain_history_bundle"
 DEMO_SKILL_ID = f"skill_{DEMO_TRIGGER_ITEM_ID}"
@@ -27,10 +28,18 @@ def seed_demo_data(
     reviewer_email: str,
     admin_email: str,
     admin_password: str,
+    student_email: str,
+    student_password: str,
 ) -> dict[str, Any]:
+    admin_email, student_email = _validate_demo_seed_credentials(
+        admin_email=admin_email,
+        admin_password=admin_password,
+        student_email=student_email,
+        student_password=student_password,
+    )
     student = auth_store.upsert_user_password(
-        DEMO_STUDENT_EMAIL,
-        DEMO_STUDENT_PASSWORD,
+        student_email,
+        student_password,
         DEMO_STUDENT_DISPLAY_NAME,
     )
     auth_store.upsert_user_password(admin_email, admin_password, DEMO_ADMIN_DISPLAY_NAME)
@@ -70,8 +79,8 @@ def seed_demo_data(
     stored_candidate = candidate_store.get_candidate(DEMO_CANDIDATE_ID)
     return {
         "student": {
-            "email": DEMO_STUDENT_EMAIL,
-            "password": DEMO_STUDENT_PASSWORD,
+            "email": student_email,
+            "password": student_password,
             "display_name": DEMO_STUDENT_DISPLAY_NAME,
         },
         "admin": {
@@ -91,6 +100,25 @@ def seed_demo_data(
             "status": str(enabled_skill.get("status")) if enabled_skill else "missing",
         },
     }
+
+
+def _validate_demo_seed_credentials(
+    *,
+    admin_email: str,
+    admin_password: str,
+    student_email: str,
+    student_password: str,
+) -> tuple[str, str]:
+    normalized_admin_email = admin_email.strip().lower()
+    normalized_student_email = student_email.strip().lower()
+    if not (
+        normalized_admin_email
+        and admin_password.strip()
+        and normalized_student_email
+        and student_password.strip()
+    ):
+        raise ValueError(DEMO_SEED_CONFIG_ERROR_MESSAGE)
+    return normalized_admin_email, normalized_student_email
 
 
 def _demo_report_count(osce_service: OsceSessionService, student_id: str) -> int:

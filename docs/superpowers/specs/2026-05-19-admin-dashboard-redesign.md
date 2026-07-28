@@ -19,7 +19,7 @@
 ### 身份与状态
 
 - 已有管理员登录弹窗。
-- 演示账号默认预填：`admin-demo@example.test` / `safe-admin-password`。
+- 本节记录当时的页面状态；后续安全收口已移除默认预填凭据。当前固定管理员账号只在 `local-dev` / `local-demo` 下完整显式配置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED/EMAIL/PASSWORD` 后可用，生产模式始终禁用。
 - 当前页面有“管理员登录”按钮，但缺少清晰的已登录账号状态与登出入口。
 - 401 / 403 会打开登录弹窗并显示错误。
 

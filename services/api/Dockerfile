@@ -13,7 +13,12 @@ WORKDIR /app
 COPY services/api/pyproject.toml services/api/uv.lock ./services/api/
 COPY services/api/app ./services/api/app
 COPY services/api/evals ./services/api/evals
-COPY data ./data
+COPY data/cases ./data/cases
+COPY data/rubrics ./data/rubrics
+COPY data/schemas ./data/schemas
+COPY data/attribution ./data/attribution
+COPY data/rag_knowledge ./data/rag_knowledge
+COPY data/humanistic_anchor_bank.yaml ./data/humanistic_anchor_bank.yaml
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir uv \

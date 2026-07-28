@@ -1,3 +1,5 @@
+import os
+
 from fastapi.testclient import TestClient
 
 from app import main
@@ -107,9 +109,10 @@ def _authenticated_client(tmp_path, monkeypatch, email: str) -> TestClient:
     return client
 
 
-def test_student_model_config_test_accepts_custom_backend_without_admin_login(monkeypatch) -> None:
+def test_student_model_config_test_requires_authentication_before_http_probe(monkeypatch) -> None:
     _FakeHttpxClient.requested_urls = []
     _FakeHttpxClient.requested_headers = []
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-dev")
     monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeHttpxClient)
 
     with TestClient(main.app) as client:
@@ -117,12 +120,70 @@ def test_student_model_config_test_accepts_custom_backend_without_admin_login(mo
             "/api/model-config/test",
             json={
                 "provider": "custom_backend",
-                "api_key": "student-secret-value",
+                "api_key": "anonymous-secret-value",
                 "model": "",
-                "base_url": "http://custom.example/api",
-                "proxy_url": "http://127.0.0.1:7897",
+                "base_url": "http://internal.example/api",
+                "proxy_url": "direct",
             },
         )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "not authenticated"}
+    assert _FakeHttpxClient.requested_urls == []
+    assert _FakeHttpxClient.requested_headers == []
+
+
+def test_unauthenticated_model_config_test_does_not_change_process_proxy(monkeypatch) -> None:
+    _FakeVertexGeminiClient.created = []
+    _FakeVertexGeminiModels.calls = []
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    original_proxy_environment = {
+        "HTTP_PROXY": "http://original-http-proxy.example",
+        "HTTPS_PROXY": "http://original-https-proxy.example",
+        "ALL_PROXY": "socks5://original-all-proxy.example",
+    }
+    for name, value in original_proxy_environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(student_model_config_service.genai, "Client", _FakeVertexGeminiClient)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/model-config/test",
+            json={
+                "provider": "vertex_gemini_adc",
+                "api_key": "",
+                "model": "gemini-3.1-pro-preview",
+                "base_url": "demo-project",
+                "proxy_url": "http://attacker-proxy.example",
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "not authenticated"}
+    assert {name: os.environ.get(name) for name in original_proxy_environment} == original_proxy_environment
+    assert _FakeVertexGeminiClient.created == []
+    assert _FakeVertexGeminiModels.calls == []
+
+
+def test_authenticated_student_model_config_test_accepts_custom_byok_backend_without_admin_role(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _FakeHttpxClient.requested_urls = []
+    _FakeHttpxClient.requested_headers = []
+    monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeHttpxClient)
+
+    client = _authenticated_client(tmp_path, monkeypatch, "student-custom-byok@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "custom_backend",
+            "api_key": "student-secret-value",
+            "model": "",
+            "base_url": "http://custom.example/api",
+            "proxy_url": "http://127.0.0.1:7897",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -134,18 +195,18 @@ def test_student_model_config_test_accepts_custom_backend_without_admin_login(mo
     assert "student-secret-value" not in response.text
 
 
-def test_student_model_config_test_rejects_remote_provider_without_api_key() -> None:
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "gemini",
-                "api_key": "",
-                "model": "gemini-3.1-pro-preview",
-                "base_url": "https://generativelanguage.googleapis.com",
-                "proxy_url": "http://127.0.0.1:7897",
-            },
-        )
+def test_student_model_config_test_rejects_remote_provider_without_api_key(tmp_path, monkeypatch) -> None:
+    client = _authenticated_client(tmp_path, monkeypatch, "student-gemini-missing-key@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "gemini",
+            "api_key": "",
+            "model": "gemini-3.1-pro-preview",
+            "base_url": "https://generativelanguage.googleapis.com",
+            "proxy_url": "http://127.0.0.1:7897",
+        },
+    )
 
     assert response.status_code == 400
     assert response.json() == {"detail": "api_key is required for gemini"}
@@ -170,23 +231,23 @@ def test_student_model_config_test_is_disabled_in_production_deployment_mode(mon
     assert response.json() == {"detail": "runtime model config is disabled in production deployment mode"}
 
 
-def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(monkeypatch) -> None:
+def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(tmp_path, monkeypatch) -> None:
     _FakeOpenAICompatibleProbeClient.requested_urls = []
     _FakeOpenAICompatibleProbeClient.requested_headers = []
     _FakeOpenAICompatibleProbeClient.requested_bodies = []
     monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeOpenAICompatibleProbeClient)
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "openai_compatible",
-                "api_key": "student-openai-secret",
-                "model": "gemini-via-clprox",
-                "base_url": "https://api.proxy.example/v1",
-                "proxy_url": "direct",
-            },
-        )
+    client = _authenticated_client(tmp_path, monkeypatch, "student-openai-probe@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "gemini-via-clprox",
+            "base_url": "https://api.proxy.example/v1",
+            "proxy_url": "direct",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -202,23 +263,23 @@ def test_student_model_config_test_openai_compatible_uses_chat_completion_probe(
     ]
 
 
-def test_student_model_config_test_includes_sanitized_provider_error_detail(monkeypatch) -> None:
+def test_student_model_config_test_includes_sanitized_provider_error_detail(tmp_path, monkeypatch) -> None:
     _FakeOpenAICompatibleErrorProbeClient.requested_urls = []
     _FakeOpenAICompatibleErrorProbeClient.requested_headers = []
     _FakeOpenAICompatibleErrorProbeClient.requested_bodies = []
     monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeOpenAICompatibleErrorProbeClient)
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "openai_compatible",
-                "api_key": "student-openai-secret",
-                "model": "unsupported-model",
-                "base_url": "https://fallback-gateway.example/v1",
-                "proxy_url": "direct",
-            },
-        )
+    client = _authenticated_client(tmp_path, monkeypatch, "student-openai-error@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "openai_compatible",
+            "api_key": "student-openai-secret",
+            "model": "unsupported-model",
+            "base_url": "https://fallback-gateway.example/v1",
+            "proxy_url": "direct",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -228,23 +289,23 @@ def test_student_model_config_test_includes_sanitized_provider_error_detail(monk
     assert "student-openai-secret" not in response.text
 
 
-def test_student_model_config_test_anthropic_uses_messages_probe(monkeypatch) -> None:
+def test_student_model_config_test_anthropic_uses_messages_probe(tmp_path, monkeypatch) -> None:
     _FakeOpenAICompatibleProbeClient.requested_urls = []
     _FakeOpenAICompatibleProbeClient.requested_headers = []
     _FakeOpenAICompatibleProbeClient.requested_bodies = []
     monkeypatch.setattr(student_model_config_service.httpx, "Client", _FakeOpenAICompatibleProbeClient)
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "anthropic",
-                "api_key": "student-anthropic-secret",
-                "model": "claude-3-5-sonnet-latest",
-                "base_url": "https://api.anthropic.com",
-                "proxy_url": "direct",
-            },
-        )
+    client = _authenticated_client(tmp_path, monkeypatch, "student-anthropic-probe@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "anthropic",
+            "api_key": "student-anthropic-secret",
+            "model": "claude-3-5-sonnet-latest",
+            "base_url": "https://api.anthropic.com",
+            "proxy_url": "direct",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -261,22 +322,22 @@ def test_student_model_config_test_anthropic_uses_messages_probe(monkeypatch) ->
     assert "student-anthropic-secret" not in response.text
 
 
-def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(monkeypatch) -> None:
+def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tmp_path, monkeypatch) -> None:
     _FakeVertexGeminiClient.created = []
     _FakeVertexGeminiModels.calls = []
     monkeypatch.setattr(student_model_config_service.genai, "Client", _FakeVertexGeminiClient)
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "vertex_gemini_adc",
-                "api_key": "",
-                "model": "gemini-3.1-pro-preview",
-                "base_url": "demo-project",
-                "proxy_url": "http://127.0.0.1:7897",
-            },
-        )
+    client = _authenticated_client(tmp_path, monkeypatch, "student-vertex-adc-probe@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-pro-preview",
+            "base_url": "demo-project",
+            "proxy_url": "http://127.0.0.1:7897",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -288,22 +349,25 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(mo
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
 
 
-def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_without_project(monkeypatch) -> None:
+def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_without_project(
+    tmp_path,
+    monkeypatch,
+) -> None:
     _FakeVertexGeminiClient.created = []
     _FakeVertexGeminiModels.calls = []
     monkeypatch.setattr(student_model_config_service.genai, "Client", _FakeVertexGeminiClient)
 
-    with TestClient(main.app) as client:
-        response = client.post(
-            "/api/model-config/test",
-            json={
-                "provider": "vertex_gemini_api_key",
-                "api_key": "student-vertex-secret",
-                "model": "gemini-2.5-flash",
-                "base_url": "",
-                "proxy_url": "http://127.0.0.1:7897",
-            },
-        )
+    client = _authenticated_client(tmp_path, monkeypatch, "student-vertex-key-probe@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "vertex_gemini_api_key",
+            "api_key": "student-vertex-secret",
+            "model": "gemini-2.5-flash",
+            "base_url": "",
+            "proxy_url": "http://127.0.0.1:7897",
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()

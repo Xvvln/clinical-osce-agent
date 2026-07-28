@@ -37,6 +37,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     assert payload["runtime_config"]["active"] is False
     assert payload["runtime_config"]["write_supported"] is False
     assert payload["policy"]["demo_admin_effective_enabled"] is False
+    assert payload["policy"]["demo_student_effective_enabled"] is False
     assert payload["policy"]["account_registration_supported"] is False
 
     issue_codes = {issue["code"] for issue in payload["issues"]}
@@ -78,6 +79,11 @@ def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gem
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
     monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@osce.test")
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "admin@osce.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", "configured-admin-password")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_EMAIL", "student@osce.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "configured-student-password")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "configured")
     monkeypatch.setenv("OSCE_OPENAI_MODEL", "gemini-3.5-flash")
@@ -95,9 +101,36 @@ def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gem
     payload = response.json()
     issue_codes = {issue["code"] for issue in payload["issues"]}
     demo_issue = next(issue for issue in payload["issues"] if issue["code"] == "demo_admin_enabled_in_production")
+    student_issue = next(issue for issue in payload["issues"] if issue["code"] == "demo_student_enabled_in_production")
     assert payload["overall_status"] == "ok"
+    assert payload["policy"]["demo_admin_effective_enabled"] is False
+    assert payload["policy"]["demo_student_effective_enabled"] is False
     assert "gemini_missing_env" not in issue_codes
     assert demo_issue["severity"] == "warning"
+    assert student_issue["severity"] == "warning"
+
+
+def test_local_demo_accounts_are_disabled_without_complete_explicit_config(monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "admin@osce.test")
+    monkeypatch.delenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_ENABLED", "true")
+    monkeypatch.delenv("CLINICAL_OSCE_DEMO_STUDENT_EMAIL", raising=False)
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "configured-student-password")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/health/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overall_status"] == "fail"
+    assert payload["policy"]["demo_admin_effective_enabled"] is False
+    assert payload["policy"]["demo_student_effective_enabled"] is False
+    issues = {issue["code"]: issue for issue in payload["issues"]}
+    assert issues["demo_admin_incomplete"]["missing_env"] == ["CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"]
+    assert issues["demo_student_incomplete"]["missing_env"] == ["CLINICAL_OSCE_DEMO_STUDENT_EMAIL"]
 
 
 def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch) -> None:
@@ -136,6 +169,7 @@ def test_compose_health_path_remains_valid() -> None:
     compose_payload = yaml.safe_load((repo_root / "docker-compose.yml").read_text(encoding="utf-8"))
     api_service = compose_payload["services"]["api"]
     web_service = compose_payload["services"]["web"]
+    admin_service = compose_payload["services"]["admin"]
     api_healthcheck = api_service["healthcheck"]["test"]
 
     assert any("http://127.0.0.1:8000/health" in str(part) for part in api_healthcheck)
@@ -143,7 +177,33 @@ def test_compose_health_path_remains_valid() -> None:
         api_service["environment"]["CLINICAL_OSCE_DEPLOYMENT_MODE"]
         == "${CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
     )
-    assert api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "${CLINICAL_OSCE_DEMO_ADMIN_ENABLED:-true}"
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG"]
+        == "${CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG:-true}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"]
+        == "${CLINICAL_OSCE_DEMO_ADMIN_ENABLED:-false}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"]
+        == "${CLINICAL_OSCE_DEMO_ADMIN_PASSWORD:-}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEMO_STUDENT_ENABLED"]
+        == "${CLINICAL_OSCE_DEMO_STUDENT_ENABLED:-false}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEMO_STUDENT_EMAIL"]
+        == "${CLINICAL_OSCE_DEMO_STUDENT_EMAIL:-}"
+    )
+    assert (
+        api_service["environment"]["CLINICAL_OSCE_DEMO_STUDENT_PASSWORD"]
+        == "${CLINICAL_OSCE_DEMO_STUDENT_PASSWORD:-}"
+    )
+    assert api_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:8000:8000"]
+    assert web_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3000:3000"]
+    assert admin_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3001:3000"]
     assert (
         web_service["build"]["args"]["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"]
         == "${NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
@@ -159,20 +219,28 @@ def test_compose_health_path_remains_valid() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_documented_test_stage_model_defaults_match_current_policy() -> None:
+def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_password() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    readme_source = (repo_root / "README.md").read_text(encoding="utf-8")
     env_example_source = (repo_root / ".env.example").read_text(encoding="utf-8")
+    env_example_lines = set(env_example_source.splitlines())
 
-    for source in [readme_source, env_example_source]:
-        assert "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true" in source
-        assert "OSCE_OPENAI_MODEL=gemini-3.5-flash" in source
-        assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" in source
-        assert "OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001" in source
-        assert "OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5" in source
-        assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in source
-        assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in source
-        assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview" not in source
+    assert "CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo" in env_example_source
+    assert "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true" in env_example_source
+    assert "CLINICAL_OSCE_BIND_HOST=127.0.0.1" in env_example_source
+    assert "CLINICAL_OSCE_DEMO_ADMIN_ENABLED=false" in env_example_source
+    assert "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=" in env_example_lines
+    assert "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD=admin" not in env_example_source
+    assert "CLINICAL_OSCE_DEMO_STUDENT_ENABLED=false" in env_example_source
+    assert "CLINICAL_OSCE_DEMO_STUDENT_EMAIL=" in env_example_lines
+    assert "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD=" in env_example_lines
+    assert "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD=student" not in env_example_source
+    assert "OSCE_OPENAI_MODEL=gemini-3.5-flash" in env_example_source
+    assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" in env_example_source
+    assert "OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001" in env_example_source
+    assert "OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5" in env_example_source
+    assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source
+    assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source
+    assert "OSCE_VERTEX_SKILL_CANDIDATE_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source
 
 
 def test_api_env_file_loader_applies_services_env_without_overriding_existing_env(tmp_path, monkeypatch) -> None:

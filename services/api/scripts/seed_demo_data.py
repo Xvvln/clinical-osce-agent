@@ -9,10 +9,12 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from app import main  # noqa: E402
-from app.services.demo_seed_service import seed_demo_data  # noqa: E402
+from app.services.demo_seed_service import DEMO_SEED_CONFIG_ERROR_MESSAGE, seed_demo_data  # noqa: E402
 
 
 def run() -> dict[str, object]:
+    if not (main._is_demo_admin_enabled() and main._is_demo_student_enabled()):
+        raise RuntimeError(DEMO_SEED_CONFIG_ERROR_MESSAGE)
     return seed_demo_data(
         auth_store=main.auth_store,
         osce_service=main.osce_session_service,
@@ -20,6 +22,8 @@ def run() -> dict[str, object]:
         reviewer_email=main._get_demo_admin_email(),
         admin_email=main._get_demo_admin_email(),
         admin_password=main._get_demo_admin_password(),
+        student_email=main._get_demo_student_email(),
+        student_password=main._get_demo_student_password(),
     )
 
 

@@ -22,6 +22,9 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
         "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
         "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+        "CLINICAL_OSCE_DEMO_STUDENT_ENABLED",
+        "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
+        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
         "OSCE_OPENAI_ENABLED",
         "OSCE_OPENAI_API_KEY",
         "OSCE_OPENAI_BASE_URL",
@@ -106,5 +109,11 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "false")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
     monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "0")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "admin@osce.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", "admin")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_EMAIL", "student@osce.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "student")
     yield
     runtime_model_config_store.clear()

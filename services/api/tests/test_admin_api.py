@@ -52,7 +52,13 @@ def authenticated_admin_client(
 ) -> Iterator[TestClient]:
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
     with TestClient(main.app, raise_server_exceptions=raise_server_exceptions) as client:
-        response = client.post("/api/auth/login", json={"email": "admin@osce.test", "password": "admin"})
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "email": main._get_demo_admin_email(),
+                "password": main._get_demo_admin_password(),
+            },
+        )
         assert response.status_code == 200
         yield client
 
@@ -294,6 +300,10 @@ def test_admin_can_read_model_api_logs(tmp_path, monkeypatch) -> None:
 
 
 def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "seed-admin@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", "seed-admin-password")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_EMAIL", "seed-student@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "seed-student-password")
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
     osce_session_service.training_event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
@@ -311,12 +321,12 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["student"] == {
-        "email": "student@osce.test",
-        "password": "student",
+        "email": "seed-student@example.test",
+        "password": "seed-student-password",
         "display_name": "演示学生",
     }
-    assert payload["admin"]["email"] == "admin@osce.test"
-    assert payload["admin"]["password"] == "admin"
+    assert payload["admin"]["email"] == "seed-admin@example.test"
+    assert payload["admin"]["password"] == "seed-admin-password"
     assert payload["session_count"] == 3
     assert payload["report_count"] == 2
     assert len(payload["sessions"]) == 3
@@ -334,6 +344,42 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
         event["payload"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
         for event in applied_events
     )
+
+
+def test_admin_demo_seed_fails_closed_when_student_credentials_are_incomplete(tmp_path, monkeypatch) -> None:
+    seed_called = False
+
+    def unexpected_seed(**_: object) -> dict[str, object]:
+        nonlocal seed_called
+        seed_called = True
+        return {}
+
+    monkeypatch.setattr(main, "seed_demo_data", unexpected_seed)
+    with authenticated_admin_client(tmp_path, monkeypatch, raise_server_exceptions=False) as client:
+        monkeypatch.delenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", raising=False)
+        response = client.post("/api/admin/demo/seed")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "demo admin and student credentials must be explicitly configured in a local deployment"
+    }
+    assert seed_called is False
+
+
+def test_demo_seed_script_fails_closed_without_complete_explicit_credentials(monkeypatch) -> None:
+    from scripts import seed_demo_data as seed_demo_script
+
+    def unexpected_seed(**_: object) -> dict[str, object]:
+        raise AssertionError("seed service must not run with incomplete credentials")
+
+    monkeypatch.delenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", raising=False)
+    monkeypatch.setattr(seed_demo_script, "seed_demo_data", unexpected_seed)
+
+    with pytest.raises(
+        RuntimeError,
+        match="demo admin and student credentials must be explicitly configured in a local deployment",
+    ):
+        seed_demo_script.run()
 
 
 def test_admin_review_request_schema_only_exposes_candidate_id() -> None:
@@ -784,26 +830,30 @@ def test_admin_can_read_retrieval_eval_metrics(tmp_path, monkeypatch) -> None:
     assert "ChromaDB 是本地可选持久向量检索" in payload["boundary"]["chroma_scope"]
 
 
-def test_demo_admin_can_login_with_hardcoded_credentials_without_env(tmp_path, monkeypatch) -> None:
+def test_demo_admin_is_disabled_without_explicit_environment_config(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
-    monkeypatch.delenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", raising=False)
+    for env_name in [
+        "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
+        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 
     with TestClient(main.app) as client:
-        login_response = client.post(
+        response = client.post(
             "/api/auth/login",
             json={"email": "admin@osce.test", "password": "admin"},
         )
-        assert login_response.status_code == 200
-        assert login_response.json()["user"]["email"] == "admin@osce.test"
-        admin_response = client.get("/api/admin/model-config")
 
-    assert admin_response.status_code == 200
+    assert response.status_code == 401
 
 
-def test_demo_admin_hardcoded_credentials_can_be_disabled(tmp_path, monkeypatch) -> None:
+def test_demo_admin_enabled_without_password_does_not_use_hardcoded_fallback(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
-    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "false")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "admin@osce.test")
+    monkeypatch.delenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", raising=False)
     monkeypatch.setattr(main, "auth_store", AuthStore(tmp_path / "auth.sqlite3"), raising=False)
 
     with TestClient(main.app) as client:

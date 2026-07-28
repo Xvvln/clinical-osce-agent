@@ -1,12 +1,15 @@
-.git
-.claude
-.worktrees
-.pytest_cache
-.playwright-mcp
-.vscode
+**/.git
+**/.claude
+**/.codex
+**/.agents
+**/.worktrees
+**/.pytest_cache
+**/.playwright-mcp
+**/.vscode
+**/.DS_Store
 
-.env
-.env.*
+**/.env
+**/.env.*
 !.env.example
 
 **/.venv
@@ -21,4 +24,13 @@
 
 references
 data/raw
-data/runtime/*.sqlite3
+data/processed
+data/runtime
+
+**/*.pem
+**/*.key
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.log
+**/*.jsonl
