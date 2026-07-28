@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
+from io import BytesIO
 
 import pytest
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
 from app import main
 from app.services.auth_store import AuthStore
-from app.services.dashscope_speech_service import SpeechSynthesisResult
+from app.services.dashscope_speech_service import SpeechSynthesisResult, SpeechTranscriptionResult
 
 
 @pytest.fixture
@@ -37,6 +40,80 @@ def test_transcription_reports_missing_speech_key(authenticated_client: TestClie
 
     assert response.status_code == 503
     assert "DASHSCOPE_API_KEY 未配置" in response.json()["detail"]
+
+
+def test_transcription_accepts_audio_at_endpoint_limit(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSpeechService:
+        async def transcribe(self, audio_bytes: bytes, **kwargs) -> SpeechTranscriptionResult:
+            assert audio_bytes == b"audio"
+            return SpeechTranscriptionResult(
+                text="什么时候开始疼的？",
+                provider="dashscope",
+                model="qwen3-asr-flash",
+                language="zh",
+            )
+
+    monkeypatch.setattr(main, "AUDIO_TRANSCRIPTION_MAX_BYTES", 5)
+    monkeypatch.setattr(main, "build_dashscope_speech_service_from_environment", lambda: FakeSpeechService())
+
+    response = authenticated_client.post(
+        "/api/audio/transcriptions",
+        files={"file": ("question.webm", b"audio", "audio/webm")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "什么时候开始疼的？"
+
+
+def test_transcription_rejects_audio_above_endpoint_limit_before_provider_call(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_calls = 0
+
+    def build_provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("oversized audio must not construct the provider")
+
+    monkeypatch.setattr(main, "AUDIO_TRANSCRIPTION_MAX_BYTES", 5)
+    monkeypatch.setattr(main, "build_dashscope_speech_service_from_environment", build_provider)
+
+    response = authenticated_client.post(
+        "/api/audio/transcriptions",
+        files={"file": ("question.webm", b"audio!", "audio/webm")},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "audio file is too large"}
+    assert provider_calls == 0
+
+
+def test_oversized_transcription_closes_upload_file(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    user = auth_store.create_user("student@example.test", "safe-password", "学生甲")
+    token = auth_store.create_session(user["user_id"])
+    upload = UploadFile(file=BytesIO(b"audio!"), filename="question.webm")
+    monkeypatch.setattr(main, "auth_store", auth_store)
+    monkeypatch.setattr(main, "AUDIO_TRANSCRIPTION_MAX_BYTES", 5)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            main.transcribe_audio(
+                file=upload,
+                language=None,
+                auth_token=token,
+            )
+        )
+
+    assert exc_info.value.status_code == 413
+    assert upload.file.closed is True
 
 
 def test_speech_endpoint_streams_audio_bytes(authenticated_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

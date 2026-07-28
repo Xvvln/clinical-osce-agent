@@ -49,7 +49,16 @@ test("web app uses an explicit API proxy route for long training requests", () =
   assert.match(routeSource, /"http:\/\/127\.0\.0\.1:8000"/);
   assert.match(routeSource, /export async function GET/);
   assert.match(routeSource, /export async function POST/);
-  assert.match(routeSource, /request\.arrayBuffer\(\)/);
+  assert.match(routeSource, /const MAX_API_PROXY_REQUEST_BYTES = 12 \* 1024 \* 1024/);
+  assert.match(routeSource, /request\.body\.getReader\(\)/);
+  assert.match(routeSource, /totalBytes > MAX_API_PROXY_REQUEST_BYTES/);
+  assert.match(
+    routeSource,
+    /const boundedRequestBody = await readBoundedRequestBody\(request\);[\s\S]*?method === "GET" \|\| method === "HEAD" \? undefined : boundedRequestBody/,
+  );
+  assert.match(routeSource, /await request\.body\?\.cancel\("request body is too large"\)/);
+  assert.match(routeSource, /status: 413/);
+  assert.doesNotMatch(routeSource, /request\.arrayBuffer\(\)/);
   assert.match(routeSource, /fetch\(upstreamUrl/);
   assert.match(routeSource, /headers\.delete\("server"\)/);
   assert.match(routeSource, /headers\.delete\("x-powered-by"\)/);

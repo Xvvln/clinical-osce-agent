@@ -107,6 +107,7 @@ from app.services.report_score_metrics import (
     aggregate_score_metrics,
     dimension_score_metrics,
 )
+from app.services.request_body_limit import RequestBodyLimitMiddleware
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import (
     RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
@@ -181,6 +182,10 @@ RAG_KNOWLEDGE_AGENT_ROLES = {
 RAG_GENERATIVE_AGENT_ROLES = {"coach", "reflection", "skill_approval", "skill_generation"}
 RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["coach", "reflection", "skill_generation", "skill_approval"]
 RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
+RAG_DOCUMENT_MAX_BASE64_CHARS = 4 * ((RAG_DOCUMENT_MAX_BYTES + 2) // 3)
+API_REQUEST_BODY_MAX_BYTES = 12 * 1024 * 1024
+AUDIO_TRANSCRIPTION_MAX_BYTES = 10 * 1024 * 1024
+AUDIO_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
 MODEL_PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (httpx.HTTPError,)
@@ -390,6 +395,10 @@ app = FastAPI(
     version="0.1.0",
     description="临境 OSCE 智能体（TraceOSCE）的 OSCE 训练后端服务。",
     lifespan=_app_lifespan,
+)
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_size=API_REQUEST_BODY_MAX_BYTES,
 )
 
 
@@ -604,7 +613,7 @@ class AdminRagDocumentUploadRequest(BaseModel):
     scope: str = ""
     case_id: str = ""
     file_name: str = ""
-    content_base64: str = ""
+    content_base64: str = Field(default="", max_length=RAG_DOCUMENT_MAX_BASE64_CHARS)
     visibility: str = "pre_submit_safe"
     allowed_agents: list[str] = Field(default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS))
     source_id: str = ""
@@ -639,6 +648,21 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         max_age=AUTH_COOKIE_MAX_AGE_SECONDS,
         path=AUTH_COOKIE_PATH,
     )
+
+
+async def _read_upload_file_with_limit(file: UploadFile, *, max_bytes: int) -> bytes:
+    content = bytearray()
+    while True:
+        remaining_bytes = max_bytes - len(content)
+        chunk = await file.read(min(AUDIO_UPLOAD_READ_CHUNK_BYTES, remaining_bytes + 1))
+        if not chunk:
+            return bytes(content)
+        if len(chunk) > remaining_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="audio file is too large",
+            )
+        content.extend(chunk)
 
 
 def _require_current_user(auth_token: str | None) -> dict[str, str]:
@@ -1396,7 +1420,7 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
     if not content_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document content is empty")
     if len(content_bytes) > RAG_DOCUMENT_MAX_BYTES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="document is too large")
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="document is too large")
 
     document_id = generate_rag_document_id(case_id=case_id or "global", file_name=file_name, content_bytes=content_bytes)
     try:
@@ -1654,8 +1678,11 @@ async def transcribe_audio(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_current_user(auth_token)
-    audio_bytes = await file.read()
     try:
+        audio_bytes = await _read_upload_file_with_limit(
+            file,
+            max_bytes=AUDIO_TRANSCRIPTION_MAX_BYTES,
+        )
         result = await build_dashscope_speech_service_from_environment().transcribe(
             audio_bytes,
             mime_type=file.content_type,
@@ -1668,6 +1695,8 @@ async def transcribe_audio(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except DashScopeSpeechServiceError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        await file.close()
     return {
         "text": result.text,
         "provider": result.provider,
