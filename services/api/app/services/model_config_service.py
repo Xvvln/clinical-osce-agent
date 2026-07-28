@@ -42,6 +42,7 @@ def build_admin_model_config() -> dict[str, Any]:
             _chroma_retrieval_config(),
             _dashscope_rerank_config(),
             _openai_compatible_config(),
+            _anthropic_config(),
         ],
     }
 
@@ -353,6 +354,52 @@ def _openai_compatible_config() -> dict[str, Any]:
         missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_OPENAI_API_KEY", "configured" if secret_configured else ""), ("OSCE_OPENAI_MODEL", model)]),
         integration_status="wired",
         notes="这里只展示服务端环境变量默认能力和配置状态；私有网关地址、代理地址和密钥不通过管理端回显。",
+    )
+
+
+def _anthropic_config() -> dict[str, Any]:
+    enabled = _truthy_env("OSCE_ANTHROPIC_ENABLED")
+    secret_configured = bool(_env("OSCE_ANTHROPIC_API_KEY"))
+    model = _env("OSCE_ANTHROPIC_MODEL")
+    configured = enabled and secret_configured and bool(model)
+    return _provider_config(
+        provider_id="anthropic",
+        label="Anthropic 模型",
+        capability=(
+            "标准化病人、Turn Intent 意图识别、TeacherAgent 教学提示、"
+            "llm_rubric 语义评分、训练模式级候选 Skill 文案生成"
+        ),
+        enabled=enabled,
+        configured=configured,
+        secret_configured=secret_configured,
+        auth_mode="api_key",
+        model=model,
+        base_url="",
+        proxy_url="",
+        required_env=[
+            "OSCE_ANTHROPIC_ENABLED=true",
+            "OSCE_ANTHROPIC_API_KEY",
+            "OSCE_ANTHROPIC_MODEL",
+        ],
+        missing_env=(
+            []
+            if configured
+            else _missing_when_enabled(
+                enabled,
+                [
+                    (
+                        "OSCE_ANTHROPIC_API_KEY",
+                        "configured" if secret_configured else "",
+                    ),
+                    ("OSCE_ANTHROPIC_MODEL", model),
+                ],
+            )
+        ),
+        integration_status="wired",
+        notes=(
+            "这里只展示服务端环境变量默认能力和配置状态；私有网关地址、"
+            "代理地址和密钥不通过管理端回显。"
+        ),
     )
 
 

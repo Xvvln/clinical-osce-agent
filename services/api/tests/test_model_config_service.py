@@ -1,0 +1,45 @@
+from pathlib import Path
+
+from app.services.model_config_service import build_admin_model_config
+
+
+def test_admin_model_config_reports_anthropic_environment(monkeypatch) -> None:
+    monkeypatch.setenv("OSCE_ANTHROPIC_ENABLED", "true")
+    monkeypatch.setenv("OSCE_ANTHROPIC_API_KEY", "private-test-key")
+    monkeypatch.setenv("OSCE_ANTHROPIC_MODEL", "test-anthropic-model")
+    monkeypatch.setenv(
+        "OSCE_ANTHROPIC_BASE_URL",
+        "https://private-anthropic-gateway.example",
+    )
+    monkeypatch.setenv(
+        "OSCE_ANTHROPIC_PROXY_URL",
+        "http://private-proxy.example:8080",
+    )
+
+    providers = {
+        provider["provider_id"]: provider
+        for provider in build_admin_model_config()["providers"]
+    }
+
+    anthropic = providers["anthropic"]
+    assert anthropic["enabled"] is True
+    assert anthropic["configured"] is True
+    assert anthropic["secret_configured"] is True
+    assert anthropic["model"] == "test-anthropic-model"
+    assert anthropic["base_url"] == ""
+    assert anthropic["proxy_url"] == ""
+    assert "private-test-key" not in str(anthropic)
+    assert "private-anthropic-gateway.example" not in str(anthropic)
+    assert "private-proxy.example" not in str(anthropic)
+
+
+def test_env_example_uses_the_anthropic_settings_prefix() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
+
+    assert "\nANTHROPIC_API_KEY=" not in f"\n{env_example}"
+    assert "OSCE_ANTHROPIC_ENABLED=false" in env_example
+    assert "OSCE_ANTHROPIC_API_KEY=" in env_example
+    assert "OSCE_ANTHROPIC_BASE_URL=https://api.anthropic.com" in env_example
+    assert "OSCE_ANTHROPIC_MODEL=" in env_example
+    assert "OSCE_ANTHROPIC_PROXY_URL=direct" in env_example
