@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
@@ -73,6 +74,88 @@ def _configure_demo_admin(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
     return email, password
 
 
+def test_reapplying_same_password_preserves_existing_sessions(tmp_path) -> None:
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    user = auth_store.upsert_user_password(
+        "student@example.test",
+        "initial-password",
+        "学生甲",
+    )
+    first_token = auth_store.create_session(user["user_id"])
+    second_token = auth_store.create_session(user["user_id"])
+
+    updated_user = auth_store.upsert_user_password(
+        "student@example.test",
+        "initial-password",
+        "学生乙",
+    )
+
+    assert updated_user["user_id"] == user["user_id"]
+    assert updated_user["display_name"] == "学生乙"
+    assert auth_store.get_user_by_session_token(first_token)["display_name"] == "学生乙"
+    assert auth_store.get_user_by_session_token(second_token)["display_name"] == "学生乙"
+
+
+def test_password_rotation_revokes_all_existing_sessions(tmp_path) -> None:
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    user = auth_store.upsert_user_password(
+        "student@example.test",
+        "initial-password",
+        "学生甲",
+    )
+    first_token = auth_store.create_session(user["user_id"])
+    second_token = auth_store.create_session(user["user_id"])
+
+    updated_user = auth_store.upsert_user_password(
+        "student@example.test",
+        "rotated-password",
+        "学生甲",
+    )
+
+    assert updated_user["user_id"] == user["user_id"]
+    assert auth_store.authenticate_user("student@example.test", "initial-password") is None
+    authenticated_user = auth_store.authenticate_user("student@example.test", "rotated-password")
+    assert authenticated_user
+    assert authenticated_user["user_id"] == user["user_id"]
+    assert auth_store.get_user_by_session_token(first_token) is None
+    assert auth_store.get_user_by_session_token(second_token) is None
+
+    replacement_token = auth_store.create_session(user["user_id"])
+    assert auth_store.get_user_by_session_token(replacement_token)["user_id"] == user["user_id"]
+
+
+def test_concurrent_password_rotations_keep_one_user_and_revoke_old_sessions(tmp_path) -> None:
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    user = auth_store.upsert_user_password(
+        "student@example.test",
+        "initial-password",
+        "学生甲",
+    )
+    old_token = auth_store.create_session(user["user_id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        updated_users = list(
+            executor.map(
+                lambda password: auth_store.upsert_user_password(
+                    "student@example.test",
+                    password,
+                    "学生甲",
+                ),
+                ["rotated-password-a", "rotated-password-b"],
+            )
+        )
+
+    assert {updated_user["user_id"] for updated_user in updated_users} == {user["user_id"]}
+    valid_passwords = [
+        password
+        for password in ["rotated-password-a", "rotated-password-b"]
+        if auth_store.authenticate_user("student@example.test", password)
+    ]
+    assert len(valid_passwords) == 1
+    assert auth_store.authenticate_user("student@example.test", "initial-password") is None
+    assert auth_store.get_user_by_session_token(old_token) is None
+
+
 def test_fixed_demo_credentials_are_rejected_by_default(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -122,6 +205,35 @@ def test_explicit_local_demo_student_login_creates_user_and_logout_clears_sessio
     assert logout_response.status_code == 200
     assert logout_response.json() == {"status": "ok"}
     assert client.get("/api/auth/me").status_code == 401
+
+
+def test_rotating_demo_password_revokes_existing_cookie_sessions(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    email, password = _configure_demo_student(monkeypatch)
+    first_login = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": password},
+    )
+    old_token = client.cookies.get(main.AUTH_COOKIE_NAME)
+
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "rotated-password")
+    rotated_login = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": "rotated-password"},
+    )
+    replacement_token = client.cookies.get(main.AUTH_COOKIE_NAME)
+
+    assert first_login.status_code == 200
+    assert rotated_login.status_code == 200
+    assert old_token
+    assert replacement_token
+    assert replacement_token != old_token
+    assert main.auth_store.get_user_by_session_token(old_token) is None
+    replacement_user = main.auth_store.get_user_by_session_token(replacement_token)
+    assert replacement_user
+    assert replacement_user["user_id"] == rotated_login.json()["user"]["user_id"]
 
 
 def test_explicit_local_demo_admin_login_marks_current_user_as_admin(

@@ -52,11 +52,10 @@ class AuthStore:
     def upsert_user_password(self, email: str, password: str, display_name: str | None = None) -> dict[str, str]:
         self._initialize()
         normalized_email = _normalize_email(email)
-        password_salt = secrets.token_hex(16)
-        password_hash = _hash_password(password, password_salt)
-        now = datetime.now(UTC).isoformat()
         next_display_name = display_name.strip() if display_name and display_name.strip() else normalized_email
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = datetime.now(UTC).isoformat()
             row = connection.execute(
                 """
                 SELECT user_id, email, display_name, password_hash, password_salt, created_at
@@ -66,6 +65,8 @@ class AuthStore:
                 (normalized_email,),
             ).fetchone()
             if row is None:
+                password_salt = secrets.token_hex(16)
+                password_hash = _hash_password(password, password_salt)
                 user_id = str(uuid4())
                 connection.execute(
                     """
@@ -76,15 +77,40 @@ class AuthStore:
                 )
                 row = (user_id, normalized_email, next_display_name, password_hash, password_salt, now)
             else:
-                connection.execute(
-                    """
-                    UPDATE users
-                    SET display_name = ?, password_hash = ?, password_salt = ?
-                    WHERE email = ?
-                    """,
-                    (next_display_name, password_hash, password_salt, normalized_email),
+                password_changed = not secrets.compare_digest(
+                    _hash_password(password, row[4]),
+                    row[3],
                 )
-                row = (row[0], row[1], next_display_name, password_hash, password_salt, row[5])
+                if password_changed:
+                    password_salt = secrets.token_hex(16)
+                    password_hash = _hash_password(password, password_salt)
+                    connection.execute(
+                        """
+                        UPDATE users
+                        SET display_name = ?, password_hash = ?, password_salt = ?
+                        WHERE email = ?
+                        """,
+                        (next_display_name, password_hash, password_salt, normalized_email),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE auth_sessions
+                        SET revoked_at = ?
+                        WHERE user_id = ? AND revoked_at IS NULL
+                        """,
+                        (now, row[0]),
+                    )
+                    row = (row[0], row[1], next_display_name, password_hash, password_salt, row[5])
+                else:
+                    connection.execute(
+                        """
+                        UPDATE users
+                        SET display_name = ?
+                        WHERE email = ?
+                        """,
+                        (next_display_name, normalized_email),
+                    )
+                    row = (row[0], row[1], next_display_name, row[3], row[4], row[5])
         return _user_from_row(row)
 
     def authenticate_user(self, email: str, password: str) -> dict[str, str] | None:
