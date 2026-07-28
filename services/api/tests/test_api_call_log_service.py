@@ -69,3 +69,59 @@ def test_api_call_log_store_extracts_http_status_error(tmp_path) -> None:
 
     assert payload["logs"][0]["status_code"] == 429
     assert payload["logs"][0]["error_type"] == "HTTPStatusError"
+
+
+def test_api_call_log_store_removes_url_credentials_and_google_keys(tmp_path) -> None:
+    store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
+
+    store.record(
+        provider="vertex_gemini",
+        operation="generate_content",
+        model="gemini-test",
+        endpoint=(
+            "https://endpoint-user:endpoint-password@gateway.example:8443/v1/models"
+            "?x-goog-api-key=endpoint-secret"
+        ),
+        success=False,
+        duration_ms=1,
+        error=RuntimeError(
+            "request to https://error-user:error-password@gateway.example/v1/models"
+            "?key=query-secret failed; x-goog-api-key=header-secret"
+        ),
+    )
+
+    log = store.build_admin_payload(limit=1)["logs"][0]
+    serialized_log = str(log)
+    assert log["endpoint"] == "https://gateway.example:8443/v1/models"
+    assert log["error_message"] == (
+        "request to https://gateway.example/v1/models failed; "
+        "x-goog-api-key=[redacted]"
+    )
+    for secret in (
+        "endpoint-user",
+        "endpoint-password",
+        "endpoint-secret",
+        "error-user",
+        "error-password",
+        "query-secret",
+        "header-secret",
+    ):
+        assert secret not in serialized_log
+
+
+def test_api_call_log_store_extracts_generic_provider_status_code(tmp_path) -> None:
+    class ProviderError(RuntimeError):
+        code = 429
+
+    store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
+    store.record(
+        provider="gemini",
+        operation="generate_content",
+        model="gemini-test",
+        endpoint="gemini://generate_content",
+        success=False,
+        duration_ms=1,
+        error=ProviderError("rate limited"),
+    )
+
+    assert store.build_admin_payload(limit=1)["logs"][0]["status_code"] == 429

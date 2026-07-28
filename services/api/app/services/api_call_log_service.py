@@ -22,12 +22,13 @@ MAX_ERROR_MESSAGE_LENGTH = 220
 MAX_LOG_ENTRIES_READ = 2000
 API_CALL_CONTEXT: ContextVar[dict[str, str]] = ContextVar("api_call_context", default={})
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
+    re.compile(r"(?i)((?:x-goog-api-key|api[_-]?key|key)\s*[=:]\s*)[\"']?[^\s,;&#\"']+"),
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+"),
     re.compile(r"sk-[A-Za-z0-9._\-]+"),
     re.compile(r"tp-[A-Za-z0-9._\-]+"),
 ]
+URL_PATTERN = re.compile(r"(?i)\b(?:https?|wss?)://[^\s<>'\"]+")
 
 
 class ApiCallLogStore:
@@ -131,17 +132,28 @@ def _safe_endpoint(endpoint: str) -> str:
     if "://" not in normalized:
         return normalized.split("?")[0]
     parsed = urlsplit(normalized)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    # urlsplit().netloc retains username/password. Keep only the host/port
+    # segment so diagnostics cannot persist credentials embedded in a URL.
+    safe_netloc = parsed.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parsed.scheme, safe_netloc, parsed.path, "", ""))
 
 
 def _status_code_from_error(error: BaseException | None) -> int | None:
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code
+    candidates = [
+        getattr(error, "status_code", None),
+        getattr(error, "code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and 100 <= candidate <= 599:
+            return candidate
     return None
 
 
 def _sanitize_error_message(message: str) -> str:
-    sanitized = message
+    sanitized = URL_PATTERN.sub(lambda match: _safe_endpoint(match.group(0)), message)
     for pattern in SECRET_PATTERNS:
         sanitized = pattern.sub(lambda match: f"{match.group(1) if match.groups() else ''}[redacted]", sanitized)
     sanitized = sanitized.replace("\n", " ").replace("\r", " ").strip()
