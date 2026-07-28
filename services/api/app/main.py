@@ -8,13 +8,14 @@ from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 import yaml
 from fastapi import BackgroundTasks, Cookie, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 try:
     from google.auth import exceptions as google_auth_exceptions
@@ -186,6 +187,26 @@ RAG_DOCUMENT_MAX_BASE64_CHARS = 4 * ((RAG_DOCUMENT_MAX_BYTES + 2) // 3)
 API_REQUEST_BODY_MAX_BYTES = 12 * 1024 * 1024
 AUDIO_TRANSCRIPTION_MAX_BYTES = 10 * 1024 * 1024
 AUDIO_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+REQUEST_VALIDATION_ERROR_DETAIL = "request validation failed"
+ADMIN_CASE_REQUEST_MAX_BYTES = 256 * 1024
+AUTH_EMAIL_MAX_CHARS = 254
+AUTH_PASSWORD_MAX_CHARS = 256
+DISPLAY_NAME_MAX_CHARS = 80
+IDENTIFIER_MAX_CHARS = 128
+PROCEDURE_CODE_MAX_CHARS = 64
+PROCEDURE_BATCH_MAX_ITEMS = 64
+QUESTION_MAX_CHARS = 500
+PROCEDURE_REQUEST_MAX_CHARS = 500
+DIAGNOSIS_MAX_CHARS = 128
+DIAGNOSIS_REASONING_MAX_CHARS = 4096
+HYPOTHESIS_MAX_CHARS = 256
+SPEECH_INPUT_MAX_CHARS = 2000
+MODEL_API_KEY_MAX_CHARS = 4096
+MODEL_NAME_MAX_CHARS = 256
+MODEL_URL_MAX_CHARS = 2048
+RAG_TEXT_MAX_CHARS = 16_384
+RAG_ALLOWED_AGENTS_MAX_ITEMS = 8
+RAG_TAGS_MAX_ITEMS = 32
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
 MODEL_PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (httpx.HTTPError,)
@@ -402,6 +423,19 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    _: Request,
+    __: RequestValidationError,
+) -> JSONResponse:
+    # FastAPI's default response includes the rejected input. That can reflect
+    # API keys, clinical text, or multi-megabyte base64 bodies back to clients.
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": REQUEST_VALIDATION_ERROR_DETAIL},
+    )
+
+
 @app.exception_handler(SessionClosedError)
 async def handle_session_closed_error(_: Request, exc: SessionClosedError) -> JSONResponse:
     return JSONResponse(
@@ -490,145 +524,194 @@ async def add_http_security_headers(request: Request, call_next: Any) -> Respons
     return response
 
 
-class AuthRegisterRequest(BaseModel):
-    email: str
-    password: str
-    display_name: str | None = None
+ProcedureCode = Annotated[str, Field(max_length=PROCEDURE_CODE_MAX_CHARS)]
+RagAgentRole = Annotated[str, Field(max_length=32)]
+RagTag = Annotated[str, Field(max_length=64)]
 
 
-class AuthLoginRequest(BaseModel):
-    email: str
-    password: str
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
 
-class CreateSessionRequest(BaseModel):
-    case_id: str
-    student_id: str = "anonymous"
-    training_difficulty: str = "beginner"
+def _validate_admin_case_request_size(payload: dict[str, Any]) -> None:
+    logical_size = len(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    if logical_size > ADMIN_CASE_REQUEST_MAX_BYTES:
+        raise ValueError(
+            f"case request payload must not exceed {ADMIN_CASE_REQUEST_MAX_BYTES} bytes"
+        )
 
 
-class MessageRequest(BaseModel):
-    message: str
+class AuthRegisterRequest(RequestModel):
+    email: str = Field(max_length=AUTH_EMAIL_MAX_CHARS)
+    password: str = Field(max_length=AUTH_PASSWORD_MAX_CHARS)
+    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_CHARS)
 
 
-class AudioSpeechRequest(BaseModel):
-    input: str
-    voice: str | None = None
-    model: str | None = None
-    session_id: str | None = None
+class AuthLoginRequest(RequestModel):
+    email: str = Field(max_length=AUTH_EMAIL_MAX_CHARS)
+    password: str = Field(max_length=AUTH_PASSWORD_MAX_CHARS)
+
+
+class CreateSessionRequest(RequestModel):
+    case_id: str = Field(max_length=IDENTIFIER_MAX_CHARS)
+    student_id: str = Field(default="anonymous", max_length=IDENTIFIER_MAX_CHARS)
+    training_difficulty: str = Field(default="beginner", max_length=64)
+
+
+class MessageRequest(RequestModel):
+    message: str = Field(max_length=QUESTION_MAX_CHARS)
+
+
+class AudioSpeechRequest(RequestModel):
+    input: str = Field(max_length=SPEECH_INPUT_MAX_CHARS)
+    voice: str | None = Field(default=None, max_length=IDENTIFIER_MAX_CHARS)
+    model: str | None = Field(default=None, max_length=MODEL_NAME_MAX_CHARS)
+    session_id: str | None = Field(default=None, max_length=IDENTIFIER_MAX_CHARS)
     message_index: int | None = None
-    emotion: str | None = None
+    emotion: str | None = Field(default=None, max_length=32)
 
 
-class PhysicalExamRequest(BaseModel):
-    exam_code: str
+class PhysicalExamRequest(RequestModel):
+    exam_code: ProcedureCode
 
 
-class PhysicalExamBatchRequest(BaseModel):
-    exam_codes: list[str] = Field(default_factory=list)
+class PhysicalExamBatchRequest(RequestModel):
+    exam_codes: list[ProcedureCode] = Field(
+        default_factory=list,
+        max_length=PROCEDURE_BATCH_MAX_ITEMS,
+    )
 
 
-class AuxiliaryTestRequest(BaseModel):
-    test_code: str
+class AuxiliaryTestRequest(RequestModel):
+    test_code: ProcedureCode
 
 
-class AuxiliaryTestBatchRequest(BaseModel):
-    test_codes: list[str] = Field(default_factory=list)
+class AuxiliaryTestBatchRequest(RequestModel):
+    test_codes: list[ProcedureCode] = Field(
+        default_factory=list,
+        max_length=PROCEDURE_BATCH_MAX_ITEMS,
+    )
 
 
-class ProcedureFreeTextRequest(BaseModel):
-    request_text: str
+class ProcedureFreeTextRequest(RequestModel):
+    request_text: str = Field(max_length=PROCEDURE_REQUEST_MAX_CHARS)
 
 
-class SubmitDiagnosisRequest(BaseModel):
-    diagnosis: str
-    reasoning: str
+class SubmitDiagnosisRequest(RequestModel):
+    diagnosis: str = Field(max_length=DIAGNOSIS_MAX_CHARS)
+    reasoning: str = Field(max_length=DIAGNOSIS_REASONING_MAX_CHARS)
 
 
-class HypothesisRequest(BaseModel):
-    hypothesis: str
+class HypothesisRequest(RequestModel):
+    hypothesis: str = Field(max_length=HYPOTHESIS_MAX_CHARS)
 
 
-class StudentModelConfigTestRequest(BaseModel):
-    provider: str
-    api_key: str = ""
-    model: str = ""
-    base_url: str = ""
-    proxy_url: str = ""
+class StudentModelConfigTestRequest(RequestModel):
+    provider: str = Field(max_length=64)
+    api_key: str = Field(default="", max_length=MODEL_API_KEY_MAX_CHARS)
+    model: str = Field(default="", max_length=MODEL_NAME_MAX_CHARS)
+    base_url: str = Field(default="", max_length=MODEL_URL_MAX_CHARS)
+    proxy_url: str = Field(default="", max_length=MODEL_URL_MAX_CHARS)
 
 
-class AdminTrainingSkillReviewRequest(BaseModel):
-    candidate_id: str
+class AdminTrainingSkillReviewRequest(RequestModel):
+    # Legacy clients may still send reviewer_id; authorization always derives the
+    # reviewer from the authenticated admin session, so ignore that untrusted hint.
+    model_config = ConfigDict(extra="ignore")
+
+    candidate_id: str = Field(max_length=IDENTIFIER_MAX_CHARS)
 
 
-class AdminTrainingSkillAutoApprovalSettingsRequest(BaseModel):
+class AdminTrainingSkillAutoApprovalSettingsRequest(RequestModel):
     auto_apply_enabled: bool
 
 
-class AdminCaseValidationRequest(BaseModel):
+class AdminCaseValidationRequest(RequestModel):
     case: dict[str, Any]
     rubric: dict[str, Any] | None = None
 
+    @model_validator(mode="after")
+    def validate_logical_payload_size(self) -> "AdminCaseValidationRequest":
+        _validate_admin_case_request_size(
+            {"case": self.case, "rubric": self.rubric}
+        )
+        return self
 
-class AdminCaseImportRequest(BaseModel):
+
+class AdminCaseImportRequest(RequestModel):
     case: dict[str, Any]
     rubric: dict[str, Any]
 
+    @model_validator(mode="after")
+    def validate_logical_payload_size(self) -> "AdminCaseImportRequest":
+        _validate_admin_case_request_size(
+            {"case": self.case, "rubric": self.rubric}
+        )
+        return self
 
-class AdminCaseFieldUpdateRequest(BaseModel):
+
+class AdminCaseFieldUpdateRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
-    case_title: str | None = None
-    course_module: str | None = None
-    difficulty: str | None = None
-    chief_complaint: str | None = None
-    safety_notes: str | None = None
+    case_title: str | None = Field(default=None, max_length=120)
+    course_module: str | None = Field(default=None, max_length=64)
+    difficulty: str | None = Field(default=None, max_length=64)
+    chief_complaint: str | None = Field(default=None, max_length=500)
+    safety_notes: str | None = Field(default=None, max_length=1000)
 
 
-class AdminRubricItemUpdateRequest(BaseModel):
+class AdminRubricItemUpdateRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
-    description: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1, max_length=1000)
 
 
-class AdminRagKnowledgeItemRequest(BaseModel):
+class AdminRagKnowledgeItemRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
-    knowledge_id: str = ""
-    scope: str = ""
-    case_id: str = ""
-    content_kind: str = ""
-    visibility: str = ""
-    allowed_agents: list[str] = Field(default_factory=list)
-    source_id: str = ""
-    title: str = ""
-    text: str = ""
-    tags: list[str] = Field(default_factory=list)
-    version: int = Field(default=1, ge=1)
+    knowledge_id: str = Field(default="", max_length=256)
+    scope: str = Field(default="", max_length=64)
+    case_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    content_kind: str = Field(default="", max_length=64)
+    visibility: str = Field(default="", max_length=64)
+    allowed_agents: list[RagAgentRole] = Field(
+        default_factory=list,
+        max_length=RAG_ALLOWED_AGENTS_MAX_ITEMS,
+    )
+    source_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    title: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=RAG_TEXT_MAX_CHARS)
+    tags: list[RagTag] = Field(default_factory=list, max_length=RAG_TAGS_MAX_ITEMS)
+    version: int = Field(default=1, ge=1, le=2_147_483_647)
 
 
-class AdminRagDocumentUploadRequest(BaseModel):
+class AdminRagDocumentUploadRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
-    scope: str = ""
-    case_id: str = ""
-    file_name: str = ""
+    scope: str = Field(default="", max_length=64)
+    case_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    file_name: str = Field(default="", max_length=255)
     content_base64: str = Field(default="", max_length=RAG_DOCUMENT_MAX_BASE64_CHARS)
-    visibility: str = "pre_submit_safe"
-    allowed_agents: list[str] = Field(default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS))
-    source_id: str = ""
-    tags: list[str] = Field(default_factory=list)
+    visibility: str = Field(default="pre_submit_safe", max_length=64)
+    allowed_agents: list[RagAgentRole] = Field(
+        default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS),
+        max_length=RAG_ALLOWED_AGENTS_MAX_ITEMS,
+    )
+    source_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    tags: list[RagTag] = Field(default_factory=list, max_length=RAG_TAGS_MAX_ITEMS)
     enabled: bool = True
 
 
-class AdminRagDocumentEnabledRequest(BaseModel):
+class AdminRagDocumentEnabledRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
 
 
-class AdminEvaluationRunRequest(BaseModel):
-    batch_id: str
+class AdminEvaluationRunRequest(RequestModel):
+    batch_id: str = Field(max_length=IDENTIFIER_MAX_CHARS)
 
 
 def _validate_auth_request(email: str, password: str) -> None:
@@ -1674,7 +1757,7 @@ def startup_config_health_check(
 @app.post("/api/audio/transcriptions")
 async def transcribe_audio(
     file: UploadFile = File(...),
-    language: str | None = Form(default=None),
+    language: str | None = Form(default=None, max_length=16),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_current_user(auth_token)

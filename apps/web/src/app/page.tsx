@@ -639,6 +639,16 @@ const SERVER_MANAGED_API_CONFIG_MESSAGE = `${TEST_STAGE_API_CONFIG_MESSAGE}主�
 const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";
 const OSCE_DOCK_POSITION_STORAGE_KEY = "clinical_osce_osce_dock_position";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
+const AUTH_EMAIL_MAX_CHARS = 254;
+const AUTH_PASSWORD_MAX_CHARS = 256;
+const QUESTION_MAX_CHARS = 500;
+const PROCEDURE_REQUEST_MAX_CHARS = 500;
+const DIAGNOSIS_MAX_CHARS = 128;
+const DIAGNOSIS_DETAIL_MAX_CHARS = 700;
+const DIFFERENTIAL_DIAGNOSIS_MAX_CHARS = 300;
+const DIAGNOSIS_REASONING_MAX_CHARS = 4096;
+const SPEECH_INPUT_MAX_CHARS = 2000;
+const AUDIO_TRANSCRIPTION_MAX_BYTES = 10 * 1024 * 1024;
 const OSCE_DOCK_MARGIN = 20;
 const OSCE_DOCK_BUTTON_SIZE = 56;
 const OSCE_DOCK_DRAG_THRESHOLD = 4;
@@ -2529,6 +2539,11 @@ function HomeContent() {
       const audioBlob = new Blob(chunks, { type: mimeType });
       const extension = mimeType.includes("wav") ? "wav" : "webm";
       const audioFile = new File([audioBlob], `osce-question-${Date.now()}.${extension}`, { type: mimeType });
+      if (audioFile.size > AUDIO_TRANSCRIPTION_MAX_BYTES) {
+        setSpeechStatusText(null);
+        setErrorText("录音超过 10 MiB，请缩短后重试。");
+        return;
+      }
       const result = await transcribeSpeechAudio(audioFile);
       const transcript = result.text.trim();
       if (!transcript) {
@@ -2538,9 +2553,10 @@ function HomeContent() {
       }
       setInputValue((currentValue) => {
         const cleanCurrentValue = currentValue.trim();
-        return cleanCurrentValue ? `${cleanCurrentValue} ${transcript}` : transcript;
+        const combinedTranscript = cleanCurrentValue ? `${cleanCurrentValue} ${transcript}` : transcript;
+        return combinedTranscript;
       });
-      setSpeechStatusText("已转写到输入框，发送前可以修改。");
+      setSpeechStatusText(`转写内容已完整保留到输入框；单次问诊最多发送 ${QUESTION_MAX_CHARS} 个字符，请按需删减。`);
       questionInputRef.current?.focus();
     } catch (error) {
       setSpeechStatusText(null);
@@ -2615,6 +2631,11 @@ function HomeContent() {
     }
     if (speechPlaybackState?.messageId === message.id) {
       stopPatientSpeechPlayback();
+      return;
+    }
+    if (speechText.length > SPEECH_INPUT_MAX_CHARS) {
+      stopPatientSpeechPlayback();
+      setErrorText(`患者回复超过 ${SPEECH_INPUT_MAX_CHARS} 个字符，暂时无法生成语音。`);
       return;
     }
 
@@ -3815,6 +3836,10 @@ function HomeContent() {
     if (!authUser || !selectedCaseId || !message || isCreating || isSending || isSpeechInputBusy) {
       return;
     }
+    if (message.length > QUESTION_MAX_CHARS) {
+      setErrorText(`问诊内容不能超过 ${QUESTION_MAX_CHARS} 个字符。`);
+      return;
+    }
 
     if (!isTrainingModelConfigReady) {
       promptTrainingModelConfigRequired();
@@ -4111,7 +4136,12 @@ function HomeContent() {
   }
 
   async function handleAdvancedProcedureRequest() {
-    if (isCreating || isRequestingAdvancedProcedure || !advancedProcedureRequestText.trim()) {
+    const requestText = advancedProcedureRequestText.trim();
+    if (isCreating || isRequestingAdvancedProcedure || !requestText) {
+      return;
+    }
+    if (requestText.length > PROCEDURE_REQUEST_MAX_CHARS) {
+      setErrorText(`检查申请不能超过 ${PROCEDURE_REQUEST_MAX_CHARS} 个字符。`);
       return;
     }
 
@@ -4130,7 +4160,7 @@ function HomeContent() {
         return;
       }
 
-      const updatedSession = await requestProcedureText(activeSession.session_id, advancedProcedureRequestText.trim());
+      const updatedSession = await requestProcedureText(activeSession.session_id, requestText);
       const nextProcedureResults = updatedSession.matched_procedure_results.map((procedureResult) => ({
         id: procedureResult.id,
         label: procedureResult.label,
@@ -4153,7 +4183,7 @@ function HomeContent() {
       const unavailableCount = updatedSession.matched_procedure_results.filter((procedureResult) => procedureResult.availability_status === "not_available_for_case").length;
       const simulatedCount = updatedSession.matched_procedure_results.filter((procedureResult) => procedureResult.availability_status === "ai_simulated_for_training").length;
       setAdvancedProcedureRequestSummary({
-        rawRequest: advancedProcedureRequestText.trim(),
+        rawRequest: requestText,
         matchedLabels: nextProcedureResults.map((procedureResult) => procedureResult.label),
         unmatchedRequests: updatedSession.standardized_request.unmatched_requests,
         returnedResultCount: nextProcedureResults.length,
@@ -4267,6 +4297,14 @@ function HomeContent() {
       nextStep,
       uncertainty,
     );
+    if (diagnosis.length > DIAGNOSIS_MAX_CHARS) {
+      setErrorText(`诊断不能超过 ${DIAGNOSIS_MAX_CHARS} 个字符。`);
+      return;
+    }
+    if (reasoning.length > DIAGNOSIS_REASONING_MAX_CHARS) {
+      setErrorText(`诊断推理不能超过 ${DIAGNOSIS_REASONING_MAX_CHARS} 个字符。`);
+      return;
+    }
 
     setIsSubmittingDiagnosis(true);
     setErrorText(null);
@@ -4552,6 +4590,7 @@ function HomeContent() {
                       autoComplete="off"
                       className="h-7 w-52 min-w-0 bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground sm:w-60"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isRequestingAdvancedProcedure}
+                      maxLength={PROCEDURE_REQUEST_MAX_CHARS}
                       onChange={(event) => setAdvancedProcedureRequestText(event.target.value)}
                       placeholder="输入想申请的查体或检查"
                       value={advancedProcedureRequestText}
@@ -4872,6 +4911,7 @@ function HomeContent() {
                     ref={questionInputRef}
                     autoComplete="off"
                     autoCorrect="off"
+                    maxLength={QUESTION_MAX_CHARS}
                     onChange={(event) => setInputValue(event.target.value)}
                     placeholder="输入问诊问题，开始诊断训练"
                     spellCheck={false}
@@ -4933,6 +4973,7 @@ function HomeContent() {
                       className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="diagnosis-input"
+                      maxLength={DIAGNOSIS_MAX_CHARS}
                       onChange={(event) => setDiagnosisValue(event.target.value)}
                       placeholder="写出你现在最支持的诊断假设"
                       value={diagnosisValue}
@@ -4962,6 +5003,7 @@ function HomeContent() {
                       className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="differential-diagnosis-input"
+                      maxLength={DIFFERENTIAL_DIAGNOSIS_MAX_CHARS}
                       onChange={(event) => setDifferentialDiagnosisValue(event.target.value)}
                       placeholder="可写 1-3 个，多个用逗号分隔"
                       value={differentialDiagnosisValue}
@@ -4977,6 +5019,7 @@ function HomeContent() {
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="supporting-evidence-input"
+                      maxLength={DIAGNOSIS_DETAIL_MAX_CHARS}
                       onChange={(event) => setSupportingEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
                       placeholder="哪些病史、查体或检查支持当前诊断？"
@@ -4994,6 +5037,7 @@ function HomeContent() {
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="exclusion-evidence-input"
+                      maxLength={DIAGNOSIS_DETAIL_MAX_CHARS}
                       onChange={(event) => setExclusionEvidenceValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
                       placeholder="还需要鉴别什么？目前如何支持或排除？证据不足也可以写清。"
@@ -5013,6 +5057,7 @@ function HomeContent() {
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="next-step-input"
+                      maxLength={DIAGNOSIS_DETAIL_MAX_CHARS}
                       onChange={(event) => setNextStepValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
                       placeholder="如果还能继续训练，下一步最该补哪项问诊、查体或检查？"
@@ -5030,6 +5075,7 @@ function HomeContent() {
                       className="min-w-0 resize-y max-h-40 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                       disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSubmittingDiagnosis}
                       id="uncertainty-input"
+                      maxLength={DIAGNOSIS_DETAIL_MAX_CHARS}
                       onChange={(event) => setUncertaintyValue(event.target.value)}
                       onInput={(event) => resizeTextareaToContent(event.currentTarget)}
                       placeholder="哪些判断还不稳？缺少什么证据？"
@@ -5560,6 +5606,7 @@ function HomeContent() {
                   autoComplete="off"
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                   id="auth-email-input"
+                  maxLength={AUTH_EMAIL_MAX_CHARS}
                   onChange={(event) => setAuthEmail(event.target.value)}
                   placeholder="输入登录邮箱"
                   type="email"
@@ -5574,6 +5621,7 @@ function HomeContent() {
                   autoComplete="new-password"
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-brand focus:ring-2 focus:ring-brand/15"
                   id="auth-password-input"
+                  maxLength={AUTH_PASSWORD_MAX_CHARS}
                   onChange={(event) => setAuthPassword(event.target.value)}
                   placeholder="请输入密码"
                   type="password"

@@ -40,6 +40,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
+const AUTH_EMAIL_MAX_CHARS = 254;
+const AUTH_PASSWORD_MAX_CHARS = 256;
+const ADMIN_CASE_REQUEST_MAX_BYTES = 256 * 1024;
+const RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
+const RAG_FILE_NAME_MAX_CHARS = 255;
+const RAG_TAG_MAX_CHARS = 64;
+const RAG_TAGS_MAX_ITEMS = 32;
+const RAG_TITLE_MAX_CHARS = 200;
+const RAG_TEXT_MAX_CHARS = 16_384;
+const CASE_TITLE_MAX_CHARS = 120;
+const CHIEF_COMPLAINT_MAX_CHARS = 500;
+const SAFETY_NOTES_MAX_CHARS = 1000;
+const RUBRIC_DESCRIPTION_MAX_CHARS = 1000;
+const CASE_CREATION_HISTORY_MAX_ITEMS = 8;
+const CASE_CREATION_PROCEDURE_MAX_ITEMS = 6;
+const CASE_CREATION_DIFFERENTIAL_MAX_ITEMS = 4;
+const CASE_CREATION_REASONING_MAX_ITEMS = 4;
+
 type AuthUser = Readonly<{
   user_id: string;
   email: string;
@@ -1398,11 +1416,11 @@ export function AdminV2Dashboard() {
           <form autoComplete="off" className="mt-6 grid gap-4" onSubmit={(event) => void handleLogin(event)}>
             <label className="grid gap-2 text-sm font-medium">
               邮箱
-              <Input autoComplete="off" onChange={(event) => setEmail(event.target.value)} placeholder="输入管理员邮箱" type="email" value={email} />
+              <Input autoComplete="off" maxLength={AUTH_EMAIL_MAX_CHARS} onChange={(event) => setEmail(event.target.value)} placeholder="输入管理员邮箱" type="email" value={email} />
             </label>
             <label className="grid gap-2 text-sm font-medium">
               密码
-              <Input autoComplete="new-password" onChange={(event) => setPassword(event.target.value)} placeholder="输入管理员账号密码" type="password" value={password} />
+              <Input autoComplete="new-password" maxLength={AUTH_PASSWORD_MAX_CHARS} onChange={(event) => setPassword(event.target.value)} placeholder="输入管理员账号密码" type="password" value={password} />
             </label>
             {loginErrorText ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{loginErrorText}</p> : null}
             {authUser && !authUser.is_admin ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">当前账号没有管理员权限。</p> : null}
@@ -1839,8 +1857,21 @@ function DocumentUploadPanel({
       setLocalErrorText("请选择要上传的文档。");
       return;
     }
+    if (file.size > RAG_DOCUMENT_MAX_BYTES) {
+      setLocalErrorText("文档不能超过 8 MiB。");
+      return;
+    }
+    if (file.name.length > RAG_FILE_NAME_MAX_CHARS) {
+      setLocalErrorText(`文件名不能超过 ${RAG_FILE_NAME_MAX_CHARS} 个字符。`);
+      return;
+    }
     if (scope === "case" && !caseId) {
       setLocalErrorText("病例知识库需要先选择关联病例。");
+      return;
+    }
+    const parsedTags = toTokenList(tags);
+    if (parsedTags.length > RAG_TAGS_MAX_ITEMS || parsedTags.some((tag) => tag.length > RAG_TAG_MAX_CHARS)) {
+      setLocalErrorText(`标签最多 ${RAG_TAGS_MAX_ITEMS} 个，每个不能超过 ${RAG_TAG_MAX_CHARS} 个字符。`);
       return;
     }
     try {
@@ -1852,7 +1883,7 @@ function DocumentUploadPanel({
         file_name: file.name,
         scope,
         source_id: sourceId,
-        tags: toTokenList(tags),
+        tags: parsedTags,
         visibility,
       });
       setLocalStatusText(`已切分 ${response.knowledge_items?.length ?? response.document.chunk_count ?? 0} 个知识片段。`);
@@ -1973,6 +2004,16 @@ function CaseEditModal({
       setLocalErrorText("病例标题和主诉不能为空。");
       return;
     }
+    if (
+      caseTitle.trim().length > CASE_TITLE_MAX_CHARS
+      || chiefComplaint.trim().length > CHIEF_COMPLAINT_MAX_CHARS
+      || safetyNotes.trim().length > SAFETY_NOTES_MAX_CHARS
+    ) {
+      setLocalErrorText(
+        `病例标题不能超过 ${CASE_TITLE_MAX_CHARS} 个字符，主诉不能超过 ${CHIEF_COMPLAINT_MAX_CHARS} 个字符，边界说明不能超过 ${SAFETY_NOTES_MAX_CHARS} 个字符。`,
+      );
+      return;
+    }
     try {
       await onSave(caseId, {
         case_title: caseTitle.trim(),
@@ -2000,10 +2041,10 @@ function CaseEditModal({
         <div className="min-h-0 overflow-y-auto p-6">
           <div className="grid gap-4">
             <FormField label="病例标题">
-              <Input onChange={(event) => setCaseTitle(event.target.value)} value={caseTitle} />
+              <Input maxLength={CASE_TITLE_MAX_CHARS} onChange={(event) => setCaseTitle(event.target.value)} value={caseTitle} />
             </FormField>
             <FormField label="主诉">
-              <Input onChange={(event) => setChiefComplaint(event.target.value)} value={chiefComplaint} />
+              <Input maxLength={CHIEF_COMPLAINT_MAX_CHARS} onChange={(event) => setChiefComplaint(event.target.value)} value={chiefComplaint} />
             </FormField>
             <div className="grid gap-4 md:grid-cols-2">
               <FormField label="课程模块">
@@ -2014,7 +2055,7 @@ function CaseEditModal({
               </FormField>
             </div>
             <FormField label="边界说明">
-              <TextAreaInput onChange={setSafetyNotes} value={safetyNotes} />
+              <TextAreaInput maxLength={SAFETY_NOTES_MAX_CHARS} onChange={setSafetyNotes} value={safetyNotes} />
             </FormField>
             {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
           </div>
@@ -2054,6 +2095,10 @@ function RubricEditModal({
     const description = drafts[itemId]?.trim() ?? "";
     if (!description) {
       setLocalErrorText("评分项说明不能为空。");
+      return;
+    }
+    if (description.length > RUBRIC_DESCRIPTION_MAX_CHARS) {
+      setLocalErrorText(`评分项说明不能超过 ${RUBRIC_DESCRIPTION_MAX_CHARS} 个字符。`);
       return;
     }
     try {
@@ -2098,6 +2143,7 @@ function RubricEditModal({
                       </div>
                       <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto]">
                         <Input
+                          maxLength={RUBRIC_DESCRIPTION_MAX_CHARS}
                           onChange={(event) => setDrafts((current) => ({ ...current, [item.item_id]: event.target.value }))}
                           value={drafts[item.item_id] ?? item.description}
                         />
@@ -2313,6 +2359,10 @@ function KnowledgeContentModal({
       setLocalErrorText("标题和正文不能为空。");
       return;
     }
+    if (nextTitle.length > RAG_TITLE_MAX_CHARS || nextText.length > RAG_TEXT_MAX_CHARS) {
+      setLocalErrorText(`标题不能超过 ${RAG_TITLE_MAX_CHARS} 个字符，正文不能超过 ${RAG_TEXT_MAX_CHARS} 个字符。`);
+      return;
+    }
     try {
       const savedItem = await onSaveKnowledgeItem({
         ...selectedItem,
@@ -2375,12 +2425,13 @@ function KnowledgeContentModal({
                 </div>
                 <label className="grid gap-2 text-sm font-semibold">
                   标题
-                  <Input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
+                  <Input maxLength={RAG_TITLE_MAX_CHARS} value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
                 </label>
                 <label className="grid gap-2 text-sm font-semibold">
                   正文
                   <textarea
                     className="min-h-[18rem] resize-y rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] px-4 py-3 text-sm leading-6 outline-none transition focus:border-[#AE5630] focus:bg-white"
+                    maxLength={RAG_TEXT_MAX_CHARS}
                     value={draftText}
                     onChange={(event) => setDraftText(event.target.value)}
                   />
@@ -2447,7 +2498,12 @@ function CaseCreationModal({
   }
 
   function addTextRow(field: "historyFacts" | "reasoningPoints") {
-    setDraft((current) => ({ ...current, [field]: [...current[field], createTextRow()] }));
+    const maxItems = field === "historyFacts" ? CASE_CREATION_HISTORY_MAX_ITEMS : CASE_CREATION_REASONING_MAX_ITEMS;
+    setDraft((current) => (
+      current[field].length >= maxItems
+        ? current
+        : { ...current, [field]: [...current[field], createTextRow()] }
+    ));
     clearCaseCreationResult();
   }
 
@@ -2468,7 +2524,11 @@ function CaseCreationModal({
   }
 
   function addProcedureRow(field: "examItems" | "testItems") {
-    setDraft((current) => ({ ...current, [field]: [...current[field], createProcedureRow()] }));
+    setDraft((current) => (
+      current[field].length >= CASE_CREATION_PROCEDURE_MAX_ITEMS
+        ? current
+        : { ...current, [field]: [...current[field], createProcedureRow()] }
+    ));
     clearCaseCreationResult();
   }
 
@@ -2489,7 +2549,11 @@ function CaseCreationModal({
   }
 
   function addDifferentialRow() {
-    setDraft((current) => ({ ...current, differentialDiagnoses: [...current.differentialDiagnoses, createDifferentialRow()] }));
+    setDraft((current) => (
+      current.differentialDiagnoses.length >= CASE_CREATION_DIFFERENTIAL_MAX_ITEMS
+        ? current
+        : { ...current, differentialDiagnoses: [...current.differentialDiagnoses, createDifferentialRow()] }
+    ));
     clearCaseCreationResult();
   }
 
@@ -2516,7 +2580,12 @@ function CaseCreationModal({
       return null;
     }
     try {
-      return buildCaseCreationPayload(draft);
+      const payload = buildCaseCreationPayload(draft);
+      if (getJsonUtf8ByteLength(payload) > ADMIN_CASE_REQUEST_MAX_BYTES) {
+        setLocalErrorText("病例与评分表内容不能超过 256 KiB。");
+        return null;
+      }
+      return payload;
     } catch (error) {
       setLocalErrorText(error instanceof Error ? error.message : "病例结构生成失败");
       return null;
@@ -2636,6 +2705,7 @@ function CaseCreationModal({
                   addLabel="添加病史线索"
                   description="例如起病时间、疼痛部位、症状演变、伴随症状或重要阴性病史。"
                   fieldLabel="病史线索"
+                  maxItems={CASE_CREATION_HISTORY_MAX_ITEMS}
                   onAdd={() => addTextRow("historyFacts")}
                   onRemove={(rowId) => removeTextRow("historyFacts", rowId)}
                   onUpdate={(rowId, value) => updateTextRow("historyFacts", rowId, value)}
@@ -2645,6 +2715,7 @@ function CaseCreationModal({
                 <CaseCreationProcedureRowList
                   addLabel="添加查体项目"
                   description="查体名称和结果会进入查体申请结果。"
+                  maxItems={CASE_CREATION_PROCEDURE_MAX_ITEMS}
                   namePlaceholder="例如 右下腹压痛"
                   onAdd={() => addProcedureRow("examItems")}
                   onRemove={(rowId) => removeProcedureRow("examItems", rowId)}
@@ -2656,6 +2727,7 @@ function CaseCreationModal({
                 <CaseCreationProcedureRowList
                   addLabel="添加辅助检查"
                   description="检查名称和结果会进入辅助检查申请结果。"
+                  maxItems={CASE_CREATION_PROCEDURE_MAX_ITEMS}
                   namePlaceholder="例如 血常规"
                   onAdd={() => addProcedureRow("testItems")}
                   onRemove={(rowId) => removeProcedureRow("testItems", rowId)}
@@ -2682,6 +2754,7 @@ function CaseCreationModal({
                 <div className="md:col-span-2">
                   <CaseCreationDifferentialRowList
                     addLabel="添加鉴别诊断"
+                    maxItems={CASE_CREATION_DIFFERENTIAL_MAX_ITEMS}
                     onAdd={addDifferentialRow}
                     onRemove={removeDifferentialRow}
                     onUpdate={updateDifferentialRow}
@@ -2693,6 +2766,7 @@ function CaseCreationModal({
                     addLabel="添加推理要点"
                     description="例如病史如何支持主要诊断、查体和检查如何补强证据、需要排除哪些危险诊断。"
                     fieldLabel="推理要点"
+                    maxItems={CASE_CREATION_REASONING_MAX_ITEMS}
                     onAdd={() => addTextRow("reasoningPoints")}
                     onRemove={(rowId) => removeTextRow("reasoningPoints", rowId)}
                     onUpdate={(rowId, value) => updateTextRow("reasoningPoints", rowId, value)}
@@ -4053,10 +4127,21 @@ function SelectInput({
   );
 }
 
-function TextAreaInput({ onChange, placeholder, value }: Readonly<{ onChange: (value: string) => void; placeholder?: string; value: string }>) {
+function TextAreaInput({
+  maxLength,
+  onChange,
+  placeholder,
+  value,
+}: Readonly<{
+  maxLength?: number;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}>) {
   return (
     <textarea
       className="min-h-36 resize-y rounded-2xl border border-[#E7E0D4] bg-white px-4 py-3 text-sm leading-6 text-[#141413] outline-none transition placeholder:text-[#9A8B7D] focus:border-[#141413] focus:ring-2 focus:ring-[#141413]/10"
+      maxLength={maxLength}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       value={value}
@@ -4068,6 +4153,7 @@ function CaseCreationTextRowList({
   addLabel,
   description,
   fieldLabel,
+  maxItems,
   onAdd,
   onRemove,
   onUpdate,
@@ -4077,6 +4163,7 @@ function CaseCreationTextRowList({
   addLabel: string;
   description: string;
   fieldLabel: string;
+  maxItems: number;
   onAdd: () => void;
   onRemove: (rowId: string) => void;
   onUpdate: (rowId: string, value: string) => void;
@@ -4090,7 +4177,7 @@ function CaseCreationTextRowList({
           <h4 className="text-sm font-semibold">{fieldLabel}</h4>
           <p className="mt-1 text-xs leading-5 text-[#6F6257]">{description}</p>
         </div>
-        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+        <Button disabled={rows.length >= maxItems} onClick={onAdd} size="sm" type="button" variant="secondary">
           <PlusCircle />
           {addLabel}
         </Button>
@@ -4117,6 +4204,7 @@ function CaseCreationTextRowList({
 function CaseCreationProcedureRowList({
   addLabel,
   description,
+  maxItems,
   namePlaceholder,
   onAdd,
   onRemove,
@@ -4127,6 +4215,7 @@ function CaseCreationProcedureRowList({
 }: Readonly<{
   addLabel: string;
   description: string;
+  maxItems: number;
   namePlaceholder: string;
   onAdd: () => void;
   onRemove: (rowId: string) => void;
@@ -4142,7 +4231,7 @@ function CaseCreationProcedureRowList({
           <h4 className="text-sm font-semibold">{title}</h4>
           <p className="mt-1 text-xs leading-5 text-[#6F6257]">{description}</p>
         </div>
-        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+        <Button disabled={rows.length >= maxItems} onClick={onAdd} size="sm" type="button" variant="secondary">
           <PlusCircle />
           {addLabel}
         </Button>
@@ -4171,12 +4260,14 @@ function CaseCreationProcedureRowList({
 
 function CaseCreationDifferentialRowList({
   addLabel,
+  maxItems,
   onAdd,
   onRemove,
   onUpdate,
   rows,
 }: Readonly<{
   addLabel: string;
+  maxItems: number;
   onAdd: () => void;
   onRemove: (rowId: string) => void;
   onUpdate: (rowId: string, patch: Partial<Omit<CaseCreationDifferentialRow, "id">>) => void;
@@ -4189,7 +4280,7 @@ function CaseCreationDifferentialRowList({
           <h4 className="text-sm font-semibold">鉴别诊断</h4>
           <p className="mt-1 text-xs leading-5 text-[#6F6257]">每个单元填写一个需要鉴别的疾病和关键区别。</p>
         </div>
-        <Button onClick={onAdd} size="sm" type="button" variant="secondary">
+        <Button disabled={rows.length >= maxItems} onClick={onAdd} size="sm" type="button" variant="secondary">
           <PlusCircle />
           {addLabel}
         </Button>
@@ -4479,11 +4570,20 @@ function getCaseCreationDraftErrors(draft: CaseCreationDraft, cases: readonly Ad
   if (getFilledTextRows(draft.historyFacts).length < 3) {
     errors.push("至少填写 3 条病史线索");
   }
+  if (getFilledTextRows(draft.historyFacts).length > CASE_CREATION_HISTORY_MAX_ITEMS) {
+    errors.push(`病史线索最多填写 ${CASE_CREATION_HISTORY_MAX_ITEMS} 条`);
+  }
   if (getFilledProcedureRows(draft.examItems).length < 1) {
     errors.push("至少填写 1 个查体项目");
   }
+  if (getFilledProcedureRows(draft.examItems).length > CASE_CREATION_PROCEDURE_MAX_ITEMS) {
+    errors.push(`查体项目最多填写 ${CASE_CREATION_PROCEDURE_MAX_ITEMS} 个`);
+  }
   if (getFilledProcedureRows(draft.testItems).length < 1) {
     errors.push("至少填写 1 个辅助检查");
+  }
+  if (getFilledProcedureRows(draft.testItems).length > CASE_CREATION_PROCEDURE_MAX_ITEMS) {
+    errors.push(`辅助检查最多填写 ${CASE_CREATION_PROCEDURE_MAX_ITEMS} 个`);
   }
   if (!draft.mainDiagnosis.trim()) {
     errors.push("请填写主要诊断");
@@ -4491,8 +4591,14 @@ function getCaseCreationDraftErrors(draft: CaseCreationDraft, cases: readonly Ad
   if (getFilledDifferentialRows(draft.differentialDiagnoses).length < 2) {
     errors.push("至少填写 2 个鉴别诊断");
   }
+  if (getFilledDifferentialRows(draft.differentialDiagnoses).length > CASE_CREATION_DIFFERENTIAL_MAX_ITEMS) {
+    errors.push(`鉴别诊断最多填写 ${CASE_CREATION_DIFFERENTIAL_MAX_ITEMS} 个`);
+  }
   if (getFilledTextRows(draft.reasoningPoints).length < 1) {
     errors.push("至少填写 1 条推理要点");
+  }
+  if (getFilledTextRows(draft.reasoningPoints).length > CASE_CREATION_REASONING_MAX_ITEMS) {
+    errors.push(`推理要点最多填写 ${CASE_CREATION_REASONING_MAX_ITEMS} 条`);
   }
   return errors;
 }
@@ -4500,11 +4606,11 @@ function getCaseCreationDraftErrors(draft: CaseCreationDraft, cases: readonly Ad
 function buildCaseCreationPayload(draft: CaseCreationDraft): AdminCaseCreationPayload {
   const caseId = draft.caseId.trim();
   const rubricId = `${caseId}_rubric`;
-  const historyRows = getFilledTextRows(draft.historyFacts).slice(0, 8);
-  const examRows = getFilledProcedureRows(draft.examItems).slice(0, 6);
-  const testRows = getFilledProcedureRows(draft.testItems).slice(0, 6);
-  const differentialRows = getFilledDifferentialRows(draft.differentialDiagnoses).slice(0, 4);
-  const reasoningLines = getFilledTextRows(draft.reasoningPoints).slice(0, 4);
+  const historyRows = getFilledTextRows(draft.historyFacts);
+  const examRows = getFilledProcedureRows(draft.examItems);
+  const testRows = getFilledProcedureRows(draft.testItems);
+  const differentialRows = getFilledDifferentialRows(draft.differentialDiagnoses);
+  const reasoningLines = getFilledTextRows(draft.reasoningPoints);
   const historyScores = distributeScores(25, historyRows.length);
   const examScores = distributeScores(15, examRows.length);
   const testScores = distributeScores(15, testRows.length);
@@ -4907,6 +5013,10 @@ function readFileAsBase64(file: File): Promise<string> {
     reader.addEventListener("error", () => reject(reader.error ?? new Error("读取文件失败")));
     reader.readAsDataURL(file);
   });
+}
+
+function getJsonUtf8ByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function buildRubricDescriptionDrafts(rubric: AdminRubricDetail): Record<string, string> {

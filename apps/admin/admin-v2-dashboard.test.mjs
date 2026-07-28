@@ -94,6 +94,32 @@ test("admin v2 reads the existing backend APIs without adding a new backend cont
   }
 });
 
+test("admin uploads and editable resources enforce API limits locally", () => {
+  const uploadHandler = sourceBetween(dashboardSource, "async function handleUpload()", "function toggleAgent");
+  assert.match(dashboardSource, /const RAG_DOCUMENT_MAX_BYTES = 8 \* 1024 \* 1024;/);
+  assert.match(uploadHandler, /if \(file\.size > RAG_DOCUMENT_MAX_BYTES\)/);
+  assert.ok(
+    uploadHandler.indexOf("file.size > RAG_DOCUMENT_MAX_BYTES") < uploadHandler.indexOf("readFileAsBase64(file)"),
+    "file size must be checked before reading and base64-encoding the document",
+  );
+  assert.match(uploadHandler, /parsedTags\.length > RAG_TAGS_MAX_ITEMS/);
+  assert.match(dashboardSource, /maxLength=\{RAG_TITLE_MAX_CHARS\}/);
+  assert.match(dashboardSource, /maxLength=\{RAG_TEXT_MAX_CHARS\}/);
+  assert.match(dashboardSource, /maxLength=\{CASE_TITLE_MAX_CHARS\}/);
+  assert.match(dashboardSource, /maxLength=\{CHIEF_COMPLAINT_MAX_CHARS\}/);
+  assert.match(dashboardSource, /maxLength=\{SAFETY_NOTES_MAX_CHARS\}/);
+  assert.match(dashboardSource, /maxLength=\{RUBRIC_DESCRIPTION_MAX_CHARS\}/);
+});
+
+test("case workshop rejects oversized payloads and never silently truncates rows", () => {
+  assert.match(dashboardSource, /const ADMIN_CASE_REQUEST_MAX_BYTES = 256 \* 1024;/);
+  assert.match(dashboardSource, /getJsonUtf8ByteLength\(payload\) > ADMIN_CASE_REQUEST_MAX_BYTES/);
+  assert.match(dashboardSource, /disabled=\{rows\.length >= maxItems\}/);
+  assert.doesNotMatch(dashboardSource, /getFilledTextRows\(draft\.historyFacts\)\.slice\(/);
+  assert.doesNotMatch(dashboardSource, /getFilledProcedureRows\(draft\.examItems\)\.slice\(/);
+  assert.doesNotMatch(dashboardSource, /getFilledDifferentialRows\(draft\.differentialDiagnoses\)\.slice\(/);
+});
+
 test("admin v2 keeps necessary management actions but avoids raw debug surfaces", () => {
   for (const label of [
     "读取报告",

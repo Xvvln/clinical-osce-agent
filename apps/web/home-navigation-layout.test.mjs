@@ -61,6 +61,40 @@ test("home page does not render large safety and source panels", () => {
   assert.doesNotMatch(pageSource, /<Panel title="数据来源"/);
 });
 
+test("student inputs enforce the API business limits before submission", () => {
+  for (const contract of [
+    /const AUTH_EMAIL_MAX_CHARS = 254;/,
+    /const AUTH_PASSWORD_MAX_CHARS = 256;/,
+    /const QUESTION_MAX_CHARS = 500;/,
+    /const PROCEDURE_REQUEST_MAX_CHARS = 500;/,
+    /const DIAGNOSIS_MAX_CHARS = 128;/,
+    /const DIAGNOSIS_REASONING_MAX_CHARS = 4096;/,
+    /const SPEECH_INPUT_MAX_CHARS = 2000;/,
+    /const AUDIO_TRANSCRIPTION_MAX_BYTES = 10 \* 1024 \* 1024;/,
+  ]) {
+    assert.match(pageSource, contract);
+  }
+
+  assert.match(pageSource, /id="history-question"[\s\S]*?maxLength=\{QUESTION_MAX_CHARS\}/);
+  assert.match(pageSource, /maxLength=\{PROCEDURE_REQUEST_MAX_CHARS\}[\s\S]*?setAdvancedProcedureRequestText/);
+  assert.match(pageSource, /id="diagnosis-input"[\s\S]*?maxLength=\{DIAGNOSIS_MAX_CHARS\}/);
+  assert.match(pageSource, /id="supporting-evidence-input"[\s\S]*?maxLength=\{DIAGNOSIS_DETAIL_MAX_CHARS\}/);
+  assert.match(pageSource, /if \(message\.length > QUESTION_MAX_CHARS\)/);
+  assert.match(pageSource, /if \(requestText\.length > PROCEDURE_REQUEST_MAX_CHARS\)/);
+  assert.match(pageSource, /if \(reasoning\.length > DIAGNOSIS_REASONING_MAX_CHARS\)/);
+});
+
+test("speech input is bounded without silently truncating transcription text", () => {
+  assert.match(
+    pageSource,
+    /if \(audioFile\.size > AUDIO_TRANSCRIPTION_MAX_BYTES\)[\s\S]*?const result = await transcribeSpeechAudio\(audioFile\);/,
+  );
+  assert.match(pageSource, /return combinedTranscript;/);
+  assert.doesNotMatch(pageSource, /combinedTranscript\.slice\(/);
+  assert.match(pageSource, /转写内容已完整保留到输入框/);
+  assert.match(pageSource, /if \(speechText\.length > SPEECH_INPUT_MAX_CHARS\)/);
+});
+
 test("app theme uses Claude-like paper palette with Chinese font fallbacks", () => {
   assert.match(globalsSource, /--background: #FAF9F5;/);
   assert.match(globalsSource, /--foreground: #141413;/);
