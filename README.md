@@ -209,22 +209,25 @@ OSCE_DASHSCOPE_TTS_VOICE=Serena
 
 ```powershell
 Set-Location 'services/api'
-uv run pytest -q
+uv sync --frozen --extra dev
+uv run python3 -m pytest -q tests ../../tests
 ```
 
 学生端：
 
 ```powershell
-corepack pnpm --dir 'apps/web' typecheck
-node --test 'apps/web/home-navigation-layout.test.mjs'
+corepack pnpm --dir 'apps/web' install --frozen-lockfile
+corepack pnpm --dir 'apps/web' check
 ```
 
 管理端：
 
 ```powershell
-corepack pnpm --dir 'apps/admin' typecheck
-node --test 'apps/admin/admin-v2-dashboard.test.mjs'
+corepack pnpm --dir 'apps/admin' install --frozen-lockfile
+corepack pnpm --dir 'apps/admin' check
 ```
+
+GitHub Actions 会以 Python 3.12、Node.js 20 和 pnpm 10.5.1 并行执行上述 API、学生端和管理端检查。
 
 ## 当前边界
 

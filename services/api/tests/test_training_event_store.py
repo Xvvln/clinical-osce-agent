@@ -194,7 +194,7 @@ def test_training_event_store_two_instances_insert_same_event_key_once(tmp_path)
     barrier = Barrier(2)
 
     def append(store: TrainingEventStore, attempt: int) -> bool:
-        barrier.wait()
+        barrier.wait(timeout=5.0)
         return store.append_event(
             session_id="session_concurrent",
             case_id="appendicitis_001",
