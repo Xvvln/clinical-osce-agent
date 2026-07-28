@@ -4,7 +4,7 @@ import json
 import re
 import hashlib
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
@@ -21,8 +21,11 @@ from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import (
     SESSION_DELETION_CLEANUP_VERSION,
     OsceSessionStore,
+    SessionCreatePreparationConflictError,
     SessionDeletionRecord,
     SessionDerivedReferenceOwnershipError,
+    SessionOutboxEvent,
+    SessionOutboxItem,
     SessionPersistenceError,
     SessionNotFoundError,
     osce_session_store,
@@ -79,6 +82,7 @@ MAX_RUNTIME_ERROR_FIELD_LENGTH = 12000
 MAX_PROCEDURE_CODES_PER_REQUEST = 64
 MAX_REQUESTED_PROCEDURES_PER_KIND = 64
 MAX_PROCEDURE_CODE_LENGTH = 64
+SESSION_EVENT_STORE_BUSY_TIMEOUT_MILLISECONDS = 100
 
 
 class ProcedureRequestTrainingModeError(RuntimeError):
@@ -212,6 +216,7 @@ class _CachedSession:
 @dataclass
 class _ProcedureCodeOperation:
     session: OsceSession
+    working_session: OsceSession | None
     case: Case
     exam_results: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
@@ -363,92 +368,73 @@ class OsceSessionService:
     def create_session(self, case_id: str, student_id: str, training_difficulty: str = "beginner") -> dict[str, Any]:
         graph_state = self.osce_graph.invoke(_initial_graph_state(case_id))
         case = load_case_node(graph_state["case_id"])
-        all_enabled_skills = self.training_skill_store.list_enabled_skills()
         rubric_item_ids = _rubric_item_ids(case.case_id)
-        student_profile = self._build_skill_profile_summary(student_id, all_enabled_skills)
-        enabled_skills = _enabled_skills_for_case(
-            all_enabled_skills,
-            case,
-            graph_state["stage"],
-            student_id,
-        )
-        active_skill_context = build_active_skill_context(
-            all_enabled_skills,
-            case_id=case.case_id,
-            student_id=student_id,
-            stage=graph_state["stage"],
-            rubric_item_ids=rubric_item_ids,
-            student_profile=student_profile,
-            patient_profile={"gender": case.patient_profile.gender},
-        )
         session = OsceSession(
             session_id=str(uuid4()),
             student_id=student_id,
             case_id=graph_state["case_id"],
             stage=graph_state["stage"],
             training_difficulty=_normalize_training_difficulty(training_difficulty),
-            evolution_candidates=_enabled_skill_prompts(enabled_skills),
-            active_skill_context=active_skill_context,
         )
-        active_skill_context_snapshot = json.dumps(
-            active_skill_context,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        agent_update = _refresh_agent_state(session)
-        self._create_session(session)
-        if json.dumps(
-            session.active_skill_context,
-            ensure_ascii=False,
-            sort_keys=True,
-        ) != active_skill_context_snapshot:
+        for create_attempt in range(3):
+            all_enabled_skills = (
+                self.training_skill_store.list_enabled_skills()
+            )
+            student_profile = self._build_skill_profile_summary(
+                student_id,
+                all_enabled_skills,
+            )
+            enabled_skills = _enabled_skills_for_case(
+                all_enabled_skills,
+                case,
+                session.stage,
+                student_id,
+            )
+            session.evolution_candidates = _enabled_skill_prompts(
+                enabled_skills
+            )
+            session.active_skill_context = build_active_skill_context(
+                all_enabled_skills,
+                case_id=case.case_id,
+                student_id=student_id,
+                stage=session.stage,
+                rubric_item_ids=rubric_item_ids,
+                student_profile=student_profile,
+                patient_profile={"gender": case.patient_profile.gender},
+            )
+            prepared = self.session_store.prepare_session_for_create(session)
+            _refresh_session_in_place(
+                session,
+                OsceSession(**prepared.payload),
+            )
             session.pedagogy_state = {}
             session.agent_decision_trace = []
             agent_update = _refresh_agent_state(session)
-            self._save_session(session)
-        enabled_skills = _enabled_skills_for_case(
-            self.training_skill_store.list_enabled_skills(),
-            case,
-            session.stage,
-            student_id,
-        )
-        self._append_event(session, "session_created", {"stage": session.stage, "training_difficulty": session.training_difficulty})
-        self._append_agent_update_event(session, agent_update)
-        for skill in enabled_skills:
-            skill_event_payload = {
-                "skill_id": skill["skill_id"],
-                "title": skill["title"],
-                "suggested_strategy": skill["suggested_strategy"],
-                "skill_type": skill.get("skill_type", "reasoning_bridge"),
-                "stage_scope": list(skill.get("stage_scope", [])),
-                "effect_status": skill.get("effect_status", "insufficient_samples"),
-            }
-            if skill.get("scope") and skill.get("scope") != "global":
-                skill_event_payload["scope"] = skill["scope"]
-            if skill.get("source_session_id"):
-                skill_event_payload["source_session_id"] = skill["source_session_id"]
-            if skill.get("source_session_ids"):
-                skill_event_payload["source_session_ids"] = list(
-                    skill["source_session_ids"]
-                )
-            if skill.get("source_report_ids"):
-                skill_event_payload["source_report_ids"] = list(
-                    skill["source_report_ids"]
-                )
-            if skill.get("source_provenance_schema_version"):
-                skill_event_payload["source_provenance_schema_version"] = str(
-                    skill["source_provenance_schema_version"]
-                )
-            if skill.get("owner_student_id"):
-                skill_event_payload["owner_student_id"] = skill["owner_student_id"]
+            selected_skill_ids = _selected_skill_ids(
+                session.active_skill_context
+            )
+            enabled_skills = [
+                skill
+                for skill in enabled_skills
+                if str(skill.get("skill_id", "")) in selected_skill_ids
+            ]
             try:
-                self._append_event(
+                self._create_session(
                     session,
-                    "training_skill_applied",
-                    skill_event_payload,
+                    outbox_events=self._build_session_creation_outbox_events(
+                        session,
+                        agent_update,
+                        enabled_skills,
+                    ),
+                    expected_deleted_skill_sources_version=(
+                        prepared.deleted_skill_sources_version
+                    ),
                 )
-            except TrainingEventDeletedSkillSourceError:
+            except SessionCreatePreparationConflictError:
+                if create_attempt == 2:
+                    raise
                 continue
+            break
         latest_session = self._get_session(session.session_id)
         if latest_session is None:
             raise SessionNotFoundError(session.session_id)
@@ -568,7 +554,7 @@ class OsceSessionService:
         _require_open_session(session)
         student_turn_count = max(
             _effective_student_turn_count(session),
-            self.training_event_store.count_session_events(
+            self._count_session_events_best_effort(
                 session_id,
                 event_types=[
                     "history_message",
@@ -599,7 +585,49 @@ class OsceSessionService:
             working_session.student_turn_count = student_turn_count + 1
             self._refresh_active_skill_context(working_session)
             agent_update = _refresh_agent_state(working_session)
-            self._commit_working_session(session, working_session)
+            primary_intent = _primary_intent_from_graph_state(graph_state)
+            if primary_intent == "safety_boundary":
+                business_event = SessionOutboxEvent(
+                    event_type="safety_boundary_triggered",
+                    payload={
+                        "message": message,
+                        "safety_flag": graph_state["safety_flags"][-1],
+                        "reply": graph_state["reply"],
+                        "agent_turn": _latest_agent_turn(graph_state),
+                    },
+                )
+            elif primary_intent == "answer_request_redirect":
+                business_event = SessionOutboxEvent(
+                    event_type="answer_request_redirected",
+                    payload={
+                        "message": message,
+                        "reply": graph_state["reply"],
+                        "agent_turn": _latest_agent_turn(graph_state),
+                    },
+                )
+            else:
+                business_event = SessionOutboxEvent(
+                    event_type="history_message",
+                    payload={
+                        "message": message,
+                        "current_intents": list(
+                            graph_state.get("current_intents", [])
+                        ),
+                        "reply": graph_state["reply"],
+                        "agent_turn": _latest_agent_turn(graph_state),
+                    },
+                )
+            self._commit_working_session(
+                session,
+                working_session,
+                outbox_events=[
+                    business_event,
+                    self._build_agent_update_outbox_event(
+                        working_session,
+                        agent_update,
+                    ),
+                ],
+            )
             self.complete_message_processing_status(session_id)
         except SessionPersistenceError:
             self.complete_message_processing_status(session_id, errored=True)
@@ -617,43 +645,6 @@ class OsceSessionService:
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["reply"] = graph_state["reply"]
         payload["current_intents"] = list(graph_state.get("current_intents", []))
-        primary_intent = _primary_intent_from_graph_state(graph_state)
-        if primary_intent == "safety_boundary":
-            self._append_event(
-                session,
-                "safety_boundary_triggered",
-                {
-                    "message": message,
-                    "safety_flag": graph_state["safety_flags"][-1],
-                    "reply": graph_state["reply"],
-                    "agent_turn": _latest_agent_turn(graph_state),
-                },
-            )
-            self._append_agent_update_event(session, agent_update)
-            return payload
-        if primary_intent == "answer_request_redirect":
-            self._append_event(
-                session,
-                "answer_request_redirected",
-                {
-                    "message": message,
-                    "reply": graph_state["reply"],
-                    "agent_turn": _latest_agent_turn(graph_state),
-                },
-            )
-            self._append_agent_update_event(session, agent_update)
-            return payload
-        self._append_event(
-            session,
-            "history_message",
-            {
-                "message": message,
-                "current_intents": list(graph_state.get("current_intents", [])),
-                "reply": graph_state["reply"],
-                "agent_turn": _latest_agent_turn(graph_state),
-            },
-        )
-        self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
@@ -665,7 +656,7 @@ class OsceSessionService:
         )
         if operation is None:
             return None
-        session, case, exam_results, agent_update = operation
+        session, case, exam_results, _agent_update = operation
         exam_result = exam_results[0]
         payload = _serialize_session(session, case)
         payload.update(
@@ -675,16 +666,6 @@ class OsceSessionService:
                 "result": exam_result["result"],
             }
         )
-        if agent_update is not None:
-            self._append_event(
-                session,
-                "physical_exam_requested",
-                {
-                    "exam_code": exam_result["exam_code"],
-                    "result": exam_result["result"],
-                },
-            )
-            self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
@@ -692,16 +673,9 @@ class OsceSessionService:
         operation = self._request_physical_exam_codes(session_id, exam_codes)
         if operation is None:
             return None
-        session, case, exam_results, agent_update = operation
+        session, case, exam_results, _agent_update = operation
         payload = _serialize_session(session, case)
         payload["exam_results"] = exam_results
-        if agent_update is not None:
-            self._append_event(
-                session,
-                "physical_exams_requested",
-                {"exam_results": exam_results},
-            )
-            self._append_agent_update_event(session, agent_update)
         return payload
 
     def _request_physical_exam_codes(
@@ -719,11 +693,46 @@ class OsceSessionService:
         )
         if operation is None:
             return None
+        agent_update = (
+            operation.agent_updates[-1]
+            if operation.agent_updates
+            else None
+        )
+        if operation.working_session is not None:
+            if agent_update is None:
+                raise RuntimeError("procedure update is missing agent state")
+            exam_result = operation.exam_results[0] if require_single else None
+            business_event = SessionOutboxEvent(
+                event_type=(
+                    "physical_exam_requested"
+                    if require_single
+                    else "physical_exams_requested"
+                ),
+                payload=(
+                    {
+                        "exam_code": exam_result["exam_code"],
+                        "result": exam_result["result"],
+                    }
+                    if exam_result is not None
+                    else {"exam_results": operation.exam_results}
+                ),
+            )
+            self._commit_working_session(
+                operation.session,
+                operation.working_session,
+                outbox_events=[
+                    business_event,
+                    self._build_agent_update_outbox_event(
+                        operation.working_session,
+                        agent_update,
+                    ),
+                ],
+            )
         return (
             operation.session,
             operation.case,
             operation.exam_results,
-            operation.agent_updates[-1] if operation.agent_updates else None,
+            agent_update,
         )
 
     @_serialize_session_operation
@@ -735,7 +744,7 @@ class OsceSessionService:
         )
         if operation is None:
             return None
-        session, case, test_results, agent_update = operation
+        session, case, test_results, _agent_update = operation
         test_result = test_results[0]
         payload = _serialize_session(session, case)
         payload.update(
@@ -745,16 +754,6 @@ class OsceSessionService:
                 "result": test_result["result"],
             }
         )
-        if agent_update is not None:
-            self._append_event(
-                session,
-                "auxiliary_test_requested",
-                {
-                    "test_code": test_result["test_code"],
-                    "result": test_result["result"],
-                },
-            )
-            self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
@@ -762,16 +761,9 @@ class OsceSessionService:
         operation = self._request_auxiliary_test_codes(session_id, test_codes)
         if operation is None:
             return None
-        session, case, test_results, agent_update = operation
+        session, case, test_results, _agent_update = operation
         payload = _serialize_session(session, case)
         payload["test_results"] = test_results
-        if agent_update is not None:
-            self._append_event(
-                session,
-                "auxiliary_tests_requested",
-                {"test_results": test_results},
-            )
-            self._append_agent_update_event(session, agent_update)
         return payload
 
     def _request_auxiliary_test_codes(
@@ -789,11 +781,46 @@ class OsceSessionService:
         )
         if operation is None:
             return None
+        agent_update = (
+            operation.agent_updates[-1]
+            if operation.agent_updates
+            else None
+        )
+        if operation.working_session is not None:
+            if agent_update is None:
+                raise RuntimeError("procedure update is missing agent state")
+            test_result = operation.test_results[0] if require_single else None
+            business_event = SessionOutboxEvent(
+                event_type=(
+                    "auxiliary_test_requested"
+                    if require_single
+                    else "auxiliary_tests_requested"
+                ),
+                payload=(
+                    {
+                        "test_code": test_result["test_code"],
+                        "result": test_result["result"],
+                    }
+                    if test_result is not None
+                    else {"test_results": operation.test_results}
+                ),
+            )
+            self._commit_working_session(
+                operation.session,
+                operation.working_session,
+                outbox_events=[
+                    business_event,
+                    self._build_agent_update_outbox_event(
+                        operation.working_session,
+                        agent_update,
+                    ),
+                ],
+            )
         return (
             operation.session,
             operation.case,
             operation.test_results,
-            operation.agent_updates[-1] if operation.agent_updates else None,
+            agent_update,
         )
 
     def _request_procedure_codes(
@@ -868,6 +895,7 @@ class OsceSessionService:
             raise ProcedureRequestLimitError("auxiliary test")
 
         agent_updates: list[dict[str, Any]] = []
+        working_session: OsceSession | None = None
         if new_exam_codes or new_test_codes:
             working_session = deepcopy(session)
             self._refresh_active_skill_context(working_session)
@@ -908,7 +936,6 @@ class OsceSessionService:
                     )
             self._refresh_active_skill_context(working_session)
             agent_updates.append(_refresh_agent_state(working_session))
-            self._commit_working_session(session, working_session)
 
         exam_results = [
             _build_physical_exam_request_result(
@@ -928,6 +955,7 @@ class OsceSessionService:
         ]
         return _ProcedureCodeOperation(
             session=session,
+            working_session=working_session,
             case=case,
             exam_results=exam_results,
             test_results=test_results,
@@ -962,28 +990,6 @@ class OsceSessionService:
         case = operation.case
         exam_results = operation.exam_results
         test_results = operation.test_results
-        next_agent_update_index = 0
-        if operation.new_exam_codes:
-            self._append_event(
-                session,
-                "physical_exams_requested",
-                {"exam_results": exam_results},
-            )
-            if operation.new_test_codes and operation.agent_updates:
-                self._append_agent_update_event(
-                    session,
-                    operation.agent_updates[0],
-                )
-                next_agent_update_index = 1
-        if operation.new_test_codes:
-            self._append_event(
-                session,
-                "auxiliary_tests_requested",
-                {"test_results": test_results},
-            )
-        for agent_update in operation.agent_updates[next_agent_update_index:]:
-            self._append_agent_update_event(session, agent_update)
-
         exam_result_map = {str(item.get("exam_code")): item for item in exam_results}
         test_result_map = {str(item.get("test_code")): item for item in test_results}
         matched_procedure_results = _build_standardized_procedure_results(
@@ -993,35 +999,88 @@ class OsceSessionService:
         )
         matched_procedure_results.extend(_build_routed_unmatched_procedure_results(routed_unmatched_requests))
         matched_procedure_results = _mark_unconfigured_procedure_results_unavailable(matched_procedure_results)
+        standardized_request = {
+            "mode": "advanced_free_text_catalog",
+            "raw_request": request_text,
+            "matched_exam_codes": list(standardization["matched_exam_codes"]),
+            "matched_test_codes": list(standardization["matched_test_codes"]),
+            "unmatched_requests": _remaining_unmatched_requests(
+                list(standardization["unmatched_requests"]),
+                routed_unmatched_requests,
+            ),
+            "routed_unmatched_requests": routed_unmatched_requests,
+            "generated_result_policy": "disabled",
+            "safety_boundary": "当前高级模式仅标准化到病例已配置项目；未配置项目不生成模拟结果，也不进入评分。",
+        }
+        free_text_event = SessionOutboxEvent(
+            event_type="procedure_free_text_requested",
+            payload={
+                "request_text": request_text,
+                "standardized_request": standardized_request,
+                "matched_procedure_results": matched_procedure_results,
+            },
+        )
+        if operation.working_session is not None:
+            outbox_events: list[SessionOutboxEvent] = []
+            next_agent_update_index = 0
+            if operation.new_exam_codes:
+                outbox_events.append(
+                    SessionOutboxEvent(
+                        event_type="physical_exams_requested",
+                        payload={"exam_results": exam_results},
+                    )
+                )
+                if operation.new_test_codes and operation.agent_updates:
+                    outbox_events.append(
+                        self._build_agent_update_outbox_event(
+                            operation.working_session,
+                            operation.agent_updates[0],
+                        )
+                    )
+                    next_agent_update_index = 1
+            if operation.new_test_codes:
+                outbox_events.append(
+                    SessionOutboxEvent(
+                        event_type="auxiliary_tests_requested",
+                        payload={"test_results": test_results},
+                    )
+                )
+            outbox_events.extend(
+                self._build_agent_update_outbox_event(
+                    operation.working_session,
+                    agent_update,
+                )
+                for agent_update in operation.agent_updates[
+                    next_agent_update_index:
+                ]
+            )
+            outbox_events.append(free_text_event)
+            self._commit_working_session(
+                session,
+                operation.working_session,
+                outbox_events=outbox_events,
+            )
+        else:
+            # A fully repeated or unmatched request does not mutate the session,
+            # so it remains an audit-only event rather than inventing a revision.
+            try:
+                self._append_event(
+                    session,
+                    free_text_event.event_type,
+                    free_text_event.payload,
+                )
+            except Exception:
+                # There is no state/event consistency boundary in this branch.
+                # An analytics outage must not fail an otherwise valid no-op.
+                pass
         payload = _serialize_session(session, case)
         payload.update(
             {
-                "standardized_request": {
-                    "mode": "advanced_free_text_catalog",
-                    "raw_request": request_text,
-                    "matched_exam_codes": list(standardization["matched_exam_codes"]),
-                    "matched_test_codes": list(standardization["matched_test_codes"]),
-                    "unmatched_requests": _remaining_unmatched_requests(
-                        list(standardization["unmatched_requests"]),
-                        routed_unmatched_requests,
-                    ),
-                    "routed_unmatched_requests": routed_unmatched_requests,
-                    "generated_result_policy": "disabled",
-                    "safety_boundary": "当前高级模式仅标准化到病例已配置项目；未配置项目不生成模拟结果，也不进入评分。",
-                },
+                "standardized_request": standardized_request,
                 "matched_procedure_results": matched_procedure_results,
                 "exam_results": exam_results,
                 "test_results": test_results,
             }
-        )
-        self._append_event(
-            session,
-            "procedure_free_text_requested",
-            {
-                "request_text": request_text,
-                "standardized_request": payload["standardized_request"],
-                "matched_procedure_results": matched_procedure_results,
-            },
         )
         return payload
 
@@ -1063,7 +1122,7 @@ class OsceSessionService:
         _require_open_session(session)
         hypothesis_record_count = max(
             _effective_hypothesis_record_count(session),
-            self.training_event_store.count_session_events(
+            self._count_session_events_best_effort(
                 session_id,
                 event_types=["hypothesis_recorded"],
             ),
@@ -1075,9 +1134,20 @@ class OsceSessionService:
         working_session.hypothesis_record_count = hypothesis_record_count + 1
         self._refresh_active_skill_context(working_session)
         agent_update = _refresh_agent_state(working_session)
-        self._commit_working_session(session, working_session)
-        self._append_event(session, "hypothesis_recorded", {"hypothesis": hypothesis})
-        self._append_agent_update_event(session, agent_update)
+        self._commit_working_session(
+            session,
+            working_session,
+            outbox_events=[
+                SessionOutboxEvent(
+                    event_type="hypothesis_recorded",
+                    payload={"hypothesis": hypothesis},
+                ),
+                self._build_agent_update_outbox_event(
+                    working_session,
+                    agent_update,
+                ),
+            ],
+        )
         return _serialize_session(session, load_case_node(session.case_id))
 
     @_serialize_session_operation
@@ -1088,7 +1158,7 @@ class OsceSessionService:
         _require_open_session(session)
         hint_request_count = max(
             _effective_hint_request_count(session),
-            self.training_event_store.count_session_events(
+            self._count_session_events_best_effort(
                 session_id,
                 event_types=["hint_requested"],
             ),
@@ -1115,22 +1185,29 @@ class OsceSessionService:
             working_session.hint_request_count = hint_request_count + 1
             self._refresh_active_skill_context(working_session)
             agent_update = _refresh_agent_state(working_session)
-            self._commit_working_session(session, working_session)
+            self._commit_working_session(
+                session,
+                working_session,
+                outbox_events=[
+                    SessionOutboxEvent(
+                        event_type="hint_requested",
+                        payload={
+                            "hint": graph_state["hint"],
+                            "agent_turn": _latest_agent_turn(graph_state),
+                        },
+                    ),
+                    self._build_agent_update_outbox_event(
+                        working_session,
+                        agent_update,
+                    ),
+                ],
+            )
             self.complete_message_processing_status(session_id)
         except Exception:
             self.complete_message_processing_status(session_id, errored=True)
             raise
         payload = _serialize_session(session, load_case_node(session.case_id))
         payload["hint"] = graph_state["hint"]
-        self._append_event(
-            session,
-            "hint_requested",
-            {
-                "hint": graph_state["hint"],
-                "agent_turn": _latest_agent_turn(graph_state),
-            },
-        )
-        self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
@@ -1173,9 +1250,20 @@ class OsceSessionService:
             ]
         self._refresh_active_skill_context(working_session)
         agent_update = _refresh_agent_state(working_session)
-        self._commit_working_session(session, working_session)
-        self._append_event(session, "diagnosis_submitted", {"diagnosis": diagnosis, "reasoning": reasoning})
-        self._append_agent_update_event(session, agent_update)
+        self._commit_working_session(
+            session,
+            working_session,
+            outbox_events=[
+                SessionOutboxEvent(
+                    event_type="diagnosis_submitted",
+                    payload={"diagnosis": diagnosis, "reasoning": reasoning},
+                ),
+                self._build_agent_update_outbox_event(
+                    working_session,
+                    agent_update,
+                ),
+            ],
+        )
         return _serialize_session(session, load_case_node(session.case_id))
 
     @_serialize_session_operation
@@ -1501,7 +1589,12 @@ class OsceSessionService:
                 elif student_id is None or existing_deletion.user_id != student_id:
                     raise SessionNotFoundError(session_id)
                 else:
-                    deletion = existing_deletion
+                    deletion = self.session_store.begin_session_deletion(
+                        session_id,
+                        expected_user_id=student_id,
+                    )
+                    if deletion is None:
+                        raise SessionNotFoundError(session_id)
             else:
                 stored_session = self.session_store.get_session(session_id)
                 if stored_session is None:
@@ -1567,6 +1660,9 @@ class OsceSessionService:
                 personal_skill_id=skill_id,
             )
             try:
+                self.training_event_store.delete_event_streams(
+                    [session_id, candidate_id],
+                )
                 candidate_cleanup = (
                     self.training_skill_candidate_store.remove_global_source_contributions(
                         source_session_id=session_id,
@@ -1604,9 +1700,6 @@ class OsceSessionService:
                     owner_student_id=student_id,
                     personal_skill_id=skill_id,
                     affected_global_skill_ids=affected_global_skill_ids,
-                )
-                self.training_event_store.delete_event_streams(
-                    [session_id, candidate_id],
                 )
                 self.report_store.delete_session_report(session_id)
                 self.training_skill_store.delete_personal_skill(
@@ -1883,8 +1976,78 @@ class OsceSessionService:
         self.student_profile_store.save_profile(student_id, profile)
         return profile
 
-    def _create_session(self, session: OsceSession) -> None:
-        revision = self.session_store.create_session(session)
+    def _build_session_creation_outbox_events(
+        self,
+        session: OsceSession,
+        agent_update: dict[str, Any],
+        enabled_skills: Sequence[dict[str, Any]],
+    ) -> list[SessionOutboxEvent]:
+        events = [
+            SessionOutboxEvent(
+                event_type="session_created",
+                payload={
+                    "stage": session.stage,
+                    "training_difficulty": session.training_difficulty,
+                },
+            ),
+            self._build_agent_update_outbox_event(session, agent_update),
+        ]
+        for skill in enabled_skills:
+            skill_event_payload: dict[str, Any] = {
+                "skill_id": skill["skill_id"],
+                "title": skill["title"],
+                "suggested_strategy": skill["suggested_strategy"],
+                "skill_type": skill.get("skill_type", "reasoning_bridge"),
+                "stage_scope": list(skill.get("stage_scope", [])),
+                "effect_status": skill.get(
+                    "effect_status",
+                    "insufficient_samples",
+                ),
+            }
+            if skill.get("scope") and skill.get("scope") != "global":
+                skill_event_payload["scope"] = skill["scope"]
+            if skill.get("source_session_id"):
+                skill_event_payload["source_session_id"] = skill[
+                    "source_session_id"
+                ]
+            if skill.get("source_session_ids"):
+                skill_event_payload["source_session_ids"] = list(
+                    skill["source_session_ids"]
+                )
+            if skill.get("source_report_ids"):
+                skill_event_payload["source_report_ids"] = list(
+                    skill["source_report_ids"]
+                )
+            if skill.get("source_provenance_schema_version"):
+                skill_event_payload["source_provenance_schema_version"] = str(
+                    skill["source_provenance_schema_version"]
+                )
+            if skill.get("owner_student_id"):
+                skill_event_payload["owner_student_id"] = skill[
+                    "owner_student_id"
+                ]
+            events.append(
+                SessionOutboxEvent(
+                    event_type="training_skill_applied",
+                    payload=skill_event_payload,
+                )
+            )
+        return events
+
+    def _create_session(
+        self,
+        session: OsceSession,
+        *,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
+        expected_deleted_skill_sources_version: int | None = None,
+    ) -> None:
+        self.session_store.create_session(
+            session,
+            outbox_events=outbox_events,
+            expected_deleted_skill_sources_version=(
+                expected_deleted_skill_sources_version
+            ),
+        )
         stored_session = self.session_store.get_session(session.session_id)
         if stored_session is None:
             raise SessionNotFoundError(session.session_id)
@@ -1896,9 +2059,14 @@ class OsceSessionService:
             session=session,
             revision=stored_session.revision,
         )
-        assert stored_session.revision == revision
+        self.drain_session_event_outbox(session_id=session.session_id)
 
-    def _save_session(self, session: OsceSession) -> None:
+    def _save_session(
+        self,
+        session: OsceSession,
+        *,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
+    ) -> None:
         cached_session = self._sessions.get(session.session_id)
         if cached_session is None or cached_session.session is not session:
             self._sessions.pop(session.session_id, None)
@@ -1907,13 +2075,15 @@ class OsceSessionService:
             stored_session = self.session_store.update_session_and_get(
                 session,
                 expected_revision=cached_session.revision,
+                outbox_events=outbox_events,
             )
             _refresh_session_in_place(
                 session,
                 OsceSession(**stored_session.payload),
             )
             cached_session.revision = stored_session.revision
-        except SessionPersistenceError:
+            self.drain_session_event_outbox(session_id=session.session_id)
+        except Exception:
             self._sessions.pop(session.session_id, None)
             raise
 
@@ -1921,6 +2091,8 @@ class OsceSessionService:
         self,
         live_session: OsceSession,
         working_session: OsceSession,
+        *,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
     ) -> None:
         cached_session = self._sessions.get(live_session.session_id)
         if (
@@ -1937,15 +2109,81 @@ class OsceSessionService:
             stored_session = self.session_store.update_session_and_get(
                 working_session,
                 expected_revision=cached_session.revision,
+                outbox_events=outbox_events,
             )
             _refresh_session_in_place(
                 live_session,
                 OsceSession(**stored_session.payload),
             )
             cached_session.revision = stored_session.revision
-        except SessionPersistenceError:
+            self.drain_session_event_outbox(
+                session_id=live_session.session_id
+            )
+        except Exception:
             self._sessions.pop(live_session.session_id, None)
             raise
+
+    def _count_session_events_best_effort(
+        self,
+        session_id: str,
+        *,
+        event_types: Sequence[str],
+    ) -> int:
+        try:
+            return self.training_event_store.count_session_events(
+                session_id,
+                event_types=list(event_types),
+                busy_timeout_milliseconds=(
+                    SESSION_EVENT_STORE_BUSY_TIMEOUT_MILLISECONDS
+                ),
+            )
+        except Exception:
+            # Persisted counters and bounded session payloads remain authoritative
+            # while the analytics/event database is temporarily unavailable.
+            return 0
+
+    def drain_session_event_outbox(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str | None = None,
+    ) -> int:
+        """Deliver one session stream in FIFO order without failing the API."""
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        def deliver(item: SessionOutboxItem) -> None:
+            try:
+                self.training_event_store.append_event(
+                    session_id=item.session_id,
+                    case_id=item.case_id,
+                    student_id=item.student_id,
+                    event_type=item.event_type,
+                    payload=item.payload,
+                    event_key=item.event_key,
+                    busy_timeout_milliseconds=(
+                        SESSION_EVENT_STORE_BUSY_TIMEOUT_MILLISECONDS
+                    ),
+                )
+            except TrainingEventDeletedSkillSourceError:
+                # The source-erasure ledger intentionally makes this event
+                # obsolete; acknowledging it prevents a permanent poison item.
+                return
+
+        acknowledged = 0
+        for _ in range(limit):
+            try:
+                delivered = self.session_store.deliver_next_event_outbox(
+                    deliver,
+                    session_id=session_id,
+                )
+            except Exception:
+                break
+            if not delivered:
+                break
+            acknowledged += 1
+        return acknowledged
 
     def _append_event(
         self,
@@ -1972,6 +2210,24 @@ class OsceSessionService:
         *,
         event_key: str | None = None,
     ) -> None:
+        event = self._build_agent_update_outbox_event(
+            session,
+            agent_update,
+            event_type=event_type,
+        )
+        self._append_event(
+            session,
+            event.event_type,
+            event.payload,
+            event_key=event_key,
+        )
+
+    @staticmethod
+    def _build_agent_update_outbox_event(
+        session: OsceSession,
+        agent_update: dict[str, Any],
+        event_type: str = "agent_decision_traced",
+    ) -> SessionOutboxEvent:
         agent_decision_trace = agent_update.get("agent_decision_trace")
         if isinstance(agent_decision_trace, list) and agent_decision_trace:
             latest_decision = agent_decision_trace[-1]
@@ -1985,7 +2241,7 @@ class OsceSessionService:
         }
         if "reflection_summary" in agent_update:
             payload["reflection_summary"] = agent_update["reflection_summary"]
-        self._append_event(session, event_type, payload, event_key=event_key)
+        return SessionOutboxEvent(event_type=event_type, payload=payload)
 
     def _append_runtime_error_event(
         self,
@@ -3491,6 +3747,20 @@ def _enabled_skill_prompts_from_active_context(active_skill_context: dict[str, A
         elif strategy:
             prompts.append(strategy)
     return prompts
+
+
+def _selected_skill_ids(
+    active_skill_context: dict[str, Any],
+) -> set[str]:
+    selected_skills = active_skill_context.get("selected_skills", [])
+    if not isinstance(selected_skills, list):
+        return set()
+    return {
+        skill_id
+        for skill in selected_skills
+        if isinstance(skill, dict)
+        and (skill_id := str(skill.get("skill_id", "")).strip())
+    }
 
 
 def _current_missing_evidence(session: OsceSession) -> list[str]:

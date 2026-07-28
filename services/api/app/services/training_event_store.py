@@ -31,6 +31,14 @@ class TrainingEventReferenceOwnershipError(RuntimeError):
         self.source_session_id = source_session_id
 
 
+def _resolve_busy_timeout(value: int | None) -> int:
+    if value is None:
+        return DATABASE_BUSY_TIMEOUT_MILLISECONDS
+    if not isinstance(value, int) or value < 0:
+        raise ValueError("busy_timeout_milliseconds must be a non-negative integer")
+    return value
+
+
 class TrainingEventStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
@@ -45,10 +53,18 @@ class TrainingEventStore:
         event_type: str,
         payload: dict[str, Any],
         event_key: str | None = None,
+        busy_timeout_milliseconds: int | None = None,
     ) -> bool:
         """Return True for a new row; False means a keyed replay was already persisted."""
-        self._initialize()
-        with self._connect() as connection:
+        timeout_milliseconds = _resolve_busy_timeout(
+            busy_timeout_milliseconds
+        )
+        self._initialize(
+            busy_timeout_milliseconds=timeout_milliseconds
+        )
+        with self._connect(
+            busy_timeout_milliseconds=timeout_milliseconds
+        ) as connection:
             connection.execute("BEGIN IMMEDIATE")
             if self._is_stream_deleted(connection, session_id):
                 raise TrainingEventStreamDeletedError(session_id)
@@ -317,6 +333,7 @@ class TrainingEventStore:
         session_id: str,
         *,
         event_types: list[str],
+        busy_timeout_milliseconds: int | None = None,
     ) -> int:
         normalized_event_types = list(
             dict.fromkeys(
@@ -327,9 +344,16 @@ class TrainingEventStore:
         )
         if not normalized_event_types:
             return 0
-        self._initialize()
+        timeout_milliseconds = _resolve_busy_timeout(
+            busy_timeout_milliseconds
+        )
+        self._initialize(
+            busy_timeout_milliseconds=timeout_milliseconds
+        )
         placeholders = ",".join("?" for _ in normalized_event_types)
-        with self._connect() as connection:
+        with self._connect(
+            busy_timeout_milliseconds=timeout_milliseconds
+        ) as connection:
             row = connection.execute(
                 f"""
                 SELECT COUNT(*)
@@ -378,14 +402,20 @@ class TrainingEventStore:
             )
         return events_by_session
 
-    def _initialize(self) -> None:
+    def _initialize(
+        self,
+        *,
+        busy_timeout_milliseconds: int = DATABASE_BUSY_TIMEOUT_MILLISECONDS,
+    ) -> None:
         if self._initialized:
             return
         with self._initialization_lock:
             if self._initialized:
                 return
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as connection:
+            with self._connect(
+                busy_timeout_milliseconds=busy_timeout_milliseconds
+            ) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     """
@@ -453,12 +483,18 @@ class TrainingEventStore:
                 connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
             self._initialized = True
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(
+        self,
+        *,
+        busy_timeout_milliseconds: int = DATABASE_BUSY_TIMEOUT_MILLISECONDS,
+    ) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self.database_path,
-            timeout=DATABASE_BUSY_TIMEOUT_MILLISECONDS / 1000,
+            timeout=busy_timeout_milliseconds / 1000,
         )
-        connection.execute(f"PRAGMA busy_timeout = {DATABASE_BUSY_TIMEOUT_MILLISECONDS}")
+        connection.execute(
+            f"PRAGMA busy_timeout = {busy_timeout_milliseconds}"
+        )
         return connection
 
     @staticmethod

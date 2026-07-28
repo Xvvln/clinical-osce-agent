@@ -145,6 +145,18 @@ def test_legacy_schema_migrates_once_under_concurrent_initialization(tmp_path: P
                 "PRAGMA table_info(osce_session_tombstones)"
             ).fetchall()
         }
+        outbox_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(osce_session_event_outbox)"
+            ).fetchall()
+        }
+        outbox_indexes = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA index_list(osce_session_event_outbox)"
+            ).fetchall()
+        }
 
     assert "revision" in columns
     assert schema_version == DATABASE_SCHEMA_VERSION
@@ -159,6 +171,22 @@ def test_legacy_schema_migrates_once_under_concurrent_initialization(tmp_path: P
         "cleanup_completed_at",
         "cleanup_version",
     } <= tombstone_columns
+    assert {
+        "id",
+        "event_key",
+        "session_id",
+        "session_revision",
+        "event_index",
+        "case_id",
+        "student_id",
+        "event_type",
+        "payload_json",
+        "created_at",
+    } <= outbox_columns
+    assert {
+        "osce_session_event_outbox_pending_idx",
+        "osce_session_event_outbox_session_idx",
+    } <= outbox_indexes
 
 
 def test_v2_tombstones_migrate_as_completed_without_inventing_ownership(

@@ -412,6 +412,15 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.session_deletion_recovery_stats = (
             recovery_service.resume_pending_session_deletions()
         )
+        recovered_events = 0
+        while True:
+            recovered_batch = recovery_service.drain_session_event_outbox(
+                limit=1_000
+            )
+            recovered_events += recovered_batch
+            if recovered_batch < 1_000:
+                break
+        application.state.session_event_outbox_recovered = recovered_events
     yield
 
 

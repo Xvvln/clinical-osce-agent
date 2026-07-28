@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.services.osce_session_service import OsceSession
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "osce_sessions.sqlite3"
-DATABASE_SCHEMA_VERSION = 5
+DATABASE_SCHEMA_VERSION = 6
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
 SESSION_DELETION_PENDING = "pending"
 SESSION_DELETION_COMPLETED = "completed"
@@ -28,6 +29,10 @@ class SessionPersistenceError(RuntimeError):
 
 
 class SessionAlreadyExistsError(SessionPersistenceError):
+    pass
+
+
+class SessionCreatePreparationConflictError(SessionPersistenceError):
     pass
 
 
@@ -57,6 +62,31 @@ class StoredSession:
 
 
 @dataclass(frozen=True)
+class PreparedSession:
+    payload: dict[str, object]
+    deleted_skill_sources_version: int
+
+
+@dataclass(frozen=True)
+class SessionOutboxEvent:
+    event_type: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SessionOutboxItem:
+    event_key: str
+    session_id: str
+    session_revision: int
+    event_index: int
+    case_id: str
+    student_id: str
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True)
 class SessionDeletionRecord:
     session_id: str
     user_id: str
@@ -74,19 +104,58 @@ class OsceSessionStore:
         self._initialization_lock = Lock()
         self._initialized = False
 
-    def create_session(self, session: OsceSession) -> int:
+    def prepare_session_for_create(
+        self,
+        session: OsceSession,
+    ) -> PreparedSession:
+        """Return a scrubbed snapshot plus the append-only deletion-ledger version."""
+
         self._initialize()
-        now = datetime.now(UTC).isoformat()
         payload = asdict(session)
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            if self._tombstone_revision(connection, session.session_id) is not None:
-                raise SessionAlreadyExistsError(session.session_id)
+            connection.execute("BEGIN")
+            deleted_skill_sources_version = (
+                self._deleted_skill_sources_version(connection)
+            )
             payload = _scrub_payload_for_deleted_skill_sources(
                 connection,
                 payload,
                 user_id=session.student_id,
             )
+        return PreparedSession(
+            payload=payload,
+            deleted_skill_sources_version=deleted_skill_sources_version,
+        )
+
+    def create_session(
+        self,
+        session: OsceSession,
+        *,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
+        expected_deleted_skill_sources_version: int | None = None,
+    ) -> int:
+        self._initialize()
+        now = datetime.now(UTC).isoformat()
+        payload = asdict(session)
+        serialized_events = _serialize_outbox_events(outbox_events)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                expected_deleted_skill_sources_version is not None
+                and self._deleted_skill_sources_version(connection)
+                != expected_deleted_skill_sources_version
+            ):
+                raise SessionCreatePreparationConflictError(
+                    session.session_id
+                )
+            if self._tombstone_revision(connection, session.session_id) is not None:
+                raise SessionAlreadyExistsError(session.session_id)
+            if expected_deleted_skill_sources_version is None:
+                payload = _scrub_payload_for_deleted_skill_sources(
+                    connection,
+                    payload,
+                    user_id=session.student_id,
+                )
             try:
                 connection.execute(
                     """
@@ -114,12 +183,28 @@ class OsceSessionStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise SessionAlreadyExistsError(session.session_id) from exc
+            self._insert_event_outbox(
+                connection,
+                session_id=session.session_id,
+                session_revision=1,
+                case_id=session.case_id,
+                student_id=session.student_id,
+                serialized_events=serialized_events,
+                created_at=now,
+            )
         return 1
 
-    def update_session(self, session: OsceSession, *, expected_revision: int) -> int:
+    def update_session(
+        self,
+        session: OsceSession,
+        *,
+        expected_revision: int,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
+    ) -> int:
         return self.update_session_and_get(
             session,
             expected_revision=expected_revision,
+            outbox_events=outbox_events,
         ).revision
 
     def update_session_and_get(
@@ -127,12 +212,14 @@ class OsceSessionStore:
         session: OsceSession,
         *,
         expected_revision: int,
+        outbox_events: Sequence[SessionOutboxEvent] = (),
     ) -> StoredSession:
         if expected_revision < 1:
             raise ValueError("expected_revision must be positive")
         self._initialize()
         now = datetime.now(UTC).isoformat()
         payload = asdict(session)
+        serialized_events = _serialize_outbox_events(outbox_events)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             payload = _scrub_payload_for_deleted_skill_sources(
@@ -164,6 +251,16 @@ class OsceSessionStore:
                 ),
             )
             if cursor.rowcount == 1:
+                new_revision = expected_revision + 1
+                self._insert_event_outbox(
+                    connection,
+                    session_id=session.session_id,
+                    session_revision=new_revision,
+                    case_id=session.case_id,
+                    student_id=session.student_id,
+                    serialized_events=serialized_events,
+                    created_at=now,
+                )
                 row = connection.execute(
                     """
                     SELECT session_json, revision
@@ -197,6 +294,106 @@ class OsceSessionStore:
                 expected_revision=expected_revision,
                 current_revision=int(row[0]),
             )
+
+    def list_pending_event_outbox(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str | None = None,
+    ) -> list[SessionOutboxItem]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        self._initialize()
+        where_clause = "" if session_id is None else "WHERE session_id = ?"
+        parameters: tuple[object, ...] = (
+            (limit,)
+            if session_id is None
+            else (session_id, limit)
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    event_key,
+                    session_id,
+                    session_revision,
+                    event_index,
+                    case_id,
+                    student_id,
+                    event_type,
+                    payload_json,
+                    created_at
+                FROM osce_session_event_outbox
+                {where_clause}
+                ORDER BY id
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [_session_outbox_item_from_row(row) for row in rows]
+
+    def acknowledge_event_outbox(self, event_key: str) -> bool:
+        if not event_key:
+            raise ValueError("event_key is required")
+        self._initialize()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM osce_session_event_outbox WHERE event_key = ?",
+                (event_key,),
+            )
+        return cursor.rowcount == 1
+
+    def deliver_next_event_outbox(
+        self,
+        deliver: Callable[[SessionOutboxItem], None],
+        *,
+        session_id: str | None = None,
+    ) -> bool:
+        """Deliver and acknowledge one FIFO item while fencing session deletion."""
+
+        self._initialize()
+        where_clause = "" if session_id is None else "WHERE session_id = ?"
+        parameters: tuple[object, ...] = (
+            () if session_id is None else (session_id,)
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                f"""
+                SELECT
+                    event_key,
+                    session_id,
+                    session_revision,
+                    event_index,
+                    case_id,
+                    student_id,
+                    event_type,
+                    payload_json,
+                    created_at
+                FROM osce_session_event_outbox
+                {where_clause}
+                ORDER BY id
+                LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+            if row is None:
+                return False
+            item = _session_outbox_item_from_row(row)
+            if self._tombstone_revision(connection, item.session_id) is None:
+                deliver(item)
+            cursor = connection.execute(
+                """
+                DELETE FROM osce_session_event_outbox
+                WHERE event_key = ?
+                """,
+                (item.event_key,),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"session outbox acknowledgement lost: {item.event_key}"
+                )
+        return True
 
     def get_session(self, session_id: str) -> StoredSession | None:
         self._initialize()
@@ -277,6 +474,10 @@ class OsceSessionStore:
                 (session_id,),
             ).fetchone()
             if row is None:
+                connection.execute(
+                    "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                    (session_id,),
+                )
                 return False
             deleted_revision = int(row[0]) + 1
             connection.execute(
@@ -314,6 +515,10 @@ class OsceSessionStore:
                     deleted_at,
                 ),
             )
+            connection.execute(
+                "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                (session_id,),
+            )
             cursor = connection.execute(
                 "DELETE FROM osce_sessions WHERE session_id = ? AND revision = ?",
                 (session_id, int(row[0])),
@@ -339,6 +544,10 @@ class OsceSessionStore:
             if existing_deletion is not None:
                 if existing_deletion.user_id != expected_user_id:
                     return None
+                connection.execute(
+                    "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                    (session_id,),
+                )
                 return existing_deletion
 
             row = connection.execute(
@@ -387,6 +596,10 @@ class OsceSessionStore:
                     deletion.cleanup_completed_at,
                     deletion.cleanup_version,
                 ),
+            )
+            connection.execute(
+                "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                (session_id,),
             )
             cursor = connection.execute(
                 """
@@ -462,6 +675,10 @@ class OsceSessionStore:
             )
             if cursor.rowcount != 1:
                 return None
+            connection.execute(
+                "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                (session_id,),
+            )
             return self._tombstone_record(connection, session_id)
 
     def get_session_deletion(self, session_id: str) -> SessionDeletionRecord | None:
@@ -782,6 +999,10 @@ class OsceSessionStore:
             deletion = self._tombstone_record(connection, session_id)
             if deletion is None:
                 return None
+            connection.execute(
+                "DELETE FROM osce_session_event_outbox WHERE session_id = ?",
+                (session_id,),
+            )
             if (
                 deletion.cleanup_status != SESSION_DELETION_COMPLETED
                 or deletion.cleanup_version < SESSION_DELETION_CLEANUP_VERSION
@@ -856,6 +1077,37 @@ class OsceSessionStore:
                         cleanup_completed_at TEXT,
                         cleanup_version INTEGER NOT NULL DEFAULT 1
                     )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS osce_session_event_outbox (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_key TEXT NOT NULL UNIQUE,
+                        session_id TEXT NOT NULL,
+                        session_revision INTEGER NOT NULL
+                            CHECK(session_revision >= 1),
+                        event_index INTEGER NOT NULL
+                            CHECK(event_index >= 0),
+                        case_id TEXT NOT NULL,
+                        student_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(session_id, session_revision, event_index)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS osce_session_event_outbox_pending_idx
+                    ON osce_session_event_outbox(id)
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS osce_session_event_outbox_session_idx
+                    ON osce_session_event_outbox(session_id)
                     """
                 )
                 tombstone_columns = {
@@ -951,6 +1203,59 @@ class OsceSessionStore:
         return connection
 
     @staticmethod
+    def _insert_event_outbox(
+        connection: sqlite3.Connection,
+        *,
+        session_id: str,
+        session_revision: int,
+        case_id: str,
+        student_id: str,
+        serialized_events: Sequence[tuple[str, str]],
+        created_at: str,
+    ) -> None:
+        for event_index, (event_type, payload_json) in enumerate(serialized_events):
+            event_key = (
+                f"session:{session_id}:revision:{session_revision}:"
+                f"event:{event_index}:{event_type}"
+            )
+            connection.execute(
+                """
+                INSERT INTO osce_session_event_outbox (
+                    event_key,
+                    session_id,
+                    session_revision,
+                    event_index,
+                    case_id,
+                    student_id,
+                    event_type,
+                    payload_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_key,
+                    session_id,
+                    session_revision,
+                    event_index,
+                    case_id,
+                    student_id,
+                    event_type,
+                    payload_json,
+                    created_at,
+                ),
+            )
+
+    @staticmethod
+    def _deleted_skill_sources_version(
+        connection: sqlite3.Connection,
+    ) -> int:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(rowid), 0) FROM osce_deleted_skill_sources"
+        ).fetchone()
+        return 0 if row is None else int(row[0])
+
+    @staticmethod
     def _tombstone_revision(connection: sqlite3.Connection, session_id: str) -> int | None:
         row = connection.execute(
             "SELECT deleted_revision FROM osce_session_tombstones WHERE session_id = ?",
@@ -985,6 +1290,44 @@ class OsceSessionStore:
 
 
 osce_session_store = OsceSessionStore()
+
+
+def _serialize_outbox_events(
+    events: Sequence[SessionOutboxEvent],
+) -> tuple[tuple[str, str], ...]:
+    serialized: list[tuple[str, str]] = []
+    for event in events:
+        event_type = event.event_type.strip()
+        if not event_type:
+            raise ValueError("outbox event_type is required")
+        if not isinstance(event.payload, dict):
+            raise ValueError("outbox event payload must be an object")
+        serialized.append(
+            (
+                event_type,
+                json.dumps(event.payload, ensure_ascii=False),
+            )
+        )
+    return tuple(serialized)
+
+
+def _session_outbox_item_from_row(
+    row: tuple[object, ...],
+) -> SessionOutboxItem:
+    payload = json.loads(str(row[7]))
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid session outbox payload: {row[0]}")
+    return SessionOutboxItem(
+        event_key=str(row[0]),
+        session_id=str(row[1]),
+        session_revision=int(row[2]),
+        event_index=int(row[3]),
+        case_id=str(row[4]),
+        student_id=str(row[5]),
+        event_type=str(row[6]),
+        payload=payload,
+        created_at=str(row[8]),
+    )
 
 
 def _session_deletion_record_from_row(

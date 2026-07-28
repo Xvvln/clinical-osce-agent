@@ -18,6 +18,7 @@ from app.services.osce_session_store import (
     SESSION_DELETION_CLEANUP_VERSION,
     OsceSessionStore,
     SessionNotFoundError,
+    SessionOutboxEvent,
 )
 from app.services.report_store import (
     ReportDeletedError,
@@ -622,10 +623,23 @@ def test_concurrent_late_session_create_is_scrubbed_without_partial_failure(
         creating_service.session_store.create_session
     )
 
-    def paused_create_session(session: OsceSession) -> int:
+    def paused_create_session(
+        session: OsceSession,
+        *,
+        outbox_events: (
+            tuple[SessionOutboxEvent, ...] | list[SessionOutboxEvent]
+        ) = (),
+        expected_deleted_skill_sources_version: int | None = None,
+    ) -> int:
         create_reached_store.set()
         assert allow_create_to_continue.wait(timeout=5)
-        return original_create_session(session)
+        return original_create_session(
+            session,
+            outbox_events=outbox_events,
+            expected_deleted_skill_sources_version=(
+                expected_deleted_skill_sources_version
+            ),
+        )
 
     monkeypatch.setattr(
         creating_service.session_store,
@@ -1081,6 +1095,53 @@ def test_process_startup_resumes_pending_session_deletion_after_restart(
         student_id=legacy_student_id,
     )
     _make_tombstone_ownerless(first_service, legacy_session_id)
+    with sqlite3.connect(first_service.session_store.database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO osce_session_event_outbox (
+                event_key,
+                session_id,
+                session_revision,
+                event_index,
+                case_id,
+                student_id,
+                event_type,
+                payload_json,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"session:{legacy_session_id}:revision:99:event:0:stale_deleted",
+                legacy_session_id,
+                99,
+                0,
+                "appendicitis_001",
+                legacy_student_id,
+                "stale_deleted",
+                "{}",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    live_session_id = str(
+        first_service.create_session(
+            "appendicitis_001",
+            "student-startup-live",
+        )["session_id"]
+    )
+    live_record = first_service.session_store.get_session(live_session_id)
+    assert live_record is not None
+    first_service.session_store.update_session_and_get(
+        OsceSession(**live_record.payload),
+        expected_revision=live_record.revision,
+        outbox_events=(
+            SessionOutboxEvent(
+                event_type="startup_delivery_probe",
+                payload={"source": "startup"},
+            ),
+        ),
+    )
 
     restarted_service = _build_service(tmp_path)
     recovery_app = FastAPI(lifespan=_app_lifespan)
@@ -1095,6 +1156,18 @@ def test_process_startup_resumes_pending_session_deletion_after_restart(
         "failed": 0,
         "skipped": 0,
     }
+    assert recovery_app.state.session_event_outbox_recovered == 1
+    assert restarted_service.session_store.list_pending_event_outbox() == []
+    assert [
+        event["event_type"]
+        for event in restarted_service.training_event_store.list_session_events(
+            live_session_id
+        )
+        if event["event_type"] == "startup_delivery_probe"
+    ] == ["startup_delivery_probe"]
+    assert restarted_service.training_event_store.list_session_events(
+        legacy_session_id
+    ) == []
     completed = restarted_service.session_store.get_session_deletion(session_id)
     assert completed is not None
     assert completed.cleanup_status == "completed"
@@ -1106,6 +1179,37 @@ def test_process_startup_resumes_pending_session_deletion_after_restart(
     assert legacy_completed.user_id == legacy_student_id
     assert legacy_completed.cleanup_status == "completed"
     assert restarted_service.report_store.get_report(legacy_session_id) is None
+
+
+def test_process_startup_drains_more_than_one_outbox_batch() -> None:
+    class _BatchedRecoveryService:
+        def __init__(self) -> None:
+            self.drain_limits: list[int] = []
+            self._batch_sizes = iter((1_000, 1))
+
+        @staticmethod
+        def resume_pending_session_deletions() -> dict[str, int]:
+            return {
+                "scanned": 0,
+                "adopted": 0,
+                "completed": 0,
+                "failed": 0,
+                "skipped": 0,
+            }
+
+        def drain_session_event_outbox(self, *, limit: int) -> int:
+            self.drain_limits.append(limit)
+            return next(self._batch_sizes)
+
+    recovery_service = _BatchedRecoveryService()
+    recovery_app = FastAPI(lifespan=_app_lifespan)
+    recovery_app.state.session_deletion_recovery_service = recovery_service
+
+    with TestClient(recovery_app):
+        pass
+
+    assert recovery_service.drain_limits == [1_000, 1_000]
+    assert recovery_app.state.session_event_outbox_recovered == 1_001
 
 
 def test_restart_upgrades_completed_legacy_cleanup_and_removes_derived_references(

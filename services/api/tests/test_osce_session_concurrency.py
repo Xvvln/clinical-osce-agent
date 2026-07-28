@@ -332,6 +332,8 @@ def test_cross_service_stale_write_raises_conflict_without_lost_update(tmp_path:
         ),
     )
     session_id = str(first_service.create_session("appendicitis_001", "student-a")["session_id"])
+    initial_record = first_service.session_store.get_session(session_id)
+    assert initial_record is not None
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         stale_write_future = executor.submit(
@@ -359,7 +361,7 @@ def test_cross_service_stale_write_raises_conflict_without_lost_update(tmp_path:
     assert retried is not None
     persisted_after_retry = first_service.session_store.get_session(session_id)
     assert persisted_after_retry is not None
-    assert persisted_after_retry.revision == 3
+    assert persisted_after_retry.revision == initial_record.revision + 2
     assert persisted_after_retry.payload["student_hypotheses"] == ["急性阑尾炎"]
     assert any(
         message.get("role") == "student"

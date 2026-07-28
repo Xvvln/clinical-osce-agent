@@ -319,6 +319,7 @@ def test_session_write_conflict_does_not_publish_procedure_working_copy(
         _session: object,
         *,
         expected_revision: int,
+        outbox_events: Any = (),
     ) -> Any:
         raise SessionWriteConflictError(
             session_id,
@@ -366,11 +367,13 @@ def test_successful_cas_uses_its_atomic_snapshot_when_another_service_writes_nex
         session: Any,
         *,
         expected_revision: int,
+        outbox_events: Any = (),
     ) -> Any:
         nonlocal interleaved
         stored_session = update_session_and_get(
             session,
             expected_revision=expected_revision,
+            outbox_events=outbox_events,
         )
         if not interleaved:
             interleaved = True
@@ -530,11 +533,13 @@ def test_combined_free_text_procedure_commits_both_kinds_with_one_cas(
         session: Any,
         *,
         expected_revision: int,
+        outbox_events: Any = (),
     ) -> Any:
         expected_revisions.append(expected_revision)
         return update_session_and_get(
             session,
             expected_revision=expected_revision,
+            outbox_events=outbox_events,
         )
 
     monkeypatch.setattr(
