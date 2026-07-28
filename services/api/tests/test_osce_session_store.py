@@ -11,6 +11,7 @@ from app.services.osce_session_store import (
     DATABASE_SCHEMA_VERSION,
     OsceSessionStore,
     SessionAlreadyExistsError,
+    SessionDeletionRecord,
     SessionDeletedError,
     SessionNotFoundError,
     SessionWriteConflictError,
@@ -66,6 +67,45 @@ def _create_legacy_database(database_path: Path, session: OsceSession) -> None:
         )
 
 
+def _create_v2_tombstone_database(database_path: Path) -> None:
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE osce_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                case_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                session_json TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE osce_session_tombstones (
+                session_id TEXT PRIMARY KEY,
+                deleted_revision INTEGER NOT NULL,
+                deleted_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO osce_session_tombstones (
+                session_id,
+                deleted_revision,
+                deleted_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            ("legacy-deleted", 7, "2026-01-02T00:00:00+00:00"),
+        )
+        connection.execute("PRAGMA user_version = 2")
+
+
 def test_legacy_schema_migrates_once_under_concurrent_initialization(tmp_path: Path) -> None:
     database_path = tmp_path / "sessions.sqlite3"
     legacy_session = _session("legacy-session")
@@ -97,10 +137,47 @@ def test_legacy_schema_migrates_once_under_concurrent_initialization(tmp_path: P
             WHERE type = 'table' AND name = 'osce_session_tombstones'
             """
         ).fetchone()
+        tombstone_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(osce_session_tombstones)"
+            ).fetchall()
+        }
 
     assert "revision" in columns
     assert schema_version == DATABASE_SCHEMA_VERSION
     assert tombstone_table == ("osce_session_tombstones",)
+    assert {
+        "session_id",
+        "user_id",
+        "case_id",
+        "deleted_revision",
+        "deleted_at",
+        "cleanup_status",
+        "cleanup_completed_at",
+    } <= tombstone_columns
+
+
+def test_v2_tombstones_migrate_as_completed_without_inventing_ownership(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "sessions.sqlite3"
+    _create_v2_tombstone_database(database_path)
+    store = OsceSessionStore(database_path)
+
+    assert store.get_session_deletion("legacy-deleted") == SessionDeletionRecord(
+        session_id="legacy-deleted",
+        user_id="",
+        case_id="",
+        deleted_revision=7,
+        deleted_at="2026-01-02T00:00:00+00:00",
+        cleanup_status="completed",
+        cleanup_completed_at="2026-01-02T00:00:00+00:00",
+    )
+    assert store.is_session_deleted("legacy-deleted") is True
+    assert store.begin_session_deletion("legacy-deleted", "student-a") is None
+    with sqlite3.connect(database_path) as connection:
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
 
 
 def test_revision_is_internal_stable_on_reads_and_monotonic_on_updates(tmp_path: Path) -> None:
@@ -221,6 +298,59 @@ def test_tombstone_blocks_stale_save_recreation_and_summaries(tmp_path: Path) ->
 
     assert active_count == 0
     assert tombstone_revision == 2
+    deletion = first_store.get_session_deletion(session.session_id)
+    assert deletion is not None
+    assert deletion.user_id == session.student_id
+    assert deletion.case_id == session.case_id
+    assert deletion.cleanup_status == "completed"
+    assert deletion.cleanup_completed_at == deletion.deleted_at
+
+
+def test_begin_session_deletion_is_owner_scoped_and_idempotent(tmp_path: Path) -> None:
+    store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    session = _session()
+    store.create_session(session)
+
+    assert store.begin_session_deletion(session.session_id, "other-student") is None
+    assert store.get_session(session.session_id) is not None
+    assert store.is_session_deleted(session.session_id) is False
+
+    deletion = store.begin_session_deletion(session.session_id, session.student_id)
+    assert deletion is not None
+    assert deletion.session_id == session.session_id
+    assert deletion.user_id == session.student_id
+    assert deletion.case_id == session.case_id
+    assert deletion.deleted_revision == 2
+    assert deletion.cleanup_status == "pending"
+    assert deletion.cleanup_completed_at is None
+    assert store.get_session(session.session_id) is None
+    assert store.is_session_deleted(session.session_id) is True
+
+    assert store.begin_session_deletion(session.session_id, "other-student") is None
+    assert (
+        store.begin_session_deletion(session.session_id, session.student_id)
+        == deletion
+    )
+
+
+def test_session_deletion_transitions_from_pending_to_completed_once(
+    tmp_path: Path,
+) -> None:
+    store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    session = _session()
+    store.create_session(session)
+    pending = store.begin_session_deletion(session.session_id, session.student_id)
+    assert pending is not None
+
+    completed = store.mark_session_deletion_complete(session.session_id)
+    assert completed is not None
+    assert completed.cleanup_status == "completed"
+    assert completed.cleanup_completed_at is not None
+    assert completed.deleted_at == pending.deleted_at
+    assert completed.deleted_revision == pending.deleted_revision
+    assert store.get_session_deletion(session.session_id) == completed
+    assert store.mark_session_deletion_complete(session.session_id) == completed
+    assert store.mark_session_deletion_complete("missing") is None
 
 
 def test_missing_session_update_is_typed_and_delete_keeps_boolean_contract(tmp_path: Path) -> None:

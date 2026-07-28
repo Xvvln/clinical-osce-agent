@@ -38,10 +38,18 @@ from app.services.report_store import (
 )
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
-from app.services.training_skill_candidate_store import TrainingSkillCandidateStore, training_skill_candidate_store
+from app.services.training_skill_candidate_store import (
+    TrainingSkillCandidateOwnershipError,
+    TrainingSkillCandidateStore,
+    training_skill_candidate_store,
+)
 from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.training_skill_orchestrator_service import build_active_skill_context
-from app.services.training_skill_store import TrainingSkillStore, training_skill_store
+from app.services.training_skill_store import (
+    TrainingSkillOwnershipError,
+    TrainingSkillStore,
+    training_skill_store,
+)
 from app.services.rule_evaluator import LlmRubricScorer
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 from app.services.vertex_gemini_scorer import create_default_vertex_gemini_scorer
@@ -61,6 +69,10 @@ class ProcedureRequestTrainingModeError(RuntimeError):
 
 class SessionClosedError(RuntimeError):
     pass
+
+
+class SessionDeletionConflictError(RuntimeError):
+    """A personal artifact does not belong to the session being deleted."""
 
 
 @dataclass
@@ -851,6 +863,8 @@ class OsceSessionService:
 
     @_serialize_session_operation
     def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, Any] | None:
+        if self.session_store.is_session_deleted(session_id):
+            return None
         self.drain_report_outbox()
         session = self._get_session(session_id)
         stored = self.report_store.get_stored_report(session_id)
@@ -1091,14 +1105,125 @@ class OsceSessionService:
             pass
 
     @_serialize_session_operation
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(
+        self,
+        session_id: str,
+        *,
+        expected_student_id: str | None = None,
+    ) -> bool:
+        deletion_started = False
+        student_id = expected_student_id
         try:
-            deleted = self.session_store.delete_session(session_id)
-            if not deleted:
-                raise SessionNotFoundError(session_id)
+            existing_deletion = self.session_store.get_session_deletion(session_id)
+            if existing_deletion is not None:
+                if student_id is None or existing_deletion.user_id != student_id:
+                    raise SessionNotFoundError(session_id)
+                deletion = existing_deletion
+            else:
+                stored_session = self.session_store.get_session(session_id)
+                if stored_session is None:
+                    raise SessionNotFoundError(session_id)
+                stored_student_id = str(stored_session.payload.get("student_id", ""))
+                if not stored_student_id or (
+                    student_id is not None and stored_student_id != student_id
+                ):
+                    raise SessionNotFoundError(session_id)
+                student_id = stored_student_id
+                self._validate_personal_artifact_ownership(
+                    session_id=session_id,
+                    student_id=student_id,
+                )
+                deletion = self.session_store.begin_session_deletion(
+                    session_id,
+                    expected_user_id=student_id,
+                )
+                if deletion is None:
+                    raise SessionNotFoundError(session_id)
+
+            assert student_id is not None
+            deletion_started = True
+            if deletion.cleanup_status == "completed":
+                return True
+
+            self._validate_personal_artifact_ownership(
+                session_id=session_id,
+                student_id=student_id,
+            )
+            candidate_id = f"personal_skill_candidate_{session_id}"
+            skill_id = f"skill_personal_{session_id}"
+            try:
+                self.training_event_store.delete_event_streams(
+                    [session_id, candidate_id],
+                )
+                self.report_store.delete_session_report(session_id)
+                self.training_skill_store.delete_personal_skill(
+                    skill_id=skill_id,
+                    owner_student_id=student_id,
+                    source_session_id=session_id,
+                    source_candidate_id=candidate_id,
+                )
+                self.training_skill_candidate_store.delete_personal_candidate(
+                    candidate_id=candidate_id,
+                    owner_student_id=student_id,
+                    source_session_id=session_id,
+                )
+            except (TrainingSkillOwnershipError, TrainingSkillCandidateOwnershipError) as exc:
+                raise SessionDeletionConflictError(
+                    "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
+                ) from exc
+
+            self.student_profile_store.delete_profile(student_id)
+            completed = self.session_store.mark_session_deletion_complete(session_id)
+            if completed is None:
+                raise SessionPersistenceError(session_id)
+
+            try:
+                self._refresh_student_profile(student_id)
+            except Exception:
+                # The source artifacts are already fenced and removed. A profile
+                # snapshot can be rebuilt later without weakening deletion.
+                pass
             return True
+        except (TrainingSkillOwnershipError, TrainingSkillCandidateOwnershipError) as exc:
+            raise SessionDeletionConflictError(
+                "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
+            ) from exc
         finally:
-            self._sessions.pop(session_id, None)
+            if deletion_started:
+                self._sessions.pop(session_id, None)
+                with self._message_processing_status_lock:
+                    self._message_processing_statuses.pop(session_id, None)
+
+    def _validate_personal_artifact_ownership(
+        self,
+        *,
+        session_id: str,
+        student_id: str,
+    ) -> None:
+        candidate_id = f"personal_skill_candidate_{session_id}"
+        candidate = self.training_skill_candidate_store.get_candidate(candidate_id)
+        if candidate is not None and (
+            str(candidate.get("candidate_id", "")) != candidate_id
+            or str(candidate.get("scope", "")) != "personal"
+            or str(candidate.get("owner_student_id", "")) != student_id
+            or str(candidate.get("source_session_id", "")) != session_id
+        ):
+            raise SessionDeletionConflictError(
+                "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
+            )
+
+        skill_id = f"skill_personal_{session_id}"
+        skill = self.training_skill_store.get_skill(skill_id)
+        if skill is not None and (
+            str(skill.get("skill_id", "")) != skill_id
+            or str(skill.get("scope", "")) != "personal"
+            or str(skill.get("owner_student_id", "")) != student_id
+            or str(skill.get("source_session_id", "")) != session_id
+            or str(skill.get("source_candidate_id", "")) != candidate_id
+        ):
+            raise SessionDeletionConflictError(
+                "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
+            )
 
     def _get_session(self, session_id: str) -> OsceSession | None:
         stored_session = self.session_store.get_session(session_id)

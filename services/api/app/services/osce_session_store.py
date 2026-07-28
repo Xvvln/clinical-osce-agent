@@ -14,8 +14,10 @@ if TYPE_CHECKING:
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "osce_sessions.sqlite3"
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
+SESSION_DELETION_PENDING = "pending"
+SESSION_DELETION_COMPLETED = "completed"
 
 
 class SessionPersistenceError(RuntimeError):
@@ -47,6 +49,17 @@ class SessionNotFoundError(SessionPersistenceError):
 class StoredSession:
     payload: dict[str, object]
     revision: int
+
+
+@dataclass(frozen=True)
+class SessionDeletionRecord:
+    session_id: str
+    user_id: str
+    case_id: str
+    deleted_revision: int
+    deleted_at: str
+    cleanup_status: str
+    cleanup_completed_at: str | None
 
 
 class OsceSessionStore:
@@ -211,7 +224,11 @@ class OsceSessionStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT revision FROM osce_sessions WHERE session_id = ?",
+                """
+                SELECT revision, user_id, case_id
+                FROM osce_sessions
+                WHERE session_id = ?
+                """,
                 (session_id,),
             ).fetchone()
             if row is None:
@@ -219,16 +236,36 @@ class OsceSessionStore:
             deleted_revision = int(row[0]) + 1
             connection.execute(
                 """
-                INSERT INTO osce_session_tombstones (session_id, deleted_revision, deleted_at)
-                VALUES (?, ?, ?)
+                INSERT INTO osce_session_tombstones (
+                    session_id,
+                    user_id,
+                    case_id,
+                    deleted_revision,
+                    deleted_at,
+                    cleanup_status,
+                    cleanup_completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    case_id = excluded.case_id,
                     deleted_revision = MAX(
                         osce_session_tombstones.deleted_revision,
                         excluded.deleted_revision
                     ),
-                    deleted_at = excluded.deleted_at
+                    deleted_at = excluded.deleted_at,
+                    cleanup_status = excluded.cleanup_status,
+                    cleanup_completed_at = excluded.cleanup_completed_at
                 """,
-                (session_id, deleted_revision, deleted_at),
+                (
+                    session_id,
+                    str(row[1]),
+                    str(row[2]),
+                    deleted_revision,
+                    deleted_at,
+                    SESSION_DELETION_COMPLETED,
+                    deleted_at,
+                ),
             )
             cursor = connection.execute(
                 "DELETE FROM osce_sessions WHERE session_id = ? AND revision = ?",
@@ -241,6 +278,120 @@ class OsceSessionStore:
                     current_revision=int(row[0]),
                 )
         return True
+
+    def begin_session_deletion(
+        self,
+        session_id: str,
+        expected_user_id: str,
+    ) -> SessionDeletionRecord | None:
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_deletion = self._tombstone_record(connection, session_id)
+            if existing_deletion is not None:
+                if existing_deletion.user_id != expected_user_id:
+                    return None
+                return existing_deletion
+
+            row = connection.execute(
+                """
+                SELECT revision, user_id, case_id
+                FROM osce_sessions
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if row is None or str(row[1]) != expected_user_id:
+                return None
+
+            current_revision = int(row[0])
+            deletion = SessionDeletionRecord(
+                session_id=session_id,
+                user_id=str(row[1]),
+                case_id=str(row[2]),
+                deleted_revision=current_revision + 1,
+                deleted_at=deleted_at,
+                cleanup_status=SESSION_DELETION_PENDING,
+                cleanup_completed_at=None,
+            )
+            connection.execute(
+                """
+                INSERT INTO osce_session_tombstones (
+                    session_id,
+                    user_id,
+                    case_id,
+                    deleted_revision,
+                    deleted_at,
+                    cleanup_status,
+                    cleanup_completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    deletion.session_id,
+                    deletion.user_id,
+                    deletion.case_id,
+                    deletion.deleted_revision,
+                    deletion.deleted_at,
+                    deletion.cleanup_status,
+                    deletion.cleanup_completed_at,
+                ),
+            )
+            cursor = connection.execute(
+                """
+                DELETE FROM osce_sessions
+                WHERE session_id = ?
+                  AND revision = ?
+                  AND user_id = ?
+                """,
+                (session_id, current_revision, expected_user_id),
+            )
+            if cursor.rowcount != 1:
+                current_row = connection.execute(
+                    "SELECT revision FROM osce_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                raise SessionWriteConflictError(
+                    session_id,
+                    expected_revision=current_revision,
+                    current_revision=(
+                        current_revision if current_row is None else int(current_row[0])
+                    ),
+                )
+            return deletion
+
+    def get_session_deletion(self, session_id: str) -> SessionDeletionRecord | None:
+        self._initialize()
+        with self._connect() as connection:
+            return self._tombstone_record(connection, session_id)
+
+    def mark_session_deletion_complete(
+        self,
+        session_id: str,
+    ) -> SessionDeletionRecord | None:
+        self._initialize()
+        completed_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            deletion = self._tombstone_record(connection, session_id)
+            if deletion is None:
+                return None
+            if deletion.cleanup_status != SESSION_DELETION_COMPLETED:
+                connection.execute(
+                    """
+                    UPDATE osce_session_tombstones
+                    SET cleanup_status = ?, cleanup_completed_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (SESSION_DELETION_COMPLETED, completed_at, session_id),
+                )
+            return self._tombstone_record(connection, session_id)
+
+    def is_session_deleted(self, session_id: str) -> bool:
+        self._initialize()
+        with self._connect() as connection:
+            return self._tombstone_revision(connection, session_id) is not None
 
     def _initialize(self) -> None:
         if self._initialized:
@@ -280,10 +431,58 @@ class OsceSessionStore:
                     """
                     CREATE TABLE IF NOT EXISTS osce_session_tombstones (
                         session_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL DEFAULT '',
+                        case_id TEXT NOT NULL DEFAULT '',
                         deleted_revision INTEGER NOT NULL,
-                        deleted_at TEXT NOT NULL
+                        deleted_at TEXT NOT NULL,
+                        cleanup_status TEXT NOT NULL DEFAULT 'completed'
+                            CHECK(cleanup_status IN ('pending', 'completed')),
+                        cleanup_completed_at TEXT
                     )
                     """
+                )
+                tombstone_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(osce_session_tombstones)"
+                    ).fetchall()
+                }
+                if "user_id" not in tombstone_columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_session_tombstones
+                        ADD COLUMN user_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                if "case_id" not in tombstone_columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_session_tombstones
+                        ADD COLUMN case_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                if "cleanup_status" not in tombstone_columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_session_tombstones
+                        ADD COLUMN cleanup_status TEXT NOT NULL DEFAULT 'completed'
+                        """
+                    )
+                if "cleanup_completed_at" not in tombstone_columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_session_tombstones
+                        ADD COLUMN cleanup_completed_at TEXT
+                        """
+                    )
+                connection.execute(
+                    """
+                    UPDATE osce_session_tombstones
+                    SET cleanup_completed_at = deleted_at
+                    WHERE cleanup_status = ?
+                      AND cleanup_completed_at IS NULL
+                    """,
+                    (SESSION_DELETION_COMPLETED,),
                 )
                 connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
             self._initialized = True
@@ -303,6 +502,38 @@ class OsceSessionStore:
             (session_id,),
         ).fetchone()
         return None if row is None else int(row[0])
+
+    @staticmethod
+    def _tombstone_record(
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> SessionDeletionRecord | None:
+        row = connection.execute(
+            """
+            SELECT
+                session_id,
+                user_id,
+                case_id,
+                deleted_revision,
+                deleted_at,
+                cleanup_status,
+                cleanup_completed_at
+            FROM osce_session_tombstones
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return SessionDeletionRecord(
+            session_id=str(row[0]),
+            user_id=str(row[1]),
+            case_id=str(row[2]),
+            deleted_revision=int(row[3]),
+            deleted_at=str(row[4]),
+            cleanup_status=str(row[5]),
+            cleanup_completed_at=None if row[6] is None else str(row[6]),
+        )
 
 
 osce_session_store = OsceSessionStore()

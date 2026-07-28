@@ -78,6 +78,7 @@ from app.services.osce_session_service import (
     OsceSessionService,
     ProcedureRequestTrainingModeError,
     SessionClosedError,
+    SessionDeletionConflictError,
     load_case_node,
     osce_session_service,
 )
@@ -374,6 +375,17 @@ async def handle_missing_persisted_session_error(
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": "session not found"},
+    )
+
+
+@app.exception_handler(SessionDeletionConflictError)
+async def handle_session_deletion_conflict_error(
+    _: Request,
+    __: SessionDeletionConflictError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": "会话关联数据存在冲突，无法安全删除。"},
     )
 
 
@@ -2616,8 +2628,11 @@ def delete_current_user_session(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, str]:
-    _require_owned_session(session_id, auth_token)
-    osce_session_service.delete_session(session_id)
+    user = _require_current_user(auth_token)
+    osce_session_service.delete_session(
+        session_id,
+        expected_student_id=user["user_id"],
+    )
     return {"status": "deleted", "session_id": session_id}
 
 

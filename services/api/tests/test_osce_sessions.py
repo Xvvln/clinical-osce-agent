@@ -10,6 +10,7 @@ from app.main import AUTH_COOKIE_NAME, app
 from app.services.auth_store import AuthStore
 from app.services.osce_session_service import (
     SessionClosedError,
+    SessionDeletionConflictError,
     _ensure_personal_skill_report_defaults,
     load_case_node,
     osce_session_service,
@@ -1363,6 +1364,19 @@ def test_admin_login_cookie_can_still_read_student_report(tmp_path) -> None:
 
 def test_current_user_can_delete_only_owned_session(tmp_path) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(
+        tmp_path / "training_events.sqlite3"
+    )
+    osce_session_service.training_skill_store = TrainingSkillStore(
+        tmp_path / "training_skills.sqlite3"
+    )
+    osce_session_service.training_skill_candidate_store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    osce_session_service.student_profile_store = StudentProfileStore(
+        tmp_path / "student_profiles.sqlite3"
+    )
     osce_session_service._sessions.clear()
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
@@ -1378,6 +1392,10 @@ def test_current_user_can_delete_only_owned_session(tmp_path) -> None:
         other_response = other_client.delete(f"/api/me/sessions/{session_id}")
 
     delete_response = client.delete(f"/api/me/sessions/{session_id}")
+    repeated_delete_response = client.delete(f"/api/me/sessions/{session_id}")
+    with TestClient(app) as other_client:
+        other_client.cookies.set(AUTH_COOKIE_NAME, other_token)
+        other_retry_response = other_client.delete(f"/api/me/sessions/{session_id}")
     detail_response = client.get(f"/api/me/sessions/{session_id}")
     list_response = client.get("/api/me/sessions")
 
@@ -1387,10 +1405,39 @@ def test_current_user_can_delete_only_owned_session(tmp_path) -> None:
     assert other_response.json() == {"detail": "session not found"}
     assert delete_response.status_code == 200
     assert delete_response.json() == {"status": "deleted", "session_id": session_id}
+    assert repeated_delete_response.status_code == 200
+    assert repeated_delete_response.json() == {
+        "status": "deleted",
+        "session_id": session_id,
+    }
+    assert other_retry_response.status_code == 404
+    assert other_retry_response.json() == {"detail": "session not found"}
     assert detail_response.status_code == 404
     assert detail_response.json() == {"detail": "session not found"}
     assert list_response.status_code == 200
     assert list_response.json() == {"sessions": []}
+
+
+def test_session_deletion_conflict_returns_generic_http_409(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_conflict(
+        _: str,
+        *,
+        expected_student_id: str | None = None,
+    ) -> bool:
+        assert expected_student_id is not None
+        raise SessionDeletionConflictError("sensitive ownership details")
+
+    monkeypatch.setattr(osce_session_service, "delete_session", raise_conflict)
+
+    response = client.delete("/api/me/sessions/session-conflict")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "会话关联数据存在冲突，无法安全删除。"
+    }
+    assert "sensitive" not in response.text
 
 
 def test_create_session_does_not_return_case_specific_diagnosis_draft() -> None:
