@@ -10,6 +10,10 @@ from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.model_call_policy import (
+    model_call_budget,
+    run_model_provider_call,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
@@ -88,28 +92,38 @@ class OpenAICompatibleChatClient:
             "temperature": self._settings.temperature if temperature is None else temperature,
             "response_format": {"type": "json_object"},
         }
-        try:
-            return self._complete_json_with_settings(
-                settings=self._settings,
-                payload=request_payload,
-                response_model=response_model,
-                provider_label="openai_compatible",
-            )
-        except Exception:
-            if not self._fallback_settings.is_configured:
-                raise
-            fallback_settings = self._fallback_settings.to_openai_settings()
-            fallback_payload = {
-                **request_payload,
-                "model": _model_name_for_base_url(fallback_settings.model, fallback_settings.base_url),
-                "temperature": fallback_settings.temperature if temperature is None else temperature,
-            }
-            return self._complete_json_with_settings(
-                settings=fallback_settings,
-                payload=fallback_payload,
-                response_model=response_model,
-                provider_label="openai_compatible_fallback",
-            )
+        with model_call_budget(self._settings.timeout_seconds):
+            try:
+                return self._complete_json_with_settings(
+                    settings=self._settings,
+                    payload=request_payload,
+                    response_model=response_model,
+                    provider_label="openai_compatible",
+                )
+            except Exception:
+                if not self._fallback_settings.is_configured:
+                    raise
+                fallback_settings = (
+                    self._fallback_settings.to_openai_settings()
+                )
+                fallback_payload = {
+                    **request_payload,
+                    "model": _model_name_for_base_url(
+                        fallback_settings.model,
+                        fallback_settings.base_url,
+                    ),
+                    "temperature": (
+                        fallback_settings.temperature
+                        if temperature is None
+                        else temperature
+                    ),
+                }
+                return self._complete_json_with_settings(
+                    settings=fallback_settings,
+                    payload=fallback_payload,
+                    response_model=response_model,
+                    provider_label="openai_compatible_fallback",
+                )
 
     def _complete_json_with_settings(
         self,
@@ -139,9 +153,20 @@ class OpenAICompatibleChatClient:
         endpoint = _chat_completions_url(settings.base_url)
         started_at = time.perf_counter()
         try:
-            with httpx.Client(**client_options) as client:
-                response = client.post(endpoint, headers=headers, json=payload)
-            response.raise_for_status()
+            def send_request() -> httpx.Response:
+                with httpx.Client(**client_options) as client:
+                    response = client.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                    )
+                response.raise_for_status()
+                return response
+
+            response = run_model_provider_call(
+                send_request,
+                timeout_seconds=settings.timeout_seconds,
+            )
         except Exception as exc:
             api_call_log_store.record(
                 provider=provider_label,

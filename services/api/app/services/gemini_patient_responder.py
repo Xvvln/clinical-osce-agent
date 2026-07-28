@@ -22,6 +22,7 @@ from app.services.model_context_window import (
     PROVIDER_DIALOGUE_ROLES,
     bounded_provider_messages,
 )
+from app.services.model_call_policy import run_model_provider_call
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -127,15 +128,20 @@ class GeminiPatientResponder:
         provider_payload, provider_fact_id_map = _build_patient_provider_payload(request)
         started_at = time.perf_counter()
         try:
-            response = self._client.models.generate_content(
-                model=self._settings.model,
-                contents=json.dumps(provider_payload, ensure_ascii=False),
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT_TEMPLATE,
-                    response_mime_type="application/json",
-                    response_schema=PatientResponderResponse,
-                    temperature=self._settings.temperature,
-                ),
+            response = run_model_provider_call(
+                lambda: self._client.models.generate_content(
+                    model=self._settings.model,
+                    contents=json.dumps(
+                        provider_payload,
+                        ensure_ascii=False,
+                    ),
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT_TEMPLATE,
+                        response_mime_type="application/json",
+                        response_schema=PatientResponderResponse,
+                        temperature=self._settings.temperature,
+                    ),
+                )
             )
         except Exception as exc:
             api_call_log_store.record(

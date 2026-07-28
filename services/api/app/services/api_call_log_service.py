@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from app.services.model_call_policy import run_model_provider_call
+
 CallResultT = TypeVar("CallResultT")
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_API_CALL_LOG_PATH = PROJECT_ROOT / "data" / "runtime" / "model_api_calls.jsonl"
@@ -173,10 +175,14 @@ def call_with_api_logging(
     model: str,
     endpoint: str,
     call: Callable[[], CallResultT],
+    timeout_seconds: float | None = None,
 ) -> CallResultT:
     started_at = time.perf_counter()
     try:
-        result = call()
+        result = run_model_provider_call(
+            call,
+            timeout_seconds=timeout_seconds,
+        )
     except Exception as exc:
         api_call_log_store.record(
             provider=provider,

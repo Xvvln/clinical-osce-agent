@@ -18,6 +18,7 @@ from app.services.local_embedding_retriever import (
     build_local_embedding_client_from_environment,
     get_local_embedding_model_name_from_environment,
 )
+from app.services.model_call_policy import ModelProviderPolicyError
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.vertex_embedding_retriever import (
     DEFAULT_VERTEX_EMBEDDING_MODEL,
@@ -101,6 +102,8 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
                         reranker=reranker,
                     )
                 return results_by_query
+        except ModelProviderPolicyError:
+            raise
         except Exception as exc:
             if _is_embedding_quota_error(exc):
                 LOGGER.warning(
@@ -125,6 +128,8 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
             for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
                 results_by_query[original_index] = embedding_results
             return results_by_query
+        except ModelProviderPolicyError:
+            raise
         except Exception as exc:
             LOGGER.warning("RAG vector retrieval failed for embedding model %s: %s", embedding_model, exc)
             continue
@@ -430,6 +435,8 @@ def _apply_dashscope_rerank(
             [_document_embedding_text(document) for document in vector_results],
             top_k=reranker.top_limit(limit, len(vector_results)),
         )
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         LOGGER.warning("DashScope rerank failed; using vector order: %s", exc)
         return vector_results[:limit]

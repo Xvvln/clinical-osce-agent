@@ -14,6 +14,10 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import (
+    ModelProviderPolicyError,
+    run_model_provider_call,
+)
 
 
 SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {
@@ -176,11 +180,21 @@ def _test_http_endpoint(
         }
         if _should_use_proxy(proxy_url):
             client_options["proxy"] = proxy_url
-        with httpx.Client(**client_options) as client:
-            if method == "POST":
-                response = client.post(endpoint, headers=headers, json=body or {})
-            else:
-                response = client.get(endpoint, headers=headers)
+
+        def send_request() -> httpx.Response:
+            with httpx.Client(**client_options) as client:
+                if method == "POST":
+                    return client.post(
+                        endpoint,
+                        headers=headers,
+                        json=body or {},
+                    )
+                return client.get(endpoint, headers=headers)
+
+        response = run_model_provider_call(
+            send_request,
+            timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
+        )
     except httpx.HTTPError as exc:
         return _connectivity_result(
             ok=False,
@@ -228,14 +242,23 @@ def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_ur
                 timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
             ),
         )
-        client.models.generate_content(
-            model=model,
-            contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
-            config=types.GenerateContentConfig(
-                system_instruction="只输出 JSON。",
-                response_mime_type="application/json",
+        run_model_provider_call(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=json.dumps(
+                    {"ping": "clinical-osce-agent"},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                config=types.GenerateContentConfig(
+                    system_instruction="只输出 JSON。",
+                    response_mime_type="application/json",
+                ),
             ),
+            timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
         )
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         return _connectivity_result(
             ok=False,
@@ -262,14 +285,23 @@ def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> 
                 timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
             ),
         )
-        client.models.generate_content(
-            model=model,
-            contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
-            config=types.GenerateContentConfig(
-                system_instruction="只输出 JSON。",
-                response_mime_type="application/json",
+        run_model_provider_call(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=json.dumps(
+                    {"ping": "clinical-osce-agent"},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                config=types.GenerateContentConfig(
+                    system_instruction="只输出 JSON。",
+                    response_mime_type="application/json",
+                ),
             ),
+            timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
         )
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         return _connectivity_result(
             ok=False,

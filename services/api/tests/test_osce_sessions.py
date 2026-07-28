@@ -508,10 +508,9 @@ def test_message_google_provider_quota_error_returns_readable_gateway_error() ->
         )
 
     assert create_response.status_code == 200
-    assert response.status_code == 502
-    assert response.json()["detail"] == (
-        "模型服务调用失败：HTTP 429：Resource has been exhausted (e.g. check quota).；RESOURCE_EXHAUSTED"
-    )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json()["detail"] == main.MODEL_PROVIDER_BUSY_DETAIL
 
 
 def test_message_google_adc_missing_error_returns_readable_gateway_error() -> None:
@@ -563,10 +562,9 @@ def test_report_google_provider_quota_error_returns_readable_gateway_error(monke
         response = error_client.post(f"/api/sessions/{session_id}/report/generate")
 
     assert create_response.status_code == 200
-    assert response.status_code == 502
-    assert response.json()["detail"] == (
-        "模型服务调用失败：HTTP 429：Resource has been exhausted (e.g. check quota).；RESOURCE_EXHAUSTED"
-    )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json()["detail"] == main.MODEL_PROVIDER_BUSY_DETAIL
 
 
 def test_current_user_report_google_adc_missing_error_returns_readable_gateway_error(

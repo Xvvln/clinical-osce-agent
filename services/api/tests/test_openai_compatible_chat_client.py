@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json as json_module
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
 
-from pydantic import BaseModel
 import httpx
+import pytest
+from pydantic import BaseModel
 
 from app.services import openai_compatible_chat_client as module
 from app.services.api_call_log_service import ApiCallLogStore
+from app.services.model_call_policy import ModelProviderTimeoutError
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 
 
@@ -268,6 +271,37 @@ class RecordingOpenAICompatibleHandler(BaseHTTPRequestHandler):
         return None
 
 
+class DripChatCompletionHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(content_length)
+        response_body = json_module.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"message":"slow response"}',
+                        }
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self.end_headers()
+        try:
+            for byte in response_body:
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+                time.sleep(0.02)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def log_message(self, *_: object) -> None:
+        return None
+
+
 def test_openai_compatible_chat_client_can_call_real_http_endpoint() -> None:
     RecordingOpenAICompatibleHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), RecordingOpenAICompatibleHandler)
@@ -310,3 +344,95 @@ def test_openai_compatible_chat_client_can_call_real_http_endpoint() -> None:
             },
         }
     ]
+
+
+def test_openai_compatible_chat_client_enforces_total_deadline_on_drip_response(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "false")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        DripChatCompletionHandler,
+    )
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="local-secret",
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            model="slow-local-model",
+            proxy_url="direct",
+            timeout_seconds=0.15,
+        )
+    )
+    started_at = time.monotonic()
+
+    try:
+        with pytest.raises(ModelProviderTimeoutError):
+            client.complete_json(
+                system_prompt="只输出 JSON。",
+                payload={"ping": "clinical-osce-agent"},
+                response_model=DemoJsonResponse,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert time.monotonic() - started_at < 0.8
+
+
+def test_openai_primary_and_fallback_share_one_total_deadline(
+    monkeypatch,
+) -> None:
+    class SlowPrimaryAndFallbackClient(FakeFallbackHttpxClient):
+        def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> FakePrimaryFailureResponse | FakeFallbackSuccessResponse:
+            time.sleep(0.08)
+            return super().post(
+                url,
+                headers=headers,
+                json=json,
+            )
+
+    SlowPrimaryAndFallbackClient.calls = []
+    monkeypatch.setattr(
+        module.httpx,
+        "Client",
+        SlowPrimaryAndFallbackClient,
+    )
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "fallback-secret")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_FALLBACK_BASE_URL",
+        "https://fallback-gateway.example/v1",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "fallback-model")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="primary-secret",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+            proxy_url="direct",
+            timeout_seconds=0.12,
+        )
+    )
+    started_at = time.monotonic()
+
+    with pytest.raises(ModelProviderTimeoutError):
+        client.complete_json(
+            system_prompt="只输出 JSON。",
+            payload={"ping": "clinical-osce-agent"},
+            response_model=DemoJsonResponse,
+        )
+
+    assert time.monotonic() - started_at < 0.3

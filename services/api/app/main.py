@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 import httpx
 import yaml
-from fastapi import BackgroundTasks, Cookie, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -79,6 +79,15 @@ from app.services.dashscope_speech_service import (
 )
 from app.services.demo_seed_service import DEMO_SEED_CONFIG_ERROR_MESSAGE, seed_demo_data
 from app.services.model_config_service import build_admin_model_config
+from app.services.model_call_policy import (
+    DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS,
+    ModelProviderOverloadedError,
+    ModelProviderPolicyError,
+    ModelProviderTimeoutError,
+    model_request_admission_gate,
+    reset_model_call_deadline,
+    set_model_call_deadline,
+)
 from app.services.osce_session_service import (
     CASES_DIR,
     PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
@@ -143,6 +152,9 @@ AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 AUTH_COOKIE_PATH = "/api"
 API_PRIVATE_CACHE_CONTROL = "private, no-store, max-age=0"
+MODEL_PROVIDER_BUSY_DETAIL = "模型服务正忙，请稍后重试。"
+MODEL_PROVIDER_TIMEOUT_DETAIL = "模型服务响应超时，请稍后重试。"
+MAX_MODEL_PROVIDER_RETRY_AFTER_SECONDS = 300
 BASE_HTTP_SECURITY_HEADERS = {
     "Content-Security-Policy": "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -213,7 +225,10 @@ RAG_ALLOWED_AGENTS_MAX_ITEMS = 8
 RAG_TAGS_MAX_ITEMS = 32
 ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID = "admin_skill_candidate_generation_smoke"
 ADMIN_EVALUATION_STUDENT_ID_PREFIX = "admin_eval_"
-MODEL_PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (httpx.HTTPError,)
+MODEL_PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
+    httpx.HTTPError,
+    ModelProviderPolicyError,
+)
 if google_auth_exceptions is not None:
     MODEL_PROVIDER_EXCEPTION_TYPES = MODEL_PROVIDER_EXCEPTION_TYPES + (google_auth_exceptions.GoogleAuthError,)
 if google_genai_errors is not None:
@@ -538,6 +553,25 @@ async def handle_session_deletion_conflict_error(
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": "会话关联数据存在冲突，无法安全删除。"},
+    )
+
+
+@app.exception_handler(ModelProviderOverloadedError)
+async def handle_model_provider_overloaded_error(
+    _: Request,
+    __: ModelProviderOverloadedError,
+) -> JSONResponse:
+    return _model_provider_busy_response()
+
+
+@app.exception_handler(ModelProviderTimeoutError)
+async def handle_model_provider_timeout_error(
+    _: Request,
+    __: ModelProviderTimeoutError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        content={"detail": MODEL_PROVIDER_TIMEOUT_DETAIL},
     )
 
 
@@ -982,13 +1016,73 @@ def _enrich_report_optional_agents_for_user(session_id: str, user_id: str) -> di
         return None
 
 
+async def _admit_authenticated_model_request(
+    request: Request,
+) -> AsyncIterator[None]:
+    # FastAPI resolves request bodies before dependencies. Invalid or slow
+    # unauthenticated uploads therefore cannot reserve scarce model capacity.
+    user = auth_store.get_user_by_session_token(
+        request.cookies.get(AUTH_COOKIE_NAME, "")
+    )
+    if user is None:
+        yield
+        return
+    if not model_request_admission_gate.try_acquire():
+        raise ModelProviderOverloadedError(
+            "model request concurrency limit reached"
+        )
+    deadline_token = set_model_call_deadline()
+    try:
+        yield
+    finally:
+        reset_model_call_deadline(deadline_token)
+        model_request_admission_gate.release()
+
+
+def _model_provider_busy_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": MODEL_PROVIDER_BUSY_DETAIL},
+        headers={
+            "Retry-After": str(
+                DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS
+            )
+        },
+    )
+
+
 def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, ModelProviderOverloadedError):
+        return _model_provider_busy_http_exception()
+    if isinstance(exc, (ModelProviderTimeoutError, httpx.TimeoutException)):
+        return HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=MODEL_PROVIDER_TIMEOUT_DETAIL,
+        )
     if isinstance(exc, httpx.HTTPStatusError):
+        upstream_status = exc.response.status_code
+        if upstream_status == status.HTTP_429_TOO_MANY_REQUESTS:
+            return _model_provider_busy_http_exception(
+                retry_after=_safe_model_provider_retry_after(
+                    exc.response.headers.get("Retry-After")
+                )
+            )
+        if upstream_status in {
+            status.HTTP_408_REQUEST_TIMEOUT,
+            status.HTTP_504_GATEWAY_TIMEOUT,
+        }:
+            return HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=MODEL_PROVIDER_TIMEOUT_DETAIL,
+            )
         detail = _model_provider_response_error_detail(exc.response)
-        message = f"模型服务调用失败：HTTP {exc.response.status_code}"
+        message = f"模型服务调用失败：HTTP {upstream_status}"
         if detail:
             message = f"{message}：{detail}"
-        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=message,
+        )
     if google_auth_exceptions is not None and isinstance(exc, google_auth_exceptions.DefaultCredentialsError):
         return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1002,6 +1096,17 @@ def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
     if google_genai_errors is not None and isinstance(exc, google_genai_errors.APIError):
         code = getattr(exc, "code", None)
         status_label = str(getattr(exc, "status", "") or "").strip()
+        normalized_status_label = status_label.upper()
+        if str(code) == "429" or normalized_status_label == "RESOURCE_EXHAUSTED":
+            return _model_provider_busy_http_exception()
+        if (
+            str(code) in {"408", "504"}
+            or normalized_status_label == "DEADLINE_EXCEEDED"
+        ):
+            return HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=MODEL_PROVIDER_TIMEOUT_DETAIL,
+            )
         detail = str(getattr(exc, "message", "") or "").strip()
         parts = [part for part in (detail, status_label) if part]
         compact_detail = "；".join(dict.fromkeys(" ".join(part.split())[:240] for part in parts if part.strip()))
@@ -1010,6 +1115,32 @@ def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
             message = f"{message}：{compact_detail}"
         return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=message)
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"模型服务调用失败：{exc.__class__.__name__}")
+
+
+def _model_provider_busy_http_exception(
+    *,
+    retry_after: str | None = None,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=MODEL_PROVIDER_BUSY_DETAIL,
+        headers={
+            "Retry-After": (
+                retry_after
+                or str(DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS)
+            )
+        },
+    )
+
+
+def _safe_model_provider_retry_after(value: str | None) -> str:
+    try:
+        retry_after_seconds = int(str(value or "").strip())
+    except ValueError:
+        retry_after_seconds = 0
+    if 1 <= retry_after_seconds <= MAX_MODEL_PROVIDER_RETRY_AFTER_SECONDS:
+        return str(retry_after_seconds)
+    return str(DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS)
 
 
 def _training_flow_runtime_error(exc: BaseException) -> HTTPException:
@@ -1914,7 +2045,12 @@ async def synthesize_audio(
     )
 
 
-@app.post("/api/model-config/test")
+@app.post(
+    "/api/model-config/test",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def test_model_config(
     request: StudentModelConfigTestRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -2337,7 +2473,12 @@ def get_admin_model_api_logs(
     return api_call_log_store.build_admin_payload(limit=limit)
 
 
-@app.get("/api/admin/retrieval-eval")
+@app.get(
+    "/api/admin/retrieval-eval",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def get_admin_retrieval_eval(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
@@ -2460,7 +2601,12 @@ def delete_admin_rag_knowledge_item(
     return {"knowledge_id": knowledge_id, "deleted": deleted}
 
 
-@app.post("/api/admin/demo/seed")
+@app.post(
+    "/api/admin/demo/seed",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def seed_admin_demo_data(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
@@ -2553,7 +2699,12 @@ def update_admin_training_skill_evolution_settings(
     return {"settings": settings}
 
 
-@app.post("/api/admin/evolution/candidates/generate")
+@app.post(
+    "/api/admin/evolution/candidates/generate",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def generate_admin_training_skill_candidates(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
@@ -2773,7 +2924,12 @@ def list_admin_evaluations(
     )
 
 
-@app.post("/api/admin/evals/run")
+@app.post(
+    "/api/admin/evals/run",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def run_admin_evaluation(
     request: AdminEvaluationRunRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -2962,7 +3118,12 @@ def get_session_processing_status(
     return osce_session_service.get_message_processing_status(session_id)
 
 
-@app.post("/api/sessions/{session_id}/message")
+@app.post(
+    "/api/sessions/{session_id}/message",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def send_message(
     session_id: str,
     request: MessageRequest,
@@ -2987,7 +3148,12 @@ def send_message(
     return session
 
 
-@app.post("/api/sessions/{session_id}/physical-exam")
+@app.post(
+    "/api/sessions/{session_id}/physical-exam",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_physical_exam(
     session_id: str,
     request: PhysicalExamRequest,
@@ -3004,7 +3170,12 @@ def request_physical_exam(
     return session
 
 
-@app.post("/api/sessions/{session_id}/physical-exams")
+@app.post(
+    "/api/sessions/{session_id}/physical-exams",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_physical_exams(
     session_id: str,
     request: PhysicalExamBatchRequest,
@@ -3021,7 +3192,12 @@ def request_physical_exams(
     return session
 
 
-@app.post("/api/sessions/{session_id}/auxiliary-test")
+@app.post(
+    "/api/sessions/{session_id}/auxiliary-test",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_auxiliary_test(
     session_id: str,
     request: AuxiliaryTestRequest,
@@ -3038,7 +3214,12 @@ def request_auxiliary_test(
     return session
 
 
-@app.post("/api/sessions/{session_id}/auxiliary-tests")
+@app.post(
+    "/api/sessions/{session_id}/auxiliary-tests",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_auxiliary_tests(
     session_id: str,
     request: AuxiliaryTestBatchRequest,
@@ -3055,7 +3236,12 @@ def request_auxiliary_tests(
     return session
 
 
-@app.post("/api/sessions/{session_id}/procedure-request")
+@app.post(
+    "/api/sessions/{session_id}/procedure-request",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_procedure_text(
     session_id: str,
     request: ProcedureFreeTextRequest,
@@ -3082,7 +3268,12 @@ def request_procedure_text(
     return session
 
 
-@app.post("/api/sessions/{session_id}/hypotheses")
+@app.post(
+    "/api/sessions/{session_id}/hypotheses",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def record_hypothesis(
     session_id: str,
     request: HypothesisRequest,
@@ -3099,7 +3290,12 @@ def record_hypothesis(
     return session
 
 
-@app.post("/api/sessions/{session_id}/hint")
+@app.post(
+    "/api/sessions/{session_id}/hint",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def request_hint(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -3127,7 +3323,12 @@ def get_session_teaching_focus(
     return teaching_focus
 
 
-@app.post("/api/sessions/{session_id}/submit-diagnosis")
+@app.post(
+    "/api/sessions/{session_id}/submit-diagnosis",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def submit_diagnosis(
     session_id: str,
     request: SubmitDiagnosisRequest,
@@ -3160,7 +3361,12 @@ def get_session_report(
     return report
 
 
-@app.post("/api/sessions/{session_id}/report/generate")
+@app.post(
+    "/api/sessions/{session_id}/report/generate",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def generate_session_report(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -3187,7 +3393,12 @@ def generate_session_report(
     return persisted_report
 
 
-@app.post("/api/sessions/{session_id}/report/enrich")
+@app.post(
+    "/api/sessions/{session_id}/report/enrich",
+    dependencies=[
+        Depends(_admit_authenticated_model_request, scope="request")
+    ],
+)
 def enrich_session_report(
     session_id: str,
     background_tasks: BackgroundTasks,

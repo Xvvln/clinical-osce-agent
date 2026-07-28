@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.model_call_policy import run_model_provider_call
 
 DEFAULT_DASHSCOPE_RERANK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-api/v1"
 DEFAULT_DASHSCOPE_RERANK_MODEL = "qwen3-rerank"
@@ -64,16 +65,25 @@ class DashScopeReranker:
         endpoint = _reranks_url(self._settings.base_url)
         started_at = time.perf_counter()
         try:
-            with httpx.Client(**self._client_options()) as client:
-                response = client.post(
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {self._settings.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-            response.raise_for_status()
+            def send_request() -> httpx.Response:
+                with httpx.Client(**self._client_options()) as client:
+                    response = client.post(
+                        endpoint,
+                        headers={
+                            "Authorization": (
+                                f"Bearer {self._settings.api_key}"
+                            ),
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                response.raise_for_status()
+                return response
+
+            response = run_model_provider_call(
+                send_request,
+                timeout_seconds=self._settings.timeout_seconds,
+            )
             results = _parse_qwen3_rerank_results(response.json())
         except Exception as exc:
             api_call_log_store.record(

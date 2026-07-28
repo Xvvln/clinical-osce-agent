@@ -16,6 +16,7 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import run_model_provider_call
 from app.services.runtime_model_config_store import runtime_model_config_store
 
 DEFAULT_VERTEX_EMBEDDING_LOCATION = "global"
@@ -65,10 +66,12 @@ class VertexTextEmbeddingClient:
         )
         started_at = time.perf_counter()
         try:
-            response = self._client.models.embed_content(
-                model=self._settings.model,
-                contents=normalized_texts,
-                config=config,
+            response = run_model_provider_call(
+                lambda: self._client.models.embed_content(
+                    model=self._settings.model,
+                    contents=normalized_texts,
+                    config=config,
+                )
             )
         except Exception as exc:
             if _is_resource_exhausted_error(exc):

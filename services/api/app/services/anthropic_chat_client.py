@@ -10,6 +10,10 @@ from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.model_call_policy import (
+    model_call_budget,
+    run_model_provider_call,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
@@ -48,19 +52,33 @@ class AnthropicChatClient:
         response_model: type[ResponseModelT],
         temperature: float | None = None,
     ) -> ResponseModelT:
-        response = self._post_message(
-            {
-                "model": self._settings.model,
-                "max_tokens": self._settings.max_tokens,
-                "system": system_prompt,
-                "messages": [
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                "temperature": self._settings.temperature if temperature is None else temperature,
-            }
-        )
-        content = _extract_text_content(response.json())
-        return _validate_response_content(content, response_model=response_model)
+        with model_call_budget(self._settings.timeout_seconds):
+            response = self._post_message(
+                {
+                    "model": self._settings.model,
+                    "max_tokens": self._settings.max_tokens,
+                    "system": system_prompt,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                payload,
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                    "temperature": (
+                        self._settings.temperature
+                        if temperature is None
+                        else temperature
+                    ),
+                }
+            )
+            content = _extract_text_content(response.json())
+            return _validate_response_content(
+                content,
+                response_model=response_model,
+            )
 
     def _post_message(self, payload: dict[str, Any]) -> httpx.Response:
         client_options: dict[str, Any] = {
@@ -80,9 +98,20 @@ class AnthropicChatClient:
         endpoint = _messages_url(self._settings.base_url)
         started_at = time.perf_counter()
         try:
-            with httpx.Client(**client_options) as client:
-                response = client.post(endpoint, headers=headers, json=payload)
-            response.raise_for_status()
+            def send_request() -> httpx.Response:
+                with httpx.Client(**client_options) as client:
+                    response = client.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                    )
+                response.raise_for_status()
+                return response
+
+            response = run_model_provider_call(
+                send_request,
+                timeout_seconds=self._settings.timeout_seconds,
+            )
         except Exception as exc:
             api_call_log_store.record(
                 provider="anthropic",

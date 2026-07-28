@@ -15,9 +15,14 @@ from app.services.chroma_retriever import (
 )
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import (
+    RetrievalDocument,
     search_retrieval_documents,
     search_retrieval_documents_batch,
     search_retrieval_documents_with_embeddings,
+)
+from app.services.model_call_policy import (
+    ModelProviderOverloadedError,
+    ModelProviderTimeoutError,
 )
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -193,6 +198,68 @@ def test_search_retrieval_documents_falls_back_to_local_embedding_when_vertex_fa
     assert results
     assert results[0].reference == "case:appendicitis_001"
     assert results[0].source_type == "case"
+
+
+def test_search_retrieval_documents_does_not_hide_provider_timeout(
+    monkeypatch,
+) -> None:
+    class TimedOutVertexEmbeddingClient:
+        def embed_texts(
+            self,
+            texts: list[str],
+            *,
+            task_type: str,
+        ) -> list[list[float]]:
+            raise ModelProviderTimeoutError("deadline exceeded")
+
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: TimedOutVertexEmbeddingClient(),
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("右下腹痛"),
+    )
+
+    with pytest.raises(ModelProviderTimeoutError):
+        search_retrieval_documents("右下腹痛", limit=3)
+
+
+def test_dashscope_rerank_does_not_hide_provider_overload() -> None:
+    class OverloadedReranker:
+        def rerank(
+            self,
+            query: str,
+            documents: list[str],
+            *,
+            top_k: int,
+        ) -> list[object]:
+            raise ModelProviderOverloadedError("provider busy")
+
+        def top_limit(self, result_limit: int, document_count: int) -> int:
+            return min(result_limit, document_count)
+
+    documents = [
+        RetrievalDocument(
+            reference=f"case:{index}",
+            source_type="case",
+            title=f"病例 {index}",
+            snippet="摘要",
+            score=float(index),
+        )
+        for index in range(2)
+    ]
+
+    with pytest.raises(ModelProviderOverloadedError):
+        retrieval_index_module._apply_dashscope_rerank(
+            "右下腹痛",
+            documents,
+            limit=2,
+            reranker=OverloadedReranker(),  # type: ignore[arg-type]
+        )
 
 
 def test_search_retrieval_documents_skips_same_vertex_in_memory_fallback_after_quota_error(

@@ -1,5 +1,6 @@
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main
@@ -10,6 +11,7 @@ from app.services.account_model_endpoint_policy import (
     ACCOUNT_MODEL_PROXY_POLICY_ERROR,
 )
 from app.services.auth_store import AuthStore
+from app.services.model_call_policy import ModelProviderTimeoutError
 from app.services.runtime_model_config_store import (
     RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
     VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
@@ -512,6 +514,57 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tm
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key", "base_url"),
+    [
+        ("vertex_gemini_adc", "", "demo-project"),
+        ("vertex_gemini_api_key", "student-vertex-secret", ""),
+    ],
+)
+def test_student_vertex_probe_preserves_model_policy_timeout(
+    tmp_path,
+    monkeypatch,
+    provider: str,
+    api_key: str,
+    base_url: str,
+) -> None:
+    monkeypatch.setattr(
+        student_model_config_service.genai,
+        "Client",
+        _FakeVertexGeminiClient,
+    )
+
+    def fail_with_policy_timeout(*_: object, **__: object) -> object:
+        raise ModelProviderTimeoutError("deadline exceeded")
+
+    monkeypatch.setattr(
+        student_model_config_service,
+        "run_model_provider_call",
+        fail_with_policy_timeout,
+    )
+    client = _authenticated_client(
+        tmp_path,
+        monkeypatch,
+        f"student-{provider}-timeout@example.test",
+    )
+
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": provider,
+            "api_key": api_key,
+            "model": "gemini-3.1-pro-preview",
+            "base_url": base_url,
+            "proxy_url": "direct",
+        },
+    )
+
+    assert response.status_code == 504
+    assert response.json() == {
+        "detail": main.MODEL_PROVIDER_TIMEOUT_DETAIL,
+    }
 
 
 def test_student_model_config_test_rejects_per_user_vertex_adc_proxy_without_environment_mutation(
