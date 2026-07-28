@@ -192,3 +192,68 @@ def test_login_rejects_wrong_password(client: TestClient, monkeypatch: pytest.Mo
 
     assert login_response.status_code == 401
     assert client.get("/api/auth/me").status_code == 401
+
+
+def test_demo_admin_and_student_cannot_share_the_same_email(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_email = "shared-role@example.test"
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", shared_email)
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+        "configured-admin-password",
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_ENABLED", "true")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_EMAIL", shared_email.upper())
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
+        "configured-student-password",
+    )
+
+    admin_response = client.post(
+        "/api/auth/login",
+        json={
+            "email": shared_email,
+            "password": "configured-admin-password",
+        },
+    )
+    student_response = client.post(
+        "/api/auth/login",
+        json={
+            "email": shared_email,
+            "password": "configured-student-password",
+        },
+    )
+
+    assert admin_response.status_code == 401
+    assert student_response.status_code == 401
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_demo_student_email_in_admin_allowlist_remains_non_admin(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    student_email, student_password = _configure_demo_student(monkeypatch)
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_ADMIN_EMAILS",
+        f"other-admin@example.test,{student_email.upper()}",
+    )
+    user = main.auth_store.upsert_user_password(
+        student_email,
+        student_password,
+        "演示学生",
+    )
+    token = main.auth_store.create_session(user["user_id"])
+    client.cookies.set(main.AUTH_COOKIE_NAME, token)
+
+    current_user_response = client.get("/api/auth/me")
+    admin_response = client.get("/api/admin/model-config")
+
+    assert current_user_response.status_code == 200
+    assert current_user_response.json()["user"]["is_admin"] is False
+    assert admin_response.status_code == 403
+    assert admin_response.json() == {"detail": "admin access required"}

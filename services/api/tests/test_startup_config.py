@@ -122,6 +122,38 @@ def test_local_demo_accounts_are_disabled_without_complete_explicit_config(monke
     assert issues["demo_student_incomplete"]["missing_env"] == ["CLINICAL_OSCE_DEMO_STUDENT_EMAIL"]
 
 
+def test_startup_config_rejects_demo_student_admin_email_overlap(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "shared-role@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_ENABLED", "true")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+        "configured-admin@example.test",
+    )
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+        "configured-admin-password",
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_ENABLED", "true")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
+        "SHARED-ROLE@example.test",
+    )
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
+        "configured-student-password",
+    )
+
+    payload = build_startup_config_self_check()
+
+    issues = {issue["code"]: issue for issue in payload["issues"]}
+    assert payload["overall_status"] == "fail"
+    assert issues["demo_role_email_overlap"]["severity"] == "error"
+    assert issues["demo_role_email_overlap"]["missing_env"] == []
+
+
 def test_public_health_is_redacted_and_detailed_config_requires_admin(
     tmp_path,
     monkeypatch,

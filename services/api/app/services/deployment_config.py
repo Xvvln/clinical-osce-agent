@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 DEPLOYMENT_MODE_ENV_NAME = "CLINICAL_OSCE_DEPLOYMENT_MODE"
+ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
 DEMO_ADMIN_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_EMAIL"
 DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
@@ -55,6 +56,39 @@ def is_demo_student_effectively_enabled(mode: str | None = None) -> bool:
     )
 
 
+def get_configured_admin_email_set(mode: str | None = None) -> set[str]:
+    admin_emails = {
+        email.strip().lower()
+        for email in os.environ.get(ADMIN_EMAILS_ENV_NAME, "").split(",")
+        if email.strip()
+    }
+    if is_demo_admin_effectively_enabled(mode):
+        demo_admin_email = os.environ.get(DEMO_ADMIN_EMAIL_ENV_NAME, "").strip().lower()
+        if demo_admin_email:
+            admin_emails.add(demo_admin_email)
+    return admin_emails
+
+
+def is_demo_student_admin_role_conflict(mode: str | None = None) -> bool:
+    if not is_demo_student_effectively_enabled(mode):
+        return False
+    student_email = os.environ.get(DEMO_STUDENT_EMAIL_ENV_NAME, "").strip().lower()
+    return bool(student_email and student_email in get_configured_admin_email_set(mode))
+
+
+def is_admin_email_allowed(email: str, mode: str | None = None) -> bool:
+    normalized_email = email.strip().lower()
+    if not normalized_email:
+        return False
+    if (
+        is_demo_student_effectively_enabled(mode)
+        and normalized_email
+        == os.environ.get(DEMO_STUDENT_EMAIL_ENV_NAME, "").strip().lower()
+    ):
+        return False
+    return normalized_email in get_configured_admin_email_set(mode)
+
+
 def _is_demo_account_effectively_enabled(
     *,
     mode: str | None,
@@ -77,6 +111,7 @@ def _truthy(value: object) -> bool:
 
 
 __all__ = [
+    "ADMIN_EMAILS_ENV_NAME",
     "ALLOWED_DEPLOYMENT_MODES",
     "DEFAULT_DEPLOYMENT_MODE",
     "DEMO_ADMIN_ENABLED_ENV_NAME",
@@ -90,8 +125,11 @@ __all__ = [
     "PRODUCTION_DEPLOYMENT_MODES",
     "SERVER_MANAGED_MODEL_CONFIG_ENV_NAME",
     "get_deployment_mode",
+    "get_configured_admin_email_set",
     "is_account_registration_supported",
+    "is_admin_email_allowed",
     "is_demo_admin_effectively_enabled",
+    "is_demo_student_admin_role_conflict",
     "is_demo_student_effectively_enabled",
     "is_known_deployment_mode",
     "is_production_deployment_mode",

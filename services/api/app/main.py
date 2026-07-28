@@ -52,6 +52,7 @@ from app.services.evaluation_result_store import evaluation_result_store
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
 from app.services.admin_learning_analytics_service import AdminLearningAnalyticsService
 from app.services.deployment_config import (
+    ADMIN_EMAILS_ENV_NAME,
     DEMO_ADMIN_ENABLED_ENV_NAME,
     DEMO_ADMIN_EMAIL_ENV_NAME,
     DEMO_ADMIN_PASSWORD_ENV_NAME,
@@ -59,9 +60,12 @@ from app.services.deployment_config import (
     DEMO_STUDENT_EMAIL_ENV_NAME,
     DEMO_STUDENT_PASSWORD_ENV_NAME,
     get_deployment_mode,
+    get_configured_admin_email_set,
     is_account_registration_supported,
+    is_admin_email_allowed,
     is_demo_admin_effectively_enabled,
     is_demo_student_effectively_enabled,
+    is_demo_student_admin_role_conflict,
     is_runtime_model_config_write_supported,
 )
 from app.services.dashscope_speech_service import (
@@ -129,7 +133,6 @@ from app.validators.case_validator import validate_case, validate_case_rubric_pa
 
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
-ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
 DEFAULT_DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = (
@@ -817,14 +820,7 @@ def _model_provider_response_error_detail(response: httpx.Response) -> str:
 
 
 def _get_admin_email_set() -> set[str]:
-    admin_emails = {
-        email.strip().lower()
-        for email in os.environ.get(ADMIN_EMAILS_ENV_NAME, "").split(",")
-        if email.strip()
-    }
-    if _is_demo_admin_enabled():
-        admin_emails.add(_get_demo_admin_email())
-    return admin_emails
+    return get_configured_admin_email_set()
 
 
 def _is_demo_admin_enabled() -> bool:
@@ -854,7 +850,7 @@ def _get_demo_student_password() -> str:
 def _build_auth_user_payload(user: dict[str, str]) -> dict[str, object]:
     return {
         **user,
-        "is_admin": user["email"].strip().lower() in _get_admin_email_set(),
+        "is_admin": is_admin_email_allowed(user["email"]),
     }
 
 
@@ -879,6 +875,8 @@ def _ensure_demo_student_user(email: str, password: str) -> dict[str, str]:
 
 
 def _authenticate_fixed_demo_user(email: str, password: str) -> dict[str, str] | None:
+    if is_demo_student_admin_role_conflict():
+        return None
     if _matches_demo_admin_credentials(email, password):
         return _ensure_demo_admin_user(email, password)
     if _matches_demo_student_credentials(email, password):
@@ -888,7 +886,7 @@ def _authenticate_fixed_demo_user(email: str, password: str) -> dict[str, str] |
 
 def _require_admin_user(auth_token: str | None) -> dict[str, str]:
     user = _require_current_user(auth_token)
-    if user["email"].lower() not in _get_admin_email_set():
+    if not is_admin_email_allowed(user["email"]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
     return user
 

@@ -346,6 +346,47 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
     )
 
 
+def test_admin_demo_seed_rejects_overlapping_role_emails_before_writes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_ADMIN_EMAILS",
+            "admin@osce.test",
+        )
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+            "shared-seed-role@example.test",
+        )
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+            "configured-admin-password",
+        )
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
+            "SHARED-SEED-ROLE@example.test",
+        )
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
+            "configured-student-password",
+        )
+
+        response = client.post("/api/admin/demo/seed")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": main.DEMO_SEED_CONFIG_ERROR_MESSAGE,
+    }
+    assert (
+        main.auth_store.authenticate_user(
+            "shared-seed-role@example.test",
+            "configured-student-password",
+        )
+        is None
+    )
+
+
 def test_admin_demo_seed_fails_closed_when_student_credentials_are_incomplete(tmp_path, monkeypatch) -> None:
     seed_called = False
 

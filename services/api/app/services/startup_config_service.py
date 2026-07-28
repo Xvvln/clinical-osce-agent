@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from app.services.deployment_config import (
+    ADMIN_EMAILS_ENV_NAME,
     ALLOWED_DEPLOYMENT_MODES,
     DEMO_ADMIN_ENABLED_ENV_NAME,
     DEMO_ADMIN_EMAIL_ENV_NAME,
@@ -13,6 +14,7 @@ from app.services.deployment_config import (
     DEMO_STUDENT_PASSWORD_ENV_NAME,
     DEPLOYMENT_MODE_ENV_NAME,
     get_deployment_mode,
+    is_demo_student_admin_role_conflict,
     is_demo_admin_effectively_enabled,
     is_demo_student_effectively_enabled,
     is_known_deployment_mode,
@@ -22,9 +24,6 @@ from app.services.deployment_config import (
 )
 from app.services.model_config_service import build_admin_model_config
 from app.services.runtime_model_config_store import runtime_model_config_store
-
-ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
-
 
 def build_startup_config_self_check() -> dict[str, Any]:
     mode = get_deployment_mode()
@@ -129,6 +128,18 @@ def _build_startup_config_issues(
                     missing_env=missing_demo_student_env,
                 )
             )
+
+    if is_demo_student_admin_role_conflict(mode):
+        issues.append(
+            _issue(
+                code="demo_role_email_overlap",
+                message=(
+                    "The configured demo student email must not also be a demo "
+                    "administrator or appear in CLINICAL_OSCE_ADMIN_EMAILS."
+                ),
+                missing_env=[],
+            )
+        )
 
     for provider in providers:
         if not provider.get("enabled"):

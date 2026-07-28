@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.auth_store import AuthStore
+from app.services.deployment_config import get_configured_admin_email_set
 from app.services.osce_session_service import OsceSessionService
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_policy import build_prohibited_content_policy, build_success_metrics, build_teaching_action_plan
@@ -116,6 +117,11 @@ def _validate_demo_seed_credentials(
         and admin_password.strip()
         and normalized_student_email
         and student_password.strip()
+    ):
+        raise ValueError(DEMO_SEED_CONFIG_ERROR_MESSAGE)
+    if (
+        normalized_admin_email == normalized_student_email
+        or normalized_student_email in get_configured_admin_email_set()
     ):
         raise ValueError(DEMO_SEED_CONFIG_ERROR_MESSAGE)
     return normalized_admin_email, normalized_student_email
