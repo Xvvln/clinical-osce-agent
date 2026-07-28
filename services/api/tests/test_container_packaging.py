@@ -28,6 +28,17 @@ def test_api_image_copies_only_required_public_data_assets() -> None:
     }
 
 
+def test_api_image_installs_locked_runtime_into_project_virtualenv() -> None:
+    dockerfile_source = (REPO_ROOT / "services/api/Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY services/api/pyproject.toml services/api/uv.lock ./" in dockerfile_source
+    assert dockerfile_source.count("uv sync --frozen --no-dev") == 2
+    assert "uv sync --frozen --no-dev --no-install-project" in dockerfile_source
+    assert "uv pip install --system" not in dockerfile_source
+    assert 'PATH="/app/services/api/.venv/bin:${PATH}"' in dockerfile_source
+    assert 'CMD ["python", "-m", "uvicorn"' in dockerfile_source
+
+
 def test_docker_context_excludes_private_state_and_nested_secret_artifacts() -> None:
     dockerignore_patterns = {
         line.strip()

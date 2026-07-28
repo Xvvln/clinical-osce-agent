@@ -6,25 +6,29 @@ ARG PIP_DEFAULT_TIMEOUT=120
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_DEFAULT_TIMEOUT=${PIP_DEFAULT_TIMEOUT}
-
-WORKDIR /app
-
-COPY services/api/pyproject.toml services/api/uv.lock ./services/api/
-COPY services/api/app ./services/api/app
-COPY services/api/evals ./services/api/evals
-COPY data/cases ./data/cases
-COPY data/rubrics ./data/rubrics
-COPY data/schemas ./data/schemas
-COPY data/attribution ./data/attribution
-COPY data/rag_knowledge ./data/rag_knowledge
-COPY data/humanistic_anchor_bank.yaml ./data/humanistic_anchor_bank.yaml
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir uv \
-    && UV_INDEX_URL=${PIP_INDEX_URL} uv pip install --system --no-cache ./services/api
+    PIP_DEFAULT_TIMEOUT=${PIP_DEFAULT_TIMEOUT} \
+    PATH="/app/services/api/.venv/bin:${PATH}"
 
 WORKDIR /app/services/api
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir uv
+
+COPY services/api/pyproject.toml services/api/uv.lock ./
+
+RUN UV_INDEX_URL=${PIP_INDEX_URL} uv sync --frozen --no-dev --no-install-project
+
+COPY services/api/app ./app
+COPY services/api/evals ./evals
+COPY data/cases /app/data/cases
+COPY data/rubrics /app/data/rubrics
+COPY data/schemas /app/data/schemas
+COPY data/attribution /app/data/attribution
+COPY data/rag_knowledge /app/data/rag_knowledge
+COPY data/humanistic_anchor_bank.yaml /app/data/humanistic_anchor_bank.yaml
+
+RUN UV_INDEX_URL=${PIP_INDEX_URL} uv sync --frozen --no-dev
+
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

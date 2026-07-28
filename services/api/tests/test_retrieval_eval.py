@@ -15,7 +15,7 @@ from app.services.retrieval_index import RetrievalDocument
 def test_api_docker_image_copies_retrieval_eval_gold_set() -> None:
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "COPY services/api/evals ./services/api/evals" in dockerfile
+    assert "COPY services/api/evals ./evals" in dockerfile
 
 
 def test_retrieval_eval_metrics_compute_correctly() -> None:

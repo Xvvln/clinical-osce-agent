@@ -171,8 +171,16 @@ def test_compose_health_path_remains_valid() -> None:
     web_service = compose_payload["services"]["web"]
     admin_service = compose_payload["services"]["admin"]
     api_healthcheck = api_service["healthcheck"]["test"]
+    web_healthcheck = web_service["healthcheck"]["test"]
+    admin_healthcheck = admin_service["healthcheck"]["test"]
 
     assert any("http://127.0.0.1:8000/health" in str(part) for part in api_healthcheck)
+    assert web_healthcheck[:2] == ["CMD", "node"]
+    assert admin_healthcheck[:2] == ["CMD", "node"]
+    assert any("http://127.0.0.1:3000/" in str(part) for part in web_healthcheck)
+    assert any("http://127.0.0.1:3000/" in str(part) for part in admin_healthcheck)
+    assert web_service["depends_on"] == {"api": {"condition": "service_healthy"}}
+    assert admin_service["depends_on"] == {"api": {"condition": "service_healthy"}}
     assert (
         api_service["environment"]["CLINICAL_OSCE_DEPLOYMENT_MODE"]
         == "${CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"
