@@ -16,6 +16,10 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import (
+    ModelProviderPolicyError,
+    call_google_text_generate_content,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -126,6 +130,8 @@ class OpenAICompatibleProcedureResultApprovalAgent:
                 response_model=ProcedureResultApprovalResponse,
                 temperature=0.0,
             )
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return _approval_provider_unavailable_response()
 
@@ -145,6 +151,8 @@ class AnthropicProcedureResultApprovalAgent:
                 response_model=ProcedureResultApprovalResponse,
                 temperature=0.0,
             )
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return _approval_provider_unavailable_response()
 
@@ -176,12 +184,13 @@ class GeminiProcedureResultApprovalAgent:
         if local_block is not None:
             return local_block
         try:
-            response = call_with_api_logging(
+            return call_with_api_logging(
                 provider="vertex_gemini_procedure_approval" if self._settings.use_vertex else "gemini_procedure_approval",
                 operation="generate_content",
                 model=self._settings.model,
                 endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-                call=lambda: self._client.models.generate_content(
+                call=lambda: call_google_text_generate_content(
+                    client=self._client,
                     model=self._settings.model,
                     contents=json.dumps(_procedure_approval_provider_payload(request), ensure_ascii=False),
                     config=types.GenerateContentConfig(
@@ -191,8 +200,12 @@ class GeminiProcedureResultApprovalAgent:
                         temperature=0.0,
                     ),
                 ),
+                result_parser=lambda response: ProcedureResultApprovalResponse.model_validate_json(
+                    response.text
+                ),
             )
-            return ProcedureResultApprovalResponse.model_validate_json(response.text)
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return _approval_provider_unavailable_response()
 
@@ -216,6 +229,8 @@ class LazyProcedureResultApprovalAgent:
             if agent is None:
                 return local_review
             return agent(request)
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return _approval_provider_unavailable_response()
 

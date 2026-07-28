@@ -17,6 +17,10 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import (
+    ModelProviderPolicyError,
+    call_google_text_generate_content,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -313,12 +317,13 @@ class GeminiProcedureRequestRouter:
             )
 
     def __call__(self, request: ProcedureRequestRoutingRequest) -> ProcedureRequestRoutingResponse:
-        response = call_with_api_logging(
+        return call_with_api_logging(
             provider="vertex_gemini_procedure_router" if self._settings.use_vertex else "gemini_procedure_router",
             operation="generate_content",
             model=self._settings.model,
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-            call=lambda: self._client.models.generate_content(
+            call=lambda: call_google_text_generate_content(
+                client=self._client,
                 model=self._settings.model,
                 contents=json.dumps(_procedure_router_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
@@ -328,8 +333,10 @@ class GeminiProcedureRequestRouter:
                     temperature=0.0,
                 ),
             ),
+            result_parser=lambda response: ProcedureRequestRoutingResponse.model_validate_json(
+                response.text
+            ),
         )
-        return ProcedureRequestRoutingResponse.model_validate_json(response.text)
 
 
 class LazyProcedureRequestRouter:
@@ -348,6 +355,8 @@ class LazyProcedureRequestRouter:
             return self._deterministic_router(request)
         try:
             return router(request)
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return self._deterministic_router(request)
 

@@ -82,6 +82,7 @@ from app.services.model_config_service import build_admin_model_config
 from app.services.model_call_policy import (
     DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS,
     ModelProviderOverloadedError,
+    ModelProviderPayloadTooLargeError,
     ModelProviderPolicyError,
     ModelProviderTimeoutError,
     model_request_admission_gate,
@@ -153,6 +154,7 @@ AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 AUTH_COOKIE_PATH = "/api"
 API_PRIVATE_CACHE_CONTROL = "private, no-store, max-age=0"
 MODEL_PROVIDER_BUSY_DETAIL = "模型服务正忙，请稍后重试。"
+MODEL_PROVIDER_PAYLOAD_TOO_LARGE_DETAIL = "模型请求内容过大，未发送到服务商。"
 MODEL_PROVIDER_TIMEOUT_DETAIL = "模型服务响应超时，请稍后重试。"
 MAX_MODEL_PROVIDER_RETRY_AFTER_SECONDS = 300
 BASE_HTTP_SECURITY_HEADERS = {
@@ -562,6 +564,17 @@ async def handle_model_provider_overloaded_error(
     __: ModelProviderOverloadedError,
 ) -> JSONResponse:
     return _model_provider_busy_response()
+
+
+@app.exception_handler(ModelProviderPayloadTooLargeError)
+async def handle_model_provider_payload_too_large_error(
+    _: Request,
+    __: ModelProviderPayloadTooLargeError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        content={"detail": MODEL_PROVIDER_PAYLOAD_TOO_LARGE_DETAIL},
+    )
 
 
 @app.exception_handler(ModelProviderTimeoutError)
@@ -1052,6 +1065,11 @@ def _model_provider_busy_response() -> JSONResponse:
 
 
 def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, ModelProviderPayloadTooLargeError):
+        return HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=MODEL_PROVIDER_PAYLOAD_TOO_LARGE_DETAIL,
+        )
     if isinstance(exc, ModelProviderOverloadedError):
         return _model_provider_busy_http_exception()
     if isinstance(exc, (ModelProviderTimeoutError, httpx.TimeoutException)):

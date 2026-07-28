@@ -33,6 +33,7 @@ from app.services.gemini_patient_responder import (
     select_patient_provider_fact_candidates,
 )
 from app.services.knowledge_recommender import recommend_knowledge_items
+from app.services.model_call_policy import ModelProviderPolicyError
 from app.services.patient_language_service import (
     build_patient_context_redirect_utterance,
     patient_friendly_chief_complaint,
@@ -835,6 +836,8 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             visible_forbidden_terms,
         )
         coach_step_status = "completed"
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         hint = _sanitize_visible_coach_hint(coach_base_hint, visible_forbidden_terms)
         turn_policy = "teaching_hint_unavailable"
@@ -946,6 +949,8 @@ def _route_skill_context_for_coach(
             "rejected_skill_ids": rejected_skill_ids,
         }
         return selected_skill_ids, selected_skill_context, routed_skill_context, None
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         routed_skill_context = {
             "available_skill_ids": _skill_ids_from_items(candidate_skill_items),
@@ -2316,6 +2321,8 @@ def _apply_passive_coach_review(
             coach_started_perf,
             metadata={"prompt_kind": "passive_turn_review"},
         )
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         processing_trace = _append_processing_trace_step(
             processing_trace,

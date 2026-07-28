@@ -37,6 +37,7 @@ from app.services.procedure_request_router import (
     create_default_procedure_request_router,
 )
 from app.services.deep_report_analysis_service import build_legacy_deep_report_analysis
+from app.services.model_call_policy import ModelProviderPolicyError
 from app.services.report_store import (
     ReportClaimLostError,
     ReportOutboxEvent,
@@ -1110,6 +1111,8 @@ class OsceSessionService:
                     forbidden_terms=_procedure_forbidden_terms(case),
                 )
             )
+        except ModelProviderPolicyError:
+            raise
         except Exception:
             return []
         return _normalize_routed_unmatched_requests(routing_response, unmatched_requests)
@@ -2469,6 +2472,8 @@ def _personal_skill_payload_for_report(
             skill_store=service.training_skill_store,
             event_store=service.training_event_store,
         )
+    except ModelProviderPolicyError:
+        raise
     except TrainingSkillCandidateGenerationError:
         return build_generation_failed_personal_skill_payload(
             report=session.feedback_report,

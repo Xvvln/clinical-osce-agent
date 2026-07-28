@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
-from app.services.api_call_log_service import api_call_log_store
+from app.services.api_call_log_service import call_with_api_logging
 from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
@@ -22,7 +21,9 @@ from app.services.model_context_window import (
     PROVIDER_DIALOGUE_ROLES,
     bounded_provider_messages,
 )
-from app.services.model_call_policy import run_model_provider_call
+from app.services.model_call_policy import (
+    call_google_text_generate_content,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -138,49 +139,33 @@ class GeminiPatientResponder:
     def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         provider = "vertex_gemini_patient" if self._settings.use_vertex else "gemini_patient"
         provider_payload, provider_fact_id_map = _build_patient_provider_payload(request)
-        started_at = time.perf_counter()
-        try:
-            response = run_model_provider_call(
-                lambda: self._client.models.generate_content(
-                    model=self._settings.model,
-                    contents=json.dumps(
-                        provider_payload,
-                        ensure_ascii=False,
-                    ),
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT_TEMPLATE,
-                        response_mime_type="application/json",
-                        response_schema=PatientResponderResponse,
-                        temperature=self._settings.temperature,
-                    ),
-                )
-            )
-        except Exception as exc:
-            api_call_log_store.record(
-                provider=provider,
-                operation="generate_content",
-                model=self._settings.model,
-                endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-                success=False,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-                error=exc,
-            )
-            raise
-        api_call_log_store.record(
+        return call_with_api_logging(
             provider=provider,
             operation="generate_content",
             model=self._settings.model,
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-            success=True,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-        )
-        return _validated_patient_reply(
-            _restore_patient_provider_fact_ids(
-                PatientResponderResponse.model_validate_json(response.text),
-                provider_fact_id_map,
+            call=lambda: call_google_text_generate_content(
+                client=self._client,
+                model=self._settings.model,
+                contents=json.dumps(
+                    provider_payload,
+                    ensure_ascii=False,
+                ),
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT_TEMPLATE,
+                    response_mime_type="application/json",
+                    response_schema=PatientResponderResponse,
+                    temperature=self._settings.temperature,
+                ),
             ),
-            request,
-            provider_answerable_fact_ids=list(provider_fact_id_map.values()),
+            result_parser=lambda response: _validated_patient_reply(
+                _restore_patient_provider_fact_ids(
+                    PatientResponderResponse.model_validate_json(response.text),
+                    provider_fact_id_map,
+                ),
+                request,
+                provider_answerable_fact_ids=list(provider_fact_id_map.values()),
+            ),
         )
 
 

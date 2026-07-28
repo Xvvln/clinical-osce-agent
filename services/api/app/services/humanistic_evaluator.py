@@ -11,6 +11,8 @@ from typing import Any, Mapping, Protocol
 import yaml
 from pydantic import BaseModel, Field
 
+from app.services.model_call_policy import ModelProviderPolicyError
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 ANCHOR_BANK_PATH = ROOT_DIR / "data" / "humanistic_anchor_bank.yaml"
 LOGGER = logging.getLogger(__name__)
@@ -390,6 +392,8 @@ def _apply_boundary_review(
                 )
             )
         )
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         LOGGER.warning("Humanistic semantic boundary review failed: %s", exc)
         status = "uncertain"

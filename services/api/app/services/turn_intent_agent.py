@@ -16,6 +16,7 @@ from app.services.google_genai_http_options import (
     require_direct_runtime_vertex_adc_proxy,
 )
 from app.services.model_context_window import bounded_provider_messages
+from app.services.model_call_policy import call_google_text_generate_content
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -199,12 +200,13 @@ class GeminiTurnIntentAgent:
             )
 
     def __call__(self, request: TurnIntentRequest) -> TurnIntentResponse:
-        response = call_with_api_logging(
+        return call_with_api_logging(
             provider="vertex_gemini_turn_intent" if self._settings.use_vertex else "gemini_turn_intent",
             operation="generate_content",
             model=self._settings.model,
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-            call=lambda: self._client.models.generate_content(
+            call=lambda: call_google_text_generate_content(
+                client=self._client,
                 model=self._settings.model,
                 contents=json.dumps(_turn_intent_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
@@ -214,8 +216,10 @@ class GeminiTurnIntentAgent:
                     temperature=0.0,
                 ),
             ),
+            result_parser=lambda response: TurnIntentResponse.model_validate_json(
+                response.text
+            ),
         )
-        return TurnIntentResponse.model_validate_json(response.text)
 
 
 class LazyTurnIntentAgent:

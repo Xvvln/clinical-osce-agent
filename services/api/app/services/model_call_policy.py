@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
@@ -17,6 +18,7 @@ CallResultT = TypeVar("CallResultT")
 DEFAULT_MODEL_CALL_MAX_CONCURRENCY = 8
 DEFAULT_MODEL_CALL_TIMEOUT_SECONDS = 30.0
 DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS = 1
+TEXT_MODEL_ENVELOPE_MAX_BYTES = 64 * 1024
 MODEL_CALL_MAX_CONCURRENCY_ENV = "OSCE_MODEL_CALL_MAX_CONCURRENCY"
 MODEL_CALL_TIMEOUT_SECONDS_ENV = "OSCE_MODEL_CALL_TIMEOUT_SECONDS"
 MODEL_CALL_DEADLINE: ContextVar[float | None] = ContextVar(
@@ -35,6 +37,63 @@ class ModelProviderOverloadedError(ModelProviderPolicyError):
 
 class ModelProviderTimeoutError(ModelProviderPolicyError, TimeoutError):
     pass
+
+
+class ModelProviderPayloadTooLargeError(ModelProviderPolicyError):
+    """Raised before transport when a text-model request exceeds policy."""
+
+
+def json_envelope_utf8_size(payload: Any) -> int:
+    """Return the exact compact JSON size used by the model-envelope policy."""
+
+    return len(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+
+
+def enforce_text_model_json_envelope(
+    payload: Any,
+) -> int:
+    """Reject an oversized text-model JSON envelope before any network call."""
+
+    size_bytes = json_envelope_utf8_size(payload)
+    if size_bytes > TEXT_MODEL_ENVELOPE_MAX_BYTES:
+        raise ModelProviderPayloadTooLargeError(
+            "text model request envelope exceeds the configured byte limit"
+        )
+    return size_bytes
+
+
+def call_google_text_generate_content(
+    *,
+    client: Any,
+    model: str,
+    contents: Any,
+    config: Any,
+) -> Any:
+    """Apply the shared text envelope policy, then invoke Google GenAI."""
+
+    if isinstance(config, dict):
+        system_instruction = config.get("system_instruction")
+    else:
+        system_instruction = getattr(config, "system_instruction", None)
+    enforce_text_model_json_envelope(
+        {
+            "model": model,
+            "contents": contents,
+            "system_instruction": system_instruction,
+        }
+    )
+    return client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
+    )
 
 
 @dataclass(frozen=True)
@@ -307,10 +366,15 @@ __all__ = [
     "DEFAULT_MODEL_OVERLOAD_RETRY_AFTER_SECONDS",
     "MODEL_CALL_MAX_CONCURRENCY",
     "MODEL_CALL_TIMEOUT_SECONDS",
+    "TEXT_MODEL_ENVELOPE_MAX_BYTES",
     "ModelProviderOverloadedError",
+    "ModelProviderPayloadTooLargeError",
     "ModelProviderPolicyError",
     "ModelProviderTimeoutError",
     "ModelRequestAdmissionGate",
+    "call_google_text_generate_content",
+    "enforce_text_model_json_envelope",
+    "json_envelope_utf8_size",
     "model_call_budget",
     "model_request_admission_gate",
     "reset_model_call_deadline",

@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.api_call_log_service import api_call_log_store
 from app.services.model_call_policy import (
+    ModelProviderPolicyError,
+    enforce_text_model_json_envelope,
     model_call_budget,
     run_model_provider_call,
 )
@@ -105,6 +107,8 @@ class OpenAICompatibleChatClient:
                     response_model=response_model,
                     provider_label="openai_compatible",
                 )
+            except ModelProviderPolicyError:
+                raise
             except Exception:
                 if (
                     not self._settings.allow_process_fallback
@@ -180,6 +184,7 @@ class OpenAICompatibleChatClient:
         *,
         settings: OpenAICompatibleSettings,
     ) -> httpx.Response:
+        enforce_text_model_json_envelope(payload)
         client_options: dict[str, Any] = {
             "timeout": settings.timeout_seconds,
             "follow_redirects": False,

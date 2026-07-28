@@ -17,6 +17,7 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import call_google_text_generate_content
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -290,12 +291,13 @@ class VertexGeminiRubricScorer:
 
     def __call__(self, request: LlmRubricRequest) -> LlmRubricResponse:
         projection = build_rubric_provider_projection(request)
-        response = call_with_api_logging(
+        return call_with_api_logging(
             provider="vertex_gemini_rubric_scorer",
             operation="generate_content",
             model=self._settings.model,
             endpoint="vertex://generate_content",
-            call=lambda: self._client.models.generate_content(
+            call=lambda: call_google_text_generate_content(
+                client=self._client,
                 model=self._settings.model,
                 contents=json.dumps(projection.payload, ensure_ascii=False),
                 config=types.GenerateContentConfig(
@@ -304,11 +306,11 @@ class VertexGeminiRubricScorer:
                     response_schema=LlmRubricResponse,
                 ),
             ),
-        )
-        return _restore_rubric_response(
-            LlmRubricResponse.model_validate_json(response.text),
-            request=request,
-            projection=projection,
+            result_parser=lambda response: _restore_rubric_response(
+                LlmRubricResponse.model_validate_json(response.text),
+                request=request,
+                projection=projection,
+            ),
         )
 
 

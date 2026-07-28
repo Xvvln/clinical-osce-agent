@@ -16,6 +16,7 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import call_google_text_generate_content
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -187,12 +188,13 @@ class GeminiTeacherAgent:
 
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
         provider_payload = _build_teacher_provider_payload(request)
-        response = call_with_api_logging(
+        return call_with_api_logging(
             provider="vertex_gemini_teacher" if self._settings.use_vertex else "gemini_teacher",
             operation="generate_content",
             model=self._settings.model,
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-            call=lambda: self._client.models.generate_content(
+            call=lambda: call_google_text_generate_content(
+                client=self._client,
                 model=self._settings.model,
                 contents=json.dumps(provider_payload, ensure_ascii=False),
                 config=types.GenerateContentConfig(
@@ -202,8 +204,10 @@ class GeminiTeacherAgent:
                     temperature=0.2,
                 ),
             ),
+            result_parser=lambda response: TeacherAnalysisResponse.model_validate_json(
+                response.text
+            ),
         )
-        return TeacherAnalysisResponse.model_validate_json(response.text)
 
 
 class LazyTeacherAgent:

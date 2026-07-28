@@ -16,6 +16,7 @@ from app.services.google_genai_http_options import (
 )
 from app.services.model_call_policy import (
     ModelProviderPolicyError,
+    call_google_text_generate_content,
     run_model_provider_call,
 )
 
@@ -243,7 +244,8 @@ def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_ur
             ),
         )
         run_model_provider_call(
-            lambda: client.models.generate_content(
+            lambda: call_google_text_generate_content(
+                client=client,
                 model=model,
                 contents=json.dumps(
                     {"ping": "clinical-osce-agent"},
@@ -286,7 +288,8 @@ def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> 
             ),
         )
         run_model_provider_call(
-            lambda: client.models.generate_content(
+            lambda: call_google_text_generate_content(
+                client=client,
                 model=model,
                 contents=json.dumps(
                     {"ping": "clinical-osce-agent"},

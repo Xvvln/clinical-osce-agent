@@ -13,6 +13,7 @@ from app.services.clinical_reasoning_trace_service import (
     evidence_chain_breakpoints_from_report,
     sequence_flags_from_report,
 )
+from app.services.model_call_policy import ModelProviderPolicyError
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_auto_approval_service import AUTO_APPROVAL_AGENT_ID, TrainingSkillApprovalAgent
 from app.services.training_skill_candidate_service import (
@@ -704,6 +705,8 @@ def _apply_teacher_agent_analysis(
     )
     try:
         analysis = normalize_teacher_analysis_response(teacher_agent(request))
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         warnings = list(review.get("generation_warnings", []))
         warnings.append(

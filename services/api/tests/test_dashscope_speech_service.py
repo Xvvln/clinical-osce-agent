@@ -112,6 +112,29 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(input_audio["data"], f"data:audio/webm;base64,{base64.b64encode(b'voice-bytes').decode('ascii')}")
 
     @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
+    async def test_transcribe_preserves_ten_mib_audio_capability_outside_text_guard(self) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(
+                api_key="sk-test",
+                asr_endpoint="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                asr_model="qwen3-asr-flash",
+            )
+        )
+        audio_bytes = b"x" * (10 * 1024 * 1024)
+
+        result = await service.transcribe(
+            audio_bytes,
+            mime_type="audio/webm",
+            filename="ten-mib.webm",
+        )
+
+        self.assertEqual(result.text, "疼痛什么时候开始的？")
+        payload = FakeAsyncClient.posts[0]["json"]
+        input_audio = payload["messages"][0]["content"][0]["input_audio"]  # type: ignore[index]
+        encoded_audio = input_audio["data"]
+        self.assertGreater(len(encoded_audio.encode("utf-8")), 10 * 1024 * 1024)
+
+    @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
     async def test_synthesize_downloads_dashscope_audio_url(self) -> None:
         service = dashscope_speech_service.DashScopeSpeechService(
             dashscope_speech_service.DashScopeSpeechSettings(

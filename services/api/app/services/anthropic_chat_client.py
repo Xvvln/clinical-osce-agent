@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.api_call_log_service import api_call_log_store
 from app.services.model_call_policy import (
+    enforce_text_model_json_envelope,
     model_call_budget,
     run_model_provider_call,
 )
@@ -52,33 +53,69 @@ class AnthropicChatClient:
         response_model: type[ResponseModelT],
         temperature: float | None = None,
     ) -> ResponseModelT:
-        with model_call_budget(self._settings.timeout_seconds):
-            response = self._post_message(
+        request_payload = {
+            "model": self._settings.model,
+            "max_tokens": self._settings.max_tokens,
+            "system": system_prompt,
+            "messages": [
                 {
-                    "model": self._settings.model,
-                    "max_tokens": self._settings.max_tokens,
-                    "system": system_prompt,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                payload,
-                                ensure_ascii=False,
-                            ),
-                        },
-                    ],
-                    "temperature": (
-                        self._settings.temperature
-                        if temperature is None
-                        else temperature
+                    "role": "user",
+                    "content": json.dumps(
+                        payload,
+                        ensure_ascii=False,
                     ),
-                }
+                },
+            ],
+            "temperature": (
+                self._settings.temperature
+                if temperature is None
+                else temperature
+            ),
+        }
+        with model_call_budget(self._settings.timeout_seconds):
+            return self._complete_json_with_payload(
+                request_payload,
+                response_model=response_model,
             )
+
+    def _complete_json_with_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        response_model: type[ResponseModelT],
+    ) -> ResponseModelT:
+        endpoint = _messages_url(self._settings.base_url)
+        started_at = time.perf_counter()
+        response: httpx.Response | None = None
+        try:
+            response = self._post_message(payload)
             content = _extract_text_content(response.json())
-            return _validate_response_content(
+            result = _validate_response_content(
                 content,
                 response_model=response_model,
             )
+        except Exception as exc:
+            api_call_log_store.record(
+                provider="anthropic",
+                operation="messages",
+                model=str(payload.get("model") or self._settings.model),
+                endpoint=endpoint,
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                status_code=getattr(response, "status_code", None),
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider="anthropic",
+            operation="messages",
+            model=str(payload.get("model") or self._settings.model),
+            endpoint=endpoint,
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            status_code=getattr(response, "status_code", None),
+        )
+        return result
 
     def _post_message(self, payload: dict[str, Any]) -> httpx.Response:
         client_options: dict[str, Any] = {
@@ -96,43 +133,22 @@ class AnthropicChatClient:
         }
 
         endpoint = _messages_url(self._settings.base_url)
-        started_at = time.perf_counter()
-        try:
-            def send_request() -> httpx.Response:
-                with httpx.Client(**client_options) as client:
-                    response = client.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                    )
-                response.raise_for_status()
-                return response
+        enforce_text_model_json_envelope(payload)
 
-            response = run_model_provider_call(
-                send_request,
-                timeout_seconds=self._settings.timeout_seconds,
-            )
-        except Exception as exc:
-            api_call_log_store.record(
-                provider="anthropic",
-                operation="messages",
-                model=str(payload.get("model") or self._settings.model),
-                endpoint=endpoint,
-                success=False,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-                error=exc,
-            )
-            raise
-        api_call_log_store.record(
-            provider="anthropic",
-            operation="messages",
-            model=str(payload.get("model") or self._settings.model),
-            endpoint=endpoint,
-            success=True,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            status_code=getattr(response, "status_code", None),
+        def send_request() -> httpx.Response:
+            with httpx.Client(**client_options) as client:
+                response = client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
+            response.raise_for_status()
+            return response
+
+        return run_model_provider_call(
+            send_request,
+            timeout_seconds=self._settings.timeout_seconds,
         )
-        return response
 
 
 def _messages_url(base_url: str) -> str:

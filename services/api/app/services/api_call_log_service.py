@@ -9,7 +9,7 @@ from contextvars import ContextVar, Token
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, overload
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -17,6 +17,7 @@ import httpx
 from app.services.model_call_policy import run_model_provider_call
 
 CallResultT = TypeVar("CallResultT")
+ParsedCallResultT = TypeVar("ParsedCallResultT")
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_API_CALL_LOG_PATH = PROJECT_ROOT / "data" / "runtime" / "model_api_calls.jsonl"
 MAX_ERROR_MESSAGE_LENGTH = 220
@@ -239,6 +240,7 @@ def reset_api_call_context(token: Token[dict[str, str]]) -> None:
     API_CALL_CONTEXT.reset(token)
 
 
+@overload
 def call_with_api_logging(
     *,
     provider: str,
@@ -247,14 +249,49 @@ def call_with_api_logging(
     endpoint: str,
     call: Callable[[], CallResultT],
     timeout_seconds: float | None = None,
+    result_parser: None = None,
 ) -> CallResultT:
+    ...
+
+
+@overload
+def call_with_api_logging(
+    *,
+    provider: str,
+    operation: str,
+    model: str,
+    endpoint: str,
+    call: Callable[[], CallResultT],
+    timeout_seconds: float | None = None,
+    result_parser: Callable[[CallResultT], ParsedCallResultT],
+) -> ParsedCallResultT:
+    ...
+
+
+def call_with_api_logging(
+    *,
+    provider: str,
+    operation: str,
+    model: str,
+    endpoint: str,
+    call: Callable[[], CallResultT],
+    timeout_seconds: float | None = None,
+    result_parser: Callable[[CallResultT], Any] | None = None,
+) -> Any:
     started_at = time.perf_counter()
+    raw_result: CallResultT | None = None
     try:
-        result = run_model_provider_call(
+        raw_result = run_model_provider_call(
             call,
             timeout_seconds=timeout_seconds,
         )
+        result = (
+            raw_result
+            if result_parser is None
+            else result_parser(raw_result)
+        )
     except Exception as exc:
+        status_code = getattr(raw_result, "status_code", None)
         api_call_log_store.record(
             provider=provider,
             operation=operation,
@@ -262,10 +299,11 @@ def call_with_api_logging(
             endpoint=endpoint,
             success=False,
             duration_ms=(time.perf_counter() - started_at) * 1000,
+            status_code=status_code if isinstance(status_code, int) else None,
             error=exc,
         )
         raise
-    status_code = getattr(result, "status_code", None)
+    status_code = getattr(raw_result, "status_code", None)
     api_call_log_store.record(
         provider=provider,
         operation=operation,

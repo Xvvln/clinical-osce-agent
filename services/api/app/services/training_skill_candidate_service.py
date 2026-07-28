@@ -16,6 +16,10 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_call_policy import (
+    ModelProviderPolicyError,
+    call_google_text_generate_content,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -133,12 +137,13 @@ class VertexGeminiTrainingSkillCandidateGenerator:
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
         try:
             model_payload = _model_generation_payload(context)
-            response = call_with_api_logging(
+            content = call_with_api_logging(
                 provider="vertex_gemini_skill_candidate",
                 operation="generate_content",
                 model=self._settings.skill_candidate_model,
                 endpoint="vertex://generate_content",
-                call=lambda: self._client.models.generate_content(
+                call=lambda: call_google_text_generate_content(
+                    client=self._client,
                     model=self._settings.skill_candidate_model,
                     contents=json.dumps(
                         model_payload,
@@ -150,8 +155,12 @@ class VertexGeminiTrainingSkillCandidateGenerator:
                         response_schema=GeneratedTrainingSkillCandidateContent,
                     ),
                 ),
+                result_parser=lambda response: GeneratedTrainingSkillCandidateContent.model_validate_json(
+                    response.text
+                ),
             )
-            content = GeneratedTrainingSkillCandidateContent.model_validate_json(response.text)
+        except ModelProviderPolicyError:
+            raise
         except Exception as exc:
             raise TrainingSkillCandidateGenerationError("Skill candidate generation failed") from exc
 
@@ -171,6 +180,8 @@ class OpenAICompatibleTrainingSkillCandidateGenerator:
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
             )
+        except ModelProviderPolicyError:
+            raise
         except Exception as exc:
             raise TrainingSkillCandidateGenerationError("Skill candidate generation failed") from exc
 
@@ -190,6 +201,8 @@ class AnthropicTrainingSkillCandidateGenerator:
                 response_model=GeneratedTrainingSkillCandidateContent,
                 temperature=0.2,
             )
+        except ModelProviderPolicyError:
+            raise
         except Exception as exc:
             raise TrainingSkillCandidateGenerationError("Skill candidate generation failed") from exc
 
