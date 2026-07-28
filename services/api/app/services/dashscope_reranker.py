@@ -9,7 +9,12 @@ from typing import Any
 import httpx
 
 from app.services.api_call_log_service import api_call_log_store
-from app.services.model_call_policy import run_model_provider_call
+from app.services.model_call_policy import (
+    TEXT_MODEL_ENVELOPE_MAX_BYTES,
+    enforce_text_model_json_envelope,
+    json_envelope_utf8_size,
+    run_model_provider_call,
+)
 
 DEFAULT_DASHSCOPE_RERANK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-api/v1"
 DEFAULT_DASHSCOPE_RERANK_MODEL = "qwen3-rerank"
@@ -17,6 +22,12 @@ DEFAULT_DASHSCOPE_RERANK_TOP_K = 5
 DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K = 30
 DEFAULT_DASHSCOPE_RERANK_TIMEOUT_SECONDS = 15.0
 DEFAULT_DASHSCOPE_RERANK_INSTRUCT = "Retrieve semantically similar text."
+MAX_DASHSCOPE_RERANK_CANDIDATES = 30
+MAX_DASHSCOPE_RERANK_TOP_K = 30
+MAX_DASHSCOPE_RERANK_QUERY_BYTES = 4 * 1024
+MAX_DASHSCOPE_RERANK_INSTRUCT_BYTES = 2 * 1024
+MAX_DASHSCOPE_RERANK_DOCUMENT_BYTES = 4 * 1024
+MIN_DASHSCOPE_RERANK_DOCUMENT_BYTES = 4
 
 
 @dataclass(frozen=True)
@@ -42,29 +53,55 @@ class DashScopeReranker:
         self._settings = settings
 
     def candidate_limit(self, result_limit: int) -> int:
-        return max(result_limit, self._settings.candidate_k)
+        return min(
+            MAX_DASHSCOPE_RERANK_CANDIDATES,
+            max(
+                _positive_int(result_limit, default=1),
+                _positive_int(
+                    self._settings.candidate_k,
+                    default=DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K,
+                ),
+            ),
+        )
 
     def top_limit(self, result_limit: int, document_count: int) -> int:
-        return max(1, min(result_limit, self._settings.top_k, document_count))
+        return max(
+            1,
+            min(
+                _positive_int(result_limit, default=1),
+                _positive_int(
+                    self._settings.top_k,
+                    default=DEFAULT_DASHSCOPE_RERANK_TOP_K,
+                ),
+                _positive_int(document_count, default=1),
+                MAX_DASHSCOPE_RERANK_TOP_K,
+            ),
+        )
 
     def rerank(self, query: str, documents: Sequence[str], *, top_k: int) -> list[DashScopeRerankResult]:
         normalized_query = str(query).strip()
-        normalized_documents = [str(document).strip() for document in documents]
-        if not normalized_query or not normalized_documents:
+        indexed_documents = [
+            (index, normalized_document)
+            for index, document in enumerate(documents)
+            if (normalized_document := str(document).strip())
+        ]
+        if not normalized_query or not indexed_documents:
             return []
 
-        payload: dict[str, Any] = {
-            "model": self._settings.model,
-            "query": normalized_query,
-            "documents": normalized_documents,
-            "top_n": max(1, min(top_k, len(normalized_documents))),
-        }
-        if self._settings.instruct:
-            payload["instruct"] = self._settings.instruct
+        candidate_limit = self.candidate_limit(top_k)
+        indexed_documents = indexed_documents[:candidate_limit]
+        original_indexes = [index for index, _ in indexed_documents]
 
         endpoint = _reranks_url(self._settings.base_url)
         started_at = time.perf_counter()
         try:
+            payload = _build_rerank_provider_payload(
+                settings=self._settings,
+                query=normalized_query,
+                documents=[document for _, document in indexed_documents],
+                top_k=self.top_limit(top_k, len(indexed_documents)),
+            )
+
             def send_request() -> httpx.Response:
                 with httpx.Client(**self._client_options()) as client:
                     response = client.post(
@@ -84,7 +121,10 @@ class DashScopeReranker:
                 send_request,
                 timeout_seconds=self._settings.timeout_seconds,
             )
-            results = _parse_qwen3_rerank_results(response.json())
+            results = _restore_original_result_indexes(
+                _parse_qwen3_rerank_results(response.json()),
+                original_indexes=original_indexes,
+            )
         except Exception as exc:
             api_call_log_store.record(
                 provider="dashscope_rerank",
@@ -128,8 +168,20 @@ def build_dashscope_reranker_from_environment() -> DashScopeReranker | None:
         api_key=api_key,
         base_url=_env("OSCE_DASHSCOPE_RERANK_BASE_URL", DEFAULT_DASHSCOPE_RERANK_BASE_URL),
         model=_env("OSCE_DASHSCOPE_RERANK_MODEL", DEFAULT_DASHSCOPE_RERANK_MODEL),
-        top_k=_int_env("OSCE_DASHSCOPE_RERANK_TOP_K", DEFAULT_DASHSCOPE_RERANK_TOP_K),
-        candidate_k=_int_env("OSCE_DASHSCOPE_RERANK_CANDIDATE_K", DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K),
+        top_k=min(
+            _int_env(
+                "OSCE_DASHSCOPE_RERANK_TOP_K",
+                DEFAULT_DASHSCOPE_RERANK_TOP_K,
+            ),
+            MAX_DASHSCOPE_RERANK_TOP_K,
+        ),
+        candidate_k=min(
+            _int_env(
+                "OSCE_DASHSCOPE_RERANK_CANDIDATE_K",
+                DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K,
+            ),
+            MAX_DASHSCOPE_RERANK_CANDIDATES,
+        ),
         instruct=_env("OSCE_DASHSCOPE_RERANK_INSTRUCT", DEFAULT_DASHSCOPE_RERANK_INSTRUCT),
         proxy_url=_env("OSCE_DASHSCOPE_RERANK_PROXY_URL", "direct"),
         timeout_seconds=_float_env("OSCE_DASHSCOPE_RERANK_TIMEOUT_SECONDS", DEFAULT_DASHSCOPE_RERANK_TIMEOUT_SECONDS),
@@ -156,6 +208,96 @@ def _parse_qwen3_rerank_results(payload: dict[str, Any]) -> list[DashScopeRerank
     return results
 
 
+def _build_rerank_provider_payload(
+    *,
+    settings: DashScopeRerankSettings,
+    query: str,
+    documents: Sequence[str],
+    top_k: int,
+) -> dict[str, Any]:
+    projected_query = _truncate_utf8(
+        query,
+        MAX_DASHSCOPE_RERANK_QUERY_BYTES,
+    )
+    projected_instruct = _truncate_utf8(
+        settings.instruct,
+        MAX_DASHSCOPE_RERANK_INSTRUCT_BYTES,
+    )
+    projected_documents = [
+        _truncate_utf8(document, MAX_DASHSCOPE_RERANK_DOCUMENT_BYTES)
+        for document in documents[:MAX_DASHSCOPE_RERANK_CANDIDATES]
+    ]
+
+    def build_payload(document_byte_limit: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": settings.model,
+            "query": projected_query,
+            "documents": [
+                _truncate_utf8(document, document_byte_limit)
+                for document in projected_documents
+            ],
+            "top_n": max(
+                1,
+                min(
+                    top_k,
+                    len(projected_documents),
+                    MAX_DASHSCOPE_RERANK_TOP_K,
+                ),
+            ),
+        }
+        if projected_instruct:
+            payload["instruct"] = projected_instruct
+        return payload
+
+    payload = build_payload(MAX_DASHSCOPE_RERANK_DOCUMENT_BYTES)
+    if json_envelope_utf8_size(payload) > TEXT_MODEL_ENVELOPE_MAX_BYTES:
+        minimum_payload = build_payload(
+            MIN_DASHSCOPE_RERANK_DOCUMENT_BYTES
+        )
+        enforce_text_model_json_envelope(minimum_payload)
+        lower_bound = MIN_DASHSCOPE_RERANK_DOCUMENT_BYTES
+        upper_bound = MAX_DASHSCOPE_RERANK_DOCUMENT_BYTES
+        best_document_limit = lower_bound
+        while lower_bound <= upper_bound:
+            candidate_limit = (lower_bound + upper_bound) // 2
+            candidate_payload = build_payload(candidate_limit)
+            if (
+                json_envelope_utf8_size(candidate_payload)
+                <= TEXT_MODEL_ENVELOPE_MAX_BYTES
+            ):
+                best_document_limit = candidate_limit
+                lower_bound = candidate_limit + 1
+            else:
+                upper_bound = candidate_limit - 1
+        payload = build_payload(best_document_limit)
+
+    enforce_text_model_json_envelope(payload)
+    return payload
+
+
+def _restore_original_result_indexes(
+    results: Sequence[DashScopeRerankResult],
+    *,
+    original_indexes: Sequence[int],
+) -> list[DashScopeRerankResult]:
+    return [
+        DashScopeRerankResult(
+            index=original_indexes[result.index],
+            relevance_score=result.relevance_score,
+        )
+        for result in results
+        if 0 <= result.index < len(original_indexes)
+    ]
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    normalized = str(value).strip()
+    encoded = normalized.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return normalized
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def _reranks_url(base_url: str) -> str:
     normalized = base_url.strip().rstrip("/")
     if normalized.endswith("/reranks"):
@@ -176,6 +318,16 @@ def _int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default
+    return normalized if normalized > 0 else default
 
 
 def _float_env(name: str, default: float) -> float:
@@ -203,6 +355,11 @@ __all__ = [
     "DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K",
     "DEFAULT_DASHSCOPE_RERANK_MODEL",
     "DEFAULT_DASHSCOPE_RERANK_TOP_K",
+    "MAX_DASHSCOPE_RERANK_CANDIDATES",
+    "MAX_DASHSCOPE_RERANK_DOCUMENT_BYTES",
+    "MAX_DASHSCOPE_RERANK_INSTRUCT_BYTES",
+    "MAX_DASHSCOPE_RERANK_QUERY_BYTES",
+    "MAX_DASHSCOPE_RERANK_TOP_K",
     "DashScopeRerankResult",
     "DashScopeRerankSettings",
     "DashScopeReranker",
