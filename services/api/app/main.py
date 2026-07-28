@@ -1568,8 +1568,16 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/health")
+def public_api_health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/api/health/config")
-def startup_config_health_check() -> dict[str, object]:
+def startup_config_health_check(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
     return build_startup_config_self_check()
 
 

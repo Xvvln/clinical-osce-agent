@@ -402,7 +402,8 @@ test("home page replaces the Next dev ball with a polished OSCE floating dock", 
   assert.match(pageSource, />\s*临\s*<\/span>/);
   assert.match(pageSource, /type BackendConnectionStatus = "checking" \| "online" \| "offline";/);
   assert.match(pageSource, /const \[backendConnectionStatus, setBackendConnectionStatus\] = useState<BackendConnectionStatus>\("checking"\);/);
-  assert.match(pageSource, /fetch\("\/api\/health\/config", \{[\s\S]*?cache: "no-store",[\s\S]*?credentials: "same-origin",[\s\S]*?\}\)/);
+  assert.match(pageSource, /fetch\("\/api\/health", \{[\s\S]*?cache: "no-store",[\s\S]*?credentials: "same-origin",[\s\S]*?\}\)/);
+  assert.doesNotMatch(pageSource, /fetch\("\/api\/health\/config"/);
   assert.match(pageSource, /const backendStatusLightClass = getBackendStatusLightClass\(backendConnectionStatus\);/);
   assert.match(pageSource, /const backendStatusHaloClass = getBackendStatusHaloClass\(backendConnectionStatus\);/);
   assert.match(pageSource, /aria-label=\{`打开 OSCE 快捷入口，\$\{backendConnectionStatusLabel\}`\}/);

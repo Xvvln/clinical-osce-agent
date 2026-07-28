@@ -8,6 +8,7 @@ from app import main
 from app.main import AUTH_COOKIE_NAME
 from app.services.auth_store import AuthStore
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.startup_config_service import build_startup_config_self_check
 
 
 def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> None:
@@ -23,11 +24,7 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", "")
     monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "")
 
-    with TestClient(main.app) as client:
-        response = client.get("/api/health/config")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = build_startup_config_self_check()
     assert payload["deployment"] == {
         "mode": "single-node-prod",
         "production": True,
@@ -94,11 +91,7 @@ def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gem
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
-    with TestClient(main.app) as client:
-        response = client.get("/api/health/config")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = build_startup_config_self_check()
     issue_codes = {issue["code"] for issue in payload["issues"]}
     demo_issue = next(issue for issue in payload["issues"] if issue["code"] == "demo_admin_enabled_in_production")
     student_issue = next(issue for issue in payload["issues"] if issue["code"] == "demo_student_enabled_in_production")
@@ -120,17 +113,64 @@ def test_local_demo_accounts_are_disabled_without_complete_explicit_config(monke
     monkeypatch.setenv("CLINICAL_OSCE_DEMO_STUDENT_PASSWORD", "configured-student-password")
     monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
 
-    with TestClient(main.app) as client:
-        response = client.get("/api/health/config")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = build_startup_config_self_check()
     assert payload["overall_status"] == "fail"
     assert payload["policy"]["demo_admin_effective_enabled"] is False
     assert payload["policy"]["demo_student_effective_enabled"] is False
     issues = {issue["code"]: issue for issue in payload["issues"]}
     assert issues["demo_admin_incomplete"]["missing_env"] == ["CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"]
     assert issues["demo_student_incomplete"]["missing_env"] == ["CLINICAL_OSCE_DEMO_STUDENT_EMAIL"]
+
+
+def test_public_health_is_redacted_and_detailed_config_requires_admin(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "health-admin@example.test")
+    monkeypatch.setenv("OSCE_VERTEX_PROJECT", "synthetic-private-project")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_PROXY_URL",
+        "http://synthetic-private-proxy.internal:7897",
+    )
+    auth_store = AuthStore(tmp_path / "health-auth.sqlite3")
+    monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
+    student = auth_store.create_user(
+        "health-student@example.test",
+        "safe-password-123",
+        "学生",
+    )
+    admin = auth_store.create_user(
+        "health-admin@example.test",
+        "safe-password-456",
+        "管理员",
+    )
+    assert student is not None
+    assert admin is not None
+
+    with TestClient(main.app) as client:
+        public_response = client.get("/api/health")
+        anonymous_detail_response = client.get("/api/health/config")
+
+        client.cookies.set(
+            AUTH_COOKIE_NAME,
+            auth_store.create_session(student["user_id"]),
+        )
+        student_detail_response = client.get("/api/health/config")
+
+        client.cookies.set(
+            AUTH_COOKIE_NAME,
+            auth_store.create_session(admin["user_id"]),
+        )
+        admin_detail_response = client.get("/api/health/config")
+
+    assert public_response.status_code == 200
+    assert public_response.json() == {"status": "ok"}
+    assert "synthetic-private-project" not in public_response.text
+    assert "synthetic-private-proxy.internal" not in public_response.text
+    assert anonymous_detail_response.status_code == 401
+    assert student_detail_response.status_code == 403
+    assert admin_detail_response.status_code == 200
+    assert "providers" in admin_detail_response.json()
 
 
 def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch) -> None:

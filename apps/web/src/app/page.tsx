@@ -1793,7 +1793,7 @@ async function synthesizePatientSpeech(text: string, context: PatientSpeechConte
 }
 
 async function checkBackendConnection(): Promise<boolean> {
-  const response = await fetch("/api/health/config", {
+  const response = await fetch("/api/health", {
     cache: "no-store",
     credentials: "same-origin",
   });
