@@ -6,7 +6,6 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
       args:
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
     environment:
       CLINICAL_OSCE_DEPLOYMENT_MODE: ${CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}

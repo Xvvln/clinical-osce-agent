@@ -39,6 +39,26 @@ def test_api_image_installs_locked_runtime_into_project_virtualenv() -> None:
     assert 'CMD ["python", "-m", "uvicorn"' in dockerfile_source
 
 
+def test_api_image_and_lock_use_one_pinned_canonical_package_source() -> None:
+    dockerfile_source = (REPO_ROOT / "services/api/Dockerfile").read_text(encoding="utf-8")
+    lock_source = (REPO_ROOT / "services/api/uv.lock").read_text(encoding="utf-8")
+    compose_sources = [
+        (REPO_ROOT / compose_path).read_text(encoding="utf-8")
+        for compose_path in ("docker-compose.yml", "docker-compose.e2e.yml")
+    ]
+
+    assert (
+        "pip install --no-cache-dir --index-url https://pypi.org/simple uv==0.11.19"
+        in dockerfile_source
+    )
+    assert "PIP_INDEX_URL" not in dockerfile_source
+    assert "UV_INDEX_URL" not in dockerfile_source
+    assert all("PIP_INDEX_URL" not in compose_source for compose_source in compose_sources)
+    assert "pypi.tuna.tsinghua.edu.cn" not in lock_source
+    assert 'registry = "https://pypi.org/simple"' in lock_source
+    assert "https://files.pythonhosted.org/" in lock_source
+
+
 def test_docker_context_excludes_private_state_and_nested_secret_artifacts() -> None:
     dockerignore_patterns = {
         line.strip()
