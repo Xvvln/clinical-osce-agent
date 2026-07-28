@@ -14,9 +14,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import api_call_log_store
+from app.services.google_genai_http_options import (
+    build_google_genai_http_options,
+    require_direct_runtime_vertex_adc_proxy,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
@@ -97,7 +102,10 @@ class GeminiPatientResponder:
         if client is not None:
             self._client = client
         elif settings.use_vertex:
-            client_options: dict[str, object] = {"vertexai": True}
+            client_options: dict[str, object] = {
+                "vertexai": True,
+                "http_options": build_google_genai_http_options(settings.proxy_url),
+            }
             if settings.api_key:
                 client_options["api_key"] = settings.api_key
             else:
@@ -105,7 +113,10 @@ class GeminiPatientResponder:
                 client_options["location"] = settings.location
             self._client = genai.Client(**client_options)
         else:
-            self._client = genai.Client(api_key=settings.api_key)
+            self._client = genai.Client(
+                api_key=settings.api_key,
+                http_options=build_google_genai_http_options(settings.proxy_url),
+            )
 
     def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
         provider = "vertex_gemini_patient" if self._settings.use_vertex else "gemini_patient"
@@ -202,16 +213,17 @@ class DeterministicPatientResponder:
 
 class LazyGeminiPatientResponder:
     def __init__(self) -> None:
-        self._responder: GeminiPatientResponder | OpenAICompatiblePatientResponder | AnthropicPatientResponder | DeterministicPatientResponder | None = None
-        self._cache_key: tuple[str, ...] | None = None
+        self._responder_cache: RuntimeModelObjectCache[
+            GeminiPatientResponder
+            | OpenAICompatiblePatientResponder
+            | AnthropicPatientResponder
+            | DeterministicPatientResponder
+        ] = RuntimeModelObjectCache()
 
     def __call__(self, request: PatientResponderRequest) -> PatientResponderOutput:
-        cache_key = runtime_model_config_store.active_config_cache_key()
-        if self._responder is None or self._cache_key != cache_key:
-            self._responder = _create_configured_responder()
-            self._cache_key = cache_key
+        responder = self._responder_cache.get_or_create(_create_configured_responder)
         try:
-            return self._responder(request)
+            return responder(request)
         except (RuntimeError, ValidationError, ValueError):
             # Only model-output contract failures fall back here. Provider connectivity
             # and authentication errors should still surface to the API caller.
@@ -233,7 +245,6 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
-        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
         return GeminiPatientResponder(
             settings=GeminiPatientSettings(
                 api_key=runtime_vertex_api_key_config.api_key,
@@ -247,7 +258,7 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
 
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
-        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        require_direct_runtime_vertex_adc_proxy(runtime_vertex_config.proxy_url)
         return GeminiPatientResponder(
             settings=GeminiPatientSettings(
                 api_key="",
@@ -268,7 +279,6 @@ def _create_configured_responder() -> GeminiPatientResponder | OpenAICompatibleP
         return AnthropicPatientResponder(anthropic_settings)
 
     settings = GeminiPatientSettings()
-    _apply_process_proxy(settings.proxy_url)
 
     if settings.use_vertex:
         vertex_api_key = settings.api_key or os.getenv("OSCE_VERTEX_API_KEY", "")
@@ -518,14 +528,6 @@ def _assert_multi_intent_fact_coverage(fact_ids_used: list[str], request: Patien
     missing_fact_ids = [fact_id for fact_id in expected_fact_ids if fact_id not in set(fact_ids_used)]
     if missing_fact_ids:
         raise RuntimeError(f"标准化病人回答未覆盖本轮多个问诊事实：{missing_fact_ids}")
-
-
-def _apply_process_proxy(proxy_url: str) -> None:
-    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
-        return
-    os.environ["HTTP_PROXY"] = proxy_url
-    os.environ["HTTPS_PROXY"] = proxy_url
-    os.environ["ALL_PROXY"] = proxy_url
 
 
 __all__ = [

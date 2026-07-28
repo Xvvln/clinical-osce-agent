@@ -86,21 +86,32 @@ def test_create_default_vertex_gemini_scorer_requires_project_when_enabled(tmp_p
     assert create_default_vertex_gemini_scorer() is None
 
 
-def test_create_default_vertex_gemini_scorer_sets_7897_proxy(tmp_path, monkeypatch) -> None:
+def test_create_default_vertex_gemini_scorer_uses_isolated_7897_client_proxy(tmp_path, monkeypatch) -> None:
+    created_clients: list[dict[str, object]] = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OSCE_VERTEX_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
     monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7897")
-    monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(
+        "app.services.vertex_gemini_scorer.genai.Client",
+        lambda **kwargs: created_clients.append(kwargs) or FakeClient(),
+    )
 
     scorer = create_default_vertex_gemini_scorer()
 
     assert scorer is not None
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["ALL_PROXY"] == "http://127.0.0.1:7897"
+    http_options = created_clients[0]["http_options"]
+    assert http_options.client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert http_options.async_client_args["trust_env"] is False
+    assert http_options.async_client_args["proxy"] == "http://127.0.0.1:7897"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
+    assert os.environ["ALL_PROXY"] == "socks5://127.0.0.1:7897"
 
 
 def test_create_default_vertex_gemini_scorer_falls_back_when_client_dependency_is_missing(monkeypatch) -> None:
@@ -195,7 +206,7 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_openai_compatible_conf
             "api_key": "student-openai-secret",
             "model": "gemini-via-clprox",
             "base_url": "https://api.proxy.example/v1",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatibleHttpClient)
@@ -284,7 +295,7 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.setattr("app.services.vertex_gemini_scorer.genai.Client", fake_client)
@@ -301,8 +312,15 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
     assert scorer._settings.project == "demo-project"
     assert scorer._settings.location == "global"
     assert scorer._settings.model == "gemini-3.1-pro-preview"
-    assert created_clients == [{"vertexai": True, "project": "demo-project", "location": "global"}]
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    client_kwargs = created_clients[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "project": "demo-project",
+        "location": "global",
+    }
+    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert os.environ.get("HTTP_PROXY") is None
 
 
 def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_api_key_config(monkeypatch) -> None:
@@ -336,4 +354,14 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_api_key_
     assert scorer._settings.project == ""
     assert scorer._settings.location == "global"
     assert scorer._settings.model == "gemini-2.5-flash"
-    assert created_clients == [{"vertexai": True, "api_key": "student-vertex-secret"}]
+    client_kwargs = created_clients[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "api_key": "student-vertex-secret",
+    }
+    assert client_kwargs["http_options"].client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert client_kwargs["http_options"].async_client_args["proxy"] == "http://127.0.0.1:7897"

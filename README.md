@@ -190,6 +190,8 @@ OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
+仅在本地显式启用账号级模型配置时，后端才会按当前登录账号读取配置，并在单次训练或报告请求的上下文中绑定；读取配置状态不会改写进程级模型状态，后台报告增强也会按 session 所属账号重新绑定。Provider 客户端按配置快照隔离缓存，OpenAI / Anthropic / Google GenAI 请求均使用客户端级代理且不继承进程代理环境。由于 ADC 凭据刷新无法做到账号级代理隔离，账号级 Vertex ADC 只允许直连；需要代理时应改用 Vertex API Key，或由运维配置服务端托管代理。
+
 语音输入与患者回复播放通过后端 `/api/audio/*` 统一接入 DashScope。浏览器不保存阿里云 key；如需启用，在 API 服务端环境配置：
 
 ```env

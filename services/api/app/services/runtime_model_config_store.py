@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 from app.services.anthropic_chat_client import AnthropicSettings
+from app.services.google_genai_http_options import (
+    require_direct_runtime_vertex_adc_proxy,
+    should_use_google_genai_proxy,
+    validate_google_genai_proxy_url,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 
 RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
@@ -14,12 +22,16 @@ RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     "llm_rubric_scorer",
     "skill_candidate_generator",
     "procedure_request_router",
+    "teacher_agent",
+    "humanistic_semantic_reviewer",
 ]
 
 VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     *RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
     "rag_vector_retrieval",
 ]
+
+_REQUEST_CONFIG_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -82,7 +94,7 @@ class RuntimeModelConfig:
                 "project": self.project,
                 "location": self.location,
                 "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
-                "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
+                "message": "Vertex Gemini ADC 配置已保存，仅在当前账号的训练与报告请求中生效。",
             }
         if self.provider == "vertex_gemini_api_key":
             return {
@@ -94,7 +106,7 @@ class RuntimeModelConfig:
                 "project": self.project,
                 "location": self.location,
                 "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
-                "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
+                "message": "Vertex Gemini API Key 配置已保存，仅在当前账号的训练与报告请求中生效。",
             }
         if self.provider == "anthropic":
             return {
@@ -104,7 +116,7 @@ class RuntimeModelConfig:
                 "base_url": self.base_url,
                 "proxy_url": self.proxy_url,
                 "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
-                "message": "Anthropic 服务端已应用到本次后端运行时。",
+                "message": "Anthropic 服务端配置已保存，仅在当前账号的训练与报告请求中生效。",
             }
         return {
             "active": True,
@@ -113,7 +125,7 @@ class RuntimeModelConfig:
             "base_url": self.base_url,
             "proxy_url": self.proxy_url,
             "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
-            "message": "OpenAI 兼容服务端已应用到本次后端运行时。",
+            "message": "OpenAI 兼容服务端配置已保存，仅在当前账号的训练与报告请求中生效。",
         }
 
 
@@ -121,8 +133,12 @@ class RuntimeModelConfigStore:
     def __init__(self) -> None:
         self._lock = Lock()
         self._active_config: RuntimeModelConfig | None = None
+        self._request_config: ContextVar[RuntimeModelConfig | None | object] = ContextVar(
+            f"runtime_model_config_{id(self)}",
+            default=_REQUEST_CONFIG_UNSET,
+        )
 
-    def apply_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
+    def build_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
         provider = _normalize_text(config.get("provider", ""))
         if provider not in {"openai_compatible", "anthropic", "vertex_gemini_adc", "vertex_gemini_api_key"}:
             raise ValueError(
@@ -131,7 +147,8 @@ class RuntimeModelConfigStore:
 
         api_key = _normalize_text(config.get("api_key", ""))
         model = _normalize_text(config.get("model", ""))
-        base_url = _normalize_text(config.get("base_url", "")) or "https://api.openai.com/v1"
+        raw_base_url = _normalize_text(config.get("base_url", ""))
+        base_url = raw_base_url or "https://api.openai.com/v1"
         proxy_url = _normalize_text(config.get("proxy_url", ""))
         if provider == "openai_compatible" and not api_key:
             raise ValueError("api_key is required for openai_compatible")
@@ -146,15 +163,18 @@ class RuntimeModelConfigStore:
         if provider == "anthropic" and not _normalize_text(config.get("base_url", "")):
             base_url = "https://api.anthropic.com"
         if provider == "vertex_gemini_adc":
-            project = base_url
+            project = raw_base_url
             base_url = project
             location = _normalize_text(config.get("location", "")) or "global"
             if not project:
                 raise ValueError("project is required for vertex_gemini_adc")
+            require_direct_runtime_vertex_adc_proxy(proxy_url)
         if provider == "vertex_gemini_api_key":
             base_url = ""
             project = ""
             location = _normalize_text(config.get("location", "")) or "global"
+            if should_use_google_genai_proxy(proxy_url):
+                validate_google_genai_proxy_url(proxy_url)
 
         runtime_config = RuntimeModelConfig(
             provider=provider,
@@ -165,11 +185,27 @@ class RuntimeModelConfigStore:
             project=project,
             location=location,
         )
+
+        return runtime_config
+
+    def apply_config(self, config: dict[str, Any]) -> RuntimeModelConfig:
+        runtime_config = self.build_config(config)
         with self._lock:
             self._active_config = runtime_config
         return runtime_config
 
+    @contextmanager
+    def use_config(self, config: RuntimeModelConfig | None) -> Iterator[RuntimeModelConfig | None]:
+        token = self._request_config.set(config)
+        try:
+            yield config
+        finally:
+            self._request_config.reset(token)
+
     def get_active_config(self) -> RuntimeModelConfig | None:
+        request_config = self._request_config.get()
+        if request_config is not _REQUEST_CONFIG_UNSET:
+            return cast(RuntimeModelConfig | None, request_config)
         with self._lock:
             return self._active_config
 
@@ -237,6 +273,7 @@ runtime_model_config_store = RuntimeModelConfigStore()
 
 __all__ = [
     "RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS",
+    "VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS",
     "RuntimeModelConfig",
     "RuntimeModelConfigStore",
     "runtime_model_config_store",

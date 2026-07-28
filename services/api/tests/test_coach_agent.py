@@ -428,7 +428,7 @@ def test_create_configured_coach_agent_uses_runtime_vertex_adc_config(monkeypatc
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.setattr(module.genai, "Client", FakeGeminiClient)
@@ -443,7 +443,14 @@ def test_create_configured_coach_agent_uses_runtime_vertex_adc_config(monkeypatc
 
     assert isinstance(agent, module.GeminiCoachAgent)
     assert response.hint == "先按时间顺序追问疼痛演变，再决定下一步查体。"
-    assert FakeGeminiClient.created == [{"vertexai": True, "project": "demo-project", "location": "global"}]
+    client_kwargs = FakeGeminiClient.created[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "project": "demo-project",
+        "location": "global",
+    }
+    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert FakeGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None

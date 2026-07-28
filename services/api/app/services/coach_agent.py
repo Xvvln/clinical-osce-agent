@@ -11,9 +11,14 @@ from pydantic import BaseModel, Field
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import call_with_api_logging
-from app.services.gemini_patient_responder import GeminiPatientSettings, _apply_process_proxy
+from app.services.gemini_patient_responder import GeminiPatientSettings
+from app.services.google_genai_http_options import (
+    build_google_genai_http_options,
+    require_direct_runtime_vertex_adc_proxy,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
 SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练系统中的 TeacherAgent 训练中提示模块，只负责生成短提示来帮助学生继续训练。
 
@@ -316,7 +321,10 @@ class GeminiCoachAgent:
         if client is not None:
             self._client = client
         elif settings.use_vertex:
-            client_options: dict[str, object] = {"vertexai": True}
+            client_options: dict[str, object] = {
+                "vertexai": True,
+                "http_options": build_google_genai_http_options(settings.proxy_url),
+            }
             if settings.api_key:
                 client_options["api_key"] = settings.api_key
             else:
@@ -324,7 +332,10 @@ class GeminiCoachAgent:
                 client_options["location"] = settings.location
             self._client = genai.Client(**client_options)
         else:
-            self._client = genai.Client(api_key=settings.api_key)
+            self._client = genai.Client(
+                api_key=settings.api_key,
+                http_options=build_google_genai_http_options(settings.proxy_url),
+            )
 
     def __call__(self, request: CoachRequest) -> CoachResponse:
         response = call_with_api_logging(
@@ -348,15 +359,16 @@ class GeminiCoachAgent:
 
 class LazyCoachAgent:
     def __init__(self) -> None:
-        self._agent: GeminiCoachAgent | OpenAICompatibleCoachAgent | AnthropicCoachAgent | DeterministicCoachAgent | None = None
-        self._cache_key: tuple[str, ...] | None = None
+        self._agent_cache: RuntimeModelObjectCache[
+            GeminiCoachAgent
+            | OpenAICompatibleCoachAgent
+            | AnthropicCoachAgent
+            | DeterministicCoachAgent
+        ] = RuntimeModelObjectCache()
 
     def __call__(self, request: CoachRequest) -> CoachResponse:
-        cache_key = runtime_model_config_store.active_config_cache_key()
-        if self._agent is None or self._cache_key != cache_key:
-            self._agent = _create_configured_coach_agent()
-            self._cache_key = cache_key
-        return self._agent(request)
+        agent = self._agent_cache.get_or_create(_create_configured_coach_agent)
+        return agent(request)
 
 
 def normalize_coach_response(response: CoachResponse | dict[str, Any]) -> CoachResponse:
@@ -382,7 +394,6 @@ def _create_configured_coach_agent() -> (
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
-        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
         return GeminiCoachAgent(
             settings=GeminiPatientSettings(
                 api_key=runtime_vertex_api_key_config.api_key,
@@ -396,7 +407,7 @@ def _create_configured_coach_agent() -> (
 
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
-        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        require_direct_runtime_vertex_adc_proxy(runtime_vertex_config.proxy_url)
         return GeminiCoachAgent(
             settings=GeminiPatientSettings(
                 api_key="",
@@ -417,7 +428,6 @@ def _create_configured_coach_agent() -> (
         return AnthropicCoachAgent(anthropic_settings)
 
     settings = GeminiPatientSettings()
-    _apply_process_proxy(settings.proxy_url)
     if settings.use_vertex:
         vertex_api_key = settings.api_key or os.getenv("OSCE_VERTEX_API_KEY", "")
         project = settings.project or os.getenv("OSCE_VERTEX_PROJECT", "")

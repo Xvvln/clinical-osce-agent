@@ -976,7 +976,7 @@ def test_admin_model_config_does_not_merge_account_runtime_vertex_gemini_adc(tmp
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
 

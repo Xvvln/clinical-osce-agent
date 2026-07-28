@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from google import genai
@@ -12,6 +11,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import call_with_api_logging
+from app.services.google_genai_http_options import (
+    build_google_genai_http_options,
+    require_direct_runtime_vertex_adc_proxy,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 
@@ -42,12 +45,17 @@ class VertexGeminiRubricScorer:
         if client is not None:
             self._client = client
         elif settings.api_key:
-            self._client = genai.Client(vertexai=True, api_key=settings.api_key)
+            self._client = genai.Client(
+                vertexai=True,
+                api_key=settings.api_key,
+                http_options=build_google_genai_http_options(settings.proxy_url),
+            )
         else:
             self._client = genai.Client(
                 vertexai=True,
                 project=settings.project,
                 location=settings.location,
+                http_options=build_google_genai_http_options(settings.proxy_url),
             )
 
     def __call__(self, request: LlmRubricRequest) -> LlmRubricResponse:
@@ -108,7 +116,6 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
-        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
         return VertexGeminiRubricScorer(
             settings=VertexGeminiSettings(
                 enabled=True,
@@ -122,7 +129,7 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
 
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
-        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        require_direct_runtime_vertex_adc_proxy(runtime_vertex_config.proxy_url)
         return VertexGeminiRubricScorer(
             settings=VertexGeminiSettings(
                 enabled=True,
@@ -144,19 +151,10 @@ def create_default_vertex_gemini_scorer() -> VertexGeminiRubricScorer | OpenAICo
     settings = VertexGeminiSettings()
     if not settings.enabled or not (settings.project or settings.api_key):
         return None
-    _apply_process_proxy(settings.proxy_url)
     try:
         return VertexGeminiRubricScorer(settings=settings)
     except ImportError:
         return None
-
-
-def _apply_process_proxy(proxy_url: str) -> None:
-    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
-        return
-    os.environ["HTTP_PROXY"] = proxy_url
-    os.environ["HTTPS_PROXY"] = proxy_url
-    os.environ["ALL_PROXY"] = proxy_url
 
 
 __all__ = [

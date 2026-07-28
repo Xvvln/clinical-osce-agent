@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 from app import main
 from app.main import AUTH_COOKIE_NAME
 from app.services.auth_store import AuthStore
-from app.services.runtime_model_config_store import RuntimeModelConfig
+from app.services.runtime_model_config_store import (
+    RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
+    VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
+    RuntimeModelConfig,
+)
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services import student_model_config_service
 
@@ -335,7 +339,7 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tm
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         },
     )
 
@@ -344,9 +348,50 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tm
     assert payload["ok"] is True
     assert payload["provider"] == "vertex_gemini_adc"
     assert payload["checked_url"] == "vertex://demo-project/global/gemini-3.1-pro-preview"
-    assert _FakeVertexGeminiClient.created == [{"vertexai": True, "project": "demo-project", "location": "global"}]
+    client_kwargs = _FakeVertexGeminiClient.created[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "project": "demo-project",
+        "location": "global",
+    }
+    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
+
+
+def test_student_model_config_test_rejects_per_user_vertex_adc_proxy_without_environment_mutation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _FakeVertexGeminiClient.created = []
+    _FakeVertexGeminiModels.calls = []
+    monkeypatch.setattr(student_model_config_service.genai, "Client", _FakeVertexGeminiClient)
+    original_proxy_environment = {
+        "HTTP_PROXY": "http://original-http-proxy.example",
+        "HTTPS_PROXY": "http://original-https-proxy.example",
+        "ALL_PROXY": "socks5://original-all-proxy.example",
+    }
+    for name, value in original_proxy_environment.items():
+        monkeypatch.setenv(name, value)
+
+    client = _authenticated_client(tmp_path, monkeypatch, "student-vertex-adc-proxy@example.test")
+    response = client.post(
+        "/api/model-config/test",
+        json={
+            "provider": "vertex_gemini_adc",
+            "api_key": "",
+            "model": "gemini-3.1-pro-preview",
+            "base_url": "demo-project",
+            "proxy_url": "http://per-user-proxy.example:8080",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "账号级代理仅支持 direct" in response.json()["detail"]
+    assert _FakeVertexGeminiClient.created == []
+    assert _FakeVertexGeminiModels.calls == []
+    assert {name: os.environ.get(name) for name in original_proxy_environment} == original_proxy_environment
 
 
 def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_without_project(
@@ -374,7 +419,17 @@ def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_witho
     assert payload["ok"] is True
     assert payload["provider"] == "vertex_gemini_api_key"
     assert payload["checked_url"] == "vertex-api-key://express/gemini-2.5-flash"
-    assert _FakeVertexGeminiClient.created == [{"vertexai": True, "api_key": "student-vertex-secret"}]
+    client_kwargs = _FakeVertexGeminiClient.created[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "api_key": "student-vertex-secret",
+    }
+    assert client_kwargs["http_options"].client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert client_kwargs["http_options"].async_client_args["proxy"] == "http://127.0.0.1:7897"
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-2.5-flash"
     assert "student-vertex-secret" not in response.text
 
@@ -403,15 +458,8 @@ def test_student_can_apply_openai_compatible_config_to_runtime_without_leaking_s
         "base_url": "https://api.proxy.example/v1",
         "proxy_url": "http://127.0.0.1:7897",
         "api_key_saved": True,
-        "integration_targets": [
-            "patient_responder",
-            "turn_intent_agent",
-            "coach_agent",
-            "llm_rubric_scorer",
-            "skill_candidate_generator",
-            "procedure_request_router",
-        ],
-        "message": "OpenAI 兼容服务端已应用到本次后端运行时。",
+        "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+        "message": "OpenAI 兼容服务端配置已保存，仅在当前账号的训练与报告请求中生效。",
     }
     assert status_response.status_code == 200
     assert status_response.json()["active"] is True
@@ -444,15 +492,8 @@ def test_student_can_apply_anthropic_config_to_runtime_without_leaking_secret(tm
         "base_url": "https://api.anthropic.com",
         "proxy_url": "http://127.0.0.1:7897",
         "api_key_saved": True,
-        "integration_targets": [
-            "patient_responder",
-            "turn_intent_agent",
-            "coach_agent",
-            "llm_rubric_scorer",
-            "skill_candidate_generator",
-            "procedure_request_router",
-        ],
-        "message": "Anthropic 服务端已应用到本次后端运行时。",
+        "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+        "message": "Anthropic 服务端配置已保存，仅在当前账号的训练与报告请求中生效。",
     }
     assert status_response.status_code == 200
     assert status_response.json()["active"] is True
@@ -471,7 +512,7 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key(t
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         },
     )
     status_response = client.get("/api/model-config/runtime")
@@ -483,20 +524,12 @@ def test_student_can_apply_vertex_gemini_adc_config_to_runtime_without_api_key(t
         "provider": "vertex_gemini_adc",
         "model": "gemini-3.1-pro-preview",
         "base_url": "demo-project",
-        "proxy_url": "http://127.0.0.1:7897",
+        "proxy_url": "direct",
         "project": "demo-project",
         "location": "global",
         "api_key_saved": False,
-        "integration_targets": [
-            "patient_responder",
-            "turn_intent_agent",
-            "coach_agent",
-            "llm_rubric_scorer",
-            "skill_candidate_generator",
-            "procedure_request_router",
-            "rag_vector_retrieval",
-        ],
-        "message": "Vertex Gemini ADC 配置已应用到本次后端运行时。",
+        "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+        "message": "Vertex Gemini ADC 配置已保存，仅在当前账号的训练与报告请求中生效。",
     }
     assert status_response.status_code == 200
     assert status_response.json()["provider"] == "vertex_gemini_adc"
@@ -529,16 +562,8 @@ def test_student_can_apply_vertex_gemini_api_key_config_to_runtime_without_leaki
         "project": "",
         "location": "global",
         "api_key_saved": True,
-        "integration_targets": [
-            "patient_responder",
-            "turn_intent_agent",
-            "coach_agent",
-            "llm_rubric_scorer",
-            "skill_candidate_generator",
-            "procedure_request_router",
-            "rag_vector_retrieval",
-        ],
-        "message": "Vertex Gemini API Key 配置已应用到本次后端运行时。",
+        "integration_targets": list(VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
+        "message": "Vertex Gemini API Key 配置已保存，仅在当前账号的训练与报告请求中生效。",
     }
     assert status_response.status_code == 200
     assert status_response.json()["provider"] == "vertex_gemini_api_key"
@@ -594,14 +619,7 @@ def test_production_runtime_config_status_exposes_environment_default_without_us
         "model": "gemini-3.5-flash",
         "base_url": "",
         "proxy_url": "",
-        "integration_targets": [
-            "patient_responder",
-            "turn_intent_agent",
-            "coach_agent",
-            "llm_rubric_scorer",
-            "skill_candidate_generator",
-            "procedure_request_router",
-        ],
+        "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
         "api_key_saved": False,
         "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
         "runtime_write_supported": False,
@@ -731,7 +749,12 @@ def test_runtime_model_config_can_reuse_saved_secret_without_echoing_it(tmp_path
     assert second_response.json()["active"] is True
     assert second_response.json()["model"] == "second-model"
     assert second_response.json()["api_key_saved"] is True
-    assert runtime_model_config_store.get_active_config().api_key == "student-openai-secret"
+    saved_user = main.auth_store.get_user_by_session_token(client.cookies.get(AUTH_COOKIE_NAME))
+    assert saved_user is not None
+    saved_config = main.user_model_config_store.get_runtime_config(saved_user["user_id"])
+    assert saved_config is not None
+    assert saved_config.api_key == "student-openai-secret"
+    assert runtime_model_config_store.get_active_config() is None
     assert "student-openai-secret" not in second_response.text
 
 

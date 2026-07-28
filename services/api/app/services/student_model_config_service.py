@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import httpx
 from google import genai
 from google.genai import types
+
+from app.services.google_genai_http_options import (
+    build_google_genai_http_options,
+    require_direct_runtime_vertex_adc_proxy,
+)
 
 
 SUPPORTED_STUDENT_MODEL_CONFIG_PROVIDERS = {
@@ -279,9 +283,14 @@ def _truncate_error_detail(detail: str) -> str:
 
 def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_url: str) -> dict[str, object]:
     checked_url = f"vertex://{project}/{location}/{model}"
+    require_direct_runtime_vertex_adc_proxy(proxy_url)
     try:
-        _apply_process_proxy(proxy_url)
-        client = genai.Client(vertexai=True, project=project, location=location)
+        client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=location,
+            http_options=build_google_genai_http_options(proxy_url),
+        )
         client.models.generate_content(
             model=model,
             contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
@@ -308,8 +317,11 @@ def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_ur
 def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> dict[str, object]:
     checked_url = f"vertex-api-key://express/{model}"
     try:
-        _apply_process_proxy(proxy_url)
-        client = genai.Client(vertexai=True, api_key=api_key)
+        client = genai.Client(
+            vertexai=True,
+            api_key=api_key,
+            http_options=build_google_genai_http_options(proxy_url),
+        )
         client.models.generate_content(
             model=model,
             contents=json.dumps({"ping": "clinical-osce-agent"}, ensure_ascii=False, separators=(",", ":")),
@@ -331,14 +343,6 @@ def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> 
         message="Vertex Gemini API Key 连通性测试通过。",
         checked_url=checked_url,
     )
-
-
-def _apply_process_proxy(proxy_url: str) -> None:
-    if not _should_use_proxy(proxy_url):
-        return
-    os.environ["HTTP_PROXY"] = proxy_url
-    os.environ["HTTPS_PROXY"] = proxy_url
-    os.environ["ALL_PROXY"] = proxy_url
 
 
 def _should_use_proxy(proxy_url: str) -> bool:

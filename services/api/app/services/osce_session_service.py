@@ -29,6 +29,8 @@ from app.services.training_skill_candidate_store import TrainingSkillCandidateSt
 from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.training_skill_orchestrator_service import build_active_skill_context
 from app.services.training_skill_store import TrainingSkillStore, training_skill_store
+from app.services.rule_evaluator import LlmRubricScorer
+from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 from app.services.vertex_gemini_scorer import create_default_vertex_gemini_scorer
 from app.validators.case_validator import validate_case
 
@@ -90,10 +92,20 @@ class OsceSessionService:
         procedure_request_router: Any | None = None,
     ) -> None:
         self._sessions: dict[str, OsceSession] = {}
-        self.osce_graph = graph or build_osce_graph(
-            llm_scorer=create_default_vertex_gemini_scorer(),
-            patient_responder=patient_responder,
-        )
+        self._runtime_llm_scorer_cache: RuntimeModelObjectCache[LlmRubricScorer | None] | None = None
+        if graph is not None:
+            self.osce_graph = graph
+        else:
+            runtime_llm_scorer_cache: RuntimeModelObjectCache[LlmRubricScorer | None] = (
+                RuntimeModelObjectCache()
+            )
+            self._runtime_llm_scorer_cache = runtime_llm_scorer_cache
+            self.osce_graph = build_osce_graph(
+                llm_scorer_factory=lambda: runtime_llm_scorer_cache.get_or_create(
+                    create_default_vertex_gemini_scorer
+                ),
+                patient_responder=patient_responder,
+            )
         self.report_store = report_store
         self.training_event_store = training_event_store
         self.training_skill_store = training_skill_store

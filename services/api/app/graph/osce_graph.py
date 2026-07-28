@@ -2712,6 +2712,7 @@ def _load_case(case_id: str) -> Any:
 
 def build_osce_graph(
     llm_scorer: LlmRubricScorer | None = None,
+    llm_scorer_factory: Callable[[], LlmRubricScorer | None] | None = None,
     patient_responder: PatientResponder | None = None,
     turn_intent_agent: TurnIntentAgent | None = None,
     coach_agent: CoachAgent | None = None,
@@ -2719,6 +2720,14 @@ def build_osce_graph(
     active_patient_responder = patient_responder or create_default_gemini_patient_responder()
     active_turn_intent_agent = turn_intent_agent or create_default_turn_intent_agent()
     active_coach_agent = coach_agent or create_default_coach_agent()
+
+    def resolve_llm_scorer() -> LlmRubricScorer | None:
+        if llm_scorer is not None:
+            return llm_scorer
+        if llm_scorer_factory is not None:
+            return llm_scorer_factory()
+        return None
+
     builder = StateGraph(OsceGraphState)
     builder.add_node(load_case_node)
     builder.add_node("input_router_node", lambda state: input_router_node(state, active_turn_intent_agent))
@@ -2733,7 +2742,10 @@ def build_osce_graph(
         lambda state: answer_request_redirect_node(state, active_coach_agent),
     )
     builder.add_node("safety_guardrail_node", lambda state: safety_guardrail_node(state, active_coach_agent))
-    builder.add_node("evaluation_node", lambda state: evaluation_node(state, llm_scorer=llm_scorer))
+    builder.add_node(
+        "evaluation_node",
+        lambda state: evaluation_node(state, llm_scorer=resolve_llm_scorer()),
+    )
     builder.add_node(feedback_node)
     builder.add_edge(START, "load_case_node")
     builder.add_conditional_edges(

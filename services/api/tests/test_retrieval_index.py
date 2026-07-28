@@ -713,7 +713,7 @@ def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(m
             "api_key": "",
             "model": "gemini-2.5-flash",
             "base_url": "runtime-demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
             "location": "global",
         }
     )
@@ -727,9 +727,14 @@ def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(m
         runtime_model_config_store.clear()
 
     assert embedding_client is not None
-    assert FakeGenAIEmbeddingClient.created_kwargs == [
-        {"vertexai": True, "project": "runtime-demo-project", "location": "global"}
-    ]
+    client_kwargs = FakeGenAIEmbeddingClient.created_kwargs[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "project": "runtime-demo-project",
+        "location": "global",
+    }
+    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert vectors == [[0.0, 0.2, 0.3]]
 
 

@@ -470,6 +470,7 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_LOCATION", "global")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_MODEL", "gemini-3.1-pro-preview")
     monkeypatch.setenv("OSCE_GEMINI_PATIENT_API_KEY", "")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_PROXY_URL", "http://server-managed-proxy.example:8080")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("GOOGLE_API_KEY", "")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
@@ -483,14 +484,22 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     assert responder._settings.project == "demo-project"
     assert responder._settings.location == "global"
     assert responder._settings.model == "gemini-3.1-pro-preview"
-    assert captured_clients[0].kwargs == {
+    client_kwargs = captured_clients[0].kwargs
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
         "vertexai": True,
         "project": "demo-project",
         "location": "global",
     }
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["ALL_PROXY"] == "http://127.0.0.1:7897"
+    http_options = client_kwargs["http_options"]
+    assert http_options.client_args == {
+        "trust_env": False,
+        "proxy": "http://server-managed-proxy.example:8080",
+    }
+    assert http_options.async_client_args["trust_env"] is False
+    assert http_options.async_client_args["proxy"] == "http://server-managed-proxy.example:8080"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
+    assert os.environ["ALL_PROXY"] == "socks5://127.0.0.1:7897"
 
 
 class FakeOpenAICompatiblePatientResponse:
@@ -843,7 +852,7 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_conf
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.setattr(module.genai, "Client", fake_client)
@@ -862,13 +871,16 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_conf
     assert responder._settings.project == "demo-project"
     assert responder._settings.location == "global"
     assert responder._settings.model == "gemini-3.1-pro-preview"
-    assert captured_clients[0].kwargs == {
+    client_kwargs = captured_clients[0].kwargs
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
         "vertexai": True,
         "project": "demo-project",
         "location": "global",
     }
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
 
 
 def test_create_configured_patient_responder_uses_runtime_vertex_gemini_api_key_config(monkeypatch) -> None:
@@ -904,7 +916,14 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_api_key_
     assert responder._settings.project == ""
     assert responder._settings.location == "global"
     assert responder._settings.model == "gemini-2.5-flash"
-    assert captured_clients[0].kwargs == {
+    client_kwargs = captured_clients[0].kwargs
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
         "vertexai": True,
         "api_key": "student-vertex-secret",
     }
+    assert client_kwargs["http_options"].client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert client_kwargs["http_options"].async_client_args["proxy"] == "http://127.0.0.1:7897"

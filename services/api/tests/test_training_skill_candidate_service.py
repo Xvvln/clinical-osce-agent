@@ -1,5 +1,7 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier
 
 import pytest
 
@@ -9,7 +11,7 @@ from app.services import openai_compatible_chat_client as openai_module
 from app.services import training_skill_candidate_service as candidate_module
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
-from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.runtime_model_config_store import RuntimeModelConfig, runtime_model_config_store
 from app.services.training_skill_candidate_service import (
     OpenAICompatibleTrainingSkillCandidateGenerator,
     TemplateTrainingSkillCandidateGenerator,
@@ -338,18 +340,29 @@ def test_create_default_training_skill_candidate_generator_uses_template_when_di
     assert isinstance(generator, TemplateTrainingSkillCandidateGenerator)
 
 
-def test_create_default_training_skill_candidate_generator_sets_proxy_when_enabled(monkeypatch) -> None:
+def test_create_default_training_skill_candidate_generator_uses_isolated_proxy_when_enabled(monkeypatch) -> None:
+    created_clients: list[dict[str, object]] = []
     monkeypatch.setenv("OSCE_VERTEX_SKILL_CANDIDATE_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_PROJECT", "demo-project")
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr(
+        "app.services.training_skill_candidate_service.genai.Client",
+        lambda **kwargs: created_clients.append(kwargs) or FakeSkillCandidateClient(),
+    )
 
-    generator = create_default_training_skill_candidate_generator(client=FakeSkillCandidateClient())
+    generator = create_default_training_skill_candidate_generator()
 
     assert isinstance(generator, VertexGeminiTrainingSkillCandidateGenerator)
-    assert "HTTP_PROXY" in os.environ
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    http_options = created_clients[0]["http_options"]
+    assert http_options.client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert http_options.async_client_args["trust_env"] is False
+    assert http_options.async_client_args["proxy"] == "http://127.0.0.1:7897"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
 
 
 class FakeOpenAICompatibleSkillCandidateResponse:
@@ -432,7 +445,7 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_openai_c
             "api_key": "student-openai-secret",
             "model": "gemini-via-clprox",
             "base_url": "https://api.proxy.example/v1",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.setattr(openai_module.httpx, "Client", FakeOpenAICompatibleHttpClient)
@@ -494,7 +507,7 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
             "api_key": "",
             "model": "gemini-3.1-pro-preview",
             "base_url": "demo-project",
-            "proxy_url": "http://127.0.0.1:7897",
+            "proxy_url": "direct",
         }
     )
     monkeypatch.delenv("HTTP_PROXY", raising=False)
@@ -509,8 +522,8 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
     assert generator._settings.project == "demo-project"
     assert generator._settings.location == "global"
     assert generator._settings.skill_candidate_model == "gemini-3.1-pro-preview"
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
 
 
 def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_gemini_api_key_config(monkeypatch) -> None:
@@ -544,9 +557,91 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
     assert generator._settings.project == ""
     assert generator._settings.location == "global"
     assert generator._settings.skill_candidate_model == "gemini-2.5-flash"
-    assert created_clients == [{"vertexai": True, "api_key": "student-vertex-secret"}]
-    assert os.environ["HTTP_PROXY"] == "http://127.0.0.1:7897"
-    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+    client_kwargs = created_clients[0]
+    assert {key: value for key, value in client_kwargs.items() if key != "http_options"} == {
+        "vertexai": True,
+        "api_key": "student-vertex-secret",
+    }
+    assert client_kwargs["http_options"].client_args == {
+        "trust_env": False,
+        "proxy": "http://127.0.0.1:7897",
+    }
+    assert client_kwargs["http_options"].async_client_args["trust_env"] is False
+    assert client_kwargs["http_options"].async_client_args["proxy"] == "http://127.0.0.1:7897"
+    assert os.environ.get("HTTP_PROXY") is None
+    assert os.environ.get("HTTPS_PROXY") is None
+
+
+def test_default_candidate_service_resolves_parallel_runtime_generators_at_generation_time(monkeypatch) -> None:
+    generation_barrier = Barrier(2)
+    created_models: list[str] = []
+
+    class TaggedGenerator:
+        def __init__(self, model: str) -> None:
+            self.model = model
+
+        def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, object]:
+            generation_barrier.wait(timeout=5)
+            return {
+                "candidate_id": f"candidate-{self.model}",
+                "trigger_item_id": context.pattern_id,
+                "model": self.model,
+            }
+
+    def create_runtime_generator() -> TaggedGenerator:
+        runtime_config = runtime_model_config_store.get_active_config()
+        assert runtime_config is not None
+        created_models.append(runtime_config.model)
+        return TaggedGenerator(runtime_config.model)
+
+    monkeypatch.setattr(
+        candidate_module,
+        "create_default_training_skill_candidate_generator",
+        create_runtime_generator,
+    )
+    monkeypatch.setattr(candidate_module, "_with_skill_generation_knowledge_context", lambda context: context)
+    service = TrainingSkillCandidateService()
+    assert created_models == []
+
+    insights = {
+        "report_count": 2,
+        "frequent_missed_items": [
+            {
+                "item_id": "reasoning_core",
+                "count": 2,
+                "case_ids": ["appendicitis_001"],
+            }
+        ],
+        "frequent_learning_recommendations": [],
+    }
+    first_config = RuntimeModelConfig(
+        provider="openai_compatible",
+        api_key="candidate-secret-a",
+        model="candidate-model-a",
+        base_url="https://candidate-provider-a.example/v1",
+        proxy_url="direct",
+    )
+    second_config = RuntimeModelConfig(
+        provider="openai_compatible",
+        api_key="candidate-secret-b",
+        model="candidate-model-b",
+        base_url="https://candidate-provider-b.example/v1",
+        proxy_url="direct",
+    )
+
+    def propose(config: RuntimeModelConfig) -> dict[str, object]:
+        with runtime_model_config_store.use_config(config):
+            return service.propose_candidates(insights, min_count=2)[0]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(propose, first_config)
+        second_future = executor.submit(propose, second_config)
+        first_candidate = first_future.result(timeout=10)
+        second_candidate = second_future.result(timeout=10)
+
+    assert first_candidate["model"] == "candidate-model-a"
+    assert second_candidate["model"] == "candidate-model-b"
+    assert sorted(created_models) == ["candidate-model-a", "candidate-model-b"]
 
 
 def test_training_skill_candidate_service_uses_injected_generator_once_for_training_pattern(monkeypatch) -> None:

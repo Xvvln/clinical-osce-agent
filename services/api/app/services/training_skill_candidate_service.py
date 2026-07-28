@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -13,9 +12,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.api_call_log_service import call_with_api_logging
+from app.services.google_genai_http_options import (
+    build_google_genai_http_options,
+    require_direct_runtime_vertex_adc_proxy,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 from app.services.admin_display_resolver import trigger_item_labels as resolve_trigger_item_labels
 from app.services.training_skill_policy import (
     build_prohibited_content_policy,
@@ -109,12 +113,17 @@ class VertexGeminiTrainingSkillCandidateGenerator:
         if client is not None:
             self._client = client
         elif settings.api_key:
-            self._client = genai.Client(vertexai=True, api_key=settings.api_key)
+            self._client = genai.Client(
+                vertexai=True,
+                api_key=settings.api_key,
+                http_options=build_google_genai_http_options(settings.proxy_url),
+            )
         else:
             self._client = genai.Client(
                 vertexai=True,
                 project=settings.project,
                 location=settings.location,
+                http_options=build_google_genai_http_options(settings.proxy_url),
             )
 
     def generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
@@ -233,7 +242,6 @@ def create_default_training_skill_candidate_generator(
 
     runtime_vertex_api_key_config = runtime_model_config_store.get_vertex_gemini_api_key_config()
     if runtime_vertex_api_key_config is not None:
-        _apply_process_proxy(runtime_vertex_api_key_config.proxy_url)
         return VertexGeminiTrainingSkillCandidateGenerator(
             settings=VertexGeminiSkillCandidateSettings(
                 skill_candidate_enabled=True,
@@ -248,7 +256,7 @@ def create_default_training_skill_candidate_generator(
 
     runtime_vertex_config = runtime_model_config_store.get_vertex_gemini_adc_config()
     if runtime_vertex_config is not None:
-        _apply_process_proxy(runtime_vertex_config.proxy_url)
+        require_direct_runtime_vertex_adc_proxy(runtime_vertex_config.proxy_url)
         return VertexGeminiTrainingSkillCandidateGenerator(
             settings=VertexGeminiSkillCandidateSettings(
                 skill_candidate_enabled=True,
@@ -271,13 +279,15 @@ def create_default_training_skill_candidate_generator(
     settings = VertexGeminiSkillCandidateSettings()
     if not settings.skill_candidate_enabled or not (settings.project or settings.api_key):
         return TemplateTrainingSkillCandidateGenerator()
-    _apply_process_proxy(settings.proxy_url)
     return VertexGeminiTrainingSkillCandidateGenerator(settings=settings, client=client)
 
 
 class TrainingSkillCandidateService:
     def __init__(self, generator: TrainingSkillCandidateGenerator | None = None) -> None:
-        self._generator = generator or create_default_training_skill_candidate_generator()
+        self._generator = generator
+        self._runtime_generator_cache: RuntimeModelObjectCache[TrainingSkillCandidateGenerator] = (
+            RuntimeModelObjectCache()
+        )
         self._fallback_generator = TemplateTrainingSkillCandidateGenerator()
 
     def propose_candidates(self, insights: dict[str, Any], min_count: int = 2) -> list[dict[str, Any]]:
@@ -315,8 +325,11 @@ class TrainingSkillCandidateService:
         return candidates
 
     def _generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
+        generator = self._generator or self._runtime_generator_cache.get_or_create(
+            create_default_training_skill_candidate_generator
+        )
         try:
-            return self._generator.generate_candidate(context)
+            return generator.generate_candidate(context)
         except TrainingSkillCandidateGenerationError as exc:
             candidate = self._fallback_generator.generate_candidate(context)
             candidate["generation_mode"] = "template_fallback"
@@ -714,14 +727,6 @@ def _add_turn_pattern_source_fields(candidate: dict[str, Any], context: Training
     candidate["source_report_ids"] = _context_source_report_ids(context)
     candidate["source_session_ids"] = _context_source_session_ids(context)
     candidate["source_turn_patterns"] = _turn_pattern_payloads(context.turn_patterns)
-
-
-def _apply_process_proxy(proxy_url: str) -> None:
-    if not proxy_url.strip().lower() or proxy_url.strip().lower() in {"direct", "none", "false", "off", "no"}:
-        return
-    os.environ["HTTP_PROXY"] = proxy_url
-    os.environ["HTTPS_PROXY"] = proxy_url
-    os.environ["ALL_PROXY"] = proxy_url
 
 
 training_skill_candidate_service = TrainingSkillCandidateService()

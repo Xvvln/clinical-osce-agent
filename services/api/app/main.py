@@ -3,6 +3,8 @@ import binascii
 import hashlib
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -86,7 +88,11 @@ from app.services.rag_document_ingestion_service import (
     generate_rag_document_id,
 )
 from app.services.retrieval_eval_service import run_retrieval_eval
-from app.services.runtime_model_config_store import runtime_model_config_store
+from app.services.runtime_model_config_store import (
+    RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
+    RuntimeModelConfig,
+    runtime_model_config_store,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.startup_config_service import build_startup_config_self_check
@@ -187,7 +193,10 @@ def _build_admin_evaluation_service() -> OsceSessionService:
         training_event_store=osce_session_service.training_event_store,
         training_skill_store=osce_session_service.training_skill_store,
         session_store=osce_session_service.session_store,
-        graph=build_osce_graph(patient_responder=_canonical_admin_patient_responder),
+        graph=build_osce_graph(
+            patient_responder=_canonical_admin_patient_responder,
+            llm_scorer=None,
+        ),
     )
 
 
@@ -510,21 +519,14 @@ def _is_training_model_config_required() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def _activate_user_runtime_model_config(user_id: str) -> bool:
+def _resolve_user_runtime_model_config(user_id: str) -> RuntimeModelConfig | None:
     if not is_runtime_model_config_write_supported():
-        runtime_model_config_store.clear()
-        return False
-    saved_config = user_model_config_store.get_runtime_config(user_id)
-    if saved_config is None:
-        runtime_model_config_store.clear()
-        return False
-    runtime_model_config_store.apply_config(saved_config.to_config_dict())
-    return True
+        return None
+    return user_model_config_store.get_runtime_config(user_id)
 
 
 def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, object]:
     if not is_runtime_model_config_write_supported():
-        runtime_model_config_store.clear()
         environment_payload = _environment_runtime_model_config_public_payload()
         if environment_payload is not None:
             return environment_payload
@@ -540,7 +542,6 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
         }
     saved_config = user_model_config_store.get_runtime_config(user_id)
     if saved_config is None:
-        runtime_model_config_store.clear()
         return {
             "active": False,
             "provider": "",
@@ -551,9 +552,8 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
             "api_key_saved": False,
             "message": "当前账号没有已保存并应用的模型配置。",
         }
-    runtime_config = runtime_model_config_store.apply_config(saved_config.to_config_dict())
-    payload = runtime_config.public_payload()
-    payload["api_key_saved"] = bool(runtime_config.api_key)
+    payload = saved_config.public_payload()
+    payload["api_key_saved"] = bool(saved_config.api_key)
     return payload
 
 
@@ -566,14 +566,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "model": openai_settings.model,
             "base_url": "",
             "proxy_url": "",
-            "integration_targets": [
-                "patient_responder",
-                "turn_intent_agent",
-                "coach_agent",
-                "llm_rubric_scorer",
-                "skill_candidate_generator",
-                "procedure_request_router",
-            ],
+            "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
         }
@@ -586,14 +579,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "model": anthropic_settings.model,
             "base_url": anthropic_settings.base_url,
             "proxy_url": anthropic_settings.proxy_url,
-            "integration_targets": [
-                "patient_responder",
-                "turn_intent_agent",
-                "coach_agent",
-                "llm_rubric_scorer",
-                "skill_candidate_generator",
-                "procedure_request_router",
-            ],
+            "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
             "api_key_saved": False,
             "message": "服务端已统一配置模型；前端不可修改 API Key。",
         }
@@ -653,11 +639,33 @@ def _build_user_runtime_model_config_request(user_id: str, request: "StudentMode
     }
 
 
-def _require_runtime_model_config_for_training(user_id: str) -> None:
-    has_user_config = _activate_user_runtime_model_config(user_id)
+def _require_runtime_model_config_for_training(user_id: str) -> RuntimeModelConfig | None:
+    runtime_config = _resolve_user_runtime_model_config(user_id)
+    has_user_config = runtime_config is not None
     has_environment_config = not is_runtime_model_config_write_supported() and _environment_training_model_configured()
     if _is_training_model_config_required() and not has_user_config and not has_environment_config:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE)
+    return runtime_config
+
+
+@contextmanager
+def _use_user_runtime_model_config(
+    user_id: str,
+    *,
+    require_for_training: bool,
+) -> Iterator[RuntimeModelConfig | None]:
+    runtime_config = (
+        _require_runtime_model_config_for_training(user_id)
+        if require_for_training
+        else _resolve_user_runtime_model_config(user_id)
+    )
+    with runtime_model_config_store.use_config(runtime_config):
+        yield runtime_config
+
+
+def _enrich_report_optional_agents_for_user(session_id: str, user_id: str) -> dict[str, Any] | None:
+    with _use_user_runtime_model_config(user_id, require_for_training=False):
+        return osce_session_service.enrich_report_optional_agents(session_id)
 
 
 def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
@@ -1607,9 +1615,7 @@ def apply_model_config_runtime(
     user = _require_current_user(auth_token)
     try:
         config_request = _build_user_runtime_model_config_request(user["user_id"], request)
-        runtime_config = runtime_model_config_store.apply_config(
-            config_request
-        )
+        runtime_config = runtime_model_config_store.build_config(config_request)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     user_model_config_store.save_runtime_config(user["user_id"], runtime_config)
@@ -2573,15 +2579,17 @@ def get_current_user_session_report(
     enrich: bool = Query(default=False),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_readable_session(session_id, auth_token)
-    try:
-        report = osce_session_service.get_report(session_id, include_optional_agents=enrich)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    session_payload = _require_readable_session(session_id, auth_token)
+    student_id = str(session_payload["student_id"])
+    with _use_user_runtime_model_config(student_id, require_for_training=False):
+        try:
+            report = osce_session_service.get_report(session_id, include_optional_agents=enrich)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
     if not enrich and _report_has_pending_optional_agent_enrichment(report):
-        background_tasks.add_task(osce_session_service.enrich_report_optional_agents, session_id)
+        background_tasks.add_task(_enrich_report_optional_agents_for_user, session_id, student_id)
     return report
 
 
@@ -2591,14 +2599,14 @@ def create_session(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     user = _require_current_user(auth_token)
-    _require_runtime_model_config_for_training(user["user_id"])
     if request.training_difficulty not in {"beginner", "intermediate", "advanced"}:
         raise HTTPException(status_code=422, detail="invalid training_difficulty")
-    return osce_session_service.create_session(
-        case_id=request.case_id,
-        student_id=user["user_id"],
-        training_difficulty=request.training_difficulty,
-    )
+    with _use_user_runtime_model_config(user["user_id"], require_for_training=True):
+        return osce_session_service.create_session(
+            case_id=request.case_id,
+            student_id=user["user_id"],
+            training_difficulty=request.training_difficulty,
+        )
 
 
 @app.get("/api/sessions/{session_id}")
@@ -2625,13 +2633,13 @@ def send_message(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.handle_message(session_id, request.message)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
-    except Exception as exc:
-        raise _training_flow_runtime_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.handle_message(session_id, request.message)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
+        except Exception as exc:
+            raise _training_flow_runtime_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2644,11 +2652,11 @@ def request_physical_exam(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_physical_exam(session_id, request.exam_code)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_physical_exam(session_id, request.exam_code)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2661,11 +2669,11 @@ def request_physical_exams(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_physical_exams(session_id, request.exam_codes)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_physical_exams(session_id, request.exam_codes)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2678,11 +2686,11 @@ def request_auxiliary_test(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_auxiliary_test(session_id, request.test_code)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2695,11 +2703,11 @@ def request_auxiliary_tests(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_auxiliary_tests(session_id, request.test_codes)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_auxiliary_tests(session_id, request.test_codes)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2717,16 +2725,16 @@ def request_procedure_text(
             status_code=status.HTTP_409_CONFLICT,
             detail=PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
         )
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_procedure_text(session_id, request.request_text)
-    except ProcedureRequestTrainingModeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
-        ) from exc
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_procedure_text(session_id, request.request_text)
+        except ProcedureRequestTrainingModeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
+            ) from exc
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2739,11 +2747,11 @@ def record_hypothesis(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.record_hypothesis(session_id, request.hypothesis)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2755,11 +2763,11 @@ def request_hint(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.request_hint(session_id)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.request_hint(session_id)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2784,15 +2792,15 @@ def submit_diagnosis(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
-    _require_runtime_model_config_for_training(str(session_payload["student_id"]))
-    try:
-        session = osce_session_service.submit_diagnosis(
-            session_id=session_id,
-            diagnosis=request.diagnosis,
-            reasoning=request.reasoning,
-        )
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=True):
+        try:
+            session = osce_session_service.submit_diagnosis(
+                session_id=session_id,
+                diagnosis=request.diagnosis,
+                reasoning=request.reasoning,
+            )
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
@@ -2803,11 +2811,12 @@ def get_session_report(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_readable_session(session_id, auth_token)
-    try:
-        report = osce_session_service.get_report(session_id)
-    except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-        raise _model_provider_gateway_error(exc) from exc
+    session_payload = _require_readable_session(session_id, auth_token)
+    with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=False):
+        try:
+            report = osce_session_service.get_report(session_id)
+        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
+            raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
     return report
