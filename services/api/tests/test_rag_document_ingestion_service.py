@@ -17,9 +17,23 @@ def test_document_parser_stack_is_a_default_backend_dependency() -> None:
     assert "python-docx>=1.2.0,<2.0.0" in dependencies
     assert "python-pptx>=1.0.0,<2.0.0" in dependencies
     assert "pdfminer-six>=20251230,<20270000" in dependencies
-    assert "pypdf>=6.6.0,<7.0.0" in dependencies
+    assert "pypdf>=6.14.2,<7.0.0" in dependencies
     assert not any(dependency.startswith("unstructured[all-docs]") for dependency in dependencies)
     assert "documents" not in optional_dependencies
+
+
+def test_backend_dependencies_keep_audited_security_floors() -> None:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    dependencies = pyproject["project"]["dependencies"]
+
+    assert "pydantic-settings>=2.14.2,<3.0.0" in dependencies
+    assert "starlette>=1.3.1,<2.0.0" in dependencies
+    assert "pillow>=12.3.0,<13.0.0" in dependencies
+    assert "aiohttp>=3.14.1,<4.0.0" in dependencies
+    assert "cryptography>=48.0.1,<49.0.0" in dependencies
+    assert "urllib3>=2.7.0,<3.0.0" in dependencies
 
 
 def test_markdown_document_chunking_preserves_sections_and_overlap() -> None:
