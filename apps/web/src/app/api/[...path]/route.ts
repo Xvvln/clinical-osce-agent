@@ -88,6 +88,11 @@ function buildDownstreamHeaders(response: Response): Headers {
   const headers = new Headers(response.headers);
   headers.delete("content-encoding");
   headers.delete("content-length");
+  headers.delete("server");
   headers.delete("transfer-encoding");
+  headers.delete("x-powered-by");
+  headers.set("cache-control", "private, no-store, max-age=0");
+  headers.set("pragma", "no-cache");
+  headers.set("expires", "0");
   return headers;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+from fastapi import Response
 from fastapi.testclient import TestClient
 
 from app import main
@@ -196,8 +197,9 @@ def test_explicit_local_demo_student_login_creates_user_and_logout_clears_sessio
     assert f"{main.AUTH_COOKIE_NAME}=" in auth_cookie_header
     assert "domain=" not in auth_cookie_header
     assert "httponly" in auth_cookie_header
-    assert "path=/" in auth_cookie_header
+    assert f"path={main.AUTH_COOKIE_PATH}" in auth_cookie_header
     assert "samesite=lax" in auth_cookie_header
+    assert "secure" not in auth_cookie_header
     current_user_response = client.get("/api/auth/me")
     assert current_user_response.status_code == 200
     assert current_user_response.json()["user"]["is_admin"] is False
@@ -206,7 +208,39 @@ def test_explicit_local_demo_student_login_creates_user_and_logout_clears_sessio
 
     assert logout_response.status_code == 200
     assert logout_response.json() == {"status": "ok"}
+    logout_cookie_header = logout_response.headers["set-cookie"].lower()
+    assert f"path={main.AUTH_COOKIE_PATH}" in logout_cookie_header
+    assert "httponly" in logout_cookie_header
+    assert "samesite=lax" in logout_cookie_header
+    assert "secure" not in logout_cookie_header
+    assert logout_response.headers["clear-site-data"] == '"cache", "cookies", "storage"'
     assert client.get("/api/auth/me").status_code == 401
+
+
+@pytest.mark.parametrize("deployment_mode", ["single-node-prod", "vertex-prod"])
+def test_production_auth_cookie_and_logout_deletion_require_https(
+    deployment_mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", deployment_mode)
+    login_response = Response()
+
+    main._set_auth_cookie(login_response, "opaque-session-token")
+
+    login_cookie_header = login_response.headers["set-cookie"].lower()
+    assert f"path={main.AUTH_COOKIE_PATH}" in login_cookie_header
+    assert "httponly" in login_cookie_header
+    assert "samesite=lax" in login_cookie_header
+    assert "secure" in login_cookie_header
+
+    logout_response = Response()
+    main.logout(logout_response, auth_token=None)
+    logout_cookie_header = logout_response.headers["set-cookie"].lower()
+    assert f"path={main.AUTH_COOKIE_PATH}" in logout_cookie_header
+    assert "max-age=0" in logout_cookie_header
+    assert "httponly" in logout_cookie_header
+    assert "samesite=lax" in logout_cookie_header
+    assert "secure" in logout_cookie_header
 
 
 def test_rotating_demo_password_revokes_existing_cookie_sessions(

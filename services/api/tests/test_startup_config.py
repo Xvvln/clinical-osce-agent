@@ -268,6 +268,7 @@ def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch
 def test_compose_health_path_remains_valid() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     compose_payload = yaml.safe_load((repo_root / "docker-compose.yml").read_text(encoding="utf-8"))
+    api_dockerfile_source = (repo_root / "services" / "api" / "Dockerfile").read_text(encoding="utf-8")
     api_service = compose_payload["services"]["api"]
     web_service = compose_payload["services"]["web"]
     admin_service = compose_payload["services"]["admin"]
@@ -282,6 +283,7 @@ def test_compose_health_path_remains_valid() -> None:
     assert any("http://127.0.0.1:3000/" in str(part) for part in admin_healthcheck)
     assert web_service["depends_on"] == {"api": {"condition": "service_healthy"}}
     assert admin_service["depends_on"] == {"api": {"condition": "service_healthy"}}
+    assert '"--no-server-header"' in api_dockerfile_source
     assert (
         api_service["environment"]["CLINICAL_OSCE_DEPLOYMENT_MODE"]
         == "${CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}"

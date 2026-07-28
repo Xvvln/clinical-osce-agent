@@ -67,6 +67,7 @@ from app.services.deployment_config import (
     is_demo_admin_effectively_enabled,
     is_demo_student_effectively_enabled,
     is_demo_student_admin_role_conflict,
+    is_production_deployment_mode,
     is_runtime_model_config_write_supported,
 )
 from app.services.dashscope_speech_service import (
@@ -134,6 +135,18 @@ from app.validators.case_validator import validate_case, validate_case_rubric_pa
 
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+AUTH_COOKIE_PATH = "/api"
+API_PRIVATE_CACHE_CONTROL = "private, no-store, max-age=0"
+BASE_HTTP_SECURITY_HEADERS = {
+    "Content-Security-Policy": "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
+PRODUCTION_HSTS_HEADER = "max-age=31536000; includeSubDomains"
 DEFAULT_DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
 DEFAULT_DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = (
@@ -454,6 +467,20 @@ async def enforce_browser_state_change_origin(request: Request, call_next: Any) 
     return await call_next(request)
 
 
+@app.middleware("http")
+async def add_http_security_headers(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    for header_name, header_value in BASE_HTTP_SECURITY_HEADERS.items():
+        response.headers[header_name] = header_value
+    if request.url.path == "/api" or request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = API_PRIVATE_CACHE_CONTROL
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    if is_production_deployment_mode():
+        response.headers["Strict-Transport-Security"] = PRODUCTION_HSTS_HEADER
+    return response
+
+
 class AuthRegisterRequest(BaseModel):
     email: str
     password: str
@@ -608,8 +635,9 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         samesite="lax",
+        secure=is_production_deployment_mode(),
         max_age=AUTH_COOKIE_MAX_AGE_SECONDS,
-        path="/",
+        path=AUTH_COOKIE_PATH,
     )
 
 
@@ -1577,7 +1605,14 @@ def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
 def logout(response: Response, auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)) -> dict[str, str]:
     if auth_token:
         auth_store.revoke_session(auth_token)
-    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        secure=is_production_deployment_mode(),
+        httponly=True,
+        samesite="lax",
+    )
+    response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
     return {"status": "ok"}
 
 
