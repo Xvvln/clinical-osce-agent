@@ -30,7 +30,12 @@ from app.services.procedure_request_router import (
     create_default_procedure_request_router,
 )
 from app.services.deep_report_analysis_service import build_legacy_deep_report_analysis
-from app.services.report_store import ReportStore, report_store
+from app.services.report_store import (
+    ReportClaimLostError,
+    ReportOutboxEvent,
+    ReportStore,
+    report_store,
+)
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore, training_skill_candidate_store
@@ -846,46 +851,82 @@ class OsceSessionService:
 
     @_serialize_session_operation
     def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, Any] | None:
+        self.drain_report_outbox()
         session = self._get_session(session_id)
-        stored_report = self.report_store.get_report(session_id)
-        if stored_report is not None:
+        stored = self.report_store.get_stored_report(session_id)
+        if stored is not None:
+            stored_report = stored.payload
             report = _ensure_personal_skill_report_defaults(stored_report, self.training_skill_candidate_store)
             if session is None:
                 report = _ensure_report_procedure_simulation_audit_items(report, None)
                 if _ai_reflection_review_uses_legacy_generic_text(report.get("ai_reflection_review")):
                     report = _rehydrate_orphan_teacher_reflection(report)
                     self.report_store.save_report(report)
+                self.drain_report_outbox()
                 return report
             case = load_case_node(session.case_id)
             stored_report_had_training_snapshot = bool(stored_report.get("training_progress_snapshot"))
             report = _ensure_report_training_progress_snapshot(report, session, case)
             report = _ensure_report_procedure_simulation_audit_items(report, session)
+            if _ai_reflection_review_uses_legacy_generic_text(report.get("ai_reflection_review")):
+                report = _rehydrate_orphan_teacher_reflection(report)
+                self.report_store.save_report(report)
+                session.feedback_report = report
+                try:
+                    self._save_session(session)
+                except SessionPersistenceError:
+                    pass
+                refreshed = self.report_store.get_stored_report(session_id)
+                if refreshed is not None:
+                    stored = refreshed
+                    report = refreshed.payload
             if (
                 not include_optional_agents
                 and stored_report_had_training_snapshot
                 and _report_only_waits_for_personal_skill_enrichment(report)
             ):
+                self._append_report_reflection_event(session, report)
+                self.drain_report_outbox()
                 return report
-            if session.final_submission is not None and _report_needs_completed_session_hydration(report):
+            if (
+                session.final_submission is not None
+                and _report_needs_completed_session_hydration(report)
+                and not _report_only_waits_for_personal_skill_enrichment(report)
+            ):
                 session.feedback_report = report
                 agent_update = _refresh_agent_state(session, use_reflection=True)
-                if include_optional_agents:
-                    session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
-                else:
-                    session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
+                session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
                 session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
                 session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
                 self._save_session(session)
                 self.report_store.save_report(session.feedback_report)
                 self._refresh_student_profile(session.student_id)
-                self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
-                self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
-                return session.feedback_report
+                self._append_report_reflection_event(
+                    session,
+                    session.feedback_report,
+                    agent_update=agent_update,
+                )
+                refreshed = self.report_store.get_stored_report(session_id)
+                if refreshed is not None:
+                    stored = refreshed
+                    report = refreshed.payload
             if report.get("training_progress_snapshot") != stored_report.get("training_progress_snapshot"):
                 if session.feedback_report is not None:
                     session.feedback_report = report
                     self._save_session(session)
                 self.report_store.save_report(report)
+                refreshed = self.report_store.get_stored_report(session_id)
+                if refreshed is not None:
+                    stored = refreshed
+                    report = refreshed.payload
+            if (
+                include_optional_agents
+                and session.final_submission is not None
+                and stored.enrichment_status in {"pending", "claimed", "failed"}
+            ):
+                report = self._enrich_claimed_report(session, case)
+            self._append_report_reflection_event(session, report)
+            self.drain_report_outbox()
             return report
         if session is None:
             return None
@@ -896,23 +937,158 @@ class OsceSessionService:
             case = load_case_node(session.case_id)
             session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
             session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
-            if include_optional_agents:
-                session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
-            else:
+            enrichment_required = session.final_submission is not None
+            if enrichment_required:
                 session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
+            else:
+                session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
             session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
             self._save_session(session)
-            self.report_store.save_report(session.feedback_report)
+            self.report_store.create_base_report(
+                session.feedback_report,
+                enrichment_required=enrichment_required,
+                outbox_event=ReportOutboxEvent(
+                    case_id=session.case_id,
+                    student_id=session.student_id,
+                    event_type="report_generated",
+                    payload=_report_event_payload(session.feedback_report, report_revision=1),
+                ),
+            )
+            self.drain_report_outbox()
             self._refresh_student_profile(session.student_id)
-            self._append_event(session, "report_generated", _report_generated_event_payload(session.feedback_report))
-            self._append_agent_update_event(session, agent_update, event_type="agent_reflection_recorded")
+            self._append_report_reflection_event(
+                session,
+                session.feedback_report,
+                agent_update=agent_update,
+            )
+            if enrichment_required and include_optional_agents:
+                session.feedback_report = self._enrich_claimed_report(session, case)
         else:
             self._save_session(session)
+        self.drain_report_outbox()
         return session.feedback_report
 
     @_serialize_session_operation
     def enrich_report_optional_agents(self, session_id: str) -> dict[str, Any] | None:
         return self.get_report(session_id, include_optional_agents=True)
+
+    def drain_report_outbox(self, *, limit: int = 100) -> int:
+        """Best-effort delivery; keyed events make replay after an ack failure safe."""
+
+        try:
+            pending_items = self.report_store.list_pending_outbox(limit=limit)
+        except Exception:
+            return 0
+        acknowledged = 0
+        for item in pending_items:
+            try:
+                self.training_event_store.append_event(
+                    session_id=item.session_id,
+                    case_id=item.case_id,
+                    student_id=item.student_id,
+                    event_type=item.event_type,
+                    payload=item.payload,
+                    event_key=item.event_key,
+                )
+                if self.report_store.acknowledge_outbox(item.event_key):
+                    acknowledged += 1
+            except Exception:
+                continue
+        return acknowledged
+
+    def _enrich_claimed_report(self, session: OsceSession, case: Case) -> dict[str, Any]:
+        claim = self.report_store.claim_report_enrichment(session.session_id)
+        if claim is None:
+            current = self.report_store.get_report(session.session_id)
+            if current is not None:
+                return current
+            return session.feedback_report or {}
+
+        base_report = _ensure_report_training_progress_snapshot(claim.report, session, case)
+        base_report = _ensure_report_procedure_simulation_audit_items(base_report, session)
+        session.feedback_report = base_report
+        enriched_report = {
+            **base_report,
+            **_personal_skill_payload_for_report(self, session, case),
+        }
+        enriched_report = _ensure_personal_skill_report_defaults(
+            enriched_report,
+            self.training_skill_candidate_store,
+        )
+        enriched_report = _ensure_report_procedure_simulation_audit_items(enriched_report, session)
+        candidate = enriched_report.get("personal_skill_candidate")
+        candidate_status = candidate.get("status") if isinstance(candidate, dict) else None
+        report_revision = claim.expected_revision + 1
+        try:
+            if candidate_status == "generation_failed":
+                stored = self.report_store.fail_report_enrichment(
+                    session.session_id,
+                    expected_revision=claim.expected_revision,
+                    claim_token=claim.claim_token,
+                    error_message=_report_enrichment_error_message(enriched_report),
+                    case_id=session.case_id,
+                    student_id=session.student_id,
+                    event_type="report_enrichment_failed",
+                    event_payload=_report_event_payload(
+                        enriched_report,
+                        report_revision=report_revision,
+                    ),
+                    failed_report=enriched_report,
+                )
+            else:
+                stored = self.report_store.complete_report_enrichment(
+                    session.session_id,
+                    enriched_report,
+                    expected_revision=claim.expected_revision,
+                    claim_token=claim.claim_token,
+                    case_id=session.case_id,
+                    student_id=session.student_id,
+                    event_type="report_enriched",
+                    event_payload=_report_event_payload(
+                        enriched_report,
+                        report_revision=report_revision,
+                    ),
+                )
+        except ReportClaimLostError:
+            current = self.report_store.get_report(session.session_id)
+            return enriched_report if current is None else current
+
+        session.feedback_report = stored.payload
+        try:
+            self._save_session(session)
+        except SessionPersistenceError:
+            # The report CAS/outbox transaction is authoritative. A stale session
+            # cache must not roll a completed report back to its pending snapshot.
+            pass
+        try:
+            self._refresh_student_profile(session.student_id)
+        except Exception:
+            pass
+        return stored.payload
+
+    def _append_report_reflection_event(
+        self,
+        session: OsceSession,
+        report: dict[str, Any],
+        *,
+        agent_update: dict[str, Any] | None = None,
+    ) -> None:
+        report_id = str(report.get("report_id") or f"{session.session_id}_report")
+        update = agent_update or {
+            "pedagogy_state": session.pedagogy_state,
+            "reflection_summary": session.reflection_summary,
+        }
+        try:
+            self._append_agent_update_event(
+                session,
+                update,
+                event_type="agent_reflection_recorded",
+                event_key=f"report:{report_id}:reflection:base",
+            )
+        except Exception:
+            # Reflection diagnostics must not turn an already persisted report
+            # into a failed response when the event database is unavailable.
+            pass
 
     @_serialize_session_operation
     def delete_session(self, session_id: str) -> bool:
@@ -1011,13 +1187,21 @@ class OsceSessionService:
             self._sessions.pop(session.session_id, None)
             raise
 
-    def _append_event(self, session: OsceSession, event_type: str, payload: dict[str, Any]) -> None:
+    def _append_event(
+        self,
+        session: OsceSession,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        event_key: str | None = None,
+    ) -> None:
         self.training_event_store.append_event(
             session_id=session.session_id,
             case_id=session.case_id,
             student_id=session.student_id,
             event_type=event_type,
             payload=payload,
+            event_key=event_key,
         )
 
     def _append_agent_update_event(
@@ -1025,6 +1209,8 @@ class OsceSessionService:
         session: OsceSession,
         agent_update: dict[str, Any],
         event_type: str = "agent_decision_traced",
+        *,
+        event_key: str | None = None,
     ) -> None:
         latest_decision = session.agent_decision_trace[-1] if session.agent_decision_trace else {}
         payload = {
@@ -1033,7 +1219,7 @@ class OsceSessionService:
         }
         if "reflection_summary" in agent_update:
             payload["reflection_summary"] = agent_update["reflection_summary"]
-        self._append_event(session, event_type, payload)
+        self._append_event(session, event_type, payload, event_key=event_key)
 
     def _append_runtime_error_event(
         self,
@@ -1404,9 +1590,15 @@ def _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review: Any) ->
     )
 
 
-def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
+def _report_event_payload(
+    report: dict[str, Any],
+    *,
+    report_revision: int,
+) -> dict[str, Any]:
     return {
         "report_id": report.get("report_id"),
+        "report_revision": report_revision,
+        "report": report,
         "total_score": report.get("total_score"),
         "missed_items": report.get("missed_items", []),
         "knowledge_recommendations": report.get("knowledge_recommendations", []),
@@ -1415,6 +1607,24 @@ def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
         "personal_skill_candidate": report.get("personal_skill_candidate"),
         "ai_reflection_review": report.get("ai_reflection_review"),
     }
+
+
+def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility wrapper for callers/tests that still build a base event payload."""
+
+    return _report_event_payload(report, report_revision=1)
+
+
+def _report_enrichment_error_message(report: dict[str, Any]) -> str:
+    warnings = report.get("generation_warnings")
+    if isinstance(warnings, list):
+        for warning in reversed(warnings):
+            if isinstance(warning, dict) and str(warning.get("message") or "").strip():
+                return str(warning["message"])
+    candidate = report.get("personal_skill_candidate")
+    if isinstance(candidate, dict) and str(candidate.get("reason") or "").strip():
+        return str(candidate["reason"])
+    return "optional report enrichment failed"
 
 
 def _ensure_personal_skill_report_defaults(

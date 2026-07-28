@@ -2876,7 +2876,7 @@ def test_pending_personal_skill_poll_does_not_resave_deferred_report(
 
     assert repeated_poll_report is not None
     assert repeated_poll_report["personal_skill_candidate"]["status"] == "generation_pending"
-    assert save_calls == ["approved"]
+    assert save_calls == []
     assert enriched_report is not None
     assert enriched_report["personal_skill_candidate"]["status"] == "approved"
     assert osce_session_service.report_store.get_report(session_id)["personal_skill_candidate"]["status"] == "approved"
@@ -3238,8 +3238,9 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "physical_exam_requested",
         "auxiliary_test_requested",
         "diagnosis_submitted",
-        "personal_training_skill_generated",
         "report_generated",
+        "personal_training_skill_generated",
+        "report_enriched",
     ]
     assert filtered_business_events[0]["case_id"] == "appendicitis_001"
     assert filtered_business_events[0]["student_id"] == authenticated_user["user_id"]
@@ -3264,9 +3265,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "diagnosis": "急性阑尾炎",
         "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。",
     }
-    assert filtered_business_events[6]["payload"]["scope"] == "personal"
-    assert filtered_business_events[6]["payload"]["skill_id"].startswith("skill_personal_")
-    report_event_payload = filtered_business_events[7]["payload"]
+    report_event_payload = filtered_business_events[6]["payload"]
     assert report_event_payload["report_id"] == f"{session_id}_report"
     assert report_event_payload["total_score"] == 22
     assert {"ht_migration", "rs_support", "comm_intro_purpose", "eth_exam_consent", "rel_empathy_response"} <= set(
@@ -3296,6 +3295,12 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "metadata": {},
     }
     assert report_event_payload["source_reference_items"][1]["metadata"]["license"] == "CC BY 4.0"
+    assert filtered_business_events[7]["payload"]["scope"] == "personal"
+    assert filtered_business_events[7]["payload"]["skill_id"].startswith("skill_personal_")
+    enriched_event_payload = filtered_business_events[8]["payload"]
+    assert enriched_event_payload["report_id"] == f"{session_id}_report"
+    assert enriched_event_payload["report_revision"] > report_event_payload["report_revision"]
+    assert enriched_event_payload["personal_skill_candidate"]["status"] == "approved"
     agent_event_types = [event["event_type"] for event in events if event["event_type"] in AGENT_EVENT_TYPES]
     assert agent_event_types.count("agent_decision_traced") >= 5
     assert "agent_reflection_recorded" in agent_event_types

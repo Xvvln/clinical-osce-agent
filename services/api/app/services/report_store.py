@@ -866,7 +866,7 @@ def _initial_enrichment_status(
 def _inferred_enrichment_status(report: dict[str, Any]) -> EnrichmentStatus:
     candidate = report.get("personal_skill_candidate")
     candidate_status = candidate.get("status") if isinstance(candidate, dict) else None
-    if candidate_status == "generation_pending":
+    if candidate_status in {"generation_pending", "not_complete", "legacy_report"}:
         return "pending"
     if candidate_status == "generation_failed":
         return "failed"

@@ -1143,7 +1143,7 @@ def _report_has_pending_optional_agent_enrichment(report: dict[str, Any]) -> boo
     personal_skill_candidate = report.get("personal_skill_candidate")
     return (
         isinstance(personal_skill_candidate, dict)
-        and personal_skill_candidate.get("status") == "generation_pending"
+        and personal_skill_candidate.get("status") in {"generation_pending", "generation_failed"}
     )
 
 
