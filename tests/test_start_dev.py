@@ -3,12 +3,34 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import sys
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
 from urllib.parse import urlsplit
 
 import pytest
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeHttpResponse:
+    status = 200
+
+    def __enter__(self) -> FakeHttpResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
 
 
 def load_start_dev_module() -> ModuleType:
@@ -81,6 +103,11 @@ def test_unified_dev_script_uses_single_api_for_web_and_admin() -> None:
         ("127.0.0.1", 3100),
     )
     assert start_dev.DEV_PORTS == (8000, 3000, 3100)
+    assert start_dev.READINESS_ENDPOINTS == (
+        ("API", "http://127.0.0.1:8000/health"),
+        ("Web", "http://localhost:3000"),
+        ("Admin", "http://127.0.0.1:3100"),
+    )
     assert start_dev.ADMIN_DIR == start_dev.ROOT_DIR / "apps" / "admin"
 
 
@@ -100,10 +127,179 @@ def test_main_stops_project_owned_stale_processes_before_starting_services() -> 
     start_dev = load_start_dev_module()
     main_source = inspect.getsource(start_dev.main)
 
-    assert main_source.index("_stop_stale_dev_processes()") < main_source.index("processes = [")
+    assert main_source.index("_stop_stale_dev_processes()") < main_source.index("_start_process(")
     assert 'name="clinical-osce-api"' in main_source
     assert 'name="clinical-osce-web"' in main_source
     assert 'name="clinical-osce-admin"' in main_source
+
+
+def test_http_readiness_retries_until_every_service_succeeds() -> None:
+    start_dev = load_start_dev_module()
+    clock = FakeClock()
+    attempts: dict[str, int] = {}
+    requested_urls: list[str] = []
+    process = SimpleNamespace(poll=lambda: None)
+
+    def fake_urlopen(url: str, *, timeout: float) -> FakeHttpResponse:
+        assert 0 < timeout <= start_dev.READINESS_REQUEST_TIMEOUT_SECONDS
+        requested_urls.append(url)
+        attempts[url] = attempts.get(url, 0) + 1
+        if attempts[url] == 1:
+            raise OSError("not ready")
+        return FakeHttpResponse()
+
+    start_dev._wait_for_http_readiness(
+        [process],
+        start_dev.READINESS_ENDPOINTS,
+        timeout_seconds=2,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        urlopen=fake_urlopen,
+    )
+
+    assert set(requested_urls) == {url for _, url in start_dev.READINESS_ENDPOINTS}
+    assert all(attempts[url] == 2 for _, url in start_dev.READINESS_ENDPOINTS)
+    assert clock.now == start_dev.READINESS_POLL_INTERVAL_SECONDS
+
+
+def test_default_http_readiness_opener_explicitly_disables_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_build_opener = urllib.request.build_opener
+    proxy_configs: list[dict[str, str]] = []
+
+    def capture_build_opener(*handlers: object) -> urllib.request.OpenerDirector:
+        proxy_configs.extend(
+            handler.proxies
+            for handler in handlers
+            if isinstance(handler, urllib.request.ProxyHandler)
+        )
+        return original_build_opener(*handlers)
+
+    monkeypatch.setattr(urllib.request, "build_opener", capture_build_opener)
+
+    load_start_dev_module()
+
+    assert proxy_configs == [{}]
+
+
+def test_http_readiness_times_out_without_real_network() -> None:
+    start_dev = load_start_dev_module()
+    clock = FakeClock()
+    process = SimpleNamespace(poll=lambda: None)
+
+    def unavailable_urlopen(url: str, *, timeout: float) -> FakeHttpResponse:
+        raise OSError(f"{url} unavailable after {timeout}s")
+
+    with pytest.raises(RuntimeError, match="Timed out after 1s waiting for: API, Web, Admin"):
+        start_dev._wait_for_http_readiness(
+            [process],
+            start_dev.READINESS_ENDPOINTS,
+            timeout_seconds=1,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+            urlopen=unavailable_urlopen,
+        )
+
+    assert clock.now == 1
+
+
+def test_http_readiness_fails_when_child_exits_before_all_targets_are_ready() -> None:
+    start_dev = load_start_dev_module()
+    requested_urls: list[str] = []
+    process = SimpleNamespace(poll=lambda: 7)
+
+    with pytest.raises(RuntimeError, match="exited with code 7 before all services became ready"):
+        start_dev._wait_for_http_readiness(
+            [process],
+            start_dev.READINESS_ENDPOINTS,
+            urlopen=lambda url, timeout: requested_urls.append(url),
+        )
+
+    assert requested_urls == []
+
+
+def test_main_opens_browsers_only_after_readiness_and_cleans_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_dev = load_start_dev_module()
+    processes = [SimpleNamespace(), SimpleNamespace(), SimpleNamespace()]
+    process_iterator = iter(processes)
+    events: list[str] = []
+    stopped_processes: list[object] = []
+
+    monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
+    monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
+    monkeypatch.setattr(
+        start_dev,
+        "_wait_for_http_readiness",
+        lambda actual_processes, endpoints: events.append("ready"),
+    )
+    monkeypatch.setattr(start_dev.webbrowser, "open", lambda url: events.append(f"open:{url}"))
+    monkeypatch.setattr(start_dev, "_wait_for_process_exit", lambda actual_processes: 0)
+    monkeypatch.setattr(start_dev, "_stop_process", stopped_processes.append)
+
+    assert start_dev.main() == 0
+    assert events == [
+        "ready",
+        f"open:{start_dev.WEB_URL}",
+        f"open:{start_dev.ADMIN_URL}",
+    ]
+    assert stopped_processes == processes
+
+
+def test_main_returns_nonzero_for_runtime_child_failure_and_cleans_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_dev = load_start_dev_module()
+    processes = [
+        SimpleNamespace(poll=lambda: None),
+        SimpleNamespace(poll=lambda: 9),
+        SimpleNamespace(poll=lambda: None),
+    ]
+    process_iterator = iter(processes)
+    stopped_processes: list[object] = []
+
+    monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
+    monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
+    monkeypatch.setattr(start_dev, "_wait_for_http_readiness", lambda processes, endpoints: None)
+    monkeypatch.setattr(start_dev.webbrowser, "open", lambda url: True)
+    monkeypatch.setattr(start_dev, "_stop_process", stopped_processes.append)
+
+    assert start_dev.main() == 1
+    assert stopped_processes == processes
+
+
+def test_runtime_child_clean_exit_is_still_an_unexpected_stack_failure() -> None:
+    start_dev = load_start_dev_module()
+    processes = [
+        SimpleNamespace(poll=lambda: 0),
+        SimpleNamespace(poll=lambda: None),
+    ]
+
+    assert start_dev._wait_for_process_exit(processes, sleep=lambda seconds: None) == 1
+
+
+def test_main_returns_zero_for_ctrl_c_and_cleans_started_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_dev = load_start_dev_module()
+    processes = [SimpleNamespace(), SimpleNamespace(), SimpleNamespace()]
+    process_iterator = iter(processes)
+    stopped_processes: list[object] = []
+
+    monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
+    monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
+    monkeypatch.setattr(
+        start_dev,
+        "_wait_for_http_readiness",
+        lambda actual_processes, endpoints: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(start_dev.webbrowser, "open", lambda url: pytest.fail("browser opened too early"))
+    monkeypatch.setattr(start_dev, "_stop_process", stopped_processes.append)
+
+    assert start_dev.main() == 0
+    assert stopped_processes == processes
 
 
 def test_project_owned_stale_web_processes_are_terminated_until_port_is_free(monkeypatch: pytest.MonkeyPatch) -> None:

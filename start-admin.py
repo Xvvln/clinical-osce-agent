@@ -5,8 +5,11 @@ import platform
 import shutil
 import subprocess
 import time
+import urllib.request
 import webbrowser
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parent
 ADMIN_DIR = ROOT_DIR / "apps" / "admin"
@@ -16,33 +19,121 @@ API_URL = f"http://{API_HOST}:8000"
 ADMIN_URL = f"http://{ADMIN_HOST}:3100"
 DEV_HOST = ADMIN_HOST
 DEV_PORTS = (3100,)
+READINESS_ENDPOINTS = (("Admin", ADMIN_URL),)
+READINESS_TIMEOUT_SECONDS = 60.0
+READINESS_POLL_INTERVAL_SECONDS = 0.25
+READINESS_REQUEST_TIMEOUT_SECONDS = 1.0
+PROCESS_POLL_INTERVAL_SECONDS = 0.25
+DIRECT_HTTP_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 LOCAL_ADMIN_EMAIL = "admin@example.test"
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 ADMIN_API_URL_ENV_NAME = "CLINICAL_OSCE_ADMIN_API_URL"
 
 
 def main() -> int:
-    _stop_stale_dev_processes()
-    process = _start_process(
-        name="clinical-osce-admin",
-        command=_admin_command(),
-        cwd=ADMIN_DIR,
-    )
-    print(f"Admin: {ADMIN_URL}")
-    print(f"Expected API: {API_URL}")
-    print("This script starts only the Admin app. Use start-dev.py for API + Web + Admin.")
-    print("Wait a few seconds for Admin to compile, then the browser will open.")
-    time.sleep(5)
-    webbrowser.open(ADMIN_URL)
-    print("Press Ctrl+C here to stop Admin.")
+    processes: list[subprocess.Popen[bytes]] = []
+    exit_code = 0
     try:
-        while process.poll() is None:
-            time.sleep(1)
+        _stop_stale_dev_processes()
+        processes.append(
+            _start_process(
+                name="clinical-osce-admin",
+                command=_admin_command(),
+                cwd=ADMIN_DIR,
+            )
+        )
+        print(f"Admin: {ADMIN_URL}")
+        print(f"Expected API: {API_URL}")
+        print("This script starts only the Admin app. Use start-dev.py for API + Web + Admin.")
+        print("Waiting for Admin to become ready...")
+        _wait_for_http_readiness(processes, READINESS_ENDPOINTS)
+        webbrowser.open(ADMIN_URL)
+        print("Press Ctrl+C here to stop Admin.")
+        exit_code = _wait_for_process_exit(processes)
     except KeyboardInterrupt:
         print("Stopping Admin...")
+        exit_code = 0
+    except Exception as exc:
+        print(f"Admin failed: {exc}")
+        exit_code = 1
     finally:
-        _stop_process(process)
-    return 0
+        for process in processes:
+            _stop_process(process)
+    return exit_code
+
+
+def _wait_for_http_readiness(
+    processes: Sequence[subprocess.Popen[bytes]],
+    endpoints: Sequence[tuple[str, str]],
+    *,
+    timeout_seconds: float = READINESS_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = READINESS_POLL_INTERVAL_SECONDS,
+    request_timeout_seconds: float = READINESS_REQUEST_TIMEOUT_SECONDS,
+    monotonic: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    urlopen: Callable[..., Any] | None = None,
+) -> None:
+    clock = monotonic or time.monotonic
+    pause = sleep or time.sleep
+    open_url = urlopen or DIRECT_HTTP_OPENER.open
+    deadline = clock() + timeout_seconds
+    pending = dict(endpoints)
+
+    while pending:
+        _raise_if_process_exited(processes)
+        for name, url in list(pending.items()):
+            remaining_seconds = deadline - clock()
+            if remaining_seconds <= 0:
+                break
+            try:
+                with open_url(
+                    url,
+                    timeout=min(request_timeout_seconds, remaining_seconds),
+                ) as response:
+                    status = getattr(response, "status", None)
+                    if status is None:
+                        status = response.getcode()
+                    if int(status) >= 400:
+                        continue
+            except Exception:
+                continue
+            del pending[name]
+            print(f"{name} is ready: {url}")
+
+        _raise_if_process_exited(processes)
+        if not pending:
+            return
+        remaining_seconds = deadline - clock()
+        if remaining_seconds <= 0:
+            names = ", ".join(pending)
+            raise RuntimeError(
+                f"Timed out after {timeout_seconds:g}s waiting for: {names}."
+            )
+        pause(min(poll_interval_seconds, remaining_seconds))
+
+
+def _wait_for_process_exit(
+    processes: Sequence[subprocess.Popen[bytes]],
+    *,
+    poll_interval_seconds: float = PROCESS_POLL_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] | None = None,
+) -> int:
+    pause = sleep or time.sleep
+    while True:
+        exit_codes = [process.poll() for process in processes]
+        exited_codes = [code for code in exit_codes if code is not None]
+        if exited_codes:
+            return 1
+        pause(poll_interval_seconds)
+
+
+def _raise_if_process_exited(processes: Sequence[subprocess.Popen[bytes]]) -> None:
+    for index, process in enumerate(processes, start=1):
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"Child process {index} exited with code {exit_code} before Admin became ready."
+            )
 
 
 def _start_process(name: str, command: list[str], cwd: Path) -> subprocess.Popen[bytes]:
