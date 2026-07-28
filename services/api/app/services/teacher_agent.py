@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from google import genai
@@ -19,6 +20,13 @@ from app.services.openai_compatible_chat_client import OpenAICompatibleChatClien
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
+
+MAX_TEACHER_PROVIDER_PAYLOAD_BYTES = 48 * 1024
+_MAX_TEACHER_TRACE_BYTES = 14 * 1024
+_MAX_TEACHER_REASONING_SUMMARY_BYTES = 7 * 1024
+_MAX_TEACHER_SUBMISSION_BYTES = 7 * 1024
+_MAX_TEACHER_BASE_REFLECTION_BYTES = 10 * 1024
+_MAX_TEACHER_SOURCE_REFERENCES_BYTES = 2 * 1024
 
 TEACHER_ANALYSIS_SYSTEM_PROMPT = """你是 OSCE 训练系统中的 TeacherAgent，负责训练后的临床教学分析。
 
@@ -135,7 +143,7 @@ class OpenAICompatibleTeacherAgent:
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
         return self._client.complete_json(
             system_prompt=TEACHER_ANALYSIS_SYSTEM_PROMPT,
-            payload=request.model_dump(),
+            payload=_build_teacher_provider_payload(request),
             response_model=TeacherAnalysisResponse,
             temperature=0.2,
         )
@@ -149,7 +157,7 @@ class AnthropicTeacherAgent:
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
         return self._client.complete_json(
             system_prompt=TEACHER_ANALYSIS_SYSTEM_PROMPT,
-            payload=request.model_dump(),
+            payload=_build_teacher_provider_payload(request),
             response_model=TeacherAnalysisResponse,
             temperature=0.2,
         )
@@ -178,6 +186,7 @@ class GeminiTeacherAgent:
             )
 
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
+        provider_payload = _build_teacher_provider_payload(request)
         response = call_with_api_logging(
             provider="vertex_gemini_teacher" if self._settings.use_vertex else "gemini_teacher",
             operation="generate_content",
@@ -185,7 +194,7 @@ class GeminiTeacherAgent:
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
             call=lambda: self._client.models.generate_content(
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                contents=json.dumps(provider_payload, ensure_ascii=False),
                 config=types.GenerateContentConfig(
                     system_instruction=TEACHER_ANALYSIS_SYSTEM_PROMPT,
                     response_mime_type="application/json",
@@ -289,6 +298,519 @@ def _create_configured_teacher_agent() -> (
     if api_key:
         return GeminiTeacherAgent(settings=settings.model_copy(update={"api_key": api_key}))
     return DeterministicTeacherAgent()
+
+
+def _build_teacher_provider_payload(request: TeacherAnalysisRequest) -> dict[str, Any]:
+    """Project a full local analysis request into one bounded provider payload.
+
+    The full clinical trace remains available to local deterministic analysis and
+    persistence. Providers receive only the teaching signals that are useful for
+    post-session reasoning, without the repeated action timeline and evidence
+    structures already represented by the summary.
+    """
+
+    payload: dict[str, Any] = {
+        "case_id": _bounded_teacher_provider_text(request.case_id, max_json_bytes=256),
+        "case_title": _bounded_teacher_provider_text(request.case_title, max_json_bytes=768),
+        "score_text": _bounded_teacher_provider_text(request.score_text, max_json_bytes=512),
+        "missed_items": _bounded_teacher_provider_text_list(
+            request.missed_items,
+            max_items=12,
+            max_item_json_bytes=160,
+            max_json_bytes=768,
+        ),
+        "missed_labels": _bounded_teacher_provider_text_list(
+            request.missed_labels,
+            max_items=12,
+            max_item_json_bytes=192,
+            max_json_bytes=768,
+        ),
+        "covered_labels": _bounded_teacher_provider_text_list(
+            request.covered_labels,
+            max_items=12,
+            max_item_json_bytes=192,
+            max_json_bytes=768,
+        ),
+        "pending_labels": _bounded_teacher_provider_text_list(
+            request.pending_labels,
+            max_items=12,
+            max_item_json_bytes=192,
+            max_json_bytes=768,
+        ),
+        "student_submission": _teacher_submission_projection(
+            request.student_submission,
+        ),
+        "clinical_reasoning_trace": _teacher_trace_projection(
+            request.clinical_reasoning_trace,
+        ),
+        "reasoning_trace_summary": _teacher_reasoning_summary_projection(
+            request.reasoning_trace_summary,
+        ),
+        "base_reflection": _teacher_base_reflection_projection(
+            request.base_reflection,
+        ),
+        "source_reference_items": _teacher_source_reference_projection(
+            request.source_reference_items,
+        ),
+    }
+    if _teacher_provider_json_size(payload) <= MAX_TEACHER_PROVIDER_PAYLOAD_BYTES:
+        return payload
+
+    # Component budgets already leave room for the top-level envelope. Keep a
+    # deterministic last line of defence if a future field name grows or a
+    # component budget changes without updating the total.
+    for field_name in (
+        "source_reference_items",
+        "covered_labels",
+        "missed_items",
+        "missed_labels",
+        "pending_labels",
+    ):
+        payload[field_name] = []
+        if _teacher_provider_json_size(payload) <= MAX_TEACHER_PROVIDER_PAYLOAD_BYTES:
+            return payload
+    raise RuntimeError("TeacherAgent 模型请求超过内部载荷上限。")
+
+
+def _teacher_trace_projection(trace_value: Any) -> dict[str, Any]:
+    trace = _teacher_mapping(trace_value)
+    pattern_values = trace.get("cognitive_patterns", [])
+    if not isinstance(pattern_values, list | tuple):
+        pattern_values = []
+    raw_patterns = [
+        pattern
+        for pattern in pattern_values
+        if isinstance(pattern, Mapping)
+    ]
+    ordered_patterns = [
+        pattern
+        for _, pattern in sorted(
+            enumerate(raw_patterns),
+            key=lambda item: (
+                _teacher_severity_priority(item[1].get("severity")),
+                item[0],
+            ),
+        )
+    ]
+    projection = {
+        "trace_version": _bounded_teacher_provider_text(
+            trace.get("trace_version", ""),
+            max_json_bytes=256,
+        ),
+        "cognitive_patterns": _bounded_teacher_provider_object_list(
+            ordered_patterns,
+            projector=_teacher_cognitive_pattern_projection,
+            max_items=8,
+            max_json_bytes=9 * 1024,
+        ),
+        "evidence_chain_breakpoints": _bounded_teacher_provider_object_list(
+            trace.get("evidence_chain_breakpoints", []),
+            projector=_teacher_evidence_breakpoint_projection,
+            max_items=8,
+            max_json_bytes=4 * 1024,
+        ),
+    }
+    if _teacher_provider_json_size(projection) > _MAX_TEACHER_TRACE_BYTES:
+        raise RuntimeError("TeacherAgent trace 投影超过内部载荷上限。")
+    return projection
+
+
+def _teacher_cognitive_pattern_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "pattern_id": 128,
+            "label": 192,
+            "category": 128,
+            "severity": 64,
+            "evidence": 512,
+            "why_it_matters": 512,
+            "remediation": 512,
+        },
+        list_fields={
+            "source_signal_ids": (8, 128, 768),
+            "trigger_item_ids": (8, 128, 512),
+        },
+    )
+
+
+def _teacher_evidence_breakpoint_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "breakpoint_id": 128,
+            "statement": 512,
+            "kind": 128,
+            "status": 64,
+            "teacher_action": 768,
+        },
+        list_fields={
+            "covered_evidence_labels": (6, 192, 512),
+            "missing_evidence_labels": (8, 192, 768),
+        },
+    )
+
+
+def _teacher_reasoning_summary_projection(summary_value: Any) -> dict[str, Any]:
+    summary = _teacher_mapping(summary_value)
+    projection = {
+        "trace_version": _bounded_teacher_provider_text(
+            summary.get("trace_version", ""),
+            max_json_bytes=192,
+        ),
+        "dominant_patterns": _bounded_teacher_provider_object_list(
+            summary.get("dominant_patterns", []),
+            projector=_teacher_dominant_pattern_projection,
+            max_items=6,
+            max_json_bytes=1_280,
+        ),
+        "problem_representation_status": _bounded_teacher_provider_text(
+            summary.get("problem_representation_status", ""),
+            max_json_bytes=128,
+        ),
+        "illness_script_status": _bounded_teacher_provider_text(
+            summary.get("illness_script_status", ""),
+            max_json_bytes=128,
+        ),
+        "evidence_synthesis_status": _bounded_teacher_provider_text(
+            summary.get("evidence_synthesis_status", ""),
+            max_json_bytes=128,
+        ),
+        "sequence_flags": _bounded_teacher_provider_object_list(
+            summary.get("sequence_flags", []),
+            projector=_teacher_sequence_flag_projection,
+            max_items=6,
+            max_json_bytes=1_024,
+        ),
+        "action_order_summary": _teacher_action_order_projection(
+            summary.get("action_order_summary", {}),
+        ),
+        "evidence_chain_breakpoints": _bounded_teacher_provider_object_list(
+            summary.get("evidence_chain_breakpoints", []),
+            projector=_teacher_summary_breakpoint_projection,
+            max_items=5,
+            max_json_bytes=1_536,
+        ),
+        "evidence_chain_focus": _bounded_teacher_provider_object_list(
+            summary.get("evidence_chain_focus", []),
+            projector=_teacher_summary_breakpoint_projection,
+            max_items=3,
+            max_json_bytes=1_536,
+        ),
+    }
+    if _teacher_provider_json_size(projection) > _MAX_TEACHER_REASONING_SUMMARY_BYTES:
+        raise RuntimeError("TeacherAgent reasoning summary 投影超过内部载荷上限。")
+    return projection
+
+
+def _teacher_dominant_pattern_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "pattern_id": 96,
+            "label": 192,
+            "category": 96,
+            "severity": 64,
+        },
+    )
+
+
+def _teacher_sequence_flag_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "flag_id": 96,
+            "label": 192,
+            "severity": 64,
+            "evidence": 384,
+        },
+    )
+
+
+def _teacher_summary_breakpoint_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "breakpoint_id": 96,
+            "statement": 256,
+            "teacher_action": 384,
+        },
+        list_fields={
+            "missing_evidence_labels": (6, 160, 512),
+        },
+    )
+
+
+def _teacher_action_order_projection(value: Any) -> dict[str, Any]:
+    action_order = _teacher_mapping(value)
+    result: dict[str, Any] = {}
+    for field_name in (
+        "first_history_fact_turn_index",
+        "first_history_turn_index",
+        "first_physical_exam_turn_index",
+        "first_auxiliary_test_turn_index",
+        "first_diagnosis_hypothesis_turn_index",
+        "diagnosis_submission_turn_index",
+        "history_fact_count_before_first_test",
+        "problem_representation_coverage_ratio",
+    ):
+        if field_name not in action_order:
+            continue
+        raw_value = action_order[field_name]
+        if isinstance(raw_value, bool | int | float) or raw_value is None:
+            compact_value: Any = raw_value
+        else:
+            compact_value = _bounded_teacher_provider_text(
+                raw_value,
+                max_json_bytes=128,
+            )
+        candidate = {**result, field_name: compact_value}
+        if _teacher_provider_json_size(candidate) <= 768:
+            result = candidate
+    return result
+
+
+def _teacher_submission_projection(value: Any) -> dict[str, Any]:
+    submission = _teacher_mapping(value)
+    projection = {
+        "diagnosis": _bounded_teacher_provider_text(
+            submission.get("diagnosis", ""),
+            max_json_bytes=1_024,
+        ),
+        "reasoning": _bounded_teacher_provider_text(
+            submission.get("reasoning", ""),
+            max_json_bytes=5_632,
+        ),
+    }
+    if _teacher_provider_json_size(projection) > _MAX_TEACHER_SUBMISSION_BYTES:
+        raise RuntimeError("TeacherAgent student submission 投影超过内部载荷上限。")
+    return projection
+
+
+def _teacher_base_reflection_projection(value: Any) -> dict[str, Any]:
+    reflection = _teacher_mapping(value)
+    projection = {
+        "summary": _bounded_teacher_provider_text(
+            reflection.get("summary", ""),
+            max_json_bytes=512,
+        ),
+        "overall_comment": _bounded_teacher_provider_text(
+            reflection.get("overall_comment", ""),
+            max_json_bytes=768,
+        ),
+        "major_issues": _bounded_teacher_provider_object_list(
+            reflection.get("major_issues", []),
+            projector=_teacher_major_issue_projection,
+            max_items=4,
+            max_json_bytes=2 * 1024,
+        ),
+        "teacher_coaching_review": _bounded_teacher_provider_object_list(
+            reflection.get("teacher_coaching_review", []),
+            projector=_teacher_coaching_section_projection,
+            max_items=6,
+            max_json_bytes=3 * 1024,
+        ),
+        "reasoning_chain_review": _bounded_teacher_provider_text(
+            reflection.get("reasoning_chain_review", ""),
+            max_json_bytes=640,
+        ),
+        "next_practice_plan": _bounded_teacher_provider_text_list(
+            reflection.get("next_practice_plan", []),
+            max_items=5,
+            max_item_json_bytes=384,
+            max_json_bytes=640,
+        ),
+        "teacher_feedback": _bounded_teacher_provider_text(
+            reflection.get("teacher_feedback", ""),
+            max_json_bytes=512,
+        ),
+        "next_focus": _bounded_teacher_provider_text(
+            reflection.get("next_focus", ""),
+            max_json_bytes=512,
+        ),
+        "teacher_note": _bounded_teacher_provider_text(
+            reflection.get("teacher_note", ""),
+            max_json_bytes=384,
+        ),
+    }
+    if _teacher_provider_json_size(projection) > _MAX_TEACHER_BASE_REFLECTION_BYTES:
+        raise RuntimeError("TeacherAgent base reflection 投影超过内部载荷上限。")
+    return projection
+
+
+def _teacher_major_issue_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "title": 192,
+            "observed_behavior": 320,
+            "why_it_matters": 320,
+            "correct_approach": 320,
+            "next_action": 320,
+        },
+        list_fields={
+            "linked_items": (6, 160, 384),
+        },
+    )
+
+
+def _teacher_coaching_section_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "section_id": 128,
+            "title": 192,
+            "teacher_comment": 384,
+            "why_it_matters": 320,
+            "next_move": 384,
+        },
+        list_fields={
+            "evidence_labels": (6, 160, 384),
+        },
+    )
+
+
+def _teacher_source_reference_projection(value: Any) -> list[dict[str, Any]]:
+    return _bounded_teacher_provider_object_list(
+        value,
+        projector=lambda item: _compact_teacher_text_mapping(
+            item,
+            {
+                "reference": 384,
+                "source_type": 128,
+                "title": 384,
+            },
+        ),
+        max_items=8,
+        max_json_bytes=_MAX_TEACHER_SOURCE_REFERENCES_BYTES,
+    )
+
+
+def _compact_teacher_text_mapping(
+    value: Mapping[str, Any],
+    text_fields: Mapping[str, int],
+    *,
+    list_fields: Mapping[str, tuple[int, int, int]] | None = None,
+) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for field_name, max_json_bytes in text_fields.items():
+        if field_name not in value:
+            continue
+        compact[field_name] = _bounded_teacher_provider_text(
+            value[field_name],
+            max_json_bytes=max_json_bytes,
+        )
+    for field_name, (
+        max_items,
+        max_item_json_bytes,
+        max_json_bytes,
+    ) in (list_fields or {}).items():
+        if field_name not in value:
+            continue
+        compact[field_name] = _bounded_teacher_provider_text_list(
+            value[field_name],
+            max_items=max_items,
+            max_item_json_bytes=max_item_json_bytes,
+            max_json_bytes=max_json_bytes,
+        )
+    return compact
+
+
+def _bounded_teacher_provider_object_list(
+    values: Any,
+    *,
+    projector: Callable[[Mapping[str, Any]], dict[str, Any]],
+    max_items: int,
+    max_json_bytes: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(values, list | tuple):
+        return []
+    result: list[dict[str, Any]] = []
+    for value in values:
+        if len(result) >= max_items:
+            break
+        if not isinstance(value, Mapping):
+            continue
+        projected = projector(value)
+        if not projected:
+            continue
+        candidate = [*result, projected]
+        if _teacher_provider_json_size(candidate) <= max_json_bytes:
+            result = candidate
+    return result
+
+
+def _bounded_teacher_provider_text_list(
+    values: Any,
+    *,
+    max_items: int,
+    max_item_json_bytes: int,
+    max_json_bytes: int,
+) -> list[str]:
+    if not isinstance(values, list | tuple):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if len(result) >= max_items:
+            break
+        text = _bounded_teacher_provider_text(
+            value,
+            max_json_bytes=max_item_json_bytes,
+        )
+        if not text or text in seen:
+            continue
+        candidate = [*result, text]
+        if _teacher_provider_json_size(candidate) > max_json_bytes:
+            continue
+        result = candidate
+        seen.add(text)
+    return result
+
+
+def _bounded_teacher_provider_text(value: Any, *, max_json_bytes: int) -> str:
+    if value is None:
+        return ""
+    normalized = (
+        str(value)
+        .encode("utf-8", errors="replace")
+        .decode("utf-8")
+        .strip()
+    )
+    if _teacher_provider_json_size(normalized) <= max_json_bytes:
+        return normalized
+
+    marker = "…"
+    if _teacher_provider_json_size(marker) > max_json_bytes:
+        return ""
+    low = 0
+    high = len(normalized)
+    best = marker
+    while low <= high:
+        midpoint = (low + high) // 2
+        candidate = f"{normalized[:midpoint]}{marker}"
+        if _teacher_provider_json_size(candidate) <= max_json_bytes:
+            best = candidate
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+    return best
+
+
+def _teacher_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _teacher_severity_priority(value: Any) -> int:
+    return {
+        "high": 0,
+        "medium": 1,
+        "low": 2,
+    }.get(str(value).strip().casefold(), 3)
+
+
+def _teacher_provider_json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
 
 
 __all__ = [
