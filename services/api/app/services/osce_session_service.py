@@ -909,7 +909,41 @@ class OsceSessionService:
         return _serialize_session(session, load_case_node(session.case_id))
 
     @_serialize_session_operation
-    def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, Any] | None:
+    def read_report(self, session_id: str) -> dict[str, Any] | None:
+        """Return the persisted report snapshot without generating or saving data."""
+
+        if self.session_store.is_session_deleted(session_id):
+            return None
+        stored = self.report_store.get_stored_report(session_id)
+        if stored is None:
+            return None
+
+        report = _ensure_personal_skill_report_defaults(
+            stored.payload,
+            self.training_skill_candidate_store,
+        )
+        stored_session = self.session_store.get_session(session_id)
+        if stored_session is not None:
+            session = OsceSession(**stored_session.payload)
+            case = load_case_node(session.case_id)
+            report = _ensure_report_training_progress_snapshot(report, session, case)
+            report = _ensure_report_procedure_simulation_audit_items(report, session)
+        else:
+            report = _ensure_report_procedure_simulation_audit_items(report, None)
+        if _ai_reflection_review_uses_legacy_generic_text(report.get("ai_reflection_review")):
+            report = _rehydrate_orphan_teacher_reflection(report)
+
+        if self.session_store.is_session_deleted(session_id):
+            return None
+        return report
+
+    def get_report(self, session_id: str) -> dict[str, Any] | None:
+        """Compatibility alias for the pure report read."""
+
+        return self.read_report(session_id)
+
+    @_serialize_session_operation
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, Any] | None:
         if self.session_store.is_session_deleted(session_id):
             return None
         self.drain_report_outbox()
@@ -1031,7 +1065,29 @@ class OsceSessionService:
 
     @_serialize_session_operation
     def enrich_report_optional_agents(self, session_id: str) -> dict[str, Any] | None:
-        return self.get_report(session_id, include_optional_agents=True)
+        if self.session_store.is_session_deleted(session_id):
+            return None
+        self.drain_report_outbox()
+        session = self._get_session(session_id)
+        stored = self.report_store.get_stored_report(session_id)
+        if session is None or stored is None:
+            return None
+
+        report = _ensure_personal_skill_report_defaults(
+            stored.payload,
+            self.training_skill_candidate_store,
+        )
+        case = load_case_node(session.case_id)
+        report = _ensure_report_training_progress_snapshot(report, session, case)
+        report = _ensure_report_procedure_simulation_audit_items(report, session)
+        if (
+            session.final_submission is not None
+            and stored.enrichment_status in {"pending", "claimed", "failed"}
+        ):
+            report = self._enrich_claimed_report(session, case)
+        self._append_report_reflection_event(session, report)
+        self.drain_report_outbox()
+        return report
 
     def drain_report_outbox(self, *, limit: int = 100) -> int:
         """Best-effort delivery; keyed events make replay after an ack failure safe."""

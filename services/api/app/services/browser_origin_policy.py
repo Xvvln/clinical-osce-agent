@@ -148,23 +148,7 @@ def normalize_browser_origin(value: str, *, allow_path: bool = False) -> str | N
 
 def _requires_browser_origin_check(method: str, path: str) -> bool:
     normalized_method = method.upper()
-    if normalized_method in UNSAFE_METHODS:
-        return path == "/api" or path.startswith("/api/")
-    if normalized_method != "GET":
-        return False
-
-    segments = [segment for segment in path.split("/") if segment]
-    return (
-        len(segments) == 4
-        and segments[0] == "api"
-        and segments[1] == "sessions"
-        and segments[3] == "report"
-    ) or (
-        len(segments) == 5
-        and segments[0] == "api"
-        and segments[1:3] == ["me", "sessions"]
-        and segments[4] == "report"
-    )
+    return normalized_method in UNSAFE_METHODS and (path == "/api" or path.startswith("/api/"))
 
 
 __all__ = [

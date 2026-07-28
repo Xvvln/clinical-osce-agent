@@ -95,7 +95,7 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         elif step.kind == "submit_diagnosis":
             service.submit_diagnosis(session_id, step.value, step.reasoning)
 
-    report = service.get_report(session_id) or {}
+    report = service.generate_report(session_id, include_optional_agents=True) or {}
     session_payload = _evaluation_session_payload(service, session_id)
     actual_total_score = int(report.get("total_score", 0))
     source_reference_items = _valid_source_reference_items(report.get("source_reference_items", []))

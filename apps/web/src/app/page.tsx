@@ -2052,9 +2052,9 @@ function getSession(sessionId: string): Promise<OsceSession> {
   });
 }
 
-function getSessionReport(sessionId: string): Promise<FeedbackReport> {
-  return requestJson<FeedbackReport>(`/api/me/sessions/${sessionId}/report`, {
-    method: "GET",
+function generateSessionReport(sessionId: string): Promise<FeedbackReport> {
+  return requestJson<FeedbackReport>(`/api/sessions/${sessionId}/report/generate`, {
+    method: "POST",
   });
 }
 
@@ -4286,7 +4286,7 @@ function HomeContent() {
       setSession(submittedSession);
       setStatusText("诊断已提交，正在生成评分报告...");
       try {
-        const report = await getSessionReport(submittedSession.session_id);
+        const report = await generateSessionReport(submittedSession.session_id);
         const updatedSession = await getSession(submittedSession.session_id);
         setSession(updatedSession);
         setFeedbackReport(report);

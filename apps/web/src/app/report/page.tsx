@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   normalizeFeedbackReport,
@@ -96,6 +96,8 @@ type BackendSession = Readonly<{
   session_id: string;
   case_id?: string;
   case_title?: string;
+  stage?: string;
+  final_submission?: Readonly<Record<string, string>> | null;
   messages: readonly BackendMessage[];
   requested_exams: readonly string[];
   requested_tests: readonly string[];
@@ -114,8 +116,19 @@ type BackendProcedureResult = Readonly<{
 }>;
 
 type RequestJsonOptions = Readonly<{
+  method?: "GET" | "POST";
   timeoutMs?: number;
 }>;
+
+class RequestJsonError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(`HTTP ${status}：${message}`);
+    this.name = "RequestJsonError";
+    this.status = status;
+  }
+}
 
 type ReportSectionId =
   | "overview"
@@ -190,6 +203,7 @@ const REPORT_BRAND_FILL_OPACITY = 0.22;
 const REPORT_SECTION_ACTIVATION_OFFSET_PX = 96;
 const REPORT_REQUEST_TIMEOUT_MS = 45_000;
 const PERSONAL_SKILL_POLL_INTERVAL_MS = 3_500;
+const PERSONAL_SKILL_ENRICHMENT_RETRY_INTERVAL_MS = 310_000;
 const PERSONAL_SKILL_NOTICE_TIMEOUT_MS = 7_000;
 const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 
@@ -738,7 +752,7 @@ async function requestJson<TResponse>(path: string, options: RequestJsonOptions 
   try {
     const response = await fetch(path, {
       credentials: "same-origin",
-      method: "GET",
+      method: options.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
       },
@@ -747,7 +761,7 @@ async function requestJson<TResponse>(path: string, options: RequestJsonOptions 
 
     if (!response.ok) {
       const errorMessage = await readResponseErrorMessage(response);
-      throw new Error(`HTTP ${response.status}：${errorMessage}`);
+      throw new RequestJsonError(response.status, errorMessage);
     }
 
     return (await response.json()) as TResponse;
@@ -830,6 +844,7 @@ export default function ReportPage() {
   const [personalSkillNoticeText, setPersonalSkillNoticeText] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<ReportSectionId>("overview");
   const [isReportNavigatorCollapsed, setIsReportNavigatorCollapsed] = useState(false);
+  const personalSkillEnrichmentRequestsRef = useRef(new Map<string, Promise<void>>());
 
   async function handleCopyReportLink() {
     try {
@@ -854,10 +869,27 @@ export default function ReportPage() {
 
     async function loadReport() {
       try {
-        const [nextReport, nextSession] = await Promise.all([
-          requestJson<FeedbackReportPayload>(`/api/me/sessions/${nextSessionId}/report`, { timeoutMs: REPORT_REQUEST_TIMEOUT_MS }),
-          requestJson<BackendSession>(`/api/me/sessions/${nextSessionId}`),
-        ]);
+        const nextSession = await requestJson<BackendSession>(`/api/me/sessions/${nextSessionId}`);
+        let nextReport: FeedbackReportPayload;
+        try {
+          nextReport = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${nextSessionId}/report`, {
+            timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
+          });
+        } catch (error) {
+          const canGenerateReport = Boolean(nextSession.final_submission)
+            || nextSession.stage === "diagnosis_submission"
+            || nextSession.stage === "feedback";
+          if (!(error instanceof RequestJsonError) || error.status !== 404 || !canGenerateReport) {
+            throw error;
+          }
+          if (isMounted) {
+            setStatusText("诊断已提交，正在补生成评分报告...");
+          }
+          nextReport = await requestJson<FeedbackReportPayload>(`/api/sessions/${nextSessionId}/report/generate`, {
+            method: "POST",
+            timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
+          });
+        }
         if (!isMounted) {
           return;
         }
@@ -884,16 +916,22 @@ export default function ReportPage() {
   }, []);
 
   useEffect(() => {
-    if (!sessionId || report?.personal_skill_candidate.status !== "generation_pending") {
+    const personalSkillStatus = report?.personal_skill_candidate.status;
+    if (
+      !sessionId
+      || !["generation_pending", "generation_failed"].includes(personalSkillStatus ?? "")
+    ) {
       return;
     }
+    const enrichmentSessionId = sessionId;
 
     let isCancelled = false;
     let pollTimer: number | null = null;
+    let enrichmentRetryTimer: number | null = null;
 
     async function pollPersonalSkillCandidate() {
       try {
-        const nextReportPayload = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${sessionId}/report?enrich=true`, {
+        const nextReportPayload = await requestJson<FeedbackReportPayload>(`/api/me/sessions/${enrichmentSessionId}/report`, {
           timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
         });
         if (isCancelled) {
@@ -903,6 +941,11 @@ export default function ReportPage() {
         const nextReport = normalizeFeedbackReport(nextReportPayload);
         setReport(nextReport);
         if (nextReport.personal_skill_candidate.status !== "generation_pending") {
+          personalSkillEnrichmentRequestsRef.current.delete(enrichmentSessionId);
+          if (enrichmentRetryTimer) {
+            window.clearTimeout(enrichmentRetryTimer);
+            enrichmentRetryTimer = null;
+          }
           const noticeText = getPersonalSkillCompletionNoticeText(nextReport.personal_skill_candidate.status);
           if (noticeText) {
             setPersonalSkillNoticeText(noticeText);
@@ -918,12 +961,59 @@ export default function ReportPage() {
       pollTimer = window.setTimeout(pollPersonalSkillCandidate, PERSONAL_SKILL_POLL_INTERVAL_MS);
     }
 
-    pollTimer = window.setTimeout(pollPersonalSkillCandidate, PERSONAL_SKILL_POLL_INTERVAL_MS);
+    function getOrCreatePersonalSkillEnrichmentRequest(): Promise<void> {
+      const existingRequest = personalSkillEnrichmentRequestsRef.current.get(enrichmentSessionId);
+      if (existingRequest) {
+        return existingRequest;
+      }
+      const nextRequest = requestJson<FeedbackReportPayload>(`/api/sessions/${enrichmentSessionId}/report/enrich`, {
+        method: "POST",
+        timeoutMs: REPORT_REQUEST_TIMEOUT_MS,
+      })
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          personalSkillEnrichmentRequestsRef.current.delete(enrichmentSessionId);
+          throw error;
+        });
+      personalSkillEnrichmentRequestsRef.current.set(enrichmentSessionId, nextRequest);
+      return nextRequest;
+    }
+
+    async function requestPersonalSkillEnrichment(startPolling: boolean) {
+      try {
+        await getOrCreatePersonalSkillEnrichmentRequest();
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+        enrichmentRetryTimer = window.setTimeout(
+          () => requestPersonalSkillEnrichment(startPolling),
+          PERSONAL_SKILL_POLL_INTERVAL_MS,
+        );
+        return;
+      }
+
+      if (isCancelled) {
+        return;
+      }
+      if (startPolling) {
+        pollTimer = window.setTimeout(pollPersonalSkillCandidate, PERSONAL_SKILL_POLL_INTERVAL_MS);
+      }
+      enrichmentRetryTimer = window.setTimeout(() => {
+        personalSkillEnrichmentRequestsRef.current.delete(enrichmentSessionId);
+        void requestPersonalSkillEnrichment(false);
+      }, PERSONAL_SKILL_ENRICHMENT_RETRY_INTERVAL_MS);
+    }
+
+    void requestPersonalSkillEnrichment(true);
 
     return () => {
       isCancelled = true;
       if (pollTimer) {
         window.clearTimeout(pollTimer);
+      }
+      if (enrichmentRetryTimer) {
+        window.clearTimeout(enrichmentRetryTimer);
       }
     };
   }, [sessionId, report?.personal_skill_candidate.status]);

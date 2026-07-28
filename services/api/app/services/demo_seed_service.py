@@ -147,7 +147,7 @@ def _create_demo_report_session(osce_service: OsceSessionService, student_id: st
         "急性阑尾炎",
         "右下腹痛、反跳痛和白细胞升高支持诊断，但鉴别诊断和排除证据仍需补充。",
     )
-    osce_service.get_report(session_id)
+    osce_service.generate_report(session_id, include_optional_agents=True)
     return session_id
 
 

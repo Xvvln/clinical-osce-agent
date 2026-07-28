@@ -37,7 +37,7 @@ class ReportWithoutRagSourcesService:
     def submit_diagnosis(self, session_id: str, diagnosis: str, reasoning: str) -> None:
         return None
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {"total_score": 32, "missed_items": ["ht_migration"], "source_reference_items": []}
 
 
@@ -45,7 +45,7 @@ class ReportWithPartialRubricSourcesService(ReportWithoutRagSourcesService):
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_partial_rubric_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {
             "case_id": "appendicitis_001",
             "total_score": 32,
@@ -71,7 +71,7 @@ class ReportWithExplanationTextWithoutExplanationSourcesService(ReportWithoutRag
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_explanation_text_without_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {
             "case_id": "appendicitis_001",
             "total_score": 32,
@@ -102,8 +102,8 @@ class ReportWithExplanationMissingRubricReferenceService(ReportWithExplanationTe
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_explanation_missing_rubric_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["explanation_source_items"] = [
             {
                 "kind": "strength",
@@ -119,8 +119,8 @@ class ReportWithExplanationReferenceOutsideReportSourcesService(ReportWithExplan
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_explanation_reference_outside_report_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["source_reference_items"] = [
             {
                 "reference": "case:appendicitis_001",
@@ -144,7 +144,7 @@ class ReportWithPartialExplanationSourcesService(ReportWithoutRagSourcesService)
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_partial_explanation_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {
             "case_id": "appendicitis_001",
             "total_score": 32,
@@ -195,7 +195,7 @@ class ReportWithExplanationMissingEvidenceReferenceService(ReportWithoutRagSourc
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_explanation_missing_evidence_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {
             "case_id": "appendicitis_001",
             "total_score": 32,
@@ -251,8 +251,8 @@ class ReportWithExplanationEvidenceReferenceOutsideReportSourcesService(ReportWi
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_explanation_evidence_reference_outside_report_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["source_reference_items"] = [
             {
                 "reference": "rubric:appendicitis_001_rubric.item.dx_main",
@@ -276,7 +276,7 @@ class ReportWithPartialExplanationEvidenceSourcesService(ReportWithoutRagSources
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_partial_explanation_evidence_sources"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {
             "case_id": "appendicitis_001",
             "total_score": 32,
@@ -365,7 +365,7 @@ class ReportWithInvalidSourceItemsService(ReportWithoutRagSourcesService):
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_invalid_source_items"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
         return {"case_id": "appendicitis_001", "total_score": 32, "missed_items": [], "source_reference_items": [{}]}
 
 
@@ -373,8 +373,8 @@ class ReportWithForbiddenRagKnowledgeReferenceService(ReportWithExplanationTextW
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_forbidden_rag_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["explanation_source_items"] = [
             {
                 "kind": "strength",
@@ -399,8 +399,8 @@ class ReportWithRagScoringReferenceService(ReportWithExplanationTextWithoutExpla
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_rag_scoring_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["explanation_source_items"] = [
             {
                 "kind": "strength",
@@ -432,8 +432,8 @@ class ReportWithUngroundedAgentKnowledgeReferenceService(ReportWithExplanationTe
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_ungrounded_agent_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["explanation_source_items"] = [
             {
                 "kind": "strength",
@@ -457,8 +457,8 @@ class ReportWithGroundedAgentKnowledgeReferenceService(ReportWithUngroundedAgent
     def create_session(self, case_id: str, student_id: str) -> dict[str, str]:
         return {"session_id": "session_with_grounded_agent_reference"}
 
-    def get_report(self, session_id: str) -> dict[str, object]:
-        report = dict(super().get_report(session_id))
+    def generate_report(self, session_id: str, *, include_optional_agents: bool = False) -> dict[str, object]:
+        report = dict(super().generate_report(session_id, include_optional_agents=include_optional_agents))
         report["ai_reflection_review"] = {
             **report["ai_reflection_review"],
             "retrieved_knowledge_context": [

@@ -16,7 +16,7 @@
 
 学生提交诊断前，发送给外部 provider 的 payload 只包含当前受控任务所需的最小已揭示上下文；需要审批的输出在审批超时、异常、空响应或状态不明时按 fail-closed（失败关闭）处理。评分只接受病例已配置且由学生实际获取的证据。若未来提供反事实查体 / 检查模拟，只能放在提交后的独立 sandbox，不能回写活动会话或评分链路。
 
-诊断提交表单保持空白结构化草稿，学生需自行填写诊断、鉴别诊断、支持依据、排除依据和下一步方向，后端不得下发标准诊断作为默认值；提交时调用 `/api/sessions/{session_id}/submit-diagnosis`，随后读取 `/api/sessions/{session_id}/report` 并在右侧展示结构化评分报告，包括总分、维度进度、亮点、推理问题、下一轮训练重点，以及按 `case`、`source`、`rubric`、`evidence` 分组展示的来源引用。
+诊断提交表单保持空白结构化草稿，学生需自行填写诊断、鉴别诊断、支持依据、排除依据和下一步方向，后端不得下发标准诊断作为默认值；提交时调用 `/api/sessions/{session_id}/submit-diagnosis`，随后用 `POST /api/sessions/{session_id}/report/generate` 显式生成基础报告。报告页通过纯读取 `GET /api/me/sessions/{session_id}/report` 展示结构化评分结果；需要个人 Skill 时仅调用一次 `POST /api/sessions/{session_id}/report/enrich`，后续继续用 GET 轮询，避免页面刷新或读取操作暗中触发模型与持久化写入。
 
 病例选择入口已在左侧落地，并会从 `/api/cases` 读取 `data/cases/*.json` 生成的学生可见病例摘要；独立病例选择页 `/cases` 已接入，可展示 5 个结构化病例并跳转工作台创建对应训练 session，但不再读取完整病例 raw JSON；当前 5 个结构化病例均可创建训练 session，查体和辅助检查按钮会按病例数据动态切换，诊断提交表单仍保持空白以避免预填标准答案。
 

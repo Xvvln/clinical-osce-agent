@@ -197,7 +197,7 @@ def test_unknown_deployment_mode_does_not_fall_back_to_local_origin_policy(
     assert response.json() == {"detail": "cross-origin state-changing request rejected"}
 
 
-def test_stateful_report_get_rejects_untrusted_same_site_origin(client: TestClient) -> None:
+def test_pure_report_get_is_not_subject_to_state_change_origin_policy(client: TestClient) -> None:
     response = client.get(
         "/api/sessions/session-1/report",
         headers={
@@ -206,8 +206,8 @@ def test_stateful_report_get_rejects_untrusted_same_site_origin(client: TestClie
         },
     )
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "cross-origin state-changing request rejected"}
+    assert response.status_code == 401
+    assert response.json() == {"detail": "not authenticated"}
 
 
 @pytest.mark.parametrize(

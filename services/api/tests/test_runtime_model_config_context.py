@@ -70,7 +70,20 @@ class _ReportSessionService:
             return None
         return dict(self._session)
 
-    def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, object] | None:
+    def read_report(self, session_id: str) -> dict[str, object] | None:
+        if session_id != self._session["session_id"]:
+            return None
+        return {
+            "session_id": session_id,
+            "personal_skill_candidate": {"status": "generation_pending"},
+        }
+
+    def generate_report(
+        self,
+        session_id: str,
+        *,
+        include_optional_agents: bool = False,
+    ) -> dict[str, object] | None:
         if session_id != self._session["session_id"]:
             return None
         runtime_config = runtime_model_config_store.get_active_config()
@@ -78,7 +91,7 @@ class _ReportSessionService:
         return {
             "session_id": session_id,
             "personal_skill_candidate": {
-                "status": "generation_pending" if not include_optional_agents else "generated",
+                "status": "generated" if include_optional_agents else "generation_pending",
             },
         }
 
@@ -409,13 +422,21 @@ def test_report_background_enrichment_rebinds_session_owner_runtime_config(tmp_p
             "session_id": session_id,
             "student_id": user["user_id"],
             "stage": "feedback",
+            "final_submission": {
+                "diagnosis": "急性阑尾炎",
+                "reasoning": "已提交诊断，准备生成报告。",
+            },
         }
     )
     monkeypatch.setattr(main, "osce_session_service", session_service)
 
-    response = client.get(f"/api/me/sessions/{session_id}/report")
+    read_response = client.get(f"/api/me/sessions/{session_id}/report")
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
 
-    assert response.status_code == 200
+    assert read_response.status_code == 200
+    assert generate_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert session_service.observed_models == [
         ("foreground", "report-owner-model"),
         ("background", "report-owner-model"),

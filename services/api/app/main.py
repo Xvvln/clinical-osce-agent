@@ -2711,21 +2711,12 @@ def delete_current_user_session(
 @app.get("/api/me/sessions/{session_id}/report")
 def get_current_user_session_report(
     session_id: str,
-    background_tasks: BackgroundTasks,
-    enrich: bool = Query(default=False),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_readable_session(session_id, auth_token)
-    student_id = str(session_payload["student_id"])
-    with _use_user_runtime_model_config(student_id, require_for_training=False):
-        try:
-            report = osce_session_service.get_report(session_id, include_optional_agents=enrich)
-        except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
-            raise _model_provider_gateway_error(exc) from exc
+    _require_readable_session(session_id, auth_token)
+    report = osce_session_service.read_report(session_id)
     if report is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    if not enrich and _report_has_pending_optional_agent_enrichment(report):
-        background_tasks.add_task(_enrich_report_optional_agents_for_user, session_id, student_id)
+        raise HTTPException(status_code=404, detail="report not found")
     return report
 
 
@@ -2949,12 +2940,56 @@ def get_session_report(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    session_payload = _require_readable_session(session_id, auth_token)
+    _require_readable_session(session_id, auth_token)
+    report = osce_session_service.read_report(session_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return report
+
+
+@app.post("/api/sessions/{session_id}/report/generate")
+def generate_session_report(
+    session_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    session_payload = _require_owned_session(session_id, auth_token)
+    if not session_payload.get("final_submission"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请先提交诊断，再生成评分报告。",
+        )
     with _use_user_runtime_model_config(str(session_payload["student_id"]), require_for_training=False):
         try:
-            report = osce_session_service.get_report(session_id)
+            report = osce_session_service.generate_report(
+                session_id,
+                include_optional_agents=False,
+            )
         except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
             raise _model_provider_gateway_error(exc) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="session not found")
+    persisted_report = osce_session_service.read_report(session_id)
+    if persisted_report is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return persisted_report
+
+
+@app.post("/api/sessions/{session_id}/report/enrich")
+def enrich_session_report(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    session_payload = _require_owned_session(session_id, auth_token)
+    report = osce_session_service.read_report(session_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    if _report_has_pending_optional_agent_enrichment(report):
+        response.status_code = status.HTTP_202_ACCEPTED
+        background_tasks.add_task(
+            _enrich_report_optional_agents_for_user,
+            session_id,
+            str(session_payload["student_id"]),
+        )
     return report

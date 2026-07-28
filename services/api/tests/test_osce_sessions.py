@@ -357,8 +357,12 @@ def test_report_google_provider_quota_error_returns_readable_gateway_error(monke
 
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "已提交诊断，准备生成报告。"},
+    )
 
-    def failing_report(_: str) -> dict[str, object]:
+    def failing_report(_: str, **__: object) -> dict[str, object]:
         raise google_genai_errors.ClientError(
             429,
             {
@@ -370,11 +374,11 @@ def test_report_google_provider_quota_error_returns_readable_gateway_error(monke
             },
         )
 
-    monkeypatch.setattr(main.osce_session_service, "get_report", failing_report)
+    monkeypatch.setattr(main.osce_session_service, "generate_report", failing_report)
 
     with TestClient(app, raise_server_exceptions=False) as error_client:
         error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
-        response = error_client.get(f"/api/sessions/{session_id}/report")
+        response = error_client.post(f"/api/sessions/{session_id}/report/generate")
 
     assert create_response.status_code == 200
     assert response.status_code == 502
@@ -390,15 +394,19 @@ def test_current_user_report_google_adc_missing_error_returns_readable_gateway_e
 
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "已提交诊断，准备生成报告。"},
+    )
 
     def failing_report(_: str, **__: object) -> dict[str, object]:
         raise google_auth_exceptions.DefaultCredentialsError("Your default credentials were not found.")
 
-    monkeypatch.setattr(main.osce_session_service, "get_report", failing_report)
+    monkeypatch.setattr(main.osce_session_service, "generate_report", failing_report)
 
     with TestClient(app, raise_server_exceptions=False) as error_client:
         error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
-        response = error_client.get(f"/api/me/sessions/{session_id}/report")
+        response = error_client.post(f"/api/sessions/{session_id}/report/generate")
 
     assert create_response.status_code == 200
     assert response.status_code == 502
@@ -635,6 +643,8 @@ def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str
             {"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
         ),
         ("GET", f"/api/sessions/{session_id}/report", None),
+        ("POST", f"/api/sessions/{session_id}/report/generate", None),
+        ("POST", f"/api/sessions/{session_id}/report/enrich", None),
     ]
 
 
@@ -738,7 +748,7 @@ def test_current_user_sessions_mark_completed_after_diagnosis_submission(
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
     after_submit_response = client.get("/api/me/sessions")
-    report_response = client.get(f"/api/me/sessions/{session_id}/report")
+    report_response = client.post(f"/api/sessions/{session_id}/report/generate")
     after_report_response = client.get("/api/me/sessions")
 
     assert create_response.status_code == 200
@@ -834,7 +844,8 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
         f"/api/sessions/{current_session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
-    current_report_response = client.get(f"/api/me/sessions/{current_session_id}/report")
+    current_report_response = client.post(f"/api/sessions/{current_session_id}/report/generate")
+    current_enrich_response = client.post(f"/api/sessions/{current_session_id}/report/enrich")
     other_user = main.auth_store.create_user("other-profile@example.test", "safe-password-456", "学生乙")
     assert other_user is not None
     other_token = main.auth_store.create_session(other_user["user_id"])
@@ -847,6 +858,7 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
 
     assert current_response.status_code == 200
     assert current_report_response.status_code == 200
+    assert current_enrich_response.status_code == 202
     assert other_response.status_code == 200
     assert response.status_code == 200
     profile = response.json()["profile"]
@@ -1219,11 +1231,13 @@ def test_completed_report_persists_student_profile_snapshot(tmp_path, authentica
         json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断。"},
     )
 
-    report_response = client.get(f"/api/me/sessions/{session_id}/report")
+    report_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
     stored_profile = osce_session_service.student_profile_store.get_profile(authenticated_user["user_id"])
 
     assert create_response.status_code == 200
     assert report_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert stored_profile is not None
     assert stored_profile["student_id"] == authenticated_user["user_id"]
     assert stored_profile["last_updated_from_report_count"] == 1
@@ -1316,6 +1330,7 @@ def test_current_user_session_detail_and_report_use_owned_session() -> None:
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
     other_user = main.auth_store.create_user("other-detail@example.test", "safe-password-456", "学生乙")
     assert other_user is not None
     other_token = main.auth_store.create_session(other_user["user_id"])
@@ -1324,6 +1339,7 @@ def test_current_user_session_detail_and_report_use_owned_session() -> None:
     report_response = client.get(f"/api/me/sessions/{session_id}/report")
 
     assert detail_response.status_code == 200
+    assert generate_response.status_code == 200
     assert detail_response.json()["session_id"] == session_id
     assert report_response.status_code == 200
     assert report_response.json()["session_id"] == session_id
@@ -1349,6 +1365,7 @@ def test_admin_login_cookie_can_still_read_student_report(tmp_path) -> None:
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
 
     admin_login_response = client.post("/api/auth/login", json={"email": "admin@osce.test", "password": "admin"})
     detail_response = client.get(f"/api/me/sessions/{session_id}")
@@ -1356,6 +1373,7 @@ def test_admin_login_cookie_can_still_read_student_report(tmp_path) -> None:
 
     assert create_response.status_code == 200
     assert submit_response.status_code == 200
+    assert generate_response.status_code == 200
     assert admin_login_response.status_code == 200
     assert detail_response.status_code == 200
     assert detail_response.json()["session_id"] == session_id
@@ -2325,7 +2343,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         for item in internal_session.action_timeline
     )
 
-    report_response = client.get(f"/api/sessions/{session_id}/report")
+    report_response = client.post(f"/api/sessions/{session_id}/report/generate")
 
     assert report_response.status_code == 200
     report_payload = report_response.json()
@@ -2717,7 +2735,7 @@ def test_session_report_can_be_read_after_session_memory_is_cleared(tmp_path) ->
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
-    generated_report = client.get(f"/api/sessions/{session_id}/report").json()
+    generated_report = client.post(f"/api/sessions/{session_id}/report/generate").json()
 
     osce_session_service._sessions.clear()
     loaded_response = client.get(f"/api/sessions/{session_id}/report")
@@ -2749,10 +2767,14 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
 
+    base_report_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
     report_response = client.get(f"/api/sessions/{session_id}/report")
     report = report_response.json()
     personal_candidate = report["personal_skill_candidate"]
 
+    assert base_report_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert report_response.status_code == 200
     assert report["ai_reflection_review"]["status"] == "generated"
     assert report["ai_reflection_review"]["source_references"]
@@ -2843,30 +2865,44 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert other_internal_session.evolution_candidates == []
 
 
-def test_current_user_report_defers_optional_personal_skill_enrichment(
+def test_report_generation_and_optional_enrichment_require_explicit_posts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "已提交诊断，准备生成报告。"},
+    )
     calls: dict[str, object] = {}
 
-    def fast_report(session_id_arg: str, *, include_optional_agents: bool = True) -> dict[str, object]:
+    pending_report = {
+        "report_id": f"{session_id}_report",
+        "session_id": session_id,
+        "case_id": "appendicitis_001",
+        "total_score": 0,
+        "dimension_scores": {},
+        "rubric_scores": {},
+        "missed_items": [],
+        "source_references": [],
+        "source_reference_items": [],
+        "explanation_source_items": [],
+        "feedback_summary": "基础报告。",
+        "personal_skill_candidate": {"status": "generation_pending", "scope": "personal"},
+    }
+
+    def generate_report(
+        session_id_arg: str,
+        *,
+        include_optional_agents: bool = True,
+    ) -> dict[str, object]:
         calls["session_id"] = session_id_arg
         calls["include_optional_agents"] = include_optional_agents
-        return {
-            "report_id": f"{session_id_arg}_report",
-            "session_id": session_id_arg,
-            "case_id": "appendicitis_001",
-            "total_score": 0,
-            "dimension_scores": {},
-            "rubric_scores": {},
-            "missed_items": [],
-            "source_references": [],
-            "source_reference_items": [],
-            "explanation_source_items": [],
-            "feedback_summary": "基础报告。",
-            "personal_skill_candidate": {"status": "generation_pending", "scope": "personal"},
-        }
+        return pending_report
+
+    def read_report(session_id_arg: str) -> dict[str, object]:
+        calls["read_session_id"] = session_id_arg
+        return pending_report
 
     def enrich_report(session_id_arg: str) -> dict[str, object]:
         calls["enriched_session_id"] = session_id_arg
@@ -2885,16 +2921,49 @@ def test_current_user_report_defers_optional_personal_skill_enrichment(
             "personal_skill_candidate": {"status": "approved", "scope": "personal"},
         }
 
-    monkeypatch.setattr(main.osce_session_service, "get_report", fast_report)
+    monkeypatch.setattr(main.osce_session_service, "generate_report", generate_report)
+    monkeypatch.setattr(main.osce_session_service, "read_report", read_report)
     monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
 
-    response = client.get(f"/api/me/sessions/{session_id}/report")
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    read_response = client.get(f"/api/me/sessions/{session_id}/report")
 
-    assert response.status_code == 200
+    assert generate_response.status_code == 200
+    assert read_response.status_code == 200
     assert calls["session_id"] == session_id
     assert calls["include_optional_agents"] is False
+    assert calls["read_session_id"] == session_id
+    assert "enriched_session_id" not in calls
+    assert read_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
+
+    assert enrich_response.status_code == 202
     assert calls["enriched_session_id"] == session_id
-    assert response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+    assert enrich_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+
+
+def test_report_generation_does_not_return_stale_payload_after_concurrent_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    client.post(
+        f"/api/sessions/{session_id}/submit-diagnosis",
+        json={"diagnosis": "急性阑尾炎", "reasoning": "已提交诊断，准备生成报告。"},
+    )
+
+    monkeypatch.setattr(
+        main.osce_session_service,
+        "generate_report",
+        lambda *_args, **_kwargs: {"session_id": session_id, "report_id": f"{session_id}_report"},
+    )
+    monkeypatch.setattr(main.osce_session_service, "read_report", lambda _session_id: None)
+
+    response = client.post(f"/api/sessions/{session_id}/report/generate")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "session not found"}
 
 
 def test_background_report_conflict_keeps_pending_report_retryable(
@@ -2904,9 +2973,8 @@ def test_background_report_conflict_keeps_pending_report_retryable(
     session_id = create_response.json()["session_id"]
     enrichment_attempts = 0
 
-    def pending_report(session_id_arg: str, *, include_optional_agents: bool = True) -> dict[str, object]:
+    def pending_report(session_id_arg: str) -> dict[str, object]:
         assert session_id_arg == session_id
-        assert include_optional_agents is False
         return {
             "report_id": f"{session_id_arg}_report",
             "session_id": session_id_arg,
@@ -2943,29 +3011,30 @@ def test_background_report_conflict_keeps_pending_report_retryable(
             },
         }
 
-    monkeypatch.setattr(main.osce_session_service, "get_report", pending_report)
+    monkeypatch.setattr(main.osce_session_service, "read_report", pending_report)
     monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
 
-    first_response = client.get(f"/api/me/sessions/{session_id}/report")
-    second_response = client.get(f"/api/me/sessions/{session_id}/report")
+    first_response = client.post(f"/api/sessions/{session_id}/report/enrich")
+    second_response = client.post(f"/api/sessions/{session_id}/report/enrich")
 
-    assert first_response.status_code == 200
-    assert second_response.status_code == 200
+    assert first_response.status_code == 202
+    assert second_response.status_code == 202
     assert first_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
     assert second_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
     assert enrichment_attempts == 2
 
 
-def test_current_user_report_poll_can_force_optional_personal_skill_enrichment(
+def test_report_get_ignores_legacy_enrich_query_and_remains_pure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
-    calls: list[bool] = []
+    read_calls: list[str] = []
+    enrichment_calls: list[str] = []
 
-    def report_for_poll(session_id_arg: str, *, include_optional_agents: bool = True) -> dict[str, object]:
+    def report_for_poll(session_id_arg: str) -> dict[str, object]:
         assert session_id_arg == session_id
-        calls.append(include_optional_agents)
+        read_calls.append(session_id_arg)
         return {
             "report_id": f"{session_id_arg}_report",
             "session_id": session_id_arg,
@@ -2979,18 +3048,24 @@ def test_current_user_report_poll_can_force_optional_personal_skill_enrichment(
             "explanation_source_items": [],
             "feedback_summary": "基础报告。",
             "personal_skill_candidate": {
-                "status": "approved" if include_optional_agents else "generation_pending",
+                "status": "generation_pending",
                 "scope": "personal",
             },
         }
 
-    monkeypatch.setattr(main.osce_session_service, "get_report", report_for_poll)
+    def enrich_report(session_id_arg: str) -> dict[str, object]:
+        enrichment_calls.append(session_id_arg)
+        return report_for_poll(session_id_arg)
+
+    monkeypatch.setattr(main.osce_session_service, "read_report", report_for_poll)
+    monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
 
     response = client.get(f"/api/me/sessions/{session_id}/report?enrich=1")
 
     assert response.status_code == 200
-    assert calls == [True]
-    assert response.json()["personal_skill_candidate"]["status"] == "approved"
+    assert read_calls == [session_id]
+    assert enrichment_calls == []
+    assert response.json()["personal_skill_candidate"]["status"] == "generation_pending"
 
 
 def test_report_can_return_before_personal_skill_agent_finishes(
@@ -3036,7 +3111,7 @@ def test_report_can_return_before_personal_skill_agent_finishes(
         json={"diagnosis": "急性阑尾炎", "reasoning": "只完成部分问诊，仍希望先生成基础报告。"},
     )
 
-    initial_report = osce_session_service.get_report(session_id, include_optional_agents=False)
+    initial_report = osce_session_service.generate_report(session_id, include_optional_agents=False)
     assert initial_report is not None
     assert initial_report["personal_skill_candidate"]["status"] == "generation_pending"
     assert tracking_service.call_count == 0
@@ -3087,7 +3162,7 @@ def test_pending_personal_skill_poll_does_not_resave_deferred_report(
         json={"diagnosis": "急性阑尾炎", "reasoning": "先生成基础报告，再后台生成个人 Skill。"},
     )
 
-    pending_report = osce_session_service.get_report(session_id, include_optional_agents=False)
+    pending_report = osce_session_service.generate_report(session_id, include_optional_agents=False)
     assert pending_report is not None
     assert pending_report["personal_skill_candidate"]["status"] == "generation_pending"
 
@@ -3100,7 +3175,7 @@ def test_pending_personal_skill_poll_does_not_resave_deferred_report(
 
     monkeypatch.setattr(osce_session_service.report_store, "save_report", tracking_save_report)
 
-    repeated_poll_report = osce_session_service.get_report(session_id, include_optional_agents=False)
+    repeated_poll_report = osce_session_service.read_report(session_id)
     enriched_report = osce_session_service.enrich_report_optional_agents(session_id)
 
     assert repeated_poll_report is not None
@@ -3181,9 +3256,13 @@ def test_completed_training_hydrates_legacy_stored_report_with_ai_reflection_and
         }
     )
 
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
     report_response = client.get(f"/api/sessions/{session_id}/report")
     report = report_response.json()
 
+    assert generate_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert report_response.status_code == 200
     assert report["ai_reflection_review"]["status"] == "generated"
     assert report["personal_skill_candidate"]["status"] == "approved"
@@ -3228,8 +3307,12 @@ def test_completed_training_report_survives_personal_skill_generation_failure(
         json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断，但病史补充不足。"},
     )
 
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
     response = client.get(f"/api/sessions/{session_id}/report")
 
+    assert generate_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert response.status_code == 200
     report = response.json()
     assert report["personal_skill_candidate"]["status"] == "generation_failed"
@@ -3263,8 +3346,12 @@ def test_completed_training_report_records_warning_when_personal_skill_crashes(
         json={"diagnosis": "急性阑尾炎", "reasoning": "只完成部分问诊，仍希望生成基础报告。"},
     )
 
+    generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    enrich_response = client.post(f"/api/sessions/{session_id}/report/enrich")
     response = client.get(f"/api/sessions/{session_id}/report")
 
+    assert generate_response.status_code == 200
+    assert enrich_response.status_code == 202
     assert response.status_code == 200
     report = response.json()
     assert report["report_id"] == f"{session_id}_report"
@@ -3300,6 +3387,8 @@ def test_completed_training_rehydrates_legacy_generic_ai_reflection_text(
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "反跳痛和白细胞升高支持诊断，但病史补充不足。"},
     )
+    client.post(f"/api/sessions/{session_id}/report/generate")
+    client.post(f"/api/sessions/{session_id}/report/enrich")
     generated_report = client.get(f"/api/sessions/{session_id}/report").json()
     osce_session_service.report_store.save_report(
         {
@@ -3317,12 +3406,15 @@ def test_completed_training_rehydrates_legacy_generic_ai_reflection_text(
         }
     )
 
+    stored_before_read = osce_session_service.report_store.get_stored_report(session_id)
     report = client.get(f"/api/sessions/{session_id}/report").json()
+    stored_after_read = osce_session_service.report_store.get_stored_report(session_id)
 
     assert "右下腹痛教学病例" in report["ai_reflection_review"]["summary"]
     assert "老师视角" in report["ai_reflection_review"]["teacher_feedback"]
     assert "下一轮 Coach" not in report["ai_reflection_review"]["next_focus"]
     assert "AI 复盘" not in report["ai_reflection_review"]["safety_note"]
+    assert stored_before_read == stored_after_read
 
 
 def test_orphan_legacy_report_rehydrates_generic_ai_reflection_from_report_fields(tmp_path) -> None:
@@ -3384,11 +3476,20 @@ def test_incomplete_training_report_does_not_generate_personal_skill(tmp_path) -
 
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
-    report_response = client.get(f"/api/sessions/{session_id}/report")
+    missing_report_response = client.get(f"/api/sessions/{session_id}/report")
+    blocked_generate_response = client.post(f"/api/sessions/{session_id}/report/generate")
+    report = osce_session_service.generate_report(session_id, include_optional_agents=False)
+    loaded_report_response = client.get(f"/api/sessions/{session_id}/report")
 
-    assert report_response.status_code == 200
-    assert report_response.json()["personal_skill_candidate"]["status"] == "not_complete"
-    assert report_response.json()["ai_reflection_review"]["status"] == "not_ready"
+    assert missing_report_response.status_code == 404
+    assert missing_report_response.json() == {"detail": "report not found"}
+    assert blocked_generate_response.status_code == 409
+    assert blocked_generate_response.json() == {"detail": "请先提交诊断，再生成评分报告。"}
+    assert report is not None
+    assert report["personal_skill_candidate"]["status"] == "not_complete"
+    assert report["ai_reflection_review"]["status"] == "not_ready"
+    assert loaded_report_response.status_code == 200
+    assert loaded_report_response.json()["personal_skill_candidate"]["status"] == "not_complete"
     assert osce_session_service.training_skill_store.list_enabled_skills() == []
 
 
@@ -3452,7 +3553,8 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         f"/api/sessions/{session_id}/submit-diagnosis",
         json={"diagnosis": "急性阑尾炎", "reasoning": "转移性右下腹痛、反跳痛和白细胞升高支持诊断。"},
     )
-    client.get(f"/api/sessions/{session_id}/report")
+    client.post(f"/api/sessions/{session_id}/report/generate")
+    client.post(f"/api/sessions/{session_id}/report/enrich")
     state_payload = client.get(f"/api/sessions/{session_id}").json()
     internal_session = osce_session_service._get_session(session_id)
     assert internal_session is not None

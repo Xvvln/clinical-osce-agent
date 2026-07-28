@@ -3919,7 +3919,7 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
                 json={"diagnosis": "暂不确定", "reasoning": "证据不足，先提交一次低质量训练。"},
             )
             assert submit_response.status_code == 200
-            report_response = client.get(f"/api/sessions/{session_id}/report")
+            report_response = client.post(f"/api/sessions/{session_id}/report/generate")
             assert report_response.status_code == 200
             report = report_response.json()
             assert report["source_reference_items"]

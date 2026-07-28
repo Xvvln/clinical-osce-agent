@@ -295,7 +295,11 @@ test("home diagnosis submit does not report submit failure when only report retr
   assert.match(pageSource, /const submittedSession = await submitDiagnosis\(activeSession\.session_id, diagnosis, reasoning\);/);
   assert.match(pageSource, /setSession\(submittedSession\);/);
   assert.match(pageSource, /setStatusText\("诊断已提交，正在生成评分报告\.\.\."\);/);
-  assert.match(pageSource, /try \{[\s\S]*?const report = await getSessionReport\(submittedSession\.session_id\);[\s\S]*?setFeedbackReport\(report\);[\s\S]*?router\.push\(`\/report\?session_id=\$\{encodeURIComponent\(report\.session_id \|\| submittedSession\.session_id\)\}`\);[\s\S]*?\} catch \(reportError\) \{/);
+  assert.match(pageSource, /function generateSessionReport\(sessionId: string\): Promise<FeedbackReport>/);
+  assert.match(pageSource, /`\/api\/sessions\/\$\{sessionId\}\/report\/generate`/);
+  assert.match(pageSource, /method: "POST"/);
+  assert.doesNotMatch(pageSource, /function getSessionReport/);
+  assert.match(pageSource, /try \{[\s\S]*?const report = await generateSessionReport\(submittedSession\.session_id\);[\s\S]*?setFeedbackReport\(report\);[\s\S]*?router\.push\(`\/report\?session_id=\$\{encodeURIComponent\(report\.session_id \|\| submittedSession\.session_id\)\}`\);[\s\S]*?\} catch \(reportError\) \{/);
   assert.match(pageSource, /setErrorText\(`诊断已提交，但报告暂时未取回：\$\{reportMessage\}`\);/);
   assert.match(pageSource, /setStatusText\("诊断已提交；评分报告暂时未取回，可稍后从训练记录打开。"\);/);
   assert.match(pageSource, /setStatusText\("诊断提交失败，请确认后端仍在运行。"\);/);
@@ -911,8 +915,21 @@ test("report page notifies when a pending personal skill finishes in the backgro
   assert.match(reportSource, /if \(status === "approved"\)/);
   assert.match(reportSource, /if \(status === "blocked_by_regression"\)/);
   assert.match(reportSource, /if \(status === "generation_failed"\)/);
-  assert.match(reportSource, /report\?\.personal_skill_candidate\.status !== "generation_pending"/);
-  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{sessionId\}\/report\?enrich=true`/);
+  assert.match(reportSource, /\["generation_pending", "generation_failed"\]\.includes\(personalSkillStatus \?\? ""\)/);
+  assert.match(reportSource, /const enrichmentSessionId = sessionId/);
+  assert.match(reportSource, /personalSkillEnrichmentRequestsRef\.current\.get\(enrichmentSessionId\)/);
+  assert.match(reportSource, /personalSkillEnrichmentRequestsRef\.current\.set\(enrichmentSessionId, nextRequest\)/);
+  assert.match(reportSource, /personalSkillEnrichmentRequestsRef\.current\.delete\(enrichmentSessionId\)/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/sessions\/\$\{enrichmentSessionId\}\/report\/enrich`, \{[\s\S]*?method: "POST"/);
+  assert.match(reportSource, /const PERSONAL_SKILL_ENRICHMENT_RETRY_INTERVAL_MS = 310_000/);
+  assert.match(reportSource, /requestPersonalSkillEnrichment\(startPolling\)/);
+  assert.match(reportSource, /requestPersonalSkillEnrichment\(false\)/);
+  assert.match(reportSource, /window\.clearTimeout\(enrichmentRetryTimer\)/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{enrichmentSessionId\}\/report`, \{[\s\S]*?timeoutMs: REPORT_REQUEST_TIMEOUT_MS/);
+  assert.match(reportSource, /error instanceof RequestJsonError[\s\S]*?error\.status !== 404/);
+  assert.match(reportSource, /const canGenerateReport = Boolean\(nextSession\.final_submission\)[\s\S]*?nextSession\.stage === "feedback"/);
+  assert.match(reportSource, /requestJson<FeedbackReportPayload>\(`\/api\/sessions\/\$\{nextSessionId\}\/report\/generate`, \{[\s\S]*?method: "POST"/);
+  assert.doesNotMatch(reportSource, /report\?enrich=true/);
   assert.match(reportSource, /const noticeText = getPersonalSkillCompletionNoticeText\(nextReport\.personal_skill_candidate\.status\);/);
   assert.match(reportSource, /if \(noticeText\) \{/);
   assert.match(reportSource, /setPersonalSkillNoticeText\(noticeText\);/);
@@ -1290,7 +1307,7 @@ test("home workspace can resume current user's persisted backend session", () =>
   assert.match(pageSource, /const nextSession = await getSession\(sessionIdToRestore\);/);
   assert.match(pageSource, /function isCompletedOsceSession\(session: OsceSession \| null\): boolean \{/);
   assert.match(pageSource, /isCompletedOsceSession\(nextSession\) \? "该训练已提交诊断，训练已结束。可以查看评分报告或重新选择病例开始新训练。" : "已恢复后端训练会话，可以继续训练。"/);
-  assert.match(pageSource, /`\/api\/me\/sessions\/\$\{sessionId\}\/report`/);
+  assert.match(pageSource, /`\/api\/sessions\/\$\{sessionId\}\/report\/generate`/);
   assert.match(pageSource, /async function getRequestErrorMessage\(response: Response\): Promise<string>/);
   assert.match(pageSource, /if \(response\.status === 401\) \{/);
   assert.match(pageSource, /return "请先登录后再继续训练。";/);
@@ -1925,7 +1942,7 @@ test("report page surfaces backend report failures as readable error cards", () 
   assert.match(reportSource, /模型服务调用失败/);
   assert.match(
     reportSource,
-    /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`, \{ timeoutMs: REPORT_REQUEST_TIMEOUT_MS \}\)/,
+    /requestJson<FeedbackReportPayload>\(`\/api\/me\/sessions\/\$\{nextSessionId\}\/report`, \{[\s\S]*?timeoutMs: REPORT_REQUEST_TIMEOUT_MS/,
   );
   assert.match(reportSource, /setErrorText\(formatRequestErrorMessage\(error\)\);/);
   assert.match(reportSource, /role="alert"/);

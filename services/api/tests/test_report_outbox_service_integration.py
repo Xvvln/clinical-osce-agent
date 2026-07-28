@@ -111,7 +111,7 @@ def test_base_report_and_enrichment_emit_distinct_idempotent_events(tmp_path) ->
     service = _build_service(tmp_path, personal_skill_service)
     session_id = _prepare_completed_session(service)
 
-    base_report = service.get_report(session_id, include_optional_agents=False)
+    base_report = service.generate_report(session_id, include_optional_agents=False)
 
     assert base_report is not None
     assert base_report["personal_skill_candidate"]["status"] == "generation_pending"
@@ -146,11 +146,50 @@ def test_base_report_and_enrichment_emit_distinct_idempotent_events(tmp_path) ->
     assert service.report_store.list_pending_outbox() == []
 
 
+def test_read_report_does_not_enrich_claim_or_drain_pending_outbox(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    personal_skill_service = _SuccessfulPersonalSkillService()
+    service = _build_service(tmp_path, personal_skill_service)
+    session_id = _prepare_completed_session(service)
+    original_append_event = service.training_event_store.append_event
+
+    def unavailable_append_event(*_: object, **__: object) -> bool:
+        raise RuntimeError("event database unavailable")
+
+    monkeypatch.setattr(service.training_event_store, "append_event", unavailable_append_event)
+    base_report = service.generate_report(session_id, include_optional_agents=False)
+    assert base_report is not None
+    monkeypatch.setattr(service.training_event_store, "append_event", original_append_event)
+
+    stored_before = service.report_store.get_stored_report(session_id)
+    session_before = service.session_store.get_session(session_id)
+    events_before = service.training_event_store.list_session_events(session_id)
+    outbox_before = service.report_store.list_pending_outbox()
+    assert stored_before is not None
+    assert stored_before.enrichment_status == "pending"
+    assert len(outbox_before) == 1
+
+    compatibility_read = service.get_report(session_id)
+    explicit_read = service.read_report(session_id)
+
+    assert compatibility_read == explicit_read
+    assert compatibility_read is not None
+    assert compatibility_read["report_id"] == base_report["report_id"]
+    assert compatibility_read["personal_skill_candidate"]["status"] == "generation_pending"
+    assert personal_skill_service.call_count == 0
+    assert service.report_store.get_stored_report(session_id) == stored_before
+    assert service.session_store.get_session(session_id) == session_before
+    assert service.training_event_store.list_session_events(session_id) == events_before
+    assert service.report_store.list_pending_outbox() == outbox_before
+
+
 def test_two_service_instances_share_one_enrichment_lease(tmp_path) -> None:
     personal_skill_service = _BlockingPersonalSkillService()
     bootstrap_service = _build_service(tmp_path, personal_skill_service)
     session_id = _prepare_completed_session(bootstrap_service)
-    base_report = bootstrap_service.get_report(session_id, include_optional_agents=False)
+    base_report = bootstrap_service.generate_report(session_id, include_optional_agents=False)
     assert base_report is not None
 
     first_service = _build_service(tmp_path, personal_skill_service)
@@ -168,7 +207,7 @@ def test_two_service_instances_share_one_enrichment_lease(tmp_path) -> None:
     assert winner_report is not None
     assert winner_report["personal_skill_candidate"]["status"] == "approved"
     assert personal_skill_service.call_count == 1
-    assert second_service.get_report(session_id)["personal_skill_candidate"]["status"] == "approved"
+    assert second_service.read_report(session_id)["personal_skill_candidate"]["status"] == "approved"
     events = second_service.training_event_store.list_session_events(session_id)
     assert len([event for event in events if event["event_type"] == "report_enriched"]) == 1
 
@@ -185,7 +224,7 @@ def test_saved_base_report_survives_event_delivery_failure_and_retries(
         raise RuntimeError("event database unavailable")
 
     monkeypatch.setattr(service.training_event_store, "append_event", unavailable_append_event)
-    report = service.get_report(session_id, include_optional_agents=False)
+    report = service.generate_report(session_id, include_optional_agents=False)
 
     assert report is not None
     assert service.report_store.get_report(session_id) == report
@@ -210,7 +249,7 @@ def test_outbox_replay_after_insert_before_ack_keeps_one_training_event(
         raise RuntimeError("crash before outbox ack")
 
     monkeypatch.setattr(service.report_store, "acknowledge_outbox", fail_acknowledge)
-    report = service.get_report(session_id, include_optional_agents=False)
+    report = service.generate_report(session_id, include_optional_agents=False)
 
     assert report is not None
     assert len(service.report_store.list_pending_outbox()) == 1
@@ -224,15 +263,15 @@ def test_outbox_replay_after_insert_before_ack_keeps_one_training_event(
     assert len([event for event in events_after_replay if event["event_type"] == "report_generated"]) == 1
 
 
-def test_failed_enrichment_is_retryable_on_next_normal_open(tmp_path) -> None:
+def test_failed_enrichment_is_retryable_on_next_explicit_request(tmp_path) -> None:
     personal_skill_service = _FlakyPersonalSkillService()
     service = _build_service(tmp_path, personal_skill_service)
     session_id = _prepare_completed_session(service)
-    base_report = service.get_report(session_id, include_optional_agents=False)
+    base_report = service.generate_report(session_id, include_optional_agents=False)
     assert base_report is not None
 
-    failed_report = service.get_report(session_id)
-    retried_report = service.get_report(session_id)
+    failed_report = service.enrich_report_optional_agents(session_id)
+    retried_report = service.enrich_report_optional_agents(session_id)
 
     assert failed_report is not None
     assert failed_report["personal_skill_candidate"]["status"] == "generation_failed"
@@ -248,11 +287,11 @@ def test_failed_enrichment_is_retryable_on_next_normal_open(tmp_path) -> None:
     assert len([event for event in events if event["event_type"] == "report_generated"]) == 1
 
 
-def test_expired_enrichment_claim_is_recovered_on_normal_open(tmp_path) -> None:
+def test_expired_enrichment_claim_is_recovered_on_explicit_request(tmp_path) -> None:
     personal_skill_service = _SuccessfulPersonalSkillService()
     service = _build_service(tmp_path, personal_skill_service)
     session_id = _prepare_completed_session(service)
-    base_report = service.get_report(session_id, include_optional_agents=False)
+    base_report = service.generate_report(session_id, include_optional_agents=False)
     assert base_report is not None
     abandoned_claim = service.report_store.claim_report_enrichment(
         session_id,
@@ -261,7 +300,7 @@ def test_expired_enrichment_claim_is_recovered_on_normal_open(tmp_path) -> None:
     )
     assert abandoned_claim is not None
 
-    recovered_report = service.get_report(session_id)
+    recovered_report = service.enrich_report_optional_agents(session_id)
 
     assert recovered_report is not None
     assert recovered_report["personal_skill_candidate"]["status"] == "approved"
@@ -278,7 +317,7 @@ def test_session_cas_conflict_after_completion_does_not_regress_report(
 ) -> None:
     service = _build_service(tmp_path, _SuccessfulPersonalSkillService())
     session_id = _prepare_completed_session(service)
-    base_report = service.get_report(session_id, include_optional_agents=False)
+    base_report = service.generate_report(session_id, include_optional_agents=False)
     assert base_report is not None
 
     def reject_session_sync(_: object) -> None:
