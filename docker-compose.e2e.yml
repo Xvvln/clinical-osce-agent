@@ -1,0 +1,106 @@
+name: clinical-osce-agent-e2e
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
+    environment:
+      CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
+      CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG: "true"
+      CLINICAL_OSCE_ADMIN_EMAILS: ${E2E_ADMIN_EMAIL:-admin@e2e.test}
+      CLINICAL_OSCE_DEMO_ADMIN_ENABLED: "true"
+      CLINICAL_OSCE_DEMO_ADMIN_EMAIL: ${E2E_ADMIN_EMAIL:-admin@e2e.test}
+      CLINICAL_OSCE_DEMO_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-traceosce-e2e-admin-only}
+      CLINICAL_OSCE_DEMO_STUDENT_ENABLED: "true"
+      CLINICAL_OSCE_DEMO_STUDENT_EMAIL: ${E2E_STUDENT_EMAIL:-student@e2e.test}
+      CLINICAL_OSCE_DEMO_STUDENT_PASSWORD: ${E2E_STUDENT_PASSWORD:-traceosce-e2e-student-only}
+      OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING: "false"
+      OSCE_GEMINI_PATIENT_USE_VERTEX: "false"
+      OSCE_GEMINI_PATIENT_API_KEY: ""
+      OSCE_GEMINI_PATIENT_MODEL: ""
+      OSCE_GEMINI_PATIENT_PROXY_URL: ""
+      OSCE_VERTEX_ENABLED: "false"
+      OSCE_VERTEX_SKILL_CANDIDATE_ENABLED: "false"
+      OSCE_VERTEX_EMBEDDING_ENABLED: "false"
+      OSCE_OPENAI_ENABLED: "false"
+      OSCE_OPENAI_API_KEY: ""
+      OSCE_OPENAI_MODEL: ""
+      OSCE_OPENAI_FALLBACK_ENABLED: "false"
+      OSCE_OPENAI_FALLBACK_API_KEY: ""
+      OSCE_OPENAI_FALLBACK_MODEL: ""
+      OSCE_LOCAL_EMBEDDING_ENABLED: "false"
+      OSCE_CHROMA_ENABLED: "false"
+      OSCE_DASHSCOPE_RERANK_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - e2e_runtime:/app/data/runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmjs.org}
+        CLINICAL_OSCE_WEB_API_URL: http://api:8000
+        NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
+    environment:
+      CLINICAL_OSCE_WEB_API_URL: http://api:8000
+      NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        PNPM_REGISTRY: ${PNPM_REGISTRY:-https://registry.npmjs.org}
+        CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
+    environment:
+      CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  e2e_runtime:

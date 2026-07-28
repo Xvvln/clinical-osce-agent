@@ -98,3 +98,71 @@ jobs:
 
       - name: Check admin web
         run: pnpm check
+
+  e2e:
+    name: Critical browser flow
+    needs:
+      - api
+      - web
+      - admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      E2E_STUDENT_BASE_URL: http://localhost:3000
+      E2E_ADMIN_BASE_URL: http://127.0.0.1:3001
+      E2E_STUDENT_EMAIL: student@e2e.test
+      E2E_STUDENT_PASSWORD: traceosce-e2e-student-only
+      E2E_ADMIN_EMAIL: admin@e2e.test
+      E2E_ADMIN_PASSWORD: traceosce-e2e-admin-only
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install student web dependencies
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: apps/web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Start isolated E2E stack
+        run: docker compose -f docker-compose.e2e.yml up --build --wait --wait-timeout 240
+
+      - name: Run critical training flow
+        working-directory: apps/web
+        run: pnpm test:e2e
+
+      - name: Collect E2E service logs
+        if: always()
+        run: |
+          mkdir -p apps/web/test-results
+          docker compose -f docker-compose.e2e.yml ps --all > apps/web/test-results/docker-compose-ps.log 2>&1 || true
+          docker compose -f docker-compose.e2e.yml logs --no-color > apps/web/test-results/docker-compose.log 2>&1 || true
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: critical-browser-flow-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+
+      - name: Stop isolated E2E stack
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down --volumes --remove-orphans

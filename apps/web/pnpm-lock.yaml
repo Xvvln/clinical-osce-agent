@@ -13,7 +13,7 @@ importers:
         version: 4.2.4
       next:
         specifier: ^15.5.14
-        version: 15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 15.5.15(@playwright/test@1.62.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react:
         specifier: ^19.1.0
         version: 19.2.5
@@ -24,6 +24,9 @@ importers:
         specifier: ^4.2.1
         version: 4.2.4
     devDependencies:
+      '@playwright/test':
+        specifier: 1.62.0
+        version: 1.62.0
       '@types/node':
         specifier: ^22.15.18
         version: 22.19.17
@@ -250,6 +253,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@playwright/test@1.62.0':
+    resolution: {integrity: sha512-9zOJ6ZQRAena31MpOH9VSzIz8Ou3YJ/wtY/eQm5T2uhfhG7/U3COrMS8xOtUrZrp9OgdmzEnIYODye3nY1VqzA==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
 
@@ -369,6 +377,11 @@ packages:
     resolution: {integrity: sha512-otxSQPw4lkOZWkHpB3zaEQs6gWYEsmX4xQF68ElXC/TWvGxGMSGOvoNbaLXm6/cS/fSfHtsEdw90y20PCd+sCA==}
     engines: {node: '>=10.13.0'}
 
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
@@ -477,6 +490,16 @@ packages:
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
+
+  playwright-core@1.62.0:
+    resolution: {integrity: sha512-nsNRyq0r2zsG8AcRHWknc9QRA5XCueC7gWMrs+Gx2tlZn9hcl8zudfh00lhJPY1DE7NmZ6bDsT9g2yey8mXljA==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.62.0:
+    resolution: {integrity: sha512-Z14dG305dgaLu6foB1TXQagFiW8JfSUIUaUuPaKQ6NtBPKF1P/qXcqfh6c6K/icPqdy37JmjbiBXf6JNg6Sylw==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   postcss@8.4.31:
     resolution: {integrity: sha512-PS08Iboia9mts/2ygV3eLpY5ghnUcfLV/EXTOW1E2qYxJKGGBUtNjN76FYHnMs36RmARn41bC0AZmn+rR0OVpQ==}
@@ -693,6 +716,10 @@ snapshots:
   '@next/swc-win32-x64-msvc@15.5.15':
     optional: true
 
+  '@playwright/test@1.62.0':
+    dependencies:
+      playwright: 1.62.0
+
   '@swc/helpers@0.5.15':
     dependencies:
       tslib: 2.8.1
@@ -791,6 +818,9 @@ snapshots:
       graceful-fs: 4.2.11
       tapable: 2.3.3
 
+  fsevents@2.3.2:
+    optional: true
+
   graceful-fs@4.2.11: {}
 
   jiti@2.6.1: {}
@@ -850,7 +880,7 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  next@15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5):
+  next@15.5.15(@playwright/test@1.62.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5):
     dependencies:
       '@next/env': 15.5.15
       '@swc/helpers': 0.5.15
@@ -868,12 +898,21 @@ snapshots:
       '@next/swc-linux-x64-musl': 15.5.15
       '@next/swc-win32-arm64-msvc': 15.5.15
       '@next/swc-win32-x64-msvc': 15.5.15
+      '@playwright/test': 1.62.0
       sharp: 0.34.5
     transitivePeerDependencies:
       - '@babel/core'
       - babel-plugin-macros
 
   picocolors@1.1.1: {}
+
+  playwright-core@1.62.0: {}
+
+  playwright@1.62.0:
+    dependencies:
+      playwright-core: 1.62.0
+    optionalDependencies:
+      fsevents: 2.3.2
 
   postcss@8.4.31:
     dependencies:
