@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { deleteTrainingHistoryRecord } from "../training-history";
+
 type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
 
 type PersistedSessionSummary = Readonly<{
@@ -120,6 +122,7 @@ export default function HistoryPage() {
     setDeletingSessionId(sessionId);
     try {
       await deleteCurrentUserSession(sessionId);
+      deleteTrainingHistoryRecord(sessionId);
       setBackendSessions((currentSessions) => currentSessions.filter((session) => session.session_id !== sessionId));
       setPendingDeleteSession(null);
       setBackendStatusText("已删除后端训练记录。");

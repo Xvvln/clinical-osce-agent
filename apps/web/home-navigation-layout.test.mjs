@@ -1960,7 +1960,11 @@ test("history page lists backend sessions as the only official records", () => {
   assert.doesNotMatch(historySource, /localStorage/);
   assert.doesNotMatch(historySource, /readTrainingHistoryRecords/);
   assert.doesNotMatch(historySource, /clearTrainingHistoryRecords/);
-  assert.doesNotMatch(historySource, /deleteTrainingHistoryRecord/);
+  assert.match(historySource, /import \{ deleteTrainingHistoryRecord \} from "\.\.\/training-history";/);
+  assert.match(
+    historySource,
+    /await deleteCurrentUserSession\(sessionId\);\s+deleteTrainingHistoryRecord\(sessionId\);\s+setBackendSessions/,
+  );
 });
 
 test("profile recent sessions do not offer continue actions for completed sessions", () => {

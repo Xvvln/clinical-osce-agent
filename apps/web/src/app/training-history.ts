@@ -89,7 +89,14 @@ export function readTrainingHistoryRecords(): readonly TrainingHistoryRecord[] {
     return [];
   }
 
-  const parsedHistory: unknown = JSON.parse(rawHistory);
+  let parsedHistory: unknown;
+  try {
+    parsedHistory = JSON.parse(rawHistory);
+  } catch {
+    window.localStorage.removeItem(TRAINING_HISTORY_STORAGE_KEY);
+    return [];
+  }
+
   if (!Array.isArray(parsedHistory)) {
     return [];
   }
