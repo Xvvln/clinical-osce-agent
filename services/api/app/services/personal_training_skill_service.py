@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -177,40 +179,62 @@ class PersonalTrainingSkillService:
     ) -> dict[str, Any]:
         candidate_id = _personal_candidate_id(str(session.session_id))
         existing_candidate = candidate_store.get_candidate(candidate_id)
-        teacher_reflection = _build_ai_reflection_review(
-            report,
-            case,
-            teacher_agent=self._teacher_agent,
-        )
-        if existing_candidate is not None:
-            return {
-                "personal_skill_candidate": _report_candidate_summary(existing_candidate),
-                "ai_reflection_review": teacher_reflection,
-            }
-
-        candidate = self._generate_candidate(
-            session=session,
-            case=case,
-            report=report,
-            teacher_analysis_context=_teacher_analysis_context_for_skill(teacher_reflection),
-        )
-        candidate, review, approval_dialogue = self._review_candidate(candidate, case)
-        candidate["approval_dialogue"] = approval_dialogue
-        candidate["review"] = review
-        candidate_store.save_candidate(candidate, review)
-        if review["status"] == "approved":
-            skill_store.enable_candidate(candidate)
+        if existing_candidate is None:
+            teacher_reflection = _build_ai_reflection_review(
+                report,
+                case,
+                teacher_agent=self._teacher_agent,
+            )
+            candidate = self._generate_candidate(
+                session=session,
+                case=case,
+                report=report,
+                teacher_analysis_context=_teacher_analysis_context_for_skill(teacher_reflection),
+            )
+            candidate, review, approval_dialogue = self._review_candidate(candidate, case)
+            candidate["approval_dialogue"] = approval_dialogue
+            candidate["review"] = review
+            candidate["review_revision"] = _personal_skill_review_revision(candidate, review)
+            candidate["ai_reflection_review"] = deepcopy(teacher_reflection)
+            candidate_store.save_candidate(candidate, review)
+        else:
+            candidate = existing_candidate
+            _validate_personal_candidate_ownership(candidate, session)
+            review = candidate.get("review")
+            if not isinstance(review, dict) or not str(review.get("status", "")).strip():
+                raise RuntimeError("个人训练 Skill 候选缺少有效审核状态。")
+            candidate["review_revision"] = _personal_skill_review_revision(candidate, review)
+            stored_reflection = candidate.get("ai_reflection_review")
+            teacher_reflection = (
+                deepcopy(stored_reflection)
+                if isinstance(stored_reflection, dict)
+                else _build_ai_reflection_review(
+                    report,
+                    case,
+                    teacher_agent=self._teacher_agent,
+                )
+            )
 
         skill_id = _personal_skill_id(str(session.session_id))
+        enabled_skill: dict[str, Any] | None = None
+        if review["status"] == "approved":
+            enabled_skill = _ensure_personal_skill_enabled(
+                candidate=candidate,
+                skill_store=skill_store,
+                skill_id=skill_id,
+            )
         _append_personal_skill_events(
             candidate=candidate,
             review=review,
             event_store=event_store,
             session=session,
-            skill_id=skill_id,
+            skill_id=skill_id if enabled_skill is not None else None,
         )
         return {
-            "personal_skill_candidate": _report_candidate_summary(candidate),
+            "personal_skill_candidate": _report_candidate_summary(
+                candidate,
+                enabled_skill=enabled_skill,
+            ),
             "ai_reflection_review": teacher_reflection,
         }
 
@@ -1383,16 +1407,39 @@ def _append_personal_skill_events(
     review: dict[str, Any],
     event_store: TrainingEventStore,
     session: Any,
-    skill_id: str,
+    skill_id: str | None,
 ) -> None:
-    event_store.append_event(
+    candidate_id = str(candidate["candidate_id"])
+    review_revision = _personal_skill_review_revision(candidate, review)
+
+    def append_event(
+        *,
+        session_id: str,
+        case_id: str,
+        student_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        event_store.append_event(
+            session_id=session_id,
+            case_id=case_id,
+            student_id=student_id,
+            event_type=event_type,
+            event_key=f"personal-skill:{candidate_id}:{event_type}:{review_revision}",
+            payload={
+                **payload,
+                "review_revision": review_revision,
+            },
+        )
+
+    append_event(
         session_id=str(session.session_id),
         case_id=str(session.case_id),
         student_id=str(session.student_id),
         event_type="personal_training_skill_generated",
         payload={
-            "candidate_id": candidate["candidate_id"],
-            "skill_id": skill_id if review["status"] == "approved" else None,
+            "candidate_id": candidate_id,
+            "skill_id": skill_id,
             "review_status": review["status"],
             "scope": "personal",
             "web_check_status": candidate.get("web_check_status", "not_configured"),
@@ -1417,16 +1464,18 @@ def _append_personal_skill_events(
             },
         ),
     ]:
-        event_store.append_event(
-            session_id=str(candidate["candidate_id"]),
+        append_event(
+            session_id=candidate_id,
             case_id=str(candidate["trigger_item_id"]),
             student_id=AUTO_APPROVAL_AGENT_ID,
             event_type=event_type,
             payload=payload,
         )
     if review["status"] == "approved":
-        event_store.append_event(
-            session_id=str(candidate["candidate_id"]),
+        if not skill_id:
+            raise RuntimeError("个人训练 Skill 尚未启用，不能记录自动启用事件。")
+        append_event(
+            session_id=candidate_id,
             case_id=str(candidate["trigger_item_id"]),
             student_id=AUTO_APPROVAL_AGENT_ID,
             event_type="personal_skill_candidate_auto_enabled",
@@ -1439,15 +1488,17 @@ def _append_personal_skill_events(
         )
 
 
-def _report_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
+def _report_candidate_summary(
+    candidate: dict[str, Any],
+    *,
+    enabled_skill: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     review = candidate.get("review", {})
-    skill_id = _personal_skill_id(str(candidate.get("source_session_id", "") or "").strip())
-    if not skill_id:
-        skill_id = f"skill_{candidate['trigger_item_id']}"
+    is_approved_and_enabled = review.get("status") == "approved" and enabled_skill is not None
     return {
-        "status": review.get("status", candidate.get("status", "draft")),
+        "status": "approved" if is_approved_and_enabled else review.get("status", candidate.get("status", "draft")),
         "candidate_id": candidate["candidate_id"],
-        "skill_id": skill_id,
+        "skill_id": str(enabled_skill["skill_id"]) if is_approved_and_enabled else None,
         "title": candidate["title"],
         "description": candidate.get("description", ""),
         "suggested_strategy": candidate.get("suggested_strategy", ""),
@@ -1467,6 +1518,71 @@ def _report_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
         "web_check_status": candidate.get("web_check_status", "not_configured"),
         "external_evidence_checks": list(candidate.get("external_evidence_checks", [])),
     }
+
+
+def _validate_personal_candidate_ownership(candidate: dict[str, Any], session: Any) -> None:
+    expected_session_id = str(session.session_id)
+    expected_student_id = str(session.student_id)
+    expected_candidate_id = _personal_candidate_id(expected_session_id)
+    if (
+        str(candidate.get("candidate_id", "")) != expected_candidate_id
+        or str(candidate.get("scope", "")) != "personal"
+        or str(candidate.get("source_session_id", "")) != expected_session_id
+        or str(candidate.get("owner_student_id", "")) != expected_student_id
+    ):
+        raise RuntimeError("个人训练 Skill 候选与当前训练归属不一致。")
+    case_ids = [str(case_id) for case_id in candidate.get("case_ids", []) if str(case_id)]
+    if case_ids and str(session.case_id) not in case_ids:
+        raise RuntimeError("个人训练 Skill 候选与当前病例不一致。")
+
+
+def _ensure_personal_skill_enabled(
+    *,
+    candidate: dict[str, Any],
+    skill_store: TrainingSkillStore,
+    skill_id: str,
+) -> dict[str, Any]:
+    enabled_skill = skill_store.get_skill(skill_id)
+    if not _is_matching_enabled_personal_skill(enabled_skill, candidate):
+        if not skill_store.enable_candidate(candidate):
+            raise RuntimeError("个人训练 Skill 启用失败。")
+        enabled_skill = skill_store.get_skill(skill_id)
+    if not _is_matching_enabled_personal_skill(enabled_skill, candidate):
+        raise RuntimeError("个人训练 Skill 启用后未能读取到对应记录。")
+    return enabled_skill
+
+
+def _is_matching_enabled_personal_skill(
+    skill: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> bool:
+    if skill is None:
+        return False
+    return (
+        str(skill.get("status", "")) == "enabled"
+        and str(skill.get("source_candidate_id", "")) == str(candidate["candidate_id"])
+        and str(skill.get("scope", "")) == "personal"
+        and str(skill.get("owner_student_id", "")) == str(candidate.get("owner_student_id", ""))
+        and str(skill.get("source_session_id", "")) == str(candidate.get("source_session_id", ""))
+    )
+
+
+def _personal_skill_review_revision(
+    candidate: dict[str, Any],
+    review: dict[str, Any],
+) -> str:
+    revision_material = {
+        "review": review,
+        "approval_agent_review": candidate.get("approval_agent_review", {}),
+        "approval_dialogue": candidate.get("approval_dialogue", []),
+    }
+    canonical_material = json.dumps(
+        revision_material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"v1-{hashlib.sha256(canonical_material.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _personal_candidate_id(session_id: str) -> str:

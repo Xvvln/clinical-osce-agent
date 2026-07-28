@@ -41,6 +41,11 @@ class FailingGenerator:
         raise TrainingSkillCandidateGenerationError("configured provider unavailable")
 
 
+class FailingTeacherAgent:
+    def __call__(self, request: Any) -> dict[str, Any]:
+        raise RuntimeError("teacher reflection should be reused from the saved candidate")
+
+
 class FakeTeacherAgent:
     def __init__(self) -> None:
         self.requests: list[Any] = []
@@ -112,6 +117,95 @@ class PassingGate:
         }
 
 
+class FailingOnceSkillStore:
+    def __init__(self, delegate: TrainingSkillStore) -> None:
+        self.delegate = delegate
+        self.remaining_failures = 1
+
+    def enable_candidate(self, candidate: dict[str, Any]) -> bool:
+        if self.remaining_failures:
+            self.remaining_failures -= 1
+            raise RuntimeError("injected skill persistence failure")
+        return self.delegate.enable_candidate(candidate)
+
+    def get_skill(self, skill_id: str) -> dict[str, Any] | None:
+        return self.delegate.get_skill(skill_id)
+
+
+class FailAfterPersistingEventStore:
+    def __init__(self, delegate: TrainingEventStore, *, fail_on_call: int) -> None:
+        self.delegate = delegate
+        self.fail_on_call = fail_on_call
+        self.call_count = 0
+        self.failed = False
+
+    def append_event(self, **kwargs: Any) -> bool:
+        inserted = self.delegate.append_event(**kwargs)
+        self.call_count += 1
+        if not self.failed and self.call_count == self.fail_on_call:
+            self.failed = True
+            raise RuntimeError("injected crash after event persistence")
+        return inserted
+
+
+def _recovery_scenario(session_id: str) -> tuple[Any, Any, dict[str, Any], CapturingGenerator, PersonalTrainingSkillService]:
+    case = _load_case()
+    session = SimpleNamespace(
+        session_id=session_id,
+        case_id=case.case_id,
+        student_id="student-recovery",
+    )
+    report = {
+        "report_id": f"{session_id}_report",
+        "case_id": case.case_id,
+        "total_score": 18,
+        "max_score": 40,
+        "missed_items": ["ht_migration"],
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+    generator = CapturingGenerator()
+    service = PersonalTrainingSkillService(
+        generator=generator,
+        approval_agent=ApprovingAgent(),
+        regression_gate=PassingGate(),
+        teacher_agent=FakeTeacherAgent(),
+    )
+    return case, session, report, generator, service
+
+
+def _call_personal_skill_generation(
+    service: PersonalTrainingSkillService,
+    *,
+    case: Any,
+    session: Any,
+    report: dict[str, Any],
+    candidate_store: TrainingSkillCandidateStore,
+    skill_store: Any,
+    event_store: Any,
+) -> dict[str, Any]:
+    return service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=report,
+        candidate_store=candidate_store,
+        skill_store=skill_store,
+        event_store=event_store,
+    )
+
+
+def _personal_skill_events(
+    event_store: TrainingEventStore,
+    *,
+    session_id: str,
+    candidate_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        *event_store.list_session_events(session_id),
+        *event_store.list_session_events(candidate_id),
+    ]
+
+
 def test_personal_skill_default_generator_is_resolved_when_generating(tmp_path, monkeypatch) -> None:
     case = _load_case()
     late_generator = CapturingGenerator()
@@ -149,6 +243,159 @@ def test_personal_skill_default_generator_is_resolved_when_generating(tmp_path, 
     )
 
     assert late_generator.contexts
+
+
+def test_personal_skill_retry_enables_saved_approved_candidate_after_skill_failure(tmp_path) -> None:
+    case, session, report, generator, service = _recovery_scenario("personal-skill-retry-session")
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3")
+    durable_skill_store = TrainingSkillStore(tmp_path / "skills.sqlite3")
+    failing_skill_store = FailingOnceSkillStore(durable_skill_store)
+    event_store = TrainingEventStore(tmp_path / "events.sqlite3")
+    candidate_id = f"personal_skill_candidate_{session.session_id}"
+    skill_id = f"skill_personal_{session.session_id}"
+
+    try:
+        _call_personal_skill_generation(
+            service,
+            case=case,
+            session=session,
+            report=report,
+            candidate_store=candidate_store,
+            skill_store=failing_skill_store,
+            event_store=event_store,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "injected skill persistence failure"
+    else:
+        raise AssertionError("首次技能持久化故障应向调用方报告失败")
+
+    assert candidate_store.get_candidate(candidate_id) is not None
+    assert durable_skill_store.get_skill(skill_id) is None
+    assert _personal_skill_events(
+        event_store,
+        session_id=session.session_id,
+        candidate_id=candidate_id,
+    ) == []
+
+    service._teacher_agent = FailingTeacherAgent()
+    payload = _call_personal_skill_generation(
+        service,
+        case=case,
+        session=session,
+        report=report,
+        candidate_store=candidate_store,
+        skill_store=failing_skill_store,
+        event_store=event_store,
+    )
+
+    assert len(generator.contexts) == 1
+    assert payload["personal_skill_candidate"]["status"] == "approved"
+    assert payload["personal_skill_candidate"]["skill_id"] == skill_id
+    enabled_skill = durable_skill_store.get_skill(skill_id)
+    assert enabled_skill is not None
+    assert enabled_skill["source_candidate_id"] == candidate_id
+
+
+def test_personal_skill_retry_completes_partial_events_exactly_once(tmp_path) -> None:
+    case, session, report, generator, service = _recovery_scenario("personal-event-retry-session")
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3")
+    skill_store = TrainingSkillStore(tmp_path / "skills.sqlite3")
+    durable_event_store = TrainingEventStore(tmp_path / "events.sqlite3")
+    failing_event_store = FailAfterPersistingEventStore(durable_event_store, fail_on_call=2)
+    candidate_id = f"personal_skill_candidate_{session.session_id}"
+
+    try:
+        _call_personal_skill_generation(
+            service,
+            case=case,
+            session=session,
+            report=report,
+            candidate_store=candidate_store,
+            skill_store=skill_store,
+            event_store=failing_event_store,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "injected crash after event persistence"
+    else:
+        raise AssertionError("事件写入后的注入故障应中断首次生成")
+
+    partial_events = _personal_skill_events(
+        durable_event_store,
+        session_id=session.session_id,
+        candidate_id=candidate_id,
+    )
+    assert [event["event_type"] for event in partial_events] == [
+        "personal_training_skill_generated",
+        "personal_skill_candidate_generated",
+    ]
+
+    payload = _call_personal_skill_generation(
+        service,
+        case=case,
+        session=session,
+        report=report,
+        candidate_store=candidate_store,
+        skill_store=skill_store,
+        event_store=failing_event_store,
+    )
+
+    assert len(generator.contexts) == 1
+    assert payload["personal_skill_candidate"]["status"] == "approved"
+    events = _personal_skill_events(
+        durable_event_store,
+        session_id=session.session_id,
+        candidate_id=candidate_id,
+    )
+    assert [event["event_type"] for event in events] == [
+        "personal_training_skill_generated",
+        "personal_skill_candidate_generated",
+        "personal_skill_candidate_agent_reviewed",
+        "personal_skill_candidate_auto_enabled",
+    ]
+    assert len({event["event_key"] for event in events}) == 4
+    assert len({event["payload"]["review_revision"] for event in events}) == 1
+    for event in events:
+        assert event["event_key"] == (
+            f"personal-skill:{candidate_id}:{event['event_type']}:"
+            f"{event['payload']['review_revision']}"
+        )
+
+
+def test_personal_skill_retry_of_complete_candidate_does_not_duplicate_events(tmp_path) -> None:
+    case, session, report, generator, service = _recovery_scenario("personal-complete-retry-session")
+    candidate_store = TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3")
+    skill_store = TrainingSkillStore(tmp_path / "skills.sqlite3")
+    event_store = TrainingEventStore(tmp_path / "events.sqlite3")
+    candidate_id = f"personal_skill_candidate_{session.session_id}"
+
+    first_payload = _call_personal_skill_generation(
+        service,
+        case=case,
+        session=session,
+        report=report,
+        candidate_store=candidate_store,
+        skill_store=skill_store,
+        event_store=event_store,
+    )
+    second_payload = _call_personal_skill_generation(
+        service,
+        case=case,
+        session=session,
+        report=report,
+        candidate_store=candidate_store,
+        skill_store=skill_store,
+        event_store=event_store,
+    )
+
+    assert len(generator.contexts) == 1
+    assert second_payload["personal_skill_candidate"] == first_payload["personal_skill_candidate"]
+    events = _personal_skill_events(
+        event_store,
+        session_id=session.session_id,
+        candidate_id=candidate_id,
+    )
+    assert len(events) == 4
+    assert len({event["event_key"] for event in events}) == 4
 
 
 def test_personal_skill_uses_reasoning_trace_patterns_for_candidate_and_reflection(tmp_path) -> None:
