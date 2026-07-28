@@ -17,7 +17,10 @@ from app.services.report_score_metrics import (
 )
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_report_event_normalizer import (
+    REPORT_LIFECYCLE_EVENT_TYPES,
+    is_report_snapshot_event,
     normalize_report_events_by_session,
+    report_snapshot_payload,
     unique_session_ids,
 )
 
@@ -71,14 +74,17 @@ class TrainingInsightService:
         for session_id in normalized_session_ids:
             events = events_by_session.get(session_id, [])
             session_report_ids = [
-                str(event["payload"].get("report_id"))
+                str(report_snapshot_payload(event).get("report_id"))
                 for event in events
-                if event["event_type"] == "report_generated" and event["payload"].get("report_id")
+                if is_report_snapshot_event(event)
+                and report_snapshot_payload(event).get("report_id")
             ]
             history_fact_disclosure_count = 0
             physical_exam_request_count = 0
             for event in events:
-                if event["event_type"] != "report_generated":
+                if not is_report_snapshot_event(event):
+                    if event.get("event_type") in REPORT_LIFECYCLE_EVENT_TYPES:
+                        continue
                     for pattern in _turn_patterns_from_training_event(
                         event,
                         history_fact_disclosure_count,
@@ -99,7 +105,7 @@ class TrainingInsightService:
                         physical_exam_request_count += 1
                     continue
                 report_count += 1
-                payload = event["payload"]
+                payload = report_snapshot_payload(event)
                 case_id = event["case_id"]
                 if _has_humanistic_payload(payload):
                     humanistic_reports.append(payload)

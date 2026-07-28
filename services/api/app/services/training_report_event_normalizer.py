@@ -6,6 +6,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
+REPORT_SNAPSHOT_EVENT_TYPES = frozenset({"report_generated", "report_enriched"})
+REPORT_LIFECYCLE_EVENT_TYPES = frozenset(
+    {*REPORT_SNAPSHOT_EVENT_TYPES, "report_enrichment_failed"}
+)
+
+
 def unique_session_ids(session_ids: Sequence[str]) -> list[str]:
     """Return session ids once, preserving the caller's first-seen order."""
 
@@ -27,12 +33,13 @@ def normalize_report_events_by_session(
 def normalize_report_generated_events(
     events: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Keep one report event per report id without reordering the event stream.
+    """Keep one successful report snapshot per report id without reordering.
 
     A declared report revision wins over an unversioned snapshot, and the highest
     revision wins. Equal or absent revisions fall back to the stable event order.
     Legacy events without a report id are retained because they cannot be safely
-    identified as duplicate snapshots.
+    identified as duplicate snapshots. Failed enrichment events remain lifecycle
+    events and never replace the last successful report snapshot.
     """
 
     selected_index_by_report_id: dict[str, int] = {}
@@ -60,12 +67,12 @@ def normalize_report_generated_events(
 def latest_report_generated_event(
     events: Sequence[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Select the chronologically latest normalized report snapshot."""
+    """Select the chronologically latest successful normalized report snapshot."""
 
     candidates = [
         (event, index)
         for index, event in enumerate(events)
-        if event.get("event_type") == "report_generated"
+        if is_report_snapshot_event(event)
     ]
     if not candidates:
         return None
@@ -73,13 +80,27 @@ def latest_report_generated_event(
 
 
 def _stable_report_id(event: Mapping[str, Any]) -> str | None:
-    if event.get("event_type") != "report_generated":
+    if not is_report_snapshot_event(event):
         return None
     payload = event.get("payload")
     if not isinstance(payload, Mapping):
         return None
     report_id = str(payload.get("report_id") or "").strip()
     return report_id or None
+
+
+def is_report_snapshot_event(event: Mapping[str, Any]) -> bool:
+    return event.get("event_type") in REPORT_SNAPSHOT_EVENT_TYPES
+
+
+def report_snapshot_payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the complete report snapshot while keeping legacy events readable."""
+
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return {}
+    report = payload.get("report")
+    return report if isinstance(report, Mapping) else payload
 
 
 def _report_selection_key(event: Mapping[str, Any], input_index: int) -> tuple[Any, ...]:

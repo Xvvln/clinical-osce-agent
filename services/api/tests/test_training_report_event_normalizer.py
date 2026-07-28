@@ -10,6 +10,7 @@ def _report_event(
     *,
     report_id: str | None,
     created_at: str,
+    event_type: str = "report_generated",
     event_id: int | None = None,
     report_revision: int | None = None,
 ) -> dict[str, object]:
@@ -19,7 +20,7 @@ def _report_event(
     if report_revision is not None:
         payload["report_revision"] = report_revision
     event: dict[str, object] = {
-        "event_type": "report_generated",
+        "event_type": event_type,
         "payload": payload,
         "created_at": created_at,
     }
@@ -101,6 +102,66 @@ def test_report_event_normalizer_uses_stable_event_order_for_unversioned_snapsho
     normalized = normalize_report_generated_events(events)
 
     assert [event["payload"]["marker"] for event in normalized] == ["later_higher_event_id"]
+
+
+def test_report_event_normalizer_prefers_enriched_snapshot_and_ignores_failed_revision() -> None:
+    events = [
+        _report_event(
+            "base",
+            report_id="stable_report",
+            report_revision=1,
+            created_at="2026-05-01T00:00:00+00:00",
+        ),
+        _report_event(
+            "enriched",
+            report_id="stable_report",
+            report_revision=3,
+            event_type="report_enriched",
+            created_at="2026-05-02T00:00:00+00:00",
+        ),
+        _report_event(
+            "failed_retry",
+            report_id="stable_report",
+            report_revision=5,
+            event_type="report_enrichment_failed",
+            created_at="2026-05-03T00:00:00+00:00",
+        ),
+    ]
+
+    normalized = normalize_report_generated_events(events)
+    selected = latest_report_generated_event(normalized)
+
+    assert [event["payload"]["marker"] for event in normalized] == [
+        "enriched",
+        "failed_retry",
+    ]
+    assert selected is not None
+    assert selected["payload"]["marker"] == "enriched"
+
+
+def test_report_event_normalizer_keeps_base_snapshot_when_enrichment_only_fails() -> None:
+    events = [
+        _report_event(
+            "base",
+            report_id="stable_report",
+            report_revision=1,
+            created_at="2026-05-01T00:00:00+00:00",
+        ),
+        _report_event(
+            "failed",
+            report_id="stable_report",
+            report_revision=3,
+            event_type="report_enrichment_failed",
+            created_at="2026-05-02T00:00:00+00:00",
+        ),
+    ]
+
+    selected = latest_report_generated_event(
+        normalize_report_generated_events(events)
+    )
+
+    assert selected is not None
+    assert selected["payload"]["marker"] == "base"
 
 
 def test_latest_report_event_uses_event_order_across_distinct_reports() -> None:

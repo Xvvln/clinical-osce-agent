@@ -161,6 +161,102 @@ def test_training_insight_service_counts_each_stable_report_once_and_deduplicate
     assert TrainingSkillCandidateService().propose_candidates(insights, min_count=2) == []
 
 
+def test_training_insight_service_uses_enriched_snapshot_without_counting_failure() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_one": [
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 1,
+                        "total_score": 40,
+                        "missed_items": ["base_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_enriched",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 3,
+                        "report": {
+                            "report_id": "stable_report",
+                            "total_score": 40,
+                            "missed_items": ["enriched_only"],
+                            "score_groups": {
+                                "humanistic_communication": {
+                                    "score": 5,
+                                    "max_score": 10,
+                                }
+                            },
+                            "dimension_scores": {
+                                "communication_skill": 5,
+                            },
+                            "rubric_scores": {
+                                "communication": {
+                                    "dimension_id": "communication_skill",
+                                    "max_score": 10,
+                                }
+                            },
+                            "training_gaps": [
+                                {
+                                    "dimension_id": "communication_skill",
+                                    "gap_type": "communication_structure_missing",
+                                    "label": "沟通结构不完整",
+                                    "missing_score": 5,
+                                    "skill_type": "communication_structure",
+                                }
+                            ],
+                            "missed_opportunities": [
+                                {
+                                    "gap_type": "communication_closure_missing",
+                                    "expected_response": "结束前确认患者是否还有疑问。",
+                                }
+                            ],
+                            "humanistic_anchor_candidates": [
+                                {"status": "candidate"}
+                            ],
+                        },
+                    },
+                    "created_at": "2026-05-02T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_enrichment_failed",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 5,
+                        "total_score": 40,
+                        "missed_items": ["failed_only"],
+                    },
+                    "created_at": "2026-05-03T00:00:00+00:00",
+                },
+            ]
+        }
+    )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_one"])
+
+    assert insights["report_count"] == 1
+    assert {
+        item["item_id"]: item["count"]
+        for item in insights["frequent_missed_items"]
+    } == {"enriched_only": 1}
+    humanistic = insights["humanistic_communication"]
+    assert humanistic["report_count"] == 1
+    assert humanistic["score_sample_count"] == 1
+    assert humanistic["average_percentage"] == 50
+    assert humanistic["frequent_gaps"][0]["gap_type"] == "communication_structure_missing"
+    assert humanistic["frequent_missed_opportunities"][0]["gap_type"] == "communication_closure_missing"
+    assert humanistic["anchor_candidate_count"] == 1
+
+
 def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_path) -> None:
     database_path = tmp_path / "training_events.sqlite3"
     store = TrainingEventStore(database_path)

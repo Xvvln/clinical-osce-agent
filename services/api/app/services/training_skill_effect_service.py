@@ -7,6 +7,7 @@ from app.services.training_event_store import TrainingEventStore, training_event
 from app.services.training_report_event_normalizer import (
     latest_report_generated_event,
     normalize_report_events_by_session,
+    report_snapshot_payload,
     unique_session_ids,
 )
 
@@ -54,7 +55,7 @@ class TrainingSkillEffectService:
             report_event = latest_report_generated_event(events)
             if report_event is None:
                 continue
-            report_payload = report_event["payload"]
+            report_payload = report_snapshot_payload(report_event)
             group = groups["with_skill" if skill_ids else "without_skill"]
             group["session_count"] += 1
             group["total_scores"].append(report_payload["total_score"])

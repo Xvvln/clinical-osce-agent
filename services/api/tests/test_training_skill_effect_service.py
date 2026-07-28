@@ -108,6 +108,70 @@ def test_training_skill_effect_service_uses_latest_report_revision_and_deduplica
     }
 
 
+def test_training_skill_effect_service_uses_enriched_snapshot_not_failed_retry() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_with_skill": [
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "training_skill_applied",
+                    "payload": {"skill_id": "skill_reasoning_core"},
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 1,
+                        "total_score": 40,
+                        "missed_items": ["base_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:01+00:00",
+                },
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_enriched",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 3,
+                        "report": {
+                            "report_id": "stable_report",
+                            "total_score": 80,
+                            "missed_items": ["enriched_only"],
+                        },
+                    },
+                    "created_at": "2026-05-01T00:00:02+00:00",
+                },
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_enrichment_failed",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 5,
+                        "total_score": 20,
+                        "missed_items": ["failed_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:03+00:00",
+                },
+            ]
+        }
+    )
+
+    comparison = TrainingSkillEffectService(store).compare_sessions(["session_with_skill"])
+
+    assert comparison["with_skill"] == {
+        "session_count": 1,
+        "average_total_score": 80.0,
+        "missed_item_counts": {"enriched_only": 1},
+        "skill_ids": ["skill_reasoning_core"],
+    }
+
+
 def test_training_skill_effect_service_uses_latest_distinct_report_snapshot() -> None:
     store = BatchOnlyTrainingEventStore(
         {
