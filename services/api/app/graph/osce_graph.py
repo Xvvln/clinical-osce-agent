@@ -373,6 +373,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             revealed_fact_ids=revealed_facts,
             patient_private_context=_build_patient_private_context(case),
             answerable_fact_candidates=answerable_fact_candidates,
+            protected_fact_texts=_patient_protected_fact_texts(case, answerable_fact_ids),
             forbidden_terms=_patient_forbidden_terms(case),
             forbidden_context=_build_patient_forbidden_context(case),
             prior_messages=state.get("messages", []),
@@ -1024,17 +1025,18 @@ def evaluation_node(
     state: OsceGraphState,
     llm_scorer: LlmRubricScorer | None = None,
 ) -> dict[str, Any]:
+    requested_exams, requested_tests, action_timeline = _evaluation_evidence_projection(state)
     report = evaluate_session_rules(
         SimpleNamespace(
             session_id=state.get("session_id", ""),
             case_id=state["case_id"],
             asked_questions=state.get("asked_questions", []),
-            requested_exams=state.get("requested_exams", []),
-            requested_tests=state.get("requested_tests", []),
+            requested_exams=requested_exams,
+            requested_tests=requested_tests,
             final_submission=state.get("final_submission"),
             revealed_facts=state.get("revealed_facts", []),
             messages=state.get("messages", []),
-            action_timeline=state.get("action_timeline", []),
+            action_timeline=action_timeline,
         ),
         llm_scorer=llm_scorer,
     )
@@ -1044,6 +1046,47 @@ def evaluation_node(
         "missed_items": report["missed_items"],
         "feedback_report": report,
     }
+
+
+def _evaluation_evidence_projection(
+    state: OsceGraphState,
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
+    case = _load_case(state["case_id"])
+    configured_exam_codes = {
+        exam.exam_code
+        for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+    }
+    configured_test_codes = {
+        test.test_code
+        for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+    }
+    requested_exams = [
+        str(code)
+        for code in state.get("requested_exams", [])
+        if str(code) in configured_exam_codes
+    ]
+    requested_tests = [
+        str(code)
+        for code in state.get("requested_tests", [])
+        if str(code) in configured_test_codes
+    ]
+    action_timeline = [
+        item
+        for item in state.get("action_timeline", [])
+        if isinstance(item, dict)
+        and (
+            item.get("action_type") not in {"physical_exam_requested", "auxiliary_test_requested"}
+            or (
+                item.get("action_type") == "physical_exam_requested"
+                and str(item.get("source_id") or "") in configured_exam_codes
+            )
+            or (
+                item.get("action_type") == "auxiliary_test_requested"
+                and str(item.get("source_id") or "") in configured_test_codes
+            )
+        )
+    ]
+    return requested_exams, requested_tests, action_timeline
 
 
 def feedback_node(state: OsceGraphState) -> dict[str, Any]:
@@ -1835,32 +1878,10 @@ def _build_patient_private_context(case: Case) -> dict[str, Any]:
             "age": f"{patient_profile.age_value}{patient_profile.age_unit}",
             "gender": patient_profile.gender,
             "occupation": patient_profile.occupation,
-            "marital_status": patient_profile.marital_status,
-            "address_city": patient_profile.address_city,
-            "social_background": patient_profile.social_background,
             "hospital_department": patient_profile.hospital_department,
-            "idea": patient_profile.idea,
-            "concern": patient_profile.concern,
-            "expectation": patient_profile.expectation,
-        },
-        "history": {
-            "present_illness_summary": case.history.present_illness_summary,
-            "hidden_facts": [
-                _serialize_answerable_fact_candidate(case.case_id, hidden_fact)
-                for hidden_fact in case.history.hidden_facts
-            ],
-            "past_medical_history": case.history.past_medical_history,
-            "surgery_injury_history": case.history.surgery_injury_history,
-            "transfusion_history": case.history.transfusion_history,
-            "infection_history": case.history.infection_history,
-            "allergy_history": case.history.allergy_history,
-            "personal_history": case.history.personal_history,
-            "menstrual_history": case.history.menstrual_history,
-            "reproductive_history": case.history.reproductive_history,
-            "family_history": case.history.family_history,
         },
         "disclosure_policy": {
-            "use_private_context_for_persona": True,
+            "context_scope": "student_visible_profile_only",
             "only_disclose_answerable_fact_candidates": True,
         },
     }
@@ -1868,13 +1889,18 @@ def _build_patient_private_context(case: Case) -> dict[str, Any]:
 
 def _build_patient_forbidden_context(case: Case) -> dict[str, Any]:
     return {
-        "diagnosis_terms": [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms],
-        "differential_diagnosis_terms": [
-            differential.disease_name for differential in case.diagnosis.differential_diagnoses
-        ],
         "blocked_reference_types": ["diagnosis", "rubric", "treatment", "dosage"],
         "blocked_content_examples": ["标准答案", "评分标准", "治疗方案", "用药剂量", "手术方案", "处置建议"],
     }
+
+
+def _patient_protected_fact_texts(case: Case, answerable_fact_ids: list[str]) -> list[str]:
+    answerable_id_set = set(answerable_fact_ids)
+    return [
+        hidden_fact.canonical_answer
+        for hidden_fact in case.history.hidden_facts
+        if hidden_fact.fact_id not in answerable_id_set
+    ]
 
 
 def _patient_forbidden_terms(case: Case) -> list[str]:
@@ -2090,7 +2116,7 @@ def _deterministic_turn_hints(
         "revealed_fact_id": revealed_fact_id,
         "revealed_fact_ids": list(revealed_fact_ids or []),
         "answerable_fact_ids": list(answerable_fact_ids or []),
-        "patient_context_mode": "private_context_with_answerable_fact_candidates",
+        "patient_context_mode": "authorized_turn_facts_only",
         "stage": state.get("stage") or "case_intro",
         "safety_flags": list(state.get("safety_flags", [])),
         "training_progress_next_focus": state.get("training_progress_next_focus", ""),

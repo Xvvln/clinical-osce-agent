@@ -17,15 +17,6 @@ from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.patient_affect_state_service import build_initial_patient_affect_state
 from app.services.patient_language_service import build_patient_opening_utterance
-from app.services.agent_rag_context_service import retrieve_agent_context
-from app.services.procedure_result_simulator import (
-    ProcedureResultSimulationRequest,
-    create_default_procedure_result_simulator,
-)
-from app.services.procedure_result_approval_agent import (
-    ProcedureResultApprovalRequest,
-    create_default_procedure_result_approval_agent,
-)
 from app.services.procedure_request_router import (
     ProcedureRequestRoutingRequest,
     create_default_procedure_request_router,
@@ -44,9 +35,13 @@ from app.validators.case_validator import validate_case
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
-PROCEDURE_SIMULATION_SAFETY_BOUNDARY = "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。"
+PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL = "free-text procedure requests require advanced training"
 TRAINING_DIFFICULTY_MODES = {"beginner", "intermediate", "advanced"}
 MAX_RUNTIME_ERROR_FIELD_LENGTH = 12000
+
+
+class ProcedureRequestTrainingModeError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -93,8 +88,6 @@ class OsceSessionService:
         graph: Any | None = None,
         patient_responder: Any | None = None,
         procedure_request_router: Any | None = None,
-        procedure_result_simulator: Any | None = None,
-        procedure_result_approval_agent: Any | None = None,
     ) -> None:
         self._sessions: dict[str, OsceSession] = {}
         self.osce_graph = graph or build_osce_graph(
@@ -109,10 +102,6 @@ class OsceSessionService:
         self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
         self.procedure_request_router = procedure_request_router or create_default_procedure_request_router()
-        self.procedure_result_simulator = procedure_result_simulator or create_default_procedure_result_simulator()
-        self.procedure_result_approval_agent = (
-            procedure_result_approval_agent or create_default_procedure_result_approval_agent()
-        )
         self._message_processing_statuses: dict[str, dict[str, Any]] = {}
         self._message_processing_status_lock = Lock()
 
@@ -552,6 +541,8 @@ class OsceSessionService:
         session = self._get_session(session_id)
         if session is None:
             return None
+        if session.training_difficulty != "advanced":
+            raise ProcedureRequestTrainingModeError(PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL)
         case = load_case_node(session.case_id)
         standardization = _standardize_procedure_request_text(request_text)
         routed_unmatched_requests = self._route_unmatched_procedure_requests(
@@ -581,20 +572,7 @@ class OsceSessionService:
             test_result_map,
         )
         matched_procedure_results.extend(_build_routed_unmatched_procedure_results(routed_unmatched_requests))
-        matched_procedure_results = self._simulate_unconfigured_procedure_results(
-            session=session,
-            case=case,
-            request_text=request_text,
-            matched_procedure_results=matched_procedure_results,
-        )
-        has_simulated_results = any(item.get("generated_by_ai") is True for item in matched_procedure_results)
-        procedure_simulation_audit_items = _procedure_simulation_audit_items_from_results(matched_procedure_results)
-        if procedure_simulation_audit_items:
-            session.procedure_simulation_audit_items = _merge_procedure_simulation_audit_items(
-                session.procedure_simulation_audit_items,
-                procedure_simulation_audit_items,
-            )
-            self._save_session(session)
+        matched_procedure_results = _mark_unconfigured_procedure_results_unavailable(matched_procedure_results)
         payload = _serialize_session(session, case)
         payload.update(
             {
@@ -608,15 +586,10 @@ class OsceSessionService:
                         routed_unmatched_requests,
                     ),
                     "routed_unmatched_requests": routed_unmatched_requests,
-                    "generated_result_policy": "ai_simulated_not_scoring" if has_simulated_results else "disabled",
-                    "safety_boundary": (
-                        PROCEDURE_SIMULATION_SAFETY_BOUNDARY
-                        if has_simulated_results
-                        else "当前高级模式仅标准化到已有目录；未配置项目在无可用模型时不生成模拟结果，也不进入评分。"
-                    ),
+                    "generated_result_policy": "disabled",
+                    "safety_boundary": "当前高级模式仅标准化到病例已配置项目；未配置项目不生成模拟结果，也不进入评分。",
                 },
                 "matched_procedure_results": matched_procedure_results,
-                "procedure_simulation_audit_items": list(session.procedure_simulation_audit_items),
                 "exam_results": exam_results,
                 "test_results": test_results,
             }
@@ -628,7 +601,6 @@ class OsceSessionService:
                 "request_text": request_text,
                 "standardized_request": payload["standardized_request"],
                 "matched_procedure_results": matched_procedure_results,
-                "procedure_simulation_audit_items": list(session.procedure_simulation_audit_items),
             },
         )
         return payload
@@ -662,149 +634,6 @@ class OsceSessionService:
         except Exception:
             return []
         return _normalize_routed_unmatched_requests(routing_response, unmatched_requests)
-
-    def _simulate_unconfigured_procedure_results(
-        self,
-        *,
-        session: OsceSession,
-        case: Case,
-        request_text: str,
-        matched_procedure_results: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        forbidden_terms = _procedure_forbidden_terms(case)
-        simulated_results: list[dict[str, Any]] = []
-        for result in matched_procedure_results:
-            if result.get("availability_status") != "not_available_for_case":
-                simulated_results.append(result)
-                continue
-            knowledge_context = _retrieve_procedure_simulation_context(
-                case=case,
-                request_text=request_text,
-                procedure_result=result,
-                forbidden_terms=forbidden_terms,
-            )
-            try:
-                simulation = self.procedure_result_simulator(
-                    ProcedureResultSimulationRequest(
-                        case_id=case.case_id,
-                        case_title=case.case_title,
-                        chief_complaint=case.chief_complaint,
-                        request_text=request_text,
-                        procedure_kind=str(result.get("kind", "")),
-                        procedure_code=str(result.get("code", "")),
-                        procedure_name_cn=str(result.get("name_cn", "")),
-                        patient_context=_procedure_simulation_patient_context(case),
-                        configured_results=_procedure_simulation_configured_results(case),
-                        retrieved_knowledge_context=knowledge_context,
-                        forbidden_terms=forbidden_terms,
-                    )
-                )
-            except Exception:
-                simulated_results.append(
-                    {
-                        **result,
-                        "approval_status": "simulation_unavailable",
-                        "source_context_references": [
-                            "policy:advanced_procedure_simulation.not_for_scoring",
-                        ],
-                    }
-                )
-                continue
-
-            simulation_text = _sanitize_simulated_procedure_result(simulation.result, forbidden_terms)
-            if not simulation_text:
-                simulated_results.append(
-                    {
-                        **result,
-                        "approval_status": "blocked_by_safety_gate",
-                        "source_context_references": [
-                            "policy:advanced_procedure_simulation.not_for_scoring",
-                        ],
-                    }
-                )
-                continue
-            approval_request = ProcedureResultApprovalRequest(
-                case_id=case.case_id,
-                case_title=case.case_title,
-                chief_complaint=case.chief_complaint,
-                request_text=request_text,
-                procedure_kind=str(result.get("kind", "")),
-                procedure_code=str(result.get("code", "")),
-                procedure_name_cn=str(result.get("name_cn", "")),
-                simulated_result=simulation_text,
-                source_context_references=[
-                    str(item.get("reference")) for item in knowledge_context if item.get("reference")
-                ],
-                forbidden_terms=forbidden_terms,
-            )
-            try:
-                approval_review = _normalize_procedure_simulation_approval_review(
-                    self.procedure_result_approval_agent(approval_request)
-                )
-            except Exception:
-                approval_review = _procedure_approval_error_fallback_review(simulation_text, forbidden_terms)
-            approval_decision = str(approval_review.get("decision") or "approved")
-            if approval_decision == "blocked":
-                simulated_results.append(
-                    {
-                        **result,
-                        "approval_status": "blocked_by_procedure_result_approval_agent",
-                        "approval_agent_review": approval_review,
-                        "source_context_references": [
-                            "policy:advanced_procedure_simulation.not_for_scoring",
-                        ],
-                    }
-                )
-                continue
-            if approval_decision == "revise":
-                revised_text = _sanitize_simulated_procedure_result(
-                    str(approval_review.get("revised_result") or ""),
-                    forbidden_terms,
-                )
-                if not revised_text:
-                    simulated_results.append(
-                        {
-                            **result,
-                            "approval_status": "blocked_by_procedure_result_approval_agent",
-                            "approval_agent_review": {
-                                **approval_review,
-                                "decision": "blocked",
-                                "safety_issues": [
-                                    *[
-                                        str(item)
-                                        for item in approval_review.get("safety_issues", [])
-                                        if str(item).strip()
-                                    ],
-                                    "审批 Agent 改写结果为空或仍包含受保护内容。",
-                                ],
-                            },
-                            "source_context_references": [
-                                "policy:advanced_procedure_simulation.not_for_scoring",
-                            ],
-                        }
-                    )
-                    continue
-                simulation_text = revised_text
-            simulated_results.append(
-                {
-                    **result,
-                    "result": f"AI 模拟：{simulation_text}（训练参考，不进入评分。）",
-                    "availability_status": "ai_simulated_for_training",
-                    "generated_by_ai": True,
-                    "approval_status": (
-                        "revised_by_procedure_result_approval_agent"
-                        if approval_decision == "revise"
-                        else "approved_by_procedure_result_approval_agent"
-                    ),
-                    "approval_agent_review": approval_review,
-                    "source_context_references": [
-                        *[str(item.get("reference")) for item in knowledge_context if item.get("reference")],
-                        "policy:advanced_procedure_simulation.not_for_scoring",
-                    ],
-                    "scoring_eligible": False,
-                }
-            )
-        return simulated_results
 
     def record_hypothesis(self, session_id: str, hypothesis: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
@@ -1345,14 +1174,19 @@ def _ensure_report_procedure_simulation_audit_items(
     report: dict[str, Any],
     session: OsceSession | None,
 ) -> dict[str, Any]:
-    audit_items = (
-        session.procedure_simulation_audit_items
-        if session is not None
-        else report.get("procedure_simulation_audit_items", [])
-    )
+    report_audit_items = report.get("procedure_simulation_audit_items")
+    session_audit_items = session.procedure_simulation_audit_items if session is not None else None
+    if isinstance(report_audit_items, list) and report_audit_items:
+        audit_items = report_audit_items
+    elif isinstance(session_audit_items, list) and session_audit_items:
+        audit_items = session_audit_items
+    elif isinstance(report_audit_items, list):
+        audit_items = report_audit_items
+    else:
+        audit_items = []
     return {
         **report,
-        "procedure_simulation_audit_items": list(audit_items) if isinstance(audit_items, list) else [],
+        "procedure_simulation_audit_items": list(audit_items),
     }
 
 
@@ -1421,7 +1255,6 @@ def _report_generated_event_payload(report: dict[str, Any]) -> dict[str, Any]:
         "source_reference_items": report.get("source_reference_items", []),
         "personal_skill_candidate": report.get("personal_skill_candidate"),
         "ai_reflection_review": report.get("ai_reflection_review"),
-        "procedure_simulation_audit_items": report.get("procedure_simulation_audit_items", []),
     }
 
 
@@ -1852,6 +1685,11 @@ def _normalize_routed_unmatched_requests(routing_response: Any, unmatched_reques
             for safety_issue in item.get("safety_issues", [])
             if str(safety_issue).strip()
         ]
+        if decision == "generate" and kind == "patient_profile":
+            decision = "block"
+            rationale = "病例未配置该患者信息，训练中不得编造姓名、身高、体重或其他患者事实。"
+            if "unconfigured_patient_fact" not in safety_issues:
+                safety_issues.append("unconfigured_patient_fact")
         normalized_items.append(
             {
                 "raw_text": raw_text,
@@ -1884,7 +1722,7 @@ def _build_routed_unmatched_procedure_results(routed_unmatched_requests: list[di
                 "result": "该项目已记录，但本训练站点未提供预置结果。",
                 "availability_status": "not_available_for_case",
                 "generated_by_ai": False,
-                "approval_status": "requires_simulation",
+                "approval_status": "not_required",
                 "approval_agent_review": {
                     "agent_id": "procedure_request_router",
                     "decision": str(item.get("decision") or "generate"),
@@ -1898,6 +1736,26 @@ def _build_routed_unmatched_procedure_results(routed_unmatched_requests: list[di
             }
         )
     return results
+
+
+def _mark_unconfigured_procedure_results_unavailable(
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        (
+            {
+                **result,
+                "availability_status": "not_available_for_case",
+                "generated_by_ai": False,
+                "approval_status": "not_required",
+                "source_context_references": [],
+                "scoring_eligible": False,
+            }
+            if result.get("availability_status") == "not_available_for_case"
+            else result
+        )
+        for result in results
+    ]
 
 
 def _remaining_unmatched_requests(
@@ -1948,174 +1806,6 @@ def _routed_procedure_label_prefix(kind: str) -> str:
     return "申请"
 
 
-def _procedure_simulation_audit_items_from_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    audit_items: list[dict[str, Any]] = []
-    for result in results:
-        if result.get("generated_by_ai") is not True:
-            continue
-        source_context_references = [
-            str(reference)
-            for reference in result.get("source_context_references", [])
-            if str(reference).strip()
-        ]
-        audit_items.append(
-            {
-                "procedure_id": str(result.get("id") or ""),
-                "kind": _procedure_audit_kind(str(result.get("kind") or "")),
-                "code": str(result.get("code") or ""),
-                "label": str(result.get("name_cn") or result.get("label") or result.get("code") or ""),
-                "result": str(result.get("result") or ""),
-                "approval_status": str(result.get("approval_status") or ""),
-                "approval_agent_review": _normalize_procedure_simulation_approval_review(
-                    result.get("approval_agent_review", {})
-                ),
-                "source_context_references": source_context_references,
-                "scoring_eligible": result.get("scoring_eligible") is True,
-                "safety_boundary": PROCEDURE_SIMULATION_SAFETY_BOUNDARY,
-            }
-        )
-    return audit_items
-
-
-def _normalize_procedure_simulation_approval_review(review: Any) -> dict[str, Any]:
-    if hasattr(review, "model_dump"):
-        review = review.model_dump()
-    if not isinstance(review, dict):
-        review = {}
-    safety_issues = [
-        str(item)
-        for item in review.get("safety_issues", [])
-        if str(item).strip()
-    ]
-    return {
-        "agent_id": str(review.get("agent_id") or "procedure_result_approval_agent"),
-        "decision": str(review.get("decision") or "approved"),
-        "approval_mode": str(review.get("approval_mode") or "deterministic_safety_gate"),
-        "rationale": str(review.get("rationale") or ""),
-        "safety_issues": safety_issues,
-        "revised_result": str(review.get("revised_result") or ""),
-    }
-
-
-def _procedure_approval_error_fallback_review(
-    simulation_text: str,
-    forbidden_terms: list[str],
-) -> dict[str, Any]:
-    safety_issues = [
-        f"包含受保护词：{term}"
-        for term in forbidden_terms
-        if term and term in simulation_text
-    ]
-    if safety_issues:
-        return {
-            "agent_id": "procedure_result_approval_agent",
-            "decision": "blocked",
-            "approval_mode": "approval_agent_error_fallback",
-            "rationale": "审批 Agent 调用失败，本地安全门禁发现受保护内容，已阻断展示。",
-            "safety_issues": safety_issues,
-            "revised_result": "",
-        }
-    return {
-        "agent_id": "procedure_result_approval_agent",
-        "decision": "approved",
-        "approval_mode": "approval_agent_error_fallback",
-        "rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
-        "safety_issues": [],
-        "revised_result": "",
-    }
-
-
-def _procedure_audit_kind(kind: str) -> str:
-    if kind == "auxiliary_test":
-        return "test"
-    if kind == "physical_exam":
-        return "exam"
-    return kind
-
-
-def _merge_procedure_simulation_audit_items(
-    existing_items: list[dict[str, Any]],
-    new_items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    merged_by_id: dict[str, dict[str, Any]] = {}
-    ordered_ids: list[str] = []
-    for item in [*existing_items, *new_items]:
-        procedure_id = str(item.get("procedure_id") or "")
-        if not procedure_id:
-            continue
-        if procedure_id not in merged_by_id:
-            ordered_ids.append(procedure_id)
-        merged_by_id[procedure_id] = dict(item)
-    return [merged_by_id[procedure_id] for procedure_id in ordered_ids]
-
-
-def _retrieve_procedure_simulation_context(
-    *,
-    case: Case,
-    request_text: str,
-    procedure_result: dict[str, Any],
-    forbidden_terms: list[str],
-) -> list[dict[str, Any]]:
-    try:
-        return retrieve_agent_context(
-            agent_role="coach",
-            case_ids=[case.case_id],
-            query_terms=[
-                case.chief_complaint,
-                request_text,
-                str(procedure_result.get("name_cn", "")),
-                str(procedure_result.get("code", "")),
-            ],
-            allowed_visibilities={"pre_submit_safe"},
-            forbidden_terms=forbidden_terms,
-            limit=3,
-        )
-    except Exception:
-        return []
-
-
-def _procedure_simulation_patient_context(case: Case) -> dict[str, Any]:
-    return {
-        "age": f"{case.patient_profile.age_value}{case.patient_profile.age_unit}",
-        "gender": case.patient_profile.gender,
-        "occupation": case.patient_profile.occupation,
-        "department": case.patient_profile.hospital_department,
-        "chief_complaint": case.chief_complaint,
-        "present_illness_summary": case.history.present_illness_summary,
-        "history_facts": [
-            {
-                "topic": fact.topic,
-                "slot": fact.slot,
-                "answer": fact.canonical_answer,
-            }
-            for fact in case.history.hidden_facts
-        ],
-    }
-
-
-def _procedure_simulation_configured_results(case: Case) -> list[dict[str, str]]:
-    configured_results: list[dict[str, str]] = []
-    for item in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
-        configured_results.append(
-            {
-                "kind": "physical_exam",
-                "code": item.exam_code,
-                "name_cn": item.exam_name_cn,
-                "result": item.result,
-            }
-        )
-    for item in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
-        configured_results.append(
-            {
-                "kind": "auxiliary_test",
-                "code": item.test_code,
-                "name_cn": item.test_name_cn,
-                "result": item.result,
-            }
-        )
-    return configured_results
-
-
 def _procedure_forbidden_terms(case: Case) -> list[str]:
     return [
         case.diagnosis.main_diagnosis,
@@ -2128,20 +1818,6 @@ def _procedure_forbidden_terms(case: Case) -> list[str]:
         "标准答案",
         "rubric",
     ]
-
-
-def _sanitize_simulated_procedure_result(result: str, forbidden_terms: list[str]) -> str:
-    sanitized = re.sub(r"\s+", " ", result).strip()
-    for term in forbidden_terms:
-        if term:
-            sanitized = sanitized.replace(term, "相关诊断")
-    for unsafe_term in ["治疗方案", "用药剂量", "手术方案", "处置建议"]:
-        sanitized = sanitized.replace(unsafe_term, "真实处置")
-    if not sanitized:
-        return ""
-    if len(sanitized) > 160:
-        sanitized = f"{sanitized[:157]}..."
-    return sanitized
 
 
 def _dedupe_non_empty(values: list[str]) -> list[str]:

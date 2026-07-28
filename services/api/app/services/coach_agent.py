@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from google import genai
@@ -60,6 +61,98 @@ class CoachResponse(BaseModel):
     selected_skill_ids: list[str] = Field(default_factory=list)
     skill_intervention_level: str = "auto"
     skill_selection_reason: str = ""
+
+
+_COACH_PROVIDER_REDACTION = "[redacted]"
+_COACH_SENSITIVE_KEY_PARTS = (
+    "answer",
+    "canonical",
+    "case_id",
+    "coverage",
+    "covered",
+    "diagnos",
+    "fact",
+    "forbidden",
+    "hidden",
+    "missing",
+    "must",
+    "pending",
+    "private",
+    "reference",
+    "result",
+    "rubric",
+    "score",
+    "secret",
+    "session",
+    "source",
+    "treatment",
+)
+
+
+def _coach_provider_payload(request: CoachRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "stage": request.stage,
+        "training_difficulty": request.training_difficulty,
+        "prompt_kind": request.prompt_kind,
+        "base_hint": request.base_hint,
+        "prior_messages": request.prior_messages,
+        "pedagogy_state": request.pedagogy_state,
+        "clinical_reasoning_state": request.clinical_reasoning_state,
+        "skill_context": request.skill_context,
+        "retrieved_knowledge_context": request.retrieved_knowledge_context,
+        "hint_context": request.hint_context,
+    }
+    redaction_terms = _coach_redaction_terms(request)
+    return _sanitize_coach_provider_value(payload, redaction_terms)
+
+
+def _coach_redaction_terms(request: CoachRequest) -> tuple[str, ...]:
+    terms = {
+        term.strip()
+        for term in [request.case_id, *request.forbidden_terms]
+        if isinstance(term, str) and term.strip()
+    }
+    return tuple(sorted(terms, key=len, reverse=True))
+
+
+def _sanitize_coach_provider_value(value: Any, redaction_terms: tuple[str, ...]) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            if _is_sensitive_coach_provider_key(key) or _coach_text_contains_redaction_term(
+                key,
+                redaction_terms,
+            ):
+                continue
+            sanitized[key] = _sanitize_coach_provider_value(item, redaction_terms)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_coach_provider_value(item, redaction_terms) for item in value]
+    if isinstance(value, str):
+        return _redact_coach_provider_text(value, redaction_terms)
+    return value
+
+
+def _is_sensitive_coach_provider_key(key: str) -> bool:
+    normalized_key = re.sub(r"[^a-z0-9]+", "_", key.casefold())
+    return any(part in normalized_key for part in _COACH_SENSITIVE_KEY_PARTS)
+
+
+def _coach_text_contains_redaction_term(text: str, redaction_terms: tuple[str, ...]) -> bool:
+    return any(re.search(re.escape(term), text, flags=re.IGNORECASE) for term in redaction_terms)
+
+
+def _redact_coach_provider_text(text: str, redaction_terms: tuple[str, ...]) -> str:
+    sanitized = text
+    for term in redaction_terms:
+        sanitized = re.sub(
+            re.escape(term),
+            _COACH_PROVIDER_REDACTION,
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+    return sanitized
 
 
 _EXAM_STYLE_VERBS = ("请说明", "请解释", "请写", "写出", "说出", "阐述")
@@ -195,7 +288,7 @@ class OpenAICompatibleCoachAgent:
     def __call__(self, request: CoachRequest) -> CoachResponse:
         response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_coach_provider_payload(request),
             response_model=CoachResponse,
             temperature=0.2,
         )
@@ -210,7 +303,7 @@ class AnthropicCoachAgent:
     def __call__(self, request: CoachRequest) -> CoachResponse:
         response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_coach_provider_payload(request),
             response_model=CoachResponse,
             temperature=0.2,
         )
@@ -241,7 +334,7 @@ class GeminiCoachAgent:
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
             call=lambda: self._client.models.generate_content(
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                contents=json.dumps(_coach_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT_TEMPLATE,
                     response_mime_type="application/json",
@@ -353,7 +446,7 @@ def sanitize_coach_hint(hint: str, forbidden_terms: list[str]) -> str:
     sanitized = hint.strip() or "请继续按 OSCE 流程补齐证据，不要急于下结论。"
     for term in forbidden_terms:
         if term:
-            sanitized = sanitized.replace(term, "标准诊断")
+            sanitized = re.sub(re.escape(term), "标准诊断", sanitized, flags=re.IGNORECASE)
     for unsafe_term in ["治疗方案", "用药剂量", "手术方案", "手术"]:
         sanitized = sanitized.replace(unsafe_term, "真实处置")
     if len(sanitized) > 160:

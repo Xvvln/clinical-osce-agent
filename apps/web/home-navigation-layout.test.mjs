@@ -697,10 +697,10 @@ test("report page exposes advanced simulated procedure audit items as collapsed 
   assert.match(reportModelSource, /procedure_simulation_audit_items: report\.procedure_simulation_audit_items \?\? \[\],/);
   assert.match(reportSource, /function ProcedureSimulationAuditSection/);
   assert.match(reportSource, /procedureSimulationAuditItems=\{report\.procedure_simulation_audit_items\}/);
-  assert.match(reportSource, /AI 模拟检查结果/);
+  assert.match(reportSource, /历史模拟检查记录/);
   assert.match(reportSource, /审批 Agent 记录/);
   assert.match(reportSource, /审核结论/);
-  assert.match(reportSource, /仅用于高级训练连续性，不进入评分/);
+  assert.match(reportSource, /只读兼容旧版报告，不进入评分/);
   assert.match(reportSource, /item\.scoring_eligible \? "可进入评分" : "不进入评分"/);
   assert.match(reportSource, /item\.source_context_references\.map/);
 });
@@ -1533,7 +1533,7 @@ test("home supports intermediate procedure catalog and batch procedure requests"
   assert.match(pageSource, /未识别项目/);
   assert.match(pageSource, /not_available_for_case/);
   assert.match(pageSource, /ai_simulated_for_training/);
-  assert.match(pageSource, /AI 模拟结果 · 不计分/);
+  assert.match(pageSource, /旧版模拟记录 · 不计分/);
   assert.match(pageSource, /formatProcedureResultText\(procedureResult\)/);
   assert.doesNotMatch(pageSource, /本次查体 \/ 检查申请/);
   assert.doesNotMatch(pageSource, /门禁状态：/);

@@ -145,7 +145,7 @@ test("admin v2 explains evaluation, skill details, knowledge content, and API fa
     "失败详情",
     "最近 60 条",
     "RAG 检索评测",
-    "AI 模拟审计",
+    "历史模拟审计",
     "全局审核审计",
     "动态教学重点",
   ]) {

@@ -2858,8 +2858,8 @@ function ProcedureAuditList({
     <Card className={className}>
       <CardHeader className="flex-row items-start justify-between gap-4">
         <div>
-          <CardTitle>AI 模拟审计</CardTitle>
-          <CardDescription>记录高级模式中 AI 补充查体或检查结果时的审核结论。</CardDescription>
+          <CardTitle>历史模拟审计</CardTitle>
+          <CardDescription>只读兼容历史报告中的模拟记录；当前活动训练不再新增。</CardDescription>
         </div>
         <Badge variant="muted">{formatCount(summary?.total ?? audits.length)} 条</Badge>
       </CardHeader>
@@ -2883,7 +2883,7 @@ function ProcedureAuditList({
             ))}
           </div>
         ) : (
-          <EmptyText>暂无 AI 模拟审计记录。</EmptyText>
+          <EmptyText>暂无历史模拟审计记录。</EmptyText>
         )}
       </CardContent>
     </Card>

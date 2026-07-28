@@ -14,7 +14,6 @@ RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [
     "llm_rubric_scorer",
     "skill_candidate_generator",
     "procedure_request_router",
-    "procedure_result_simulator",
 ]
 
 VERTEX_RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS = [

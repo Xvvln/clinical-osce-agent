@@ -64,6 +64,14 @@ class ProcedureRequestRoutingResponse(BaseModel):
     routed_items: list[ProcedureRequestRouteItem] = Field(default_factory=list)
 
 
+def _procedure_router_provider_payload(request: ProcedureRequestRoutingRequest) -> dict[str, Any]:
+    return {
+        "request_text": request.request_text,
+        "unmatched_requests": list(request.unmatched_requests),
+        "known_catalog_labels": list(request.known_catalog_labels),
+    }
+
+
 class DeterministicProcedureRequestRouter:
     def __call__(self, request: ProcedureRequestRoutingRequest) -> ProcedureRequestRoutingResponse:
         routed_items: list[ProcedureRequestRouteItem] = []
@@ -115,7 +123,7 @@ class OpenAICompatibleProcedureRequestRouter:
     def __call__(self, request: ProcedureRequestRoutingRequest) -> ProcedureRequestRoutingResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_procedure_router_provider_payload(request),
             response_model=ProcedureRequestRoutingResponse,
             temperature=0.0,
         )
@@ -128,7 +136,7 @@ class AnthropicProcedureRequestRouter:
     def __call__(self, request: ProcedureRequestRoutingRequest) -> ProcedureRequestRoutingResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_procedure_router_provider_payload(request),
             response_model=ProcedureRequestRoutingResponse,
             temperature=0.0,
         )
@@ -158,7 +166,7 @@ class GeminiProcedureRequestRouter:
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
             call=lambda: self._client.models.generate_content(
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                contents=json.dumps(_procedure_router_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT_TEMPLATE,
                     response_mime_type="application/json",

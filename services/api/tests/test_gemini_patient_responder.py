@@ -36,9 +36,10 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "低热" in module.SYSTEM_PROMPT_TEMPLATE
     assert "有点发热" in module.SYSTEM_PROMPT_TEMPLATE
     assert "不要主动引导学生下一步该问什么" in module.SYSTEM_PROMPT_TEMPLATE
-    assert "patient_private_context" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "patient_private_context" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "answerable_fact_candidates" in module.SYSTEM_PROMPT_TEMPLATE
-    assert "revealed_fact_ids" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "revealed_fact_ids" not in module.SYSTEM_PROMPT_TEMPLATE
+    assert "本轮临时令牌" in module.SYSTEM_PROMPT_TEMPLATE
     assert "dialogue_context" in module.SYSTEM_PROMPT_TEMPLATE
     assert "is_repeated_fact_question" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "repeated_fact_ids" not in module.SYSTEM_PROMPT_TEMPLATE
@@ -199,7 +200,7 @@ def test_patient_responder_rejects_partial_fact_coverage_for_multi_intent_questi
     fake_client = FakePatientFactIdClient(
         module.PatientResponderResponse(
             reply="今天上午活动完之后开始胸口疼，到现在大概两个小时了。",
-            fact_ids_used=["acs_001.hf_01"],
+            fact_ids_used=["fact_1"],
         )
     )
     responder = module.OpenAICompatiblePatientResponder(
@@ -272,7 +273,7 @@ def test_lazy_patient_responder_uses_canonical_answer_when_model_output_fails_fa
 
 def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
     fake_client = FakePatientFactIdClient(
-        module.PatientResponderResponse(reply="我昨天开始疼的。", fact_ids_used=["appendicitis_001.hf_01"])
+        module.PatientResponderResponse(reply="我昨天开始疼的。", fact_ids_used=["fact_1"])
     )
     responder = module.OpenAICompatiblePatientResponder(
         settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
@@ -299,7 +300,124 @@ def test_patient_responder_accepts_declared_answerable_fact_ids() -> None:
     )
 
     assert reply.reply == "我昨天开始疼的。"
-    assert fake_client.calls[0]["payload"]["answerable_fact_candidates"][0]["fact_id"] == "appendicitis_001.hf_01"
+    assert reply.fact_ids_used == ["appendicitis_001.hf_01"]
+    assert fake_client.calls[0]["payload"]["answerable_fact_candidates"][0]["fact_id"] == "fact_1"
+
+
+def test_patient_provider_payload_contains_only_current_answerable_facts() -> None:
+    hidden_fact = "有恶心，没吐出来，低热约 37.8 ℃。"
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(reply="我昨天开始疼的。", fact_ids_used=["fact_1"])
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    reply = responder(
+        module.PatientResponderRequest(
+            case_id="appendicitis_001",
+            case_title="急性腹痛问诊",
+            chief_complaint="腹痛 1 天",
+            student_message="什么时候开始疼？",
+            current_intents=["ask_onset"],
+            canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+            revealed_fact_id="appendicitis_001.hf_01",
+            revealed_fact_ids=["appendicitis_001.hf_01"],
+            patient_private_context={
+                "history": {
+                    "present_illness_summary": f"完整摘要：{hidden_fact}",
+                    "hidden_facts": [{"fact_id": "appendicitis_001.hf_05", "canonical_answer": hidden_fact}],
+                }
+            },
+            answerable_fact_candidates=[
+                {
+                    "fact_id": "appendicitis_001.hf_01",
+                    "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+                    "source_reference": "case:appendicitis_001.history.appendicitis_001.hf_01",
+                }
+            ],
+            forbidden_terms=["急性阑尾炎", "appendicitis"],
+            forbidden_context={"diagnosis_terms": ["急性阑尾炎"]},
+            protected_fact_texts=[hidden_fact],
+            deterministic_hints={
+                "revealed_fact_ids": ["appendicitis_001.hf_01"],
+                "answerable_fact_ids": ["appendicitis_001.hf_01"],
+            },
+        )
+    )
+
+    provider_payload = fake_client.calls[0]["payload"]
+    payload_text = str(provider_payload)
+    assert reply.fact_ids_used == ["appendicitis_001.hf_01"]
+    assert provider_payload["canonical_answer"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert "patient_private_context" not in provider_payload
+    assert "forbidden_terms" not in provider_payload
+    assert "forbidden_context" not in provider_payload
+    assert "protected_fact_texts" not in provider_payload
+    assert "appendicitis_001" not in payload_text
+    assert "急性阑尾炎" not in payload_text
+    assert hidden_fact not in payload_text
+    assert "present_illness_summary" not in payload_text
+
+
+def test_patient_responder_rejects_protected_fact_text_when_fact_ids_used_is_empty() -> None:
+    hidden_fact = "有恶心，没吐出来，低热约 37.8 ℃。"
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(reply=hidden_fact, fact_ids_used=[])
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+
+    request = module.PatientResponderRequest(
+        case_id="appendicitis_001",
+        case_title="急性腹痛问诊",
+        chief_complaint="腹痛 1 天",
+        student_message="什么时候开始疼？",
+        current_intents=["ask_onset"],
+        canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+        answerable_fact_candidates=[
+            {
+                "fact_id": "appendicitis_001.hf_01",
+                "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+            }
+        ],
+        protected_fact_texts=[hidden_fact],
+        forbidden_terms=["急性阑尾炎"],
+    )
+
+    with pytest.raises(RuntimeError, match="未授权病例事实|未声明本轮病例事实"):
+        responder(request)
+
+
+def test_patient_responder_rejects_forbidden_terms_case_insensitively() -> None:
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(reply="This looks like APPENDICITIS.", fact_ids_used=["fact_1"])
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(enabled=True, api_key="key", model="model"),
+        client=fake_client,
+    )
+    request = module.PatientResponderRequest(
+        case_id="appendicitis_001",
+        case_title="急性腹痛问诊",
+        chief_complaint="腹痛 1 天",
+        student_message="什么时候开始疼？",
+        current_intents=["ask_onset"],
+        canonical_answer="24 小时前开始，最初是上腹部隐痛。",
+        answerable_fact_candidates=[
+            {
+                "fact_id": "appendicitis_001.hf_01",
+                "canonical_answer": "24 小时前开始，最初是上腹部隐痛。",
+            }
+        ],
+        forbidden_terms=["appendicitis"],
+    )
+
+    with pytest.raises(RuntimeError, match="禁止泄露词"):
+        responder(request)
 
 
 def test_patient_responder_keeps_model_declared_emotion() -> None:
@@ -307,7 +425,7 @@ def test_patient_responder_keeps_model_declared_emotion() -> None:
         module.PatientResponderResponse(
             reply="我怕这个病会不会很严重。",
             emotion="anxious",
-            fact_ids_used=["appendicitis_001.hf_01"],
+            fact_ids_used=["fact_1"],
         )
     )
     responder = module.OpenAICompatiblePatientResponder(

@@ -105,6 +105,18 @@ class FakePolicyDroppingCoachClient:
         )
 
 
+class RecordingCoachClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs: object) -> module.CoachResponse:
+        self.calls.append(kwargs)
+        return module.CoachResponse(
+            hint="先按时间顺序补充病史，再决定下一步。",
+            trigger_kind="manual_hint",
+        )
+
+
 def _request() -> module.CoachRequest:
     return module.CoachRequest(
         case_id="appendicitis_001",
@@ -243,6 +255,50 @@ def test_llm_coach_agent_preserves_active_hint_policy_training_goal() -> None:
 
     assert "最担心" in response.hint
     assert "回应情绪" in response.hint
+
+
+def test_coach_provider_payload_excludes_case_secrets_and_local_denylist() -> None:
+    recording_client = RecordingCoachClient()
+    request = _request().model_copy(
+        update={
+            "case_id": "appendicitis_001",
+            "case_title": "急性阑尾炎训练病例",
+            "forbidden_terms": ["急性阑尾炎", "appendicitis"],
+            "pedagogy_state": {
+                "pending_fact_ids": ["appendicitis_001.hf_05"],
+                "coverage_map": {"history": [{"label": "低热约 37.8 ℃"}]},
+            },
+            "hint_context": {
+                "next_step": {"base_hint": "先补充病史。"},
+                "missing_rubric_items": ["rubric:appendicitis_001.ht_fever"],
+            },
+        }
+    )
+    agent = module.OpenAICompatibleCoachAgent(object(), client=recording_client)
+
+    response = agent(request)
+
+    provider_payload = recording_client.calls[0]["payload"]
+    payload_text = str(provider_payload)
+    assert response.hint
+    assert "case_id" not in provider_payload
+    assert "forbidden_terms" not in provider_payload
+    assert "appendicitis_001" not in payload_text
+    assert "急性阑尾炎" not in payload_text
+    assert "低热约 37.8 ℃" not in payload_text
+    assert "pending_fact_ids" not in payload_text
+    assert "coverage_map" not in payload_text
+    assert "missing_rubric_items" not in payload_text
+
+
+def test_coach_hint_redacts_forbidden_terms_case_insensitively() -> None:
+    hint = module.sanitize_coach_hint(
+        "Do not reveal APPENDICITIS to the student.",
+        ["appendicitis"],
+    )
+
+    assert "APPENDICITIS" not in hint
+    assert "标准诊断" in hint
 
 
 def test_active_hint_policy_keeps_visible_hint_concise_when_skill_context_is_long() -> None:

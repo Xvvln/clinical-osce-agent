@@ -14,7 +14,6 @@ from app.services.osce_session_service import (
     osce_session_service,
 )
 from app.services.osce_session_store import OsceSessionStore
-from app.services.procedure_result_simulator import ProcedureResultSimulationResponse
 from app.services.report_store import ReportStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.student_profile_store import StudentProfileStore
@@ -1794,37 +1793,7 @@ def test_session_resume_restores_only_collected_procedure_results() -> None:
     )
 
 
-def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeProcedureResultSimulator:
-        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
-            assert getattr(request, "procedure_code") == "ecg.st_segment"
-            assert getattr(request, "procedure_name_cn") == "心电图"
-            return ProcedureResultSimulationResponse(
-                result="窦性心律，未见明确急性 ST 段抬高或压低。",
-                safety_note="训练模拟，不参与评分。",
-            )
-
-    class FakeProcedureResultApprovalAgent:
-        calls: list[object] = []
-
-        def __call__(self, request: object) -> dict[str, object]:
-            self.calls.append(request)
-            assert getattr(request, "procedure_code") == "ecg.st_segment"
-            assert getattr(request, "procedure_name_cn") == "心电图"
-            assert getattr(request, "simulated_result") == "窦性心律，未见明确急性 ST 段抬高或压低。"
-            return {
-                "agent_id": "procedure_result_approval_agent",
-                "decision": "approved",
-                "approval_mode": "llm_review",
-                "rationale": "结果未泄露诊断、治疗或评分答案，可作为高级训练补充结果。",
-                "safety_issues": [],
-                "revised_result": "",
-            }
-
-    fake_approval_agent = FakeProcedureResultApprovalAgent()
-    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
-    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", fake_approval_agent, raising=False)
-
+def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) -> None:
     create_response = client.post(
         "/api/sessions",
         json={"case_id": "appendicitis_001", "student_id": "student_demo"},
@@ -1973,55 +1942,10 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         f"/api/sessions/{session_id}/procedure-request",
         json={"request_text": "我想查反跳痛和血常规，再看看心电图和胃镜"},
     )
-    free_text_procedure_payload = free_text_procedure_response.json()
-
-    assert free_text_procedure_response.status_code == 200
-    assert free_text_procedure_payload["standardized_request"]["mode"] == "advanced_free_text_catalog"
-    assert free_text_procedure_payload["standardized_request"]["matched_exam_codes"] == ["abd.palpation.rebound"]
-    assert free_text_procedure_payload["standardized_request"]["matched_test_codes"] == ["lab.cbc", "ecg.st_segment"]
-    assert free_text_procedure_payload["standardized_request"]["unmatched_requests"] == ["胃镜"]
-    assert free_text_procedure_payload["standardized_request"]["generated_result_policy"] == "ai_simulated_not_scoring"
-    assert "不进入标准评分" in free_text_procedure_payload["standardized_request"]["safety_boundary"]
-    assert [
-        item["id"] for item in free_text_procedure_payload["matched_procedure_results"]
-    ] == [
-        "exam:abd.palpation.rebound",
-        "test:lab.cbc",
-        "test:ecg.st_segment",
-    ]
-    assert free_text_procedure_payload["matched_procedure_results"][0]["generated_by_ai"] is False
-    assert free_text_procedure_payload["matched_procedure_results"][0]["scoring_eligible"] is True
-    simulated_result = free_text_procedure_payload["matched_procedure_results"][2]
-    assert simulated_result["availability_status"] == "ai_simulated_for_training"
-    assert simulated_result["generated_by_ai"] is True
-    assert simulated_result["approval_status"] == "approved_by_procedure_result_approval_agent"
-    assert simulated_result["scoring_eligible"] is False
-    assert "AI 模拟" in simulated_result["result"]
-    assert "不进入评分" in simulated_result["result"]
-    assert simulated_result["approval_agent_review"] == {
-        "agent_id": "procedure_result_approval_agent",
-        "decision": "approved",
-        "approval_mode": "llm_review",
-        "rationale": "结果未泄露诊断、治疗或评分答案，可作为高级训练补充结果。",
-        "safety_issues": [],
-        "revised_result": "",
+    assert free_text_procedure_response.status_code == 409
+    assert free_text_procedure_response.json() == {
+        "detail": "free-text procedure requests require advanced training"
     }
-    assert "policy:advanced_procedure_simulation.not_for_scoring" in simulated_result["source_context_references"]
-    assert len(fake_approval_agent.calls) == 1
-    assert free_text_procedure_payload["procedure_simulation_audit_items"] == [
-        {
-            "procedure_id": "test:ecg.st_segment",
-            "kind": "test",
-            "code": "ecg.st_segment",
-            "label": "心电图",
-            "result": simulated_result["result"],
-            "approval_status": "approved_by_procedure_result_approval_agent",
-            "approval_agent_review": simulated_result["approval_agent_review"],
-            "source_context_references": simulated_result["source_context_references"],
-            "scoring_eligible": False,
-            "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
-        }
-    ]
 
     submit_response = client.post(
         f"/api/sessions/{session_id}/submit-diagnosis",
@@ -2124,20 +2048,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
     assert report_payload["rubric_scores"]["dx_main"]["score"] == 10
     assert report_payload["rubric_scores"]["rs_support"]["score"] == 3
     assert "ht_migration" in report_payload["missed_items"]
-    assert report_payload["procedure_simulation_audit_items"] == [
-        {
-            "procedure_id": "test:ecg.st_segment",
-            "kind": "test",
-            "code": "ecg.st_segment",
-            "label": "心电图",
-            "result": simulated_result["result"],
-            "approval_status": "approved_by_procedure_result_approval_agent",
-            "approval_agent_review": simulated_result["approval_agent_review"],
-            "source_context_references": simulated_result["source_context_references"],
-            "scoring_eligible": False,
-            "safety_boundary": "AI 模拟补充结果仅用于高级训练反馈，不写入病例标准事实，不进入标准评分。",
-        }
-    ]
+    assert report_payload["procedure_simulation_audit_items"] == []
     assert "ecg.st_segment" not in report_payload["source_references"]
     assert report_payload["strengths"] == [
         "追问起病时间：已完成。",
@@ -2226,7 +2137,7 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         assert forbidden_term not in report_text
 
 
-def test_advanced_procedure_request_routes_safe_unmatched_items_to_simulation(
+def test_advanced_procedure_request_does_not_fabricate_unmatched_patient_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeProcedureRequestRouter:
@@ -2248,37 +2159,18 @@ def test_advanced_procedure_request_routes_safe_unmatched_items_to_simulation(
                 ]
             }
 
-    class FakeProcedureResultSimulator:
-        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
-            assert getattr(request, "procedure_kind") == "patient_profile"
-            assert getattr(request, "procedure_name_cn") == "身高体重姓名"
-            return ProcedureResultSimulationResponse(
-                result="姓名未提供；身高约 175 cm，体重约 68 kg。",
-                safety_note="训练模拟，不参与评分。",
-            )
-
-    class FakeProcedureResultApprovalAgent:
-        calls: list[object] = []
-
+    class UnexpectedProcedureResultSimulator:
         def __call__(self, request: object) -> dict[str, object]:
-            self.calls.append(request)
-            assert getattr(request, "procedure_kind") == "patient_profile"
-            assert getattr(request, "procedure_name_cn") == "身高体重姓名"
-            assert getattr(request, "simulated_result") == "姓名未提供；身高约 175 cm，体重约 68 kg。"
-            return {
-                "agent_id": "procedure_result_approval_agent",
-                "decision": "approved",
-                "approval_mode": "llm_review",
-                "rationale": "基础体格信息未泄露诊断或评分答案，可作为高级训练补充结果。",
-                "safety_issues": [],
-                "revised_result": "",
-            }
+            raise AssertionError(f"unconfigured patient facts must not be simulated: {request}")
 
     fake_router = FakeProcedureRequestRouter()
-    fake_approval_agent = FakeProcedureResultApprovalAgent()
     monkeypatch.setattr(osce_session_service, "procedure_request_router", fake_router, raising=False)
-    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
-    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", fake_approval_agent, raising=False)
+    monkeypatch.setattr(
+        osce_session_service,
+        "procedure_result_simulator",
+        UnexpectedProcedureResultSimulator(),
+        raising=False,
+    )
 
     create_response = client.post(
         "/api/sessions",
@@ -2294,76 +2186,81 @@ def test_advanced_procedure_request_routes_safe_unmatched_items_to_simulation(
     payload = response.json()
 
     assert response.status_code == 200
-    assert payload["standardized_request"]["unmatched_requests"] == []
+    assert payload["standardized_request"]["unmatched_requests"] == ["身高体重姓名"]
     assert payload["standardized_request"]["routed_unmatched_requests"] == [
         {
             "raw_text": "身高体重姓名",
-            "decision": "generate",
+            "decision": "block",
             "kind": "patient_profile",
             "name_cn": "身高体重姓名",
-            "rationale": "基础身份与体格信息可作为高级训练补充结果，不进入评分。",
-            "safety_issues": [],
+            "rationale": "病例未配置该患者信息，训练中不得编造姓名、身高、体重或其他患者事实。",
+            "safety_issues": ["unconfigured_patient_fact"],
         }
     ]
-    assert len(payload["matched_procedure_results"]) == 1
-    simulated_result = payload["matched_procedure_results"][0]
-    assert simulated_result["id"].startswith("generated:patient_profile:")
-    assert simulated_result["kind"] == "patient_profile"
-    assert simulated_result["label"] == "信息：身高体重姓名"
-    assert simulated_result["availability_status"] == "ai_simulated_for_training"
-    assert simulated_result["generated_by_ai"] is True
-    assert simulated_result["scoring_eligible"] is False
-    assert "身高约 175 cm" in simulated_result["result"]
-    assert payload["procedure_simulation_audit_items"][0]["kind"] == "patient_profile"
+    assert payload["standardized_request"]["generated_result_policy"] == "disabled"
+    assert payload["matched_procedure_results"] == []
+    assert "procedure_simulation_audit_items" not in payload
+    assert "175 cm" not in str(payload)
+    assert "68 kg" not in str(payload)
     assert len(fake_router.calls) == 1
-    assert len(fake_approval_agent.calls) == 1
 
 
-def test_advanced_procedure_request_falls_back_when_approval_agent_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeProcedureResultSimulator:
-        def __call__(self, request: object) -> ProcedureResultSimulationResponse:
-            assert getattr(request, "procedure_code") == "ecg.st_segment"
-            return ProcedureResultSimulationResponse(
-                result="窦性心律，未见明确急性 ST 段抬高或压低。",
-                safety_note="训练模拟，不参与评分。",
-            )
-
-    class FailingProcedureResultApprovalAgent:
+def test_advanced_unconfigured_procedure_returns_unavailable_without_invoking_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedAgent:
         def __call__(self, request: object) -> dict[str, object]:
-            assert getattr(request, "procedure_code") == "ecg.st_segment"
-            raise RuntimeError("approval gateway timeout")
+            raise AssertionError(f"unconfigured procedures must not invoke an LLM: {request}")
 
-    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", FakeProcedureResultSimulator())
-    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", FailingProcedureResultApprovalAgent())
+    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", UnexpectedAgent(), raising=False)
+    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", UnexpectedAgent(), raising=False)
 
-    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
     assert create_response.status_code == 200
     session_id = create_response.json()["session_id"]
 
-    with TestClient(app, raise_server_exceptions=False) as error_client:
-        error_client.cookies.set(AUTH_COOKIE_NAME, client.cookies.get(AUTH_COOKIE_NAME))
-        procedure_response = error_client.post(
-            f"/api/sessions/{session_id}/procedure-request",
-            json={"request_text": "我想查心电图"},
-        )
+    procedure_response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
 
     assert procedure_response.status_code == 200
     procedure_payload = procedure_response.json()
-    simulated_result = procedure_payload["matched_procedure_results"][0]
-    assert simulated_result["availability_status"] == "ai_simulated_for_training"
-    assert simulated_result["generated_by_ai"] is True
-    assert simulated_result["approval_status"] == "approved_by_procedure_result_approval_agent"
-    assert simulated_result["approval_agent_review"] == {
-        "agent_id": "procedure_result_approval_agent",
-        "decision": "approved",
-        "approval_mode": "approval_agent_error_fallback",
-        "rationale": "审批 Agent 调用失败，已使用本地安全门禁降级审核。",
-        "safety_issues": [],
-        "revised_result": "",
-    }
-    assert procedure_payload["procedure_simulation_audit_items"][0]["approval_agent_review"] == (
-        simulated_result["approval_agent_review"]
+    unavailable_result = procedure_payload["matched_procedure_results"][0]
+    assert unavailable_result["availability_status"] == "not_available_for_case"
+    assert unavailable_result["generated_by_ai"] is False
+    assert unavailable_result["approval_status"] == "not_required"
+    assert unavailable_result["scoring_eligible"] is False
+    assert procedure_payload["standardized_request"]["generated_result_policy"] == "disabled"
+    assert "procedure_simulation_audit_items" not in procedure_payload
+
+
+@pytest.mark.parametrize("training_difficulty", ["beginner", "intermediate"])
+def test_procedure_request_rejects_non_advanced_session(
+    training_difficulty: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedRouter:
+        def __call__(self, request: object) -> dict[str, object]:
+            raise AssertionError(f"non-advanced request must stop before routing: {request}")
+
+    monkeypatch.setattr(osce_session_service, "procedure_request_router", UnexpectedRouter(), raising=False)
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": training_difficulty},
     )
+    session_id = create_response.json()["session_id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "free-text procedure requests require advanced training"}
 
 
 def test_osce_session_records_diagnosis_hypothesis_before_final_submission(tmp_path) -> None:

@@ -50,6 +50,15 @@ class ProcedureResultSimulationResponse(BaseModel):
     safety_note: str = Field(default="", max_length=160)
 
 
+def _procedure_simulator_provider_payload(request: ProcedureResultSimulationRequest) -> dict[str, str]:
+    return {
+        "request_text": request.request_text,
+        "procedure_kind": request.procedure_kind,
+        "procedure_code": request.procedure_code,
+        "procedure_name_cn": request.procedure_name_cn,
+    }
+
+
 class OpenAICompatibleProcedureResultSimulator:
     def __init__(self, settings: OpenAICompatibleSettings, client: OpenAICompatibleChatClient | None = None) -> None:
         self._client = client or OpenAICompatibleChatClient(settings)
@@ -57,7 +66,7 @@ class OpenAICompatibleProcedureResultSimulator:
     def __call__(self, request: ProcedureResultSimulationRequest) -> ProcedureResultSimulationResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_procedure_simulator_provider_payload(request),
             response_model=ProcedureResultSimulationResponse,
             temperature=0.2,
         )
@@ -70,7 +79,7 @@ class AnthropicProcedureResultSimulator:
     def __call__(self, request: ProcedureResultSimulationRequest) -> ProcedureResultSimulationResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_procedure_simulator_provider_payload(request),
             response_model=ProcedureResultSimulationResponse,
             temperature=0.2,
         )
@@ -100,7 +109,7 @@ class GeminiProcedureResultSimulator:
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
             call=lambda: self._client.models.generate_content(
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                contents=json.dumps(_procedure_simulator_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT_TEMPLATE,
                     response_mime_type="application/json",

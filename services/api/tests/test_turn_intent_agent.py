@@ -221,6 +221,19 @@ class FailingTurnIntentAgent:
         raise RuntimeError("provider unavailable")
 
 
+class RecordingTurnIntentClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs: object) -> module.TurnIntentResponse:
+        self.calls.append(kwargs)
+        return module.TurnIntentResponse(
+            current_intents=["ask_onset"],
+            confidence=0.9,
+            rationale="学生询问起病时间。",
+        )
+
+
 def _request() -> module.TurnIntentRequest:
     return module.TurnIntentRequest(
         case_id="appendicitis_001",
@@ -308,6 +321,33 @@ def test_turn_intent_prompt_uses_current_intents_as_authoritative_output() -> No
     assert "current_intents 是本轮问诊意图列表" in module.SYSTEM_PROMPT_TEMPLATE
     assert "只能从 allowed_intents 中选择 current_intent。" not in module.SYSTEM_PROMPT_TEMPLATE
     assert "current_intent 是本轮主意图；" not in module.SYSTEM_PROMPT_TEMPLATE
+
+
+def test_turn_intent_provider_payload_omits_case_identity_and_case_summary() -> None:
+    recording_client = RecordingTurnIntentClient()
+    agent = module.OpenAICompatibleTurnIntentAgent(object(), client=recording_client)
+    request = _request().model_copy(
+        update={
+            "case_id": "appendicitis_001",
+            "case_title": "急性阑尾炎训练病例",
+            "chief_complaint": "右下腹痛伴低热",
+        }
+    )
+
+    response = agent(request)
+
+    assert response.current_intents == ["ask_onset"]
+    assert recording_client.calls[0]["payload"] == {
+        "stage": "history_taking",
+        "student_message": "腹痛持续多久了？",
+        "keyword_intent": "unknown_history_intent",
+        "keyword_intents": [],
+        "prior_messages": [],
+        "allowed_intents": module.KNOWN_HISTORY_INTENTS,
+    }
+    assert "appendicitis_001" not in str(recording_client.calls[0]["payload"])
+    assert "急性阑尾炎" not in str(recording_client.calls[0]["payload"])
+    assert "低热" not in str(recording_client.calls[0]["payload"])
 
 
 def test_normalize_turn_intent_response_prefers_current_intents_over_legacy_current_intent() -> None:

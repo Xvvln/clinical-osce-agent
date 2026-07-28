@@ -5353,7 +5353,7 @@ function HomeContent() {
                 </h2>
                 {selectedProcedureResultItems.some((procedureResult) => procedureResult.generatedByAi) ? (
                   <p className="mt-2 inline-flex rounded-full border border-brand/25 bg-brand/5 px-2.5 py-1 text-xs font-medium text-brand">
-                    AI 模拟结果 · 不计分
+                    旧版模拟记录 · 不计分
                   </p>
                 ) : null}
               </div>

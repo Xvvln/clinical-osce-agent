@@ -17,6 +17,64 @@ def silent_coach_agent(request: object) -> dict[str, object]:
     return {"should_emit": False, "hint": "", "trigger_kind": "none"}
 
 
+def test_evaluation_projection_excludes_unconfigured_procedure_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_sessions: list[object] = []
+
+    def fake_evaluate_session_rules(session: object, llm_scorer: object = None) -> dict[str, object]:
+        captured_sessions.append(session)
+        return {"rubric_scores": {}, "missed_items": []}
+
+    monkeypatch.setattr(osce_graph_module, "evaluate_session_rules", fake_evaluate_session_rules)
+    result = osce_graph_module.evaluation_node(
+        {
+            "session_id": "evaluation-safe-projection",
+            "case_id": "appendicitis_001",
+            "asked_questions": [],
+            "requested_exams": ["abd.palpation.rebound", "vital.blood_pressure"],
+            "requested_tests": ["lab.cbc", "ecg.st_segment"],
+            "revealed_facts": [],
+            "messages": [],
+            "action_timeline": [
+                {
+                    "action_type": "physical_exam_requested",
+                    "source_id": "abd.palpation.rebound",
+                    "label": "反跳痛",
+                },
+                {
+                    "action_type": "physical_exam_requested",
+                    "source_id": "vital.blood_pressure",
+                    "label": "未提供查体",
+                },
+                {
+                    "action_type": "auxiliary_test_requested",
+                    "source_id": "lab.cbc",
+                    "label": "血常规",
+                },
+                {
+                    "action_type": "auxiliary_test_requested",
+                    "source_id": "ecg.st_segment",
+                    "label": "未提供检查",
+                },
+                {
+                    "action_type": "diagnosis_submitted",
+                    "source_id": "final_submission",
+                    "label": "提交诊断",
+                },
+            ],
+            "final_submission": {"diagnosis": "待定", "reasoning": "证据不足"},
+        }
+    )
+
+    assert result["feedback_report"] == {"rubric_scores": {}, "missed_items": []}
+    assert len(captured_sessions) == 1
+    evaluation_session = captured_sessions[0]
+    assert getattr(evaluation_session, "requested_exams") == ["abd.palpation.rebound"]
+    assert getattr(evaluation_session, "requested_tests") == ["lab.cbc"]
+    assert [
+        item["source_id"] for item in getattr(evaluation_session, "action_timeline")
+    ] == ["abd.palpation.rebound", "lab.cbc", "final_submission"]
+
+
 def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
     monkeypatch.setattr(
         agent_rag_context_module,
@@ -1018,22 +1076,22 @@ def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
     assert patient_private_context["case_id"] == "appendicitis_001"
     assert patient_private_context["patient_profile"]["age"] == "22岁"
     assert patient_private_context["patient_profile"]["gender"] == "男"
-    assert patient_private_context["history"]["present_illness_summary"] == (
-        "患者 24 小时前无明显诱因出现上腹部隐痛，伴恶心，未呕吐，约 8 小时前疼痛转移并固定于右下腹，程度较前加重，行走时加重，伴低热。"
-    )
-    assert "appendicitis_001.hf_05" in {
-        fact["fact_id"] for fact in patient_private_context["history"]["hidden_facts"]
-    }
+    assert "history" not in patient_private_context
+    assert "marital_status" not in patient_private_context["patient_profile"]
+    assert "social_background" not in patient_private_context["patient_profile"]
+    assert "idea" not in patient_private_context["patient_profile"]
+    assert "concern" not in patient_private_context["patient_profile"]
+    assert "expectation" not in patient_private_context["patient_profile"]
     assert "diagnosis" not in patient_private_context
     forbidden_context = getattr(patient_request, "forbidden_context")
-    assert forbidden_context["diagnosis_terms"] == [
-        "急性阑尾炎",
-        "阑尾炎",
-        "Acute appendicitis",
-        "acute appendicitis",
-    ]
+    assert "diagnosis_terms" not in forbidden_context
+    assert "differential_diagnosis_terms" not in forbidden_context
     assert forbidden_context["blocked_reference_types"] == ["diagnosis", "rubric", "treatment", "dosage"]
     assert "rubric" not in patient_private_context
+    assert (
+        "有恶心，没吐出来，低热约 37.8 ℃；没有明显腹泻，也没有尿频、尿急或肉眼血尿。"
+        in getattr(patient_request, "protected_fact_texts")
+    )
     assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == ["appendicitis_001.hf_01"]
 
 

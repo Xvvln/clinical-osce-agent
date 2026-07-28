@@ -2724,9 +2724,9 @@ function ProcedureSimulationAuditSection({ items }: Readonly<{ items: readonly P
       <details>
         <summary className="flex cursor-pointer list-none flex-col gap-3 rounded-xl border border-border bg-muted/30 p-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className={sectionHeadingClassName}>AI 模拟检查结果</h2>
+            <h2 className={sectionHeadingClassName}>历史模拟检查记录</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              仅用于高级训练连续性，不进入评分；默认折叠，展开后可查看安全边界和来源上下文。
+              只读兼容旧版报告，不进入评分；当前活动训练不会再生成这类记录。
             </p>
           </div>
           <span className="rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
@@ -2808,7 +2808,7 @@ function ProcedureSimulationAuditSection({ items }: Readonly<{ items: readonly P
           </div>
         ) : (
           <p className="mt-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
-            本轮没有使用 AI 模拟查体或检查结果。
+            当前报告没有旧版模拟查体或检查记录。
           </p>
         )}
       </details>

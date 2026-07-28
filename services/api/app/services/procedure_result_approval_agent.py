@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Literal
 
 from google import genai
@@ -61,6 +62,25 @@ class ProcedureResultApprovalResponse(BaseModel):
     revised_result: str = Field(default="", max_length=180)
 
 
+def _procedure_approval_provider_payload(request: ProcedureResultApprovalRequest) -> dict[str, str]:
+    return {
+        "request_text": request.request_text,
+        "procedure_kind": request.procedure_kind,
+        "procedure_code": request.procedure_code,
+        "procedure_name_cn": request.procedure_name_cn,
+        "simulated_result": request.simulated_result,
+    }
+
+
+def _approval_provider_unavailable_response() -> ProcedureResultApprovalResponse:
+    return ProcedureResultApprovalResponse(
+        decision="blocked",
+        approval_mode="llm_error_fail_closed",
+        rationale="审批模型不可用，已按安全默认值阻断模拟结果。",
+        safety_issues=["approval_agent_unavailable"],
+    )
+
+
 class DeterministicProcedureResultApprovalAgent:
     def __call__(self, request: ProcedureResultApprovalRequest) -> ProcedureResultApprovalResponse:
         safety_issues = _detect_simulated_result_safety_issues(request)
@@ -79,17 +99,30 @@ class DeterministicProcedureResultApprovalAgent:
         )
 
 
+def _local_approval_safety_block(
+    request: ProcedureResultApprovalRequest,
+) -> ProcedureResultApprovalResponse | None:
+    review = DeterministicProcedureResultApprovalAgent()(request)
+    return review if review.decision == "blocked" else None
+
+
 class OpenAICompatibleProcedureResultApprovalAgent:
     def __init__(self, settings: OpenAICompatibleSettings, client: OpenAICompatibleChatClient | None = None) -> None:
         self._client = client or OpenAICompatibleChatClient(settings)
 
     def __call__(self, request: ProcedureResultApprovalRequest) -> ProcedureResultApprovalResponse:
-        return self._client.complete_json(
-            system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
-            response_model=ProcedureResultApprovalResponse,
-            temperature=0.0,
-        )
+        local_block = _local_approval_safety_block(request)
+        if local_block is not None:
+            return local_block
+        try:
+            return self._client.complete_json(
+                system_prompt=SYSTEM_PROMPT_TEMPLATE,
+                payload=_procedure_approval_provider_payload(request),
+                response_model=ProcedureResultApprovalResponse,
+                temperature=0.0,
+            )
+        except Exception:
+            return _approval_provider_unavailable_response()
 
 
 class AnthropicProcedureResultApprovalAgent:
@@ -97,12 +130,18 @@ class AnthropicProcedureResultApprovalAgent:
         self._client = client or AnthropicChatClient(settings)
 
     def __call__(self, request: ProcedureResultApprovalRequest) -> ProcedureResultApprovalResponse:
-        return self._client.complete_json(
-            system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
-            response_model=ProcedureResultApprovalResponse,
-            temperature=0.0,
-        )
+        local_block = _local_approval_safety_block(request)
+        if local_block is not None:
+            return local_block
+        try:
+            return self._client.complete_json(
+                system_prompt=SYSTEM_PROMPT_TEMPLATE,
+                payload=_procedure_approval_provider_payload(request),
+                response_model=ProcedureResultApprovalResponse,
+                temperature=0.0,
+            )
+        except Exception:
+            return _approval_provider_unavailable_response()
 
 
 class GeminiProcedureResultApprovalAgent:
@@ -122,23 +161,29 @@ class GeminiProcedureResultApprovalAgent:
             self._client = genai.Client(api_key=settings.api_key)
 
     def __call__(self, request: ProcedureResultApprovalRequest) -> ProcedureResultApprovalResponse:
-        response = call_with_api_logging(
-            provider="vertex_gemini_procedure_approval" if self._settings.use_vertex else "gemini_procedure_approval",
-            operation="generate_content",
-            model=self._settings.model,
-            endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
-            call=lambda: self._client.models.generate_content(
+        local_block = _local_approval_safety_block(request)
+        if local_block is not None:
+            return local_block
+        try:
+            response = call_with_api_logging(
+                provider="vertex_gemini_procedure_approval" if self._settings.use_vertex else "gemini_procedure_approval",
+                operation="generate_content",
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT_TEMPLATE,
-                    response_mime_type="application/json",
-                    response_schema=ProcedureResultApprovalResponse,
-                    temperature=0.0,
+                endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
+                call=lambda: self._client.models.generate_content(
+                    model=self._settings.model,
+                    contents=json.dumps(_procedure_approval_provider_payload(request), ensure_ascii=False),
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT_TEMPLATE,
+                        response_mime_type="application/json",
+                        response_schema=ProcedureResultApprovalResponse,
+                        temperature=0.0,
+                    ),
                 ),
-            ),
-        )
-        return ProcedureResultApprovalResponse.model_validate_json(response.text)
+            )
+            return ProcedureResultApprovalResponse.model_validate_json(response.text)
+        except Exception:
+            return _approval_provider_unavailable_response()
 
 
 class LazyProcedureResultApprovalAgent:
@@ -153,17 +198,19 @@ class LazyProcedureResultApprovalAgent:
         self._deterministic_agent = DeterministicProcedureResultApprovalAgent()
 
     def __call__(self, request: ProcedureResultApprovalRequest) -> ProcedureResultApprovalResponse:
-        cache_key = runtime_model_config_store.active_config_cache_key()
-        if self._agent is None or self._cache_key != cache_key:
-            self._agent = _create_configured_approval_agent()
-            self._cache_key = cache_key
-        if self._agent is None:
-            return self._deterministic_agent(request)
+        local_review = self._deterministic_agent(request)
+        if local_review.decision == "blocked":
+            return local_review
         try:
+            cache_key = runtime_model_config_store.active_config_cache_key()
+            if self._agent is None or self._cache_key != cache_key:
+                self._agent = _create_configured_approval_agent()
+                self._cache_key = cache_key
+            if self._agent is None:
+                return local_review
             return self._agent(request)
         except Exception:
-            fallback_review = self._deterministic_agent(request)
-            return fallback_review.model_copy(update={"approval_mode": "llm_error_fallback"})
+            return _approval_provider_unavailable_response()
 
 
 def create_default_procedure_result_approval_agent() -> LazyProcedureResultApprovalAgent:
@@ -247,7 +294,7 @@ def _detect_simulated_result_safety_issues(request: ProcedureResultApprovalReque
     result_text = request.simulated_result
     issues: list[str] = []
     for forbidden_term in request.forbidden_terms:
-        if forbidden_term and forbidden_term in result_text:
+        if forbidden_term and re.search(re.escape(forbidden_term), result_text, flags=re.IGNORECASE):
             issues.append(f"包含受保护词：{forbidden_term}")
     for forbidden_term in ["治疗方案", "手术方案", "用药剂量", "处方", "标准诊断", "标准答案"]:
         if forbidden_term in result_text:

@@ -105,6 +105,17 @@ class TurnIntentResponse(BaseModel):
         return [] if value is None else value
 
 
+def _turn_intent_provider_payload(request: TurnIntentRequest) -> dict[str, Any]:
+    return {
+        "stage": request.stage,
+        "student_message": request.student_message,
+        "keyword_intent": request.keyword_intent,
+        "keyword_intents": list(request.keyword_intents),
+        "prior_messages": list(request.prior_messages),
+        "allowed_intents": list(request.allowed_intents),
+    }
+
+
 class DeterministicTurnIntentAgent:
     def __call__(self, request: TurnIntentRequest) -> TurnIntentResponse:
         keyword_intents = _dedupe_intents([*request.keyword_intents, request.keyword_intent])
@@ -139,7 +150,7 @@ class OpenAICompatibleTurnIntentAgent:
     def __call__(self, request: TurnIntentRequest) -> TurnIntentResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_turn_intent_provider_payload(request),
             response_model=TurnIntentResponse,
             temperature=0.0,
         )
@@ -153,7 +164,7 @@ class AnthropicTurnIntentAgent:
     def __call__(self, request: TurnIntentRequest) -> TurnIntentResponse:
         return self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
-            payload=request.model_dump(),
+            payload=_turn_intent_provider_payload(request),
             response_model=TurnIntentResponse,
             temperature=0.0,
         )
@@ -183,7 +194,7 @@ class GeminiTurnIntentAgent:
             endpoint="vertex://generate_content" if self._settings.use_vertex else "gemini://generate_content",
             call=lambda: self._client.models.generate_content(
                 model=self._settings.model,
-                contents=json.dumps(request.model_dump(), ensure_ascii=False),
+                contents=json.dumps(_turn_intent_provider_payload(request), ensure_ascii=False),
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT_TEMPLATE,
                     response_mime_type="application/json",

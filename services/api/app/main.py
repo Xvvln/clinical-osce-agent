@@ -63,7 +63,14 @@ from app.services.dashscope_speech_service import (
 )
 from app.services.demo_seed_service import seed_demo_data
 from app.services.model_config_service import build_admin_model_config
-from app.services.osce_session_service import CASES_DIR, OsceSessionService, load_case_node, osce_session_service
+from app.services.osce_session_service import (
+    CASES_DIR,
+    PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
+    OsceSessionService,
+    ProcedureRequestTrainingModeError,
+    load_case_node,
+    osce_session_service,
+)
 from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rag_document_ingestion_service import (
@@ -570,7 +577,6 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
                 "procedure_request_router",
-                "procedure_result_simulator",
             ],
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
@@ -591,7 +597,6 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
                 "llm_rubric_scorer",
                 "skill_candidate_generator",
                 "procedure_request_router",
-                "procedure_result_simulator",
             ],
             "api_key_saved": False,
             "message": "服务端已统一配置模型；前端不可修改 API Key。",
@@ -604,7 +609,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "model": _env("OSCE_GEMINI_PATIENT_MODEL") or _env("OSCE_VERTEX_MODEL") or "gemini-3.1-pro-preview",
             "base_url": _env("OSCE_GEMINI_PATIENT_PROJECT") or _env("OSCE_VERTEX_PROJECT"),
             "proxy_url": _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL") or "http://127.0.0.1:7897",
-            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent", "procedure_request_router", "procedure_result_simulator"],
+            "integration_targets": ["patient_responder", "turn_intent_agent", "coach_agent", "procedure_request_router"],
             "api_key_saved": False,
             "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
         }
@@ -2698,9 +2703,19 @@ def request_procedure_text(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     session_payload = _require_open_owned_session(session_id, auth_token)
+    if session_payload.get("training_difficulty") != "advanced":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
+        )
     _require_runtime_model_config_for_training(str(session_payload["student_id"]))
     try:
         session = osce_session_service.request_procedure_text(session_id, request.request_text)
+    except ProcedureRequestTrainingModeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
+        ) from exc
     except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
         raise _model_provider_gateway_error(exc) from exc
     if session is None:
