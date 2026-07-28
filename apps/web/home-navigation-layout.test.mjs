@@ -478,12 +478,15 @@ test("home OSCE dock opens student API config dialog instead of navigating direc
   assert.doesNotMatch(pageSource, /OpenAI 兼容、Anthropic、Vertex Gemini ADC 或 Vertex Gemini API Key 配置按当前登录账号保存在后端/);
 });
 
-test("student README documents blank diagnosis drafts and all runtime model providers", () => {
+test("student README documents blank diagnosis drafts and the server-managed model policy", () => {
   assert.doesNotMatch(webReadmeSource, /初始化默认诊断与推理依据/);
   assert.match(webReadmeSource, /诊断提交表单保持空白结构化草稿/);
   assert.match(webReadmeSource, /后端不得下发标准诊断作为默认值/);
-  assert.match(webReadmeSource, /Vertex Gemini API Key/);
-  assert.match(webReadmeSource, /运行时模型配置按当前登录账号持久化/);
+  assert.match(webReadmeSource, /当前比赛 \/ 测试构建采用服务端统一托管模型配置/);
+  assert.match(webReadmeSource, /学生端不提供 provider 选择、API Key 输入、保存或连通性测试/);
+  assert.match(webReadmeSource, /账号配置只允许服务端批准的 HTTPS provider 主机和 direct 连接/);
+  assert.match(webReadmeSource, /只有单人本机 `local-dev` 可显式开启不安全端点兼容开关/);
+  assert.doesNotMatch(webReadmeSource, /运行时模型配置按当前登录账号持久化/);
   assert.doesNotMatch(webReadmeSource, /学生端配置保存到浏览器 `localStorage`/);
 });
 
