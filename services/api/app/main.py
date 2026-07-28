@@ -82,10 +82,13 @@ from app.services.model_config_service import build_admin_model_config
 from app.services.osce_session_service import (
     CASES_DIR,
     PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
+    InvalidProcedureRequestError,
     OsceSessionService,
+    ProcedureRequestLimitError,
     ProcedureRequestTrainingModeError,
     SessionClosedError,
     SessionDeletionConflictError,
+    UnknownProcedureCodeError,
     load_case_node,
     osce_session_service,
 )
@@ -441,6 +444,34 @@ async def handle_session_closed_error(_: Request, exc: SessionClosedError) -> JS
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(InvalidProcedureRequestError)
+@app.exception_handler(UnknownProcedureCodeError)
+async def handle_invalid_procedure_request_error(
+    _: Request,
+    exc: InvalidProcedureRequestError | UnknownProcedureCodeError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(ProcedureRequestLimitError)
+async def handle_procedure_request_limit_error(
+    _: Request,
+    exc: ProcedureRequestLimitError,
+) -> JSONResponse:
+    detail = (
+        "本次训练申请的查体项目已达到上限。"
+        if exc.procedure_kind == "physical exam"
+        else "本次训练申请的辅助检查项目已达到上限。"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": detail},
     )
 
 

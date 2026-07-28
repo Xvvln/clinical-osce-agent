@@ -1,5 +1,7 @@
 import json
 import sqlite3
+from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 import httpx
@@ -186,6 +188,26 @@ def authenticated_user(tmp_path, monkeypatch: pytest.MonkeyPatch) -> dict[str, s
     client.cookies.clear()
 
 
+@pytest.fixture
+def isolated_procedure_api_storage(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        osce_session_service,
+        "session_store",
+        OsceSessionStore(tmp_path / "procedure_api_sessions.sqlite3"),
+    )
+    monkeypatch.setattr(
+        osce_session_service,
+        "training_event_store",
+        TrainingEventStore(tmp_path / "procedure_api_events.sqlite3"),
+    )
+    osce_session_service._sessions.clear()
+    yield
+    osce_session_service._sessions.clear()
+
+
 def test_create_session_requires_logged_in_user() -> None:
     with TestClient(app) as anonymous_client:
         create_response = anonymous_client.post("/api/sessions", json={"case_id": "appendicitis_001"})
@@ -211,6 +233,166 @@ def test_procedure_catalog_does_not_expose_case_specific_configuration() -> None
         assert "case_id" not in item
         assert "result" not in item
         assert "is_abnormal" not in item
+
+
+@pytest.mark.parametrize(
+    ("endpoint_suffix", "request_payload", "expected_detail"),
+    [
+        pytest.param(
+            "/physical-exam",
+            {"exam_code": "unknown.exam"},
+            "unknown physical exam code",
+            id="physical-exam-single",
+        ),
+        pytest.param(
+            "/physical-exams",
+            {
+                "exam_codes": [
+                    "abd.palpation.rebound",
+                    "unknown.exam",
+                ]
+            },
+            "unknown physical exam code",
+            id="physical-exam-batch",
+        ),
+        pytest.param(
+            "/auxiliary-test",
+            {"test_code": "unknown.test"},
+            "unknown auxiliary test code",
+            id="auxiliary-test-single",
+        ),
+        pytest.param(
+            "/auxiliary-tests",
+            {
+                "test_codes": [
+                    "lab.cbc",
+                    "unknown.test",
+                ]
+            },
+            "unknown auxiliary test code",
+            id="auxiliary-test-batch",
+        ),
+    ],
+)
+def test_unknown_procedure_api_requests_return_fixed_422_without_side_effects(
+    isolated_procedure_api_storage: None,
+    endpoint_suffix: str,
+    request_payload: dict[str, object],
+    expected_detail: str,
+) -> None:
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001"},
+    )
+    assert create_response.status_code == 200
+    session_id = str(create_response.json()["session_id"])
+    held_session = osce_session_service._get_session(session_id)
+    stored_before = osce_session_service.session_store.get_session(session_id)
+    assert held_session is not None
+    assert stored_before is not None
+    live_session_before = asdict(held_session)
+    persisted_session_before = deepcopy(stored_before.payload)
+    events_before = deepcopy(
+        osce_session_service.training_event_store.list_session_events(session_id)
+    )
+
+    response = client.post(
+        f"/api/sessions/{session_id}{endpoint_suffix}",
+        json=request_payload,
+    )
+
+    stored_after = osce_session_service.session_store.get_session(session_id)
+    assert response.status_code == 422
+    assert response.json() == {"detail": expected_detail}
+    assert asdict(held_session) == live_session_before
+    assert stored_after is not None
+    assert stored_after.revision == stored_before.revision
+    assert stored_after.payload == persisted_session_before
+    assert (
+        osce_session_service.training_event_store.list_session_events(session_id)
+        == events_before
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "endpoint_suffix",
+        "request_payload",
+        "requested_field",
+        "existing_code",
+        "expected_detail",
+    ),
+    [
+        pytest.param(
+            "/physical-exam",
+            {"exam_code": "vital.blood_pressure"},
+            "requested_exams",
+            "abd.palpation.rebound",
+            "本次训练申请的查体项目已达到上限。",
+            id="physical-exam",
+        ),
+        pytest.param(
+            "/auxiliary-test",
+            {"test_code": "ecg.st_segment"},
+            "requested_tests",
+            "lab.cbc",
+            "本次训练申请的辅助检查项目已达到上限。",
+            id="auxiliary-test",
+        ),
+    ],
+)
+def test_procedure_api_limit_returns_fixed_409_without_side_effects(
+    isolated_procedure_api_storage: None,
+    endpoint_suffix: str,
+    request_payload: dict[str, object],
+    requested_field: str,
+    existing_code: str,
+    expected_detail: str,
+) -> None:
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001"},
+    )
+    assert create_response.status_code == 200
+    session_id = str(create_response.json()["session_id"])
+    held_session = osce_session_service._get_session(session_id)
+    assert held_session is not None
+    setattr(
+        held_session,
+        requested_field,
+        [
+            existing_code,
+            *[
+                f"legacy.procedure.{index}"
+                for index in range(63)
+            ],
+        ],
+    )
+    osce_session_service._save_session(held_session)
+    stored_before = osce_session_service.session_store.get_session(session_id)
+    assert stored_before is not None
+    live_session_before = asdict(held_session)
+    persisted_session_before = deepcopy(stored_before.payload)
+    events_before = deepcopy(
+        osce_session_service.training_event_store.list_session_events(session_id)
+    )
+
+    response = client.post(
+        f"/api/sessions/{session_id}{endpoint_suffix}",
+        json=request_payload,
+    )
+
+    stored_after = osce_session_service.session_store.get_session(session_id)
+    assert response.status_code == 409
+    assert response.json() == {"detail": expected_detail}
+    assert asdict(held_session) == live_session_before
+    assert stored_after is not None
+    assert stored_after.revision == stored_before.revision
+    assert stored_after.payload == persisted_session_before
+    assert (
+        osce_session_service.training_event_store.list_session_events(session_id)
+        == events_before
+    )
 
 
 def test_create_session_requires_runtime_model_config_when_training_gate_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1810,7 +1992,10 @@ def test_active_skill_context_refreshes_after_session_stage_changes(tmp_path) ->
     created_session = osce_session_service._get_session(session_id)
     assert created_session is not None
     initial_skill_id = created_session.active_skill_context["selected_skills"][0]["skill_id"]
-    exam_response = client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation"})
+    exam_response = client.post(
+        f"/api/sessions/{session_id}/physical-exam",
+        json={"exam_code": "abd.palpation.rebound"},
+    )
     hint_response = client.post(f"/api/sessions/{session_id}/hint")
 
     assert create_response.status_code == 200

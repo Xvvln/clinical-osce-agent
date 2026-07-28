@@ -117,6 +117,17 @@ class OsceSessionStore:
         return 1
 
     def update_session(self, session: OsceSession, *, expected_revision: int) -> int:
+        return self.update_session_and_get(
+            session,
+            expected_revision=expected_revision,
+        ).revision
+
+    def update_session_and_get(
+        self,
+        session: OsceSession,
+        *,
+        expected_revision: int,
+    ) -> StoredSession:
         if expected_revision < 1:
             raise ValueError("expected_revision must be positive")
         self._initialize()
@@ -153,7 +164,25 @@ class OsceSessionStore:
                 ),
             )
             if cursor.rowcount == 1:
-                return expected_revision + 1
+                row = connection.execute(
+                    """
+                    SELECT session_json, revision
+                    FROM osce_sessions
+                    WHERE session_id = ?
+                    """,
+                    (session.session_id,),
+                ).fetchone()
+                if row is None:
+                    raise SessionNotFoundError(session.session_id)
+                stored_payload = json.loads(row[0])
+                if not isinstance(stored_payload, dict):
+                    raise ValueError(
+                        f"invalid persisted session payload: {session.session_id}"
+                    )
+                return StoredSession(
+                    payload=stored_payload,
+                    revision=int(row[1]),
+                )
             deleted_revision = self._tombstone_revision(connection, session.session_id)
             if deleted_revision is not None:
                 raise SessionDeletedError(session.session_id)

@@ -6,6 +6,7 @@ import hashlib
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from functools import wraps
 from pathlib import Path
@@ -69,10 +70,31 @@ RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL = "free-text procedure requests require advanced training"
 TRAINING_DIFFICULTY_MODES = {"beginner", "intermediate", "advanced"}
 MAX_RUNTIME_ERROR_FIELD_LENGTH = 12000
+MAX_PROCEDURE_CODES_PER_REQUEST = 64
+MAX_REQUESTED_PROCEDURES_PER_KIND = 64
+MAX_PROCEDURE_CODE_LENGTH = 64
 
 
 class ProcedureRequestTrainingModeError(RuntimeError):
     pass
+
+
+class InvalidProcedureRequestError(ValueError):
+    def __init__(self, procedure_kind: str) -> None:
+        super().__init__(f"invalid {procedure_kind} request")
+        self.procedure_kind = procedure_kind
+
+
+class UnknownProcedureCodeError(ValueError):
+    def __init__(self, procedure_kind: str) -> None:
+        super().__init__(f"unknown {procedure_kind} code")
+        self.procedure_kind = procedure_kind
+
+
+class ProcedureRequestLimitError(RuntimeError):
+    def __init__(self, procedure_kind: str) -> None:
+        super().__init__(f"{procedure_kind} request limit reached")
+        self.procedure_kind = procedure_kind
 
 
 class SessionClosedError(RuntimeError):
@@ -176,6 +198,17 @@ class OsceSession:
 class _CachedSession:
     session: OsceSession
     revision: int
+
+
+@dataclass
+class _ProcedureCodeOperation:
+    session: OsceSession
+    case: Case
+    exam_results: list[dict[str, Any]]
+    test_results: list[dict[str, Any]]
+    agent_updates: list[dict[str, Any]]
+    new_exam_codes: list[str]
+    new_test_codes: list[str]
 
 
 def _refresh_session_in_place(target: OsceSession, source: OsceSession) -> None:
@@ -536,187 +569,283 @@ class OsceSessionService:
 
     @_serialize_session_operation
     def request_physical_exam(self, session_id: str, exam_code: str) -> dict[str, Any] | None:
-        session = self._get_session(session_id)
-        if session is None:
+        operation = self._request_physical_exam_codes(
+            session_id,
+            [exam_code],
+            require_single=True,
+        )
+        if operation is None:
             return None
-        _require_open_session(session)
-        self._refresh_active_skill_context(session)
-        graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
-        _apply_graph_state(session, graph_state)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
-        payload = _serialize_session(session, load_case_node(session.case_id))
+        session, case, exam_results, agent_update = operation
+        exam_result = exam_results[0]
+        payload = _serialize_session(session, case)
         payload.update(
             {
-                "exam_code": graph_state["exam_code"],
-                "exam_name_cn": graph_state["exam_name_cn"],
-                "result": graph_state["exam_result"],
+                "exam_code": exam_result["exam_code"],
+                "exam_name_cn": exam_result["exam_name_cn"],
+                "result": exam_result["result"],
             }
         )
-        self._append_event(
-            session,
-            "physical_exam_requested",
-            {"exam_code": graph_state["exam_code"], "result": graph_state["exam_result"]},
-        )
-        self._append_agent_update_event(session, agent_update)
+        if agent_update is not None:
+            self._append_event(
+                session,
+                "physical_exam_requested",
+                {
+                    "exam_code": exam_result["exam_code"],
+                    "result": exam_result["result"],
+                },
+            )
+            self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
     def request_physical_exams(self, session_id: str, exam_codes: list[str]) -> dict[str, Any] | None:
-        session = self._get_session(session_id)
-        if session is None:
+        operation = self._request_physical_exam_codes(session_id, exam_codes)
+        if operation is None:
             return None
-        _require_open_session(session)
-        self._refresh_active_skill_context(session)
-        case = load_case_node(session.case_id)
-        case_exam_map = _case_physical_exam_map(case)
-        catalog_exam_map = _catalog_physical_exam_map()
-        exam_results: list[dict[str, Any]] = []
-        for exam_code in _dedupe_non_empty(exam_codes):
-            configured_exam = case_exam_map.get(exam_code)
-            catalog_exam = catalog_exam_map.get(exam_code, {})
-            already_requested = exam_code in session.requested_exams
-            graph_state: dict[str, Any] = {
-                "exam_code": exam_code,
-                "exam_name_cn": configured_exam.exam_name_cn
-                if configured_exam is not None
-                else str(catalog_exam.get("exam_name_cn") or "未提供查体"),
-                "exam_result": configured_exam.result
-                if configured_exam is not None
-                else "该项目已记录，但本训练站点未提供该查体结果。",
-            }
-            if not already_requested:
-                graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
-                _apply_graph_state(session, graph_state)
-                if configured_exam is None and catalog_exam.get("exam_name_cn"):
-                    _relabel_latest_action_timeline_event(
-                        session,
-                        action_type="physical_exam_requested",
-                        source_id=exam_code,
-                        label=str(catalog_exam["exam_name_cn"]),
-                    )
-            is_configured = configured_exam is not None
-            exam_results.append(
-                {
-                    "exam_code": graph_state["exam_code"],
-                    "exam_name_cn": (
-                        configured_exam.exam_name_cn
-                        if configured_exam is not None
-                        else str(catalog_exam.get("exam_name_cn") or graph_state["exam_name_cn"])
-                    ),
-                    "result": (
-                        graph_state["exam_result"]
-                        if is_configured
-                        else "该项目已记录，但本训练站点未提供该查体结果。"
-                    ),
-                    "availability_status": "case_configured" if is_configured else "not_available_for_case",
-                }
-            )
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        session, case, exam_results, agent_update = operation
         payload = _serialize_session(session, case)
         payload["exam_results"] = exam_results
-        self._append_event(
-            session,
-            "physical_exams_requested",
-            {"exam_results": exam_results},
-        )
-        self._append_agent_update_event(session, agent_update)
+        if agent_update is not None:
+            self._append_event(
+                session,
+                "physical_exams_requested",
+                {"exam_results": exam_results},
+            )
+            self._append_agent_update_event(session, agent_update)
         return payload
+
+    def _request_physical_exam_codes(
+        self,
+        session_id: str,
+        exam_codes: list[str],
+        *,
+        require_single: bool = False,
+    ) -> tuple[OsceSession, Case, list[dict[str, Any]], dict[str, Any] | None] | None:
+        operation = self._request_procedure_codes(
+            session_id,
+            exam_codes=exam_codes,
+            test_codes=[],
+            require_single_exam=require_single,
+        )
+        if operation is None:
+            return None
+        return (
+            operation.session,
+            operation.case,
+            operation.exam_results,
+            operation.agent_updates[-1] if operation.agent_updates else None,
+        )
 
     @_serialize_session_operation
     def request_auxiliary_test(self, session_id: str, test_code: str) -> dict[str, Any] | None:
-        session = self._get_session(session_id)
-        if session is None:
+        operation = self._request_auxiliary_test_codes(
+            session_id,
+            [test_code],
+            require_single=True,
+        )
+        if operation is None:
             return None
-        _require_open_session(session)
-        self._refresh_active_skill_context(session)
-        graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
-        _apply_graph_state(session, graph_state)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
-        payload = _serialize_session(session, load_case_node(session.case_id))
+        session, case, test_results, agent_update = operation
+        test_result = test_results[0]
+        payload = _serialize_session(session, case)
         payload.update(
             {
-                "test_code": graph_state["test_code"],
-                "test_name_cn": graph_state["test_name_cn"],
-                "result": graph_state["test_result"],
+                "test_code": test_result["test_code"],
+                "test_name_cn": test_result["test_name_cn"],
+                "result": test_result["result"],
             }
         )
-        self._append_event(
-            session,
-            "auxiliary_test_requested",
-            {"test_code": graph_state["test_code"], "result": graph_state["test_result"]},
-        )
-        self._append_agent_update_event(session, agent_update)
+        if agent_update is not None:
+            self._append_event(
+                session,
+                "auxiliary_test_requested",
+                {
+                    "test_code": test_result["test_code"],
+                    "result": test_result["result"],
+                },
+            )
+            self._append_agent_update_event(session, agent_update)
         return payload
 
     @_serialize_session_operation
     def request_auxiliary_tests(self, session_id: str, test_codes: list[str]) -> dict[str, Any] | None:
+        operation = self._request_auxiliary_test_codes(session_id, test_codes)
+        if operation is None:
+            return None
+        session, case, test_results, agent_update = operation
+        payload = _serialize_session(session, case)
+        payload["test_results"] = test_results
+        if agent_update is not None:
+            self._append_event(
+                session,
+                "auxiliary_tests_requested",
+                {"test_results": test_results},
+            )
+            self._append_agent_update_event(session, agent_update)
+        return payload
+
+    def _request_auxiliary_test_codes(
+        self,
+        session_id: str,
+        test_codes: list[str],
+        *,
+        require_single: bool = False,
+    ) -> tuple[OsceSession, Case, list[dict[str, Any]], dict[str, Any] | None] | None:
+        operation = self._request_procedure_codes(
+            session_id,
+            exam_codes=[],
+            test_codes=test_codes,
+            require_single_test=require_single,
+        )
+        if operation is None:
+            return None
+        return (
+            operation.session,
+            operation.case,
+            operation.test_results,
+            operation.agent_updates[-1] if operation.agent_updates else None,
+        )
+
+    def _request_procedure_codes(
+        self,
+        session_id: str,
+        *,
+        exam_codes: list[str],
+        test_codes: list[str],
+        require_single_exam: bool = False,
+        require_single_test: bool = False,
+    ) -> _ProcedureCodeOperation | None:
         session = self._get_session(session_id)
         if session is None:
             return None
         _require_open_session(session)
-        self._refresh_active_skill_context(session)
+        normalized_exam_codes = _normalize_procedure_codes(
+            exam_codes,
+            procedure_kind="physical exam",
+            require_single=require_single_exam,
+        )
+        normalized_test_codes = _normalize_procedure_codes(
+            test_codes,
+            procedure_kind="auxiliary test",
+            require_single=require_single_test,
+        )
         case = load_case_node(session.case_id)
+        case_exam_map = _case_physical_exam_map(case)
         case_test_map = _case_auxiliary_test_map(case)
-        catalog_test_map = _catalog_auxiliary_test_map()
-        test_results: list[dict[str, Any]] = []
-        for test_code in _dedupe_non_empty(test_codes):
-            configured_test = case_test_map.get(test_code)
-            catalog_test = catalog_test_map.get(test_code, {})
-            already_requested = test_code in session.requested_tests
-            graph_state: dict[str, Any] = {
-                "test_code": test_code,
-                "test_name_cn": configured_test.test_name_cn
-                if configured_test is not None
-                else str(catalog_test.get("test_name_cn") or "未提供检查"),
-                "test_result": configured_test.result
-                if configured_test is not None
-                else "该项目已记录，但本训练站点未提供该辅助检查结果。",
-            }
-            if not already_requested:
-                graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
-                _apply_graph_state(session, graph_state)
-                if configured_test is None and catalog_test.get("test_name_cn"):
+        catalog = _build_procedure_catalog()
+        catalog_exam_map = {
+            str(item["exam_code"]): item
+            for item in catalog["physical_exams"]
+        }
+        catalog_test_map = {
+            str(item["test_code"]): item
+            for item in catalog["auxiliary_tests"]
+        }
+        if any(
+            exam_code not in catalog_exam_map
+            for exam_code in normalized_exam_codes
+        ):
+            raise UnknownProcedureCodeError("physical exam")
+        if any(
+            test_code not in catalog_test_map
+            for test_code in normalized_test_codes
+        ):
+            raise UnknownProcedureCodeError("auxiliary test")
+
+        requested_exam_codes = set(session.requested_exams)
+        requested_test_codes = set(session.requested_tests)
+        new_exam_codes = [
+            exam_code
+            for exam_code in normalized_exam_codes
+            if exam_code not in requested_exam_codes
+        ]
+        new_test_codes = [
+            test_code
+            for test_code in normalized_test_codes
+            if test_code not in requested_test_codes
+        ]
+        if (
+            new_exam_codes
+            and len(requested_exam_codes | set(new_exam_codes))
+            > MAX_REQUESTED_PROCEDURES_PER_KIND
+        ):
+            raise ProcedureRequestLimitError("physical exam")
+        if (
+            new_test_codes
+            and len(requested_test_codes | set(new_test_codes))
+            > MAX_REQUESTED_PROCEDURES_PER_KIND
+        ):
+            raise ProcedureRequestLimitError("auxiliary test")
+
+        agent_updates: list[dict[str, Any]] = []
+        if new_exam_codes or new_test_codes:
+            working_session = deepcopy(session)
+            self._refresh_active_skill_context(working_session)
+            for exam_code in new_exam_codes:
+                graph_state = self.osce_graph.invoke(
+                    _graph_state_from_session(
+                        working_session,
+                        exam_code=exam_code,
+                    )
+                )
+                _apply_graph_state(working_session, graph_state)
+                catalog_exam = catalog_exam_map[exam_code]
+                if exam_code not in case_exam_map:
                     _relabel_latest_action_timeline_event(
-                        session,
+                        working_session,
+                        action_type="physical_exam_requested",
+                        source_id=exam_code,
+                        label=str(catalog_exam["exam_name_cn"]),
+                    )
+            if new_exam_codes and new_test_codes:
+                self._refresh_active_skill_context(working_session)
+                agent_updates.append(_refresh_agent_state(working_session))
+            for test_code in new_test_codes:
+                graph_state = self.osce_graph.invoke(
+                    _graph_state_from_session(
+                        working_session,
+                        test_code=test_code,
+                    )
+                )
+                _apply_graph_state(working_session, graph_state)
+                catalog_test = catalog_test_map[test_code]
+                if test_code not in case_test_map:
+                    _relabel_latest_action_timeline_event(
+                        working_session,
                         action_type="auxiliary_test_requested",
                         source_id=test_code,
                         label=str(catalog_test["test_name_cn"]),
                     )
-            is_configured = configured_test is not None
-            test_results.append(
-                {
-                    "test_code": graph_state["test_code"],
-                    "test_name_cn": (
-                        configured_test.test_name_cn
-                        if configured_test is not None
-                        else str(catalog_test.get("test_name_cn") or graph_state["test_name_cn"])
-                    ),
-                    "result": (
-                        graph_state["test_result"]
-                        if is_configured
-                        else "该项目已记录，但本训练站点未提供该辅助检查结果。"
-                    ),
-                    "availability_status": "case_configured" if is_configured else "not_available_for_case",
-                }
+            self._refresh_active_skill_context(working_session)
+            agent_updates.append(_refresh_agent_state(working_session))
+            self._commit_working_session(session, working_session)
+
+        exam_results = [
+            _build_physical_exam_request_result(
+                exam_code,
+                case_exam_map=case_exam_map,
+                catalog_exam_map=catalog_exam_map,
             )
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
-        payload = _serialize_session(session, case)
-        payload["test_results"] = test_results
-        self._append_event(
-            session,
-            "auxiliary_tests_requested",
-            {"test_results": test_results},
+            for exam_code in normalized_exam_codes
+        ]
+        test_results = [
+            _build_auxiliary_test_request_result(
+                test_code,
+                case_test_map=case_test_map,
+                catalog_test_map=catalog_test_map,
+            )
+            for test_code in normalized_test_codes
+        ]
+        return _ProcedureCodeOperation(
+            session=session,
+            case=case,
+            exam_results=exam_results,
+            test_results=test_results,
+            agent_updates=agent_updates,
+            new_exam_codes=new_exam_codes,
+            new_test_codes=new_test_codes,
         )
-        self._append_agent_update_event(session, agent_update)
-        return payload
 
     @_serialize_session_operation
     def request_procedure_text(self, session_id: str, request_text: str) -> dict[str, Any] | None:
@@ -733,20 +862,39 @@ class OsceSessionService:
             request_text=request_text,
             unmatched_requests=list(standardization["unmatched_requests"]),
         )
-        exam_results: list[dict[str, Any]] = []
-        test_results: list[dict[str, Any]] = []
-        if standardization["matched_exam_codes"]:
-            exam_payload = self.request_physical_exams(session_id, list(standardization["matched_exam_codes"]))
-            if exam_payload is not None:
-                exam_results = list(exam_payload.get("exam_results") or [])
-        if standardization["matched_test_codes"]:
-            test_payload = self.request_auxiliary_tests(session_id, list(standardization["matched_test_codes"]))
-            if test_payload is not None:
-                test_results = list(test_payload.get("test_results") or [])
-
-        session = self._get_session(session_id)
-        if session is None:
+        operation = self._request_procedure_codes(
+            session_id,
+            exam_codes=list(standardization["matched_exam_codes"]),
+            test_codes=list(standardization["matched_test_codes"]),
+        )
+        if operation is None:
             return None
+        session = operation.session
+        case = operation.case
+        exam_results = operation.exam_results
+        test_results = operation.test_results
+        next_agent_update_index = 0
+        if operation.new_exam_codes:
+            self._append_event(
+                session,
+                "physical_exams_requested",
+                {"exam_results": exam_results},
+            )
+            if operation.new_test_codes and operation.agent_updates:
+                self._append_agent_update_event(
+                    session,
+                    operation.agent_updates[0],
+                )
+                next_agent_update_index = 1
+        if operation.new_test_codes:
+            self._append_event(
+                session,
+                "auxiliary_tests_requested",
+                {"test_results": test_results},
+            )
+        for agent_update in operation.agent_updates[next_agent_update_index:]:
+            self._append_agent_update_event(session, agent_update)
+
         exam_result_map = {str(item.get("exam_code")): item for item in exam_results}
         test_result_map = {str(item.get("test_code")): item for item in test_results}
         matched_procedure_results = _build_standardized_procedure_results(
@@ -1634,20 +1782,47 @@ class OsceSessionService:
             self._sessions.pop(session.session_id, None)
             raise SessionNotFoundError(session.session_id)
         try:
-            revision = self.session_store.update_session(
+            stored_session = self.session_store.update_session_and_get(
                 session,
                 expected_revision=cached_session.revision,
             )
-            stored_session = self.session_store.get_session(session.session_id)
-            if stored_session is None or stored_session.revision != revision:
-                raise SessionNotFoundError(session.session_id)
             _refresh_session_in_place(
                 session,
                 OsceSession(**stored_session.payload),
             )
-            cached_session.revision = revision
+            cached_session.revision = stored_session.revision
         except SessionPersistenceError:
             self._sessions.pop(session.session_id, None)
+            raise
+
+    def _commit_working_session(
+        self,
+        live_session: OsceSession,
+        working_session: OsceSession,
+    ) -> None:
+        cached_session = self._sessions.get(live_session.session_id)
+        if (
+            cached_session is None
+            or cached_session.session is not live_session
+            or working_session is live_session
+            or working_session.session_id != live_session.session_id
+            or working_session.student_id != live_session.student_id
+            or working_session.case_id != live_session.case_id
+        ):
+            self._sessions.pop(live_session.session_id, None)
+            raise SessionNotFoundError(live_session.session_id)
+        try:
+            stored_session = self.session_store.update_session_and_get(
+                working_session,
+                expected_revision=cached_session.revision,
+            )
+            _refresh_session_in_place(
+                live_session,
+                OsceSession(**stored_session.payload),
+            )
+            cached_session.revision = stored_session.revision
+        except SessionPersistenceError:
+            self._sessions.pop(live_session.session_id, None)
             raise
 
     def _append_event(
@@ -1675,7 +1850,13 @@ class OsceSessionService:
         *,
         event_key: str | None = None,
     ) -> None:
-        latest_decision = session.agent_decision_trace[-1] if session.agent_decision_trace else {}
+        agent_decision_trace = agent_update.get("agent_decision_trace")
+        if isinstance(agent_decision_trace, list) and agent_decision_trace:
+            latest_decision = agent_decision_trace[-1]
+        elif session.agent_decision_trace:
+            latest_decision = session.agent_decision_trace[-1]
+        else:
+            latest_decision = {}
         payload = {
             "latest_decision": latest_decision,
             "pedagogy_state": agent_update.get("pedagogy_state", session.pedagogy_state),
@@ -2654,11 +2835,73 @@ def _procedure_forbidden_terms(case: Case) -> list[str]:
 
 def _dedupe_non_empty(values: list[str]) -> list[str]:
     deduped: list[str] = []
+    seen: set[str] = set()
     for value in values:
         normalized = str(value).strip()
-        if normalized and normalized not in deduped:
+        if normalized and normalized not in seen:
+            seen.add(normalized)
             deduped.append(normalized)
     return deduped
+
+
+def _normalize_procedure_codes(
+    values: list[str],
+    *,
+    procedure_kind: str,
+    require_single: bool,
+) -> list[str]:
+    if len(values) > MAX_PROCEDURE_CODES_PER_REQUEST:
+        raise InvalidProcedureRequestError(procedure_kind)
+    normalized_codes = _dedupe_non_empty(values)
+    if require_single and len(normalized_codes) != 1:
+        raise InvalidProcedureRequestError(procedure_kind)
+    if any(len(code) > MAX_PROCEDURE_CODE_LENGTH for code in normalized_codes):
+        raise InvalidProcedureRequestError(procedure_kind)
+    return normalized_codes
+
+
+def _build_physical_exam_request_result(
+    exam_code: str,
+    *,
+    case_exam_map: dict[str, PhysicalExamItem],
+    catalog_exam_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    configured_exam = case_exam_map.get(exam_code)
+    if configured_exam is not None:
+        return {
+            "exam_code": exam_code,
+            "exam_name_cn": configured_exam.exam_name_cn,
+            "result": configured_exam.result,
+            "availability_status": "case_configured",
+        }
+    return {
+        "exam_code": exam_code,
+        "exam_name_cn": str(catalog_exam_map[exam_code]["exam_name_cn"]),
+        "result": "该项目已记录，但本训练站点未提供该查体结果。",
+        "availability_status": "not_available_for_case",
+    }
+
+
+def _build_auxiliary_test_request_result(
+    test_code: str,
+    *,
+    case_test_map: dict[str, AuxiliaryTestItem],
+    catalog_test_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    configured_test = case_test_map.get(test_code)
+    if configured_test is not None:
+        return {
+            "test_code": test_code,
+            "test_name_cn": configured_test.test_name_cn,
+            "result": configured_test.result,
+            "availability_status": "case_configured",
+        }
+    return {
+        "test_code": test_code,
+        "test_name_cn": str(catalog_test_map[test_code]["test_name_cn"]),
+        "result": "该项目已记录，但本训练站点未提供该辅助检查结果。",
+        "availability_status": "not_available_for_case",
+    }
 
 
 def _relabel_latest_action_timeline_event(
