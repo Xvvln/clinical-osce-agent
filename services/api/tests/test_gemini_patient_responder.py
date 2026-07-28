@@ -492,6 +492,7 @@ def test_create_configured_patient_responder_uses_vertex_adc_without_api_key(mon
     }
     http_options = client_kwargs["http_options"]
     assert http_options.client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://server-managed-proxy.example:8080",
     }
@@ -877,7 +878,10 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_adc_conf
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert os.environ.get("HTTP_PROXY") is None
     assert os.environ.get("HTTPS_PROXY") is None
@@ -922,6 +926,7 @@ def test_create_configured_patient_responder_uses_runtime_vertex_gemini_api_key_
         "api_key": "student-vertex-secret",
     }
     assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }

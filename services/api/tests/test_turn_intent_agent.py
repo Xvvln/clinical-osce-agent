@@ -599,7 +599,10 @@ def test_create_configured_turn_intent_agent_uses_runtime_vertex_adc_config(monk
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert os.environ.get("HTTP_PROXY") is None
     assert os.environ.get("HTTPS_PROXY") is None

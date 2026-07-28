@@ -59,7 +59,10 @@ def test_vertex_embedding_client_calls_vertex_adc_with_gemini_embedding_model(mo
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert vectors == [[1.0, 0.5], [2.0, 0.5]]
     assert FakeModels.calls == [

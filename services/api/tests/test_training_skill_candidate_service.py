@@ -356,6 +356,7 @@ def test_create_default_training_skill_candidate_generator_uses_isolated_proxy_w
     assert isinstance(generator, VertexGeminiTrainingSkillCandidateGenerator)
     http_options = created_clients[0]["http_options"]
     assert http_options.client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }
@@ -563,6 +564,7 @@ def test_create_default_training_skill_candidate_generator_uses_runtime_vertex_g
         "api_key": "student-vertex-secret",
     }
     assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }

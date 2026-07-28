@@ -21,8 +21,12 @@ def build_google_genai_http_options(proxy_url: str) -> types.HttpOptions:
     use_proxy = should_use_google_genai_proxy(normalized_proxy_url)
     if use_proxy:
         validate_google_genai_proxy_url(normalized_proxy_url)
-    client_args: dict[str, Any] = {"trust_env": False}
+    client_args: dict[str, Any] = {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     async_client_args: dict[str, Any] = {
+        "follow_redirects": False,
         "trust_env": False,
         # google-genai otherwise prefers aiohttp when installed, whose internally
         # created session trusts process proxy variables. A transport forces the

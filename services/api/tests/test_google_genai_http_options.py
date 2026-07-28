@@ -38,13 +38,19 @@ def test_google_genai_http_options_do_not_mutate_process_proxy_environment(monke
     proxied_options = build_google_genai_http_options("http://request-proxy.example:8080")
 
     assert {name: os.environ.get(name) for name in PROXY_ENV_NAMES} == original_environment
-    assert direct_options.client_args == {"trust_env": False}
+    assert direct_options.client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
+    assert direct_options.async_client_args["follow_redirects"] is False
     assert direct_options.async_client_args["trust_env"] is False
     assert "proxy" not in direct_options.async_client_args
     assert proxied_options.client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://request-proxy.example:8080",
     }
+    assert proxied_options.async_client_args["follow_redirects"] is False
     assert proxied_options.async_client_args["trust_env"] is False
     assert proxied_options.async_client_args["proxy"] == "http://request-proxy.example:8080"
 

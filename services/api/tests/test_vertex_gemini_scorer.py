@@ -104,6 +104,7 @@ def test_create_default_vertex_gemini_scorer_uses_isolated_7897_client_proxy(tmp
     assert scorer is not None
     http_options = created_clients[0]["http_options"]
     assert http_options.client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }
@@ -318,7 +319,10 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_adc_conf
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert os.environ.get("HTTP_PROXY") is None
 
@@ -360,6 +364,7 @@ def test_create_default_vertex_gemini_scorer_uses_runtime_vertex_gemini_api_key_
         "api_key": "student-vertex-secret",
     }
     assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }

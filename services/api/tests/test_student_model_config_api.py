@@ -498,7 +498,10 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tm
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
@@ -569,6 +572,7 @@ def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_witho
         "api_key": "student-vertex-secret",
     }
     assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }

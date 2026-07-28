@@ -449,7 +449,10 @@ def test_create_configured_coach_agent_uses_runtime_vertex_adc_config(monkeypatc
         "project": "demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert FakeGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert os.environ.get("HTTP_PROXY") is None

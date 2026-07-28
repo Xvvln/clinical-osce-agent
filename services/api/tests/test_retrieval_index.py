@@ -997,7 +997,10 @@ def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(m
         "project": "runtime-demo-project",
         "location": "global",
     }
-    assert client_kwargs["http_options"].client_args == {"trust_env": False}
+    assert client_kwargs["http_options"].client_args == {
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert vectors == [[0.0, 0.2, 0.3]]
 
