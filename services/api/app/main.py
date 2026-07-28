@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import BackgroundTasks, Cookie, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -77,6 +77,7 @@ from app.services.osce_session_service import (
     PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL,
     OsceSessionService,
     ProcedureRequestTrainingModeError,
+    SessionClosedError,
     load_case_node,
     osce_session_service,
 )
@@ -330,6 +331,14 @@ app = FastAPI(
     version="0.1.0",
     description="临境 OSCE 智能体（TraceOSCE）的 OSCE 训练后端服务。",
 )
+
+
+@app.exception_handler(SessionClosedError)
+async def handle_session_closed_error(_: Request, exc: SessionClosedError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": str(exc)},
+    )
 
 
 @app.middleware("http")
@@ -2638,6 +2647,8 @@ def send_message(
             session = osce_session_service.handle_message(session_id, request.message)
         except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
             raise _model_provider_gateway_error(exc) from exc
+        except SessionClosedError:
+            raise
         except Exception as exc:
             raise _training_flow_runtime_error(exc) from exc
     if session is None:

@@ -9,6 +9,7 @@ from app.graph.osce_graph import build_osce_graph
 from app.main import AUTH_COOKIE_NAME, app
 from app.services.auth_store import AuthStore
 from app.services.osce_session_service import (
+    SessionClosedError,
     _ensure_personal_skill_report_defaults,
     load_case_node,
     osce_session_service,
@@ -730,6 +731,25 @@ def test_completed_session_rejects_further_training_actions(tmp_path, authentica
     assert submit_response.status_code == 200
     assert [response.status_code for response in blocked_responses] == [409, 409, 409, 409, 409, 409]
     assert {response.json()["detail"] for response in blocked_responses} == {"训练已结束，请查看报告。"}
+
+
+def test_session_closed_after_api_precheck_still_returns_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session_id"]
+
+    def reject_after_precheck(_: str, __: str) -> dict[str, object]:
+        raise SessionClosedError("训练已结束，请查看报告。")
+
+    monkeypatch.setattr(osce_session_service, "handle_message", reject_after_precheck)
+
+    response = client.post(
+        f"/api/sessions/{session_id}/message",
+        json={"message": "这个请求在预检之后才拿到会话锁"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "训练已结束，请查看报告。"}
 
 
 def test_current_user_profile_requires_logged_in_user() -> None:

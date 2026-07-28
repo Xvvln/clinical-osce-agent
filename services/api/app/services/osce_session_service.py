@@ -4,10 +4,13 @@ import json
 import re
 import hashlib
 import traceback
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
-from threading import Lock
-from typing import Any
+from threading import Lock, RLock
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 import yaml
@@ -46,6 +49,68 @@ class ProcedureRequestTrainingModeError(RuntimeError):
     pass
 
 
+class SessionClosedError(RuntimeError):
+    pass
+
+
+@dataclass
+class _SessionLockEntry:
+    lock: RLock = field(default_factory=RLock)
+    holders_and_waiters: int = 0
+
+
+class _SessionLockRegistry:
+    """Keep one re-entrant lock per active session operation.
+
+    The reference count is incremented before waiting on the session lock, so an
+    entry cannot be removed and recreated while another thread is queued on the
+    old lock.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _SessionLockEntry] = {}
+        self._registry_lock = Lock()
+
+    @contextmanager
+    def hold(self, session_id: str) -> Iterator[None]:
+        with self._registry_lock:
+            entry = self._entries.setdefault(session_id, _SessionLockEntry())
+            entry.holders_and_waiters += 1
+        entry.lock.acquire()
+        try:
+            yield
+        finally:
+            entry.lock.release()
+            with self._registry_lock:
+                entry.holders_and_waiters -= 1
+                if (
+                    entry.holders_and_waiters == 0
+                    and self._entries.get(session_id) is entry
+                ):
+                    del self._entries[session_id]
+
+    def active_entry_count(self) -> int:
+        with self._registry_lock:
+            return len(self._entries)
+
+
+_SessionOperation = TypeVar("_SessionOperation", bound=Callable[..., Any])
+
+
+def _serialize_session_operation(method: _SessionOperation) -> _SessionOperation:
+    @wraps(method)
+    def wrapped(
+        self: OsceSessionService,
+        session_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with self._session_locks.hold(session_id):
+            return method(self, session_id, *args, **kwargs)
+
+    return cast(_SessionOperation, wrapped)
+
+
 @dataclass
 class OsceSession:
     session_id: str
@@ -77,6 +142,15 @@ class OsceSession:
     procedure_simulation_audit_items: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _require_open_session(session: OsceSession) -> None:
+    if (
+        session.final_submission is not None
+        or session.feedback_report is not None
+        or session.stage in {"diagnosis_submission", "feedback"}
+    ):
+        raise SessionClosedError("训练已结束，请查看报告。")
+
+
 class OsceSessionService:
     def __init__(
         self,
@@ -92,6 +166,7 @@ class OsceSessionService:
         procedure_request_router: Any | None = None,
     ) -> None:
         self._sessions: dict[str, OsceSession] = {}
+        self._session_locks = _SessionLockRegistry()
         self._runtime_llm_scorer_cache: RuntimeModelObjectCache[LlmRubricScorer | None] | None = None
         if graph is not None:
             self.osce_graph = graph
@@ -193,6 +268,7 @@ class OsceSessionService:
             )
         return _serialize_session(session, case)
 
+    @_serialize_session_operation
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
@@ -297,10 +373,12 @@ class OsceSessionService:
                 "steps": list(payload.get("steps", [])),
             }
 
+    @_serialize_session_operation
     def handle_message(self, session_id: str, message: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self.begin_message_processing_status(session_id)
         try:
             self._refresh_active_skill_context(session)
@@ -373,10 +451,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def request_physical_exam(self, session_id: str, exam_code: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, exam_code=exam_code))
         _apply_graph_state(session, graph_state)
@@ -399,10 +479,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def request_physical_exams(self, session_id: str, exam_codes: list[str]) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self._refresh_active_skill_context(session)
         case = load_case_node(session.case_id)
         case_exam_map = _case_physical_exam_map(case)
@@ -461,10 +543,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def request_auxiliary_test(self, session_id: str, test_code: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(_graph_state_from_session(session, test_code=test_code))
         _apply_graph_state(session, graph_state)
@@ -487,10 +571,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def request_auxiliary_tests(self, session_id: str, test_codes: list[str]) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self._refresh_active_skill_context(session)
         case = load_case_node(session.case_id)
         case_test_map = _case_auxiliary_test_map(case)
@@ -549,10 +635,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def request_procedure_text(self, session_id: str, request_text: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         if session.training_difficulty != "advanced":
             raise ProcedureRequestTrainingModeError(PROCEDURE_REQUEST_ADVANCED_ONLY_DETAIL)
         case = load_case_node(session.case_id)
@@ -647,10 +735,12 @@ class OsceSessionService:
             return []
         return _normalize_routed_unmatched_requests(routing_response, unmatched_requests)
 
+    @_serialize_session_operation
     def record_hypothesis(self, session_id: str, hypothesis: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         session.student_hypotheses.append(hypothesis)
         self._refresh_active_skill_context(session)
         agent_update = _refresh_agent_state(session)
@@ -659,10 +749,12 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
 
+    @_serialize_session_operation
     def request_hint(self, session_id: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self.begin_message_processing_status(session_id)
         try:
             self._refresh_active_skill_context(session)
@@ -699,6 +791,7 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return payload
 
+    @_serialize_session_operation
     def get_teaching_focus(self, session_id: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
@@ -710,10 +803,12 @@ class OsceSessionService:
     def build_student_profile_summary(self, student_id: str) -> dict[str, Any]:
         return self._refresh_student_profile(student_id)
 
+    @_serialize_session_operation
     def submit_diagnosis(self, session_id: str, diagnosis: str, reasoning: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         if session is None:
             return None
+        _require_open_session(session)
         self._refresh_active_skill_context(session)
         graph_state = self.osce_graph.invoke(
             _graph_state_from_session(
@@ -730,6 +825,7 @@ class OsceSessionService:
         self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
 
+    @_serialize_session_operation
     def get_report(self, session_id: str, *, include_optional_agents: bool = True) -> dict[str, Any] | None:
         session = self._get_session(session_id)
         stored_report = self.report_store.get_report(session_id)
@@ -795,9 +891,11 @@ class OsceSessionService:
             self._save_session(session)
         return session.feedback_report
 
+    @_serialize_session_operation
     def enrich_report_optional_agents(self, session_id: str) -> dict[str, Any] | None:
         return self.get_report(session_id, include_optional_agents=True)
 
+    @_serialize_session_operation
     def delete_session(self, session_id: str) -> bool:
         self._sessions.pop(session_id, None)
         return self.session_store.delete_session(session_id)
