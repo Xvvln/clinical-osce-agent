@@ -17,6 +17,7 @@ const layoutSource = readFileSync(new URL("./src/app/layout.tsx", import.meta.ur
 const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl, "utf8") : "";
 const webDockerfileSource = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
 const webReadmeSource = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+const recordingPlanSource = readFileSync(new URL("../../docs/10分钟完整录屏测试方案.md", import.meta.url), "utf8");
 
 function getInteractiveElementsWithLabel(source, label) {
   return (source.match(/<(?:button|Link|a)\b[\s\S]*?<\/(?:button|Link|a)>/g) ?? []).filter((element) => element.includes(label));
@@ -468,6 +469,14 @@ test("student README documents blank diagnosis drafts and all runtime model prov
   assert.match(webReadmeSource, /Vertex Gemini API Key/);
   assert.match(webReadmeSource, /运行时模型配置按当前登录账号持久化/);
   assert.doesNotMatch(webReadmeSource, /学生端配置保存到浏览器 `localStorage`/);
+});
+
+test("student and admin documentation preserves isolated local browser origins", () => {
+  assert.match(webReadmeSource, /打开浏览器访问 `http:\/\/localhost:3000`/);
+  assert.doesNotMatch(webReadmeSource, /打开浏览器访问 `http:\/\/127\.0\.0\.1:3000`/);
+  assert.match(recordingPlanSource, /学生端：`http:\/\/localhost:3000`/);
+  assert.match(recordingPlanSource, /管理端：`http:\/\/127\.0\.0\.1:3001`/);
+  assert.doesNotMatch(recordingPlanSource, /学生端：`http:\/\/127\.0\.0\.1:3000`/);
 });
 
 test("home production deployment keeps student API config visible but read-only", () => {

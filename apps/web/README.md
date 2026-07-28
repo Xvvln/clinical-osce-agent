@@ -47,19 +47,20 @@ Tailwind v4 通过 `postcss.config.mjs` 加载 `@tailwindcss/postcss`，确保�
 先启动后端 API 服务：
 
 ```bash
-cd "F:/杂物/个人开发/clinical-osce-agent"
-source /d/Anaconda3/etc/profile.d/conda.sh && conda activate agent && python -m uvicorn app.main:app --app-dir services/api --reload --host 127.0.0.1 --port 8000
+cd services/api
+uv sync --frozen --extra dev
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-再启动前端：
+再从仓库根目录启动学生端：
 
 ```bash
-cd "F:/杂物/个人开发/clinical-osce-agent/apps/web"
-corepack pnpm install
-corepack pnpm dev
+cd apps/web
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-打开浏览器访问 `http://127.0.0.1:3000`。如果 3000 端口被占用，Next.js 会在终端提示实际端口，例如 `http://127.0.0.1:3001`。
+打开浏览器访问 `http://localhost:3000`。同一浏览器演示时，学生端必须保留 `localhost`，管理端使用 `127.0.0.1`，让两端的 host-only 登录 Cookie 相互隔离。若 3000 端口被占用，请为学生端显式选择其他空闲端口并继续使用 `localhost`；不要把学生端改为 `127.0.0.1:3000`，也不要占用 Compose 管理端使用的 3001。
 
 ### ChromaDB 召回稳定性配置
 
@@ -70,7 +71,8 @@ API 默认使用 `OSCE_CHROMA_SEARCH_EF=500` 作为 ChromaDB HNSW 查询深度�
 ## 常用命令
 
 ```bash
-corepack pnpm typecheck
-corepack pnpm build
-corepack pnpm dev
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm dev
 ```
