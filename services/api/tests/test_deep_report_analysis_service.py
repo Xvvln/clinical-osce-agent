@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from app.services.deep_report_analysis_service import build_deep_report_analysis, build_diagnostic_contrast_analysis
 from app.validators.case_validator import validate_case
 
@@ -165,6 +167,45 @@ def test_deep_report_analysis_builds_overall_task_and_evidence_sections() -> Non
     process = analysis["process_strategy_analysis"]
     assert process["sequence_flags"][0]["label"] == "诊断假设生成偏晚"
     assert "先形成诊断假设" in process["premature_or_delayed_actions"][0]
+
+
+def test_deep_report_analysis_uses_report_rubric_maxima_for_clinical_only_case() -> None:
+    case = _load_case("acs_001")
+    rubric = yaml.safe_load((ROOT_DIR / "data" / "rubrics" / "acs_001_rubric.yaml").read_text(encoding="utf-8"))
+    rubric_scores = {
+        item["item_id"]: {
+            "dimension_id": dimension["dimension_id"],
+            "description": item["description"],
+            "score": 0,
+            "max_score": item["max_score"],
+        }
+        for dimension in rubric["dimensions"]
+        for item in dimension["items"]
+    }
+    report = {
+        "case_id": "acs_001",
+        "total_score": 0,
+        "max_score": 100,
+        "score_groups": {
+            "clinical_osce": {"score": 0, "max_score": 100},
+            "humanistic_communication": {"score": 0, "max_score": 0},
+        },
+        "dimension_scores": {dimension["dimension_id"]: 0 for dimension in rubric["dimensions"]},
+        "dimension_traces": {},
+        "rubric_scores": rubric_scores,
+        "final_submission": {"diagnosis": "", "reasoning": ""},
+        "evidence_graph_summary": {"covered_evidence_nodes": [], "missing_evidence_nodes": []},
+        "clinical_reasoning_trace": {},
+        "training_gaps": [],
+    }
+
+    analysis = build_deep_report_analysis(report=report, case=case)
+
+    assert analysis["overall_evaluation"]["score_interpretation"] == "本轮总分 0/100，临床 OSCE 0/100。"
+    assert analysis["clinical_task_analysis"]["history_taking"]["max_score"] == 25
+    assert analysis["clinical_task_analysis"]["physical_exam"]["max_score"] == 15
+    assert analysis["clinical_task_analysis"]["reasoning"]["max_score"] == 15
+    assert analysis["humanistic_communication_analysis"]["dimension_scores"] == []
 
 
 def test_deep_report_analysis_hydrates_trace_summary_from_rubric_item_id() -> None:

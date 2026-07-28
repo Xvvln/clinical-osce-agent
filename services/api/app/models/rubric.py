@@ -85,6 +85,12 @@ class RubricDimension(BaseModel):
         oversized_items = [item.item_id for item in self.items if item.max_score > self.weight]
         if oversized_items:
             raise ValueError(f"item score exceeds dimension weight: {oversized_items}")
+        item_score_total = sum(item.max_score for item in self.items)
+        if item_score_total != self.weight:
+            raise ValueError(
+                "rubric item scores must sum to dimension weight: "
+                f"{self.dimension_id} has {item_score_total}, expected {self.weight}"
+            )
         return self
 
 

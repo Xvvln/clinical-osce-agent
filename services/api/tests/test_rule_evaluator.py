@@ -135,6 +135,23 @@ def test_rule_evaluator_scores_deterministic_rubric_items() -> None:
     assert report["feedback_summary"] == "已完成规则评分，LLM 评分维度将在后续阶段补充。"
 
 
+def test_rule_evaluator_derives_score_group_maxima_from_current_rubric() -> None:
+    session = OsceSession(
+        session_id="session_acs",
+        student_id="student_demo",
+        case_id="acs_001",
+        stage="diagnosis_submission",
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["total_score"] == 0
+    assert report["score_groups"] == {
+        "clinical_osce": {"score": 0, "max_score": 100},
+        "humanistic_communication": {"score": 0, "max_score": 0},
+    }
+
+
 def test_intent_keyword_item_scores_when_expected_fact_was_revealed() -> None:
     session = OsceSession(
         session_id="session_demo",

@@ -157,7 +157,7 @@ def evaluate_session_rules(
         rubric_scores=rubric_scores,
         missed_items=_unique_strings(missed_items),
         feedback_summary="已完成规则评分，LLM 评分维度将在后续阶段补充。",
-        score_groups=_score_groups(dimension_scores),
+        score_groups=_score_groups(dimension_scores, rubric),
         training_event_stream=[event.__dict__ for event in event_stream],
         scoring_ledger=scoring_ledger.to_dict(),
         missed_opportunities=missed_opportunities,
@@ -617,15 +617,30 @@ HUMANISTIC_DIMENSIONS = {
 }
 
 
-def _score_groups(dimension_scores: dict[str, int]) -> dict[str, dict[str, int]]:
+def _score_groups(
+    dimension_scores: dict[str, int],
+    rubric: dict[str, Any],
+) -> dict[str, dict[str, int]]:
+    dimension_max_scores = {
+        str(dimension["dimension_id"]): int(dimension["weight"])
+        for dimension in rubric.get("dimensions", [])
+    }
     return {
         "clinical_osce": {
             "score": sum(score for dimension_id, score in dimension_scores.items() if dimension_id in CLINICAL_DIMENSIONS),
-            "max_score": 70,
+            "max_score": sum(
+                max_score
+                for dimension_id, max_score in dimension_max_scores.items()
+                if dimension_id in CLINICAL_DIMENSIONS
+            ),
         },
         "humanistic_communication": {
             "score": sum(score for dimension_id, score in dimension_scores.items() if dimension_id in HUMANISTIC_DIMENSIONS),
-            "max_score": 30,
+            "max_score": sum(
+                max_score
+                for dimension_id, max_score in dimension_max_scores.items()
+                if dimension_id in HUMANISTIC_DIMENSIONS
+            ),
         },
     }
 

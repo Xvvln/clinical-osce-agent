@@ -482,6 +482,15 @@ def test_rubric_weight_sum_must_equal_100() -> None:
         validate_rubric(payload)
 
 
+def test_rubric_item_scores_must_equal_dimension_weight() -> None:
+    _, _, _, validate_rubric, _ = _load_step2_contract()
+    payload = build_valid_rubric_payload()
+    payload["dimensions"][0]["items"][0]["max_score"] = 9
+
+    with pytest.raises(Exception, match="item scores must sum to dimension weight"):
+        validate_rubric(payload)
+
+
 def test_rubric_evidence_must_exist_in_case() -> None:
     _, _, validate_case, validate_rubric, validate_case_rubric_pair = _load_step2_contract()
     case_payload = build_valid_case_payload()

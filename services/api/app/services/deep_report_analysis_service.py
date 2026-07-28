@@ -88,11 +88,14 @@ def build_overall_evaluation(*, report: Mapping[str, Any]) -> dict[str, Any]:
     clinical_max = _number(clinical_group.get("max_score"), fallback=70)
     humanistic_score = _number(humanistic_group.get("score"))
     humanistic_max = _number(humanistic_group.get("max_score"), fallback=30)
-    score_interpretation = (
-        f"本轮总分 {_format_score(total_score)}/{_format_score(max_score)}，"
-        f"临床 OSCE {_format_score(clinical_score)}/{_format_score(clinical_max)}，"
-        f"人文沟通 {_format_score(humanistic_score)}/{_format_score(humanistic_max)}。"
-    )
+    score_parts = [
+        f"本轮总分 {_format_score(total_score)}/{_format_score(max_score)}",
+    ]
+    if clinical_max > 0:
+        score_parts.append(f"临床 OSCE {_format_score(clinical_score)}/{_format_score(clinical_max)}")
+    if humanistic_max > 0:
+        score_parts.append(f"人文沟通 {_format_score(humanistic_score)}/{_format_score(humanistic_max)}")
+    score_interpretation = "，".join(score_parts) + "。"
     ratio = total_score / max_score if max_score > 0 else 0
     judgement = _completion_judgement(ratio)
     return {
@@ -146,7 +149,11 @@ def build_humanistic_communication_analysis(*, report: Mapping[str, Any]) -> dic
     repair_actions = _relationship_repair_actions(report, missed_opportunities)
     return {
         **_empty_humanistic_communication_analysis(),
-        "dimension_scores": [_humanistic_dimension_score(report, dimension) for dimension in _HUMANISTIC_DIMENSIONS],
+        "dimension_scores": [
+            _humanistic_dimension_score(report, dimension)
+            for dimension in _HUMANISTIC_DIMENSIONS
+            if _report_has_dimension(report, str(dimension["dimension_id"]))
+        ],
         "matched_evidence": _humanistic_matched_evidence(report),
         "missed_opportunities": missed_opportunities,
         "relationship_repair_actions": repair_actions,
@@ -468,7 +475,7 @@ def _evidence_nodes(report: Mapping[str, Any], key: str) -> list[dict[str, str]]
 def _clinical_task_item(*, report: Mapping[str, Any], dimension: Mapping[str, Any]) -> dict[str, Any]:
     dimension_id = str(dimension["dimension_id"])
     score = _dimension_score(report, dimension_id)
-    max_score = int(dimension["max_score"])
+    max_score = _dimension_max_score(report, dimension_id, fallback=int(dimension["max_score"]))
     traces = _dimension_trace_items(report, dimension_id)
     missed_items = [_trace_summary(trace, report) for trace in traces if _trace_score(trace) < _trace_max_score(trace)]
     completed_items = [_trace_summary(trace, report) for trace in traces if _trace_score(trace) > 0]
@@ -490,6 +497,29 @@ def _dimension_score(report: Mapping[str, Any], dimension_id: str) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     return 0.0
+
+
+def _dimension_max_score(report: Mapping[str, Any], dimension_id: str, *, fallback: int) -> int:
+    rubric_scores = _mapping(report.get("rubric_scores"))
+    rubric_total = sum(
+        max(0, int(_number(item.get("max_score"))))
+        for item in rubric_scores.values()
+        if isinstance(item, Mapping) and str(item.get("dimension_id") or "") == dimension_id
+    )
+    if rubric_total > 0:
+        return rubric_total
+    return fallback
+
+
+def _report_has_dimension(report: Mapping[str, Any], dimension_id: str) -> bool:
+    if dimension_id in _mapping(report.get("dimension_scores")):
+        return True
+    if dimension_id in _mapping(report.get("dimension_traces")):
+        return True
+    return any(
+        isinstance(item, Mapping) and str(item.get("dimension_id") or "") == dimension_id
+        for item in _mapping(report.get("rubric_scores")).values()
+    )
 
 
 def _dimension_trace_items(report: Mapping[str, Any], dimension_id: str) -> list[Mapping[str, Any]]:
@@ -649,7 +679,7 @@ def _sequence_flag_action(flag: Mapping[str, Any]) -> str:
 def _humanistic_dimension_score(report: Mapping[str, Any], dimension: Mapping[str, Any]) -> dict[str, Any]:
     dimension_id = str(dimension["dimension_id"])
     score = _dimension_score(report, dimension_id)
-    max_score = int(dimension["max_score"])
+    max_score = _dimension_max_score(report, dimension_id, fallback=int(dimension["max_score"]))
     return {
         "dimension_id": dimension_id,
         "label": str(dimension["label"]),
