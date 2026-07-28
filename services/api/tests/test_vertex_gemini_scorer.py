@@ -1,3 +1,4 @@
+import json
 import os
 
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
@@ -5,8 +6,12 @@ from app.services import anthropic_chat_client as anthropic_module
 from app.services import openai_compatible_chat_client as openai_module
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.vertex_gemini_scorer import (
+    AnthropicRubricScorer,
+    OpenAICompatibleRubricScorer,
+    RUBRIC_PROVIDER_PAYLOAD_MAX_BYTES,
     VertexGeminiRubricScorer,
     VertexGeminiSettings,
+    build_rubric_provider_projection,
     create_default_vertex_gemini_scorer,
 )
 
@@ -27,6 +32,39 @@ class FakeModels:
 class FakeClient:
     def __init__(self) -> None:
         self.models = FakeModels()
+
+
+class CapturingStructuredClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs: object) -> LlmRubricResponse:
+        self.payloads.append(kwargs["payload"])
+        return LlmRubricResponse(
+            score=0,
+            covered_evidence=[],
+            missing_evidence=[],
+            rationale="未确认投影证据覆盖。",
+        )
+
+
+def _oversized_rubric_request(count: int) -> LlmRubricRequest:
+    relevant_facts = [
+        f"病例事实_{index:04d}_" + "超长中文病例事实🩺🧬" * 36
+        for index in range(count)
+    ]
+    required_evidence = [
+        f"评分证据_{index:04d}_" + "超长中文评分证据🔬🧠" * 36
+        for index in range(count)
+    ]
+    return LlmRubricRequest(
+        rubric_item_id="reasoning_quality",
+        description="推理链覆盖关键证据并能自圆其说",
+        max_score=15,
+        student_final_reasoning="转移性右下腹痛和反跳痛支持急性阑尾炎。",
+        relevant_facts_revealed=relevant_facts,
+        required_evidence=required_evidence,
+    )
 
 
 def test_vertex_gemini_scorer_uses_adc_vertex_settings_and_response_schema() -> None:
@@ -59,6 +97,170 @@ def test_vertex_gemini_scorer_uses_adc_vertex_settings_and_response_schema() -> 
     assert call["config"].response_mime_type == "application/json"
     assert call["config"].response_schema is LlmRubricResponse
     assert "不得引入输入之外的医学事实" in call["config"].system_instruction
+
+
+def test_small_rubric_provider_payload_keeps_the_existing_shape() -> None:
+    request = LlmRubricRequest(
+        rubric_item_id="reasoning_core",
+        description="推理链覆盖关键证据并能自圆其说",
+        max_score=15,
+        student_final_reasoning="转移性右下腹痛支持急性阑尾炎。",
+        relevant_facts_revealed=["hf_01"],
+        required_evidence=["hf_01", "lab.cbc"],
+    )
+
+    projection = build_rubric_provider_projection(request)
+
+    assert projection.compacted is False
+    assert projection.payload == request.model_dump()
+    assert "provider_projection" not in projection.payload
+
+
+def test_oversized_rubric_provider_payload_is_utf8_bounded_and_deterministic() -> None:
+    for count in (100, 200):
+        request = _oversized_rubric_request(count)
+        original_request = request.model_dump()
+        reordered_request = request.model_copy(
+            update={
+                "relevant_facts_revealed": list(reversed(request.relevant_facts_revealed)),
+                "required_evidence": list(reversed(request.required_evidence)),
+            }
+        )
+
+        projection = build_rubric_provider_projection(request)
+        repeated_projection = build_rubric_provider_projection(request)
+        reordered_projection = build_rubric_provider_projection(reordered_request)
+        serialized = json.dumps(projection.payload, ensure_ascii=False).encode("utf-8")
+
+        assert projection.compacted is True
+        assert len(serialized) <= RUBRIC_PROVIDER_PAYLOAD_MAX_BYTES
+        assert projection.payload == repeated_projection.payload == reordered_projection.payload
+        assert len(projection.payload["relevant_facts_revealed"]) < count
+        assert len(projection.payload["required_evidence"]) < count
+        assert projection.payload["provider_projection"] == {
+            "compacted": True,
+            "policy": "relevance_first_v1",
+            "relevant_facts_revealed_total": count,
+            "relevant_facts_revealed_unique_total": count,
+            "relevant_facts_revealed_included": len(projection.payload["relevant_facts_revealed"]),
+            "required_evidence_total": count,
+            "required_evidence_unique_total": count,
+            "required_evidence_included": len(projection.payload["required_evidence"]),
+        }
+        omitted_evidence = next(
+            value
+            for value in request.required_evidence
+            if value not in projection.payload["required_evidence"]
+        )
+        assert omitted_evidence not in serialized.decode("utf-8")
+        # Projection is outbound-only: the complete local scoring request stays intact.
+        assert request.model_dump() == original_request
+
+
+def test_all_rubric_providers_share_the_same_bounded_projection() -> None:
+    request = _oversized_rubric_request(200)
+    expected_projection = build_rubric_provider_projection(request)
+
+    vertex_client = FakeClient()
+    vertex_scorer = VertexGeminiRubricScorer(
+        settings=VertexGeminiSettings(project="demo-project", _env_file=None),
+        client=vertex_client,
+    )
+    openai_client = CapturingStructuredClient()
+    openai_scorer = OpenAICompatibleRubricScorer(
+        settings=openai_module.OpenAICompatibleSettings(_env_file=None),
+        client=openai_client,
+    )
+    anthropic_client = CapturingStructuredClient()
+    anthropic_scorer = AnthropicRubricScorer(
+        settings=anthropic_module.AnthropicSettings(_env_file=None),
+        client=anthropic_client,
+    )
+
+    vertex_scorer(request)
+    openai_scorer(request)
+    anthropic_scorer(request)
+
+    vertex_payload = json.loads(vertex_client.models.calls[0]["contents"])
+    assert (
+        vertex_payload
+        == openai_client.payloads[0]
+        == anthropic_client.payloads[0]
+        == expected_projection.payload
+    )
+    assert (
+        len(json.dumps(vertex_payload, ensure_ascii=False).encode("utf-8"))
+        <= RUBRIC_PROVIDER_PAYLOAD_MAX_BYTES
+    )
+    assert request.model_dump()["required_evidence"] == request.required_evidence
+
+
+def test_compacted_provider_response_uses_full_local_evidence_denominator_and_missing_list() -> None:
+    request = _oversized_rubric_request(100)
+    request = request.model_copy(
+        update={
+            "required_evidence": [
+                f"评分证据_{index:04d}_" + "带引号的超长证据\"🧠" * 180
+                for index in range(10)
+            ]
+        }
+    )
+    projection = build_rubric_provider_projection(request)
+    projected_reference = projection.payload["required_evidence"][0]
+    original_reference = projection.required_evidence_aliases[projected_reference]
+
+    class EchoProjectedEvidenceClient:
+        def complete_json(self, **kwargs: object) -> LlmRubricResponse:
+            return LlmRubricResponse(
+                score=15,
+                covered_evidence=[kwargs["payload"]["required_evidence"][0]],
+                missing_evidence=[],
+                rationale="错误地把投影子集当成全集并给出满分。",
+            )
+
+    scorer = OpenAICompatibleRubricScorer(
+        settings=openai_module.OpenAICompatibleSettings(_env_file=None),
+        client=EchoProjectedEvidenceClient(),
+    )
+
+    response = scorer(request)
+
+    assert projected_reference != original_reference
+    assert response.score == 2
+    assert response.covered_evidence == [original_reference]
+    assert response.missing_evidence == [
+        evidence
+        for evidence in request.required_evidence
+        if evidence != original_reference
+    ]
+    assert len(request.required_evidence) == 10
+
+
+def test_compacted_provider_response_with_no_required_evidence_is_conservatively_zero() -> None:
+    request = _oversized_rubric_request(100).model_copy(
+        update={"required_evidence": []}
+    )
+
+    class IncorrectFullScoreClient:
+        def complete_json(self, **kwargs: object) -> LlmRubricResponse:
+            return LlmRubricResponse(
+                score=15,
+                covered_evidence=[],
+                missing_evidence=[],
+                rationale="错误地给出满分。",
+            )
+
+    scorer = AnthropicRubricScorer(
+        settings=anthropic_module.AnthropicSettings(_env_file=None),
+        client=IncorrectFullScoreClient(),
+    )
+
+    response = scorer(request)
+
+    assert build_rubric_provider_projection(request).compacted is True
+    assert response.score == 0
+    assert response.covered_evidence == []
+    assert response.missing_evidence == []
 
 
 def test_vertex_gemini_settings_defaults_to_global_gemini_31_pro_preview() -> None:
