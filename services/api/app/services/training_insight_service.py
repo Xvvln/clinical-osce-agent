@@ -10,6 +10,10 @@ from app.services.admin_display_resolver import (
     enrich_training_insight_turn_pattern,
 )
 from app.services.training_event_store import TrainingEventStore, training_event_store
+from app.services.training_report_event_normalizer import (
+    normalize_report_events_by_session,
+    unique_session_ids,
+)
 
 HUMANISTIC_DIMENSION_LABELS = {
     "narrative_medicine": "叙事医学",
@@ -53,8 +57,12 @@ class TrainingInsightService:
         humanistic_reports: list[dict[str, Any]] = []
         report_count = 0
 
-        events_by_session = _list_events_by_session(self.event_store, session_ids)
-        for session_id in session_ids:
+        normalized_session_ids = unique_session_ids(session_ids)
+        events_by_session = normalize_report_events_by_session(
+            normalized_session_ids,
+            _list_events_by_session(self.event_store, normalized_session_ids),
+        )
+        for session_id in normalized_session_ids:
             events = events_by_session.get(session_id, [])
             session_report_ids = [
                 str(event["payload"].get("report_id"))
@@ -107,7 +115,7 @@ class TrainingInsightService:
                     source_reference_metadata[reference] = source_reference_item.get("metadata", {})
 
         return {
-            "session_count": len(session_ids),
+            "session_count": len(normalized_session_ids),
             "report_count": report_count,
             "frequent_missed_items": [
                 enrich_training_insight_missed_item(

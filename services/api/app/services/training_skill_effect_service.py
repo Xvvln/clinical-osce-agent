@@ -4,6 +4,11 @@ from collections import Counter
 from typing import Any
 
 from app.services.training_event_store import TrainingEventStore, training_event_store
+from app.services.training_report_event_normalizer import (
+    latest_report_generated_event,
+    normalize_report_events_by_session,
+    unique_session_ids,
+)
 
 
 class TrainingSkillEffectService:
@@ -34,20 +39,22 @@ class TrainingSkillEffectService:
             "with_skill": _empty_group(),
             "without_skill": _empty_group(),
         }
-        events_by_session = _list_events_by_session(self.event_store, session_ids)
-        for session_id in session_ids:
+        normalized_session_ids = unique_session_ids(session_ids)
+        events_by_session = normalize_report_events_by_session(
+            normalized_session_ids,
+            _list_events_by_session(self.event_store, normalized_session_ids),
+        )
+        for session_id in normalized_session_ids:
             events = events_by_session.get(session_id, [])
             skill_ids = [
                 event["payload"]["skill_id"]
                 for event in events
                 if event["event_type"] == "training_skill_applied"
             ]
-            report_payload = next(
-                (event["payload"] for event in events if event["event_type"] == "report_generated"),
-                None,
-            )
-            if report_payload is None:
+            report_event = latest_report_generated_event(events)
+            if report_event is None:
                 continue
+            report_payload = report_event["payload"]
             group = groups["with_skill" if skill_ids else "without_skill"]
             group["session_count"] += 1
             group["total_scores"].append(report_payload["total_score"])

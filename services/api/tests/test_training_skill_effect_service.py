@@ -56,6 +56,98 @@ def test_training_skill_effect_service_batch_loads_events_for_large_admin_summar
     assert comparison["without_skill"]["session_count"] == 1
 
 
+def test_training_skill_effect_service_uses_latest_report_revision_and_deduplicates_session_ids() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_with_skill": [
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "training_skill_applied",
+                    "payload": {"skill_id": "skill_reasoning_core"},
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 2,
+                        "total_score": 80,
+                        "missed_items": ["new_revision_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:01+00:00",
+                },
+                {
+                    "session_id": "session_with_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 1,
+                        "total_score": 40,
+                        "missed_items": ["old_revision_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:02+00:00",
+                },
+            ]
+        }
+    )
+
+    comparison = TrainingSkillEffectService(store).compare_sessions(
+        ["session_with_skill", "session_with_skill"]
+    )
+
+    assert store.batch_calls == [["session_with_skill"]]
+    assert comparison["with_skill"] == {
+        "session_count": 1,
+        "average_total_score": 80.0,
+        "missed_item_counts": {"new_revision_only": 1},
+        "skill_ids": ["skill_reasoning_core"],
+    }
+
+
+def test_training_skill_effect_service_uses_latest_distinct_report_snapshot() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_without_skill": [
+                {
+                    "session_id": "session_without_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "first_report",
+                        "total_score": 40,
+                        "missed_items": ["first_report_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_without_skill",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "latest_report",
+                        "total_score": 75,
+                        "missed_items": ["latest_report_only"],
+                    },
+                    "created_at": "2026-05-02T00:00:00+00:00",
+                },
+            ]
+        }
+    )
+
+    comparison = TrainingSkillEffectService(store).compare_sessions(["session_without_skill"])
+
+    assert comparison["without_skill"] == {
+        "session_count": 1,
+        "average_total_score": 75.0,
+        "missed_item_counts": {"latest_report_only": 1},
+        "skill_ids": [],
+    }
+
+
 def test_training_skill_effect_service_compares_sessions_with_and_without_skill(tmp_path) -> None:
     store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     store.append_event(

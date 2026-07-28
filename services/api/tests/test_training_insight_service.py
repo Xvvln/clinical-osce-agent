@@ -1,5 +1,6 @@
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_insight_service import TrainingInsightService
+from app.services.training_skill_candidate_service import TrainingSkillCandidateService
 
 
 EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT = {
@@ -60,6 +61,76 @@ def test_training_insight_service_batch_loads_events_for_large_admin_summaries()
     assert store.batch_calls == [["session_one", "session_two"]]
     assert insights["session_count"] == 2
     assert insights["report_count"] == 1
+
+
+def test_training_insight_service_counts_each_stable_report_once_and_deduplicates_session_ids() -> None:
+    store = BatchOnlyTrainingEventStore(
+        {
+            "session_one": [
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 1,
+                        "total_score": 40,
+                        "missed_items": ["old_revision_only"],
+                    },
+                    "created_at": "2026-05-02T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "stable_report",
+                        "report_revision": 2,
+                        "total_score": 70,
+                        "missed_items": ["new_revision_only"],
+                    },
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "report_id": "different_report",
+                        "total_score": 65,
+                        "missed_items": ["different_report_only"],
+                    },
+                    "created_at": "2026-05-03T00:00:00+00:00",
+                },
+                {
+                    "session_id": "session_one",
+                    "case_id": "appendicitis_001",
+                    "event_type": "report_generated",
+                    "payload": {
+                        "total_score": 60,
+                        "missed_items": ["legacy_report_only"],
+                    },
+                    "created_at": "2026-05-04T00:00:00+00:00",
+                },
+            ]
+        }
+    )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_one", "session_one"])
+    missed_item_counts = {
+        item["item_id"]: item["count"]
+        for item in insights["frequent_missed_items"]
+    }
+
+    assert store.batch_calls == [["session_one"]]
+    assert insights["session_count"] == 1
+    assert insights["report_count"] == 3
+    assert missed_item_counts == {
+        "different_report_only": 1,
+        "legacy_report_only": 1,
+        "new_revision_only": 1,
+    }
+    assert TrainingSkillCandidateService().propose_candidates(insights, min_count=2) == []
 
 
 def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_path) -> None:
