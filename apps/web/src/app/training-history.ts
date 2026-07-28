@@ -138,6 +138,10 @@ export function clearTrainingHistoryRecords(): readonly TrainingHistoryRecord[] 
     return [];
   }
 
-  window.localStorage.removeItem(TRAINING_HISTORY_STORAGE_KEY);
+  try {
+    window.localStorage.removeItem(TRAINING_HISTORY_STORAGE_KEY);
+  } catch {
+    // Legacy browser storage cleanup is best effort and must not interrupt auth or rendering.
+  }
   return [];
 }

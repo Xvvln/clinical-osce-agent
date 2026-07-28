@@ -1,3 +1,5 @@
+import { clearTrainingHistoryRecords } from "./training-history";
+
 export type AuthUser = Readonly<{
   user_id: string;
   email: string;
@@ -86,7 +88,11 @@ export async function registerUser(email: string, password: string, displayName:
 }
 
 export async function logoutUser(): Promise<void> {
-  await requestAuth<{ status: string }>("/api/auth/logout", {
-    method: "POST",
-  });
+  try {
+    await requestAuth<{ status: string }>("/api/auth/logout", {
+      method: "POST",
+    });
+  } finally {
+    clearTrainingHistoryRecords();
+  }
 }

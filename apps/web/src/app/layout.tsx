@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { LegacyStorageCleanup } from "./legacy-storage-cleanup";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -17,7 +18,10 @@ type RootLayoutProps = Readonly<{
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="zh-CN">
-      <body className="font-ui">{children}</body>
+      <body className="font-ui">
+        <LegacyStorageCleanup />
+        {children}
+      </body>
     </html>
   );
 }

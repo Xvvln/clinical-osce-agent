@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const authClientUrl = new URL("./src/app/auth-client.ts", import.meta.url);
+const legacyStorageCleanupUrl = new URL("./src/app/legacy-storage-cleanup.tsx", import.meta.url);
 const profilePageUrl = new URL("./src/app/profile/page.tsx", import.meta.url);
 const pageSource = readFileSync(new URL("./src/app/page.tsx", import.meta.url), "utf8");
 const reportSource = readFileSync(new URL("./src/app/report/page.tsx", import.meta.url), "utf8");
@@ -15,6 +16,7 @@ const sourcesSource = readFileSync(new URL("./src/app/sources/page.tsx", import.
 const globalsSource = readFileSync(new URL("./src/app/globals.css", import.meta.url), "utf8");
 const layoutSource = readFileSync(new URL("./src/app/layout.tsx", import.meta.url), "utf8");
 const authClientSource = existsSync(authClientUrl) ? readFileSync(authClientUrl, "utf8") : "";
+const legacyStorageCleanupSource = existsSync(legacyStorageCleanupUrl) ? readFileSync(legacyStorageCleanupUrl, "utf8") : "";
 const webDockerfileSource = readFileSync(new URL("./Dockerfile", import.meta.url), "utf8");
 const webReadmeSource = readFileSync(new URL("./README.md", import.meta.url), "utf8");
 const recordingPlanSource = readFileSync(new URL("../../docs/10分钟完整录屏测试方案.md", import.meta.url), "utf8");
@@ -39,6 +41,19 @@ test("home shell removes the top navigation bar", () => {
   assert.doesNotMatch(pageSource, /className="flex h-12 shrink-0 items-center justify-end border-b border-border bg-background px-4"/);
   assert.doesNotMatch(pageSource, /href="\/safety"[\s\S]*?>\s*安全声明\s*<\/Link>[\s\S]*<header/);
   assert.doesNotMatch(pageSource, /href="\/sources"[\s\S]*?>\s*数据来源\s*<\/Link>[\s\S]*<header/);
+});
+
+test("root layout and logout purge legacy personal training data", () => {
+  assert.ok(existsSync(legacyStorageCleanupUrl), "root layout should have a client-side legacy storage cleanup");
+  assert.match(legacyStorageCleanupSource, /"use client";/);
+  assert.match(legacyStorageCleanupSource, /useEffect\(\(\) => \{\s+clearTrainingHistoryRecords\(\);\s+\}, \[\]\);/);
+  assert.match(layoutSource, /import \{ LegacyStorageCleanup \} from "\.\/legacy-storage-cleanup";/);
+  assert.match(layoutSource, /<LegacyStorageCleanup \/>/);
+  assert.match(authClientSource, /import \{ clearTrainingHistoryRecords \} from "\.\/training-history";/);
+  assert.match(
+    authClientSource,
+    /export async function logoutUser\(\): Promise<void> \{\s+try \{[\s\S]*?\} finally \{\s+clearTrainingHistoryRecords\(\);\s+\}\s+\}/,
+  );
 });
 
 test("home page does not render large safety and source panels", () => {

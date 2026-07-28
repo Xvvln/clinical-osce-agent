@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { afterEach, test } from "node:test";
 
 import {
+  clearTrainingHistoryRecords,
   deleteTrainingHistoryRecord,
   readTrainingHistoryRecords,
   TRAINING_HISTORY_STORAGE_KEY,
@@ -56,4 +57,23 @@ test("deleteTrainingHistoryRecord succeeds when legacy JSON is malformed", () =>
 
   assert.deepEqual(deleteTrainingHistoryRecord("session-1"), []);
   assert.equal(localStorage.getItem(TRAINING_HISTORY_STORAGE_KEY), null);
+});
+
+test("clearTrainingHistoryRecords removes legacy training data", () => {
+  const localStorage = createLocalStorage([[TRAINING_HISTORY_STORAGE_KEY, JSON.stringify([{ sessionId: "session-1" }])]]);
+  installWindow(localStorage);
+
+  assert.deepEqual(clearTrainingHistoryRecords(), []);
+  assert.equal(localStorage.getItem(TRAINING_HISTORY_STORAGE_KEY), null);
+});
+
+test("clearTrainingHistoryRecords is best effort when browser storage is unavailable", () => {
+  installWindow({
+    removeItem() {
+      throw new DOMException("Storage access denied", "SecurityError");
+    },
+  });
+
+  assert.doesNotThrow(() => clearTrainingHistoryRecords());
+  assert.deepEqual(clearTrainingHistoryRecords(), []);
 });
