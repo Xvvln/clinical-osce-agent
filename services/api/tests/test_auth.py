@@ -107,6 +107,12 @@ def test_explicit_local_demo_student_login_creates_user_and_logout_clears_sessio
     assert login_response.status_code == 200
     assert login_response.json()["user"]["email"] == email
     assert login_response.json()["user"]["display_name"] == "演示学生"
+    auth_cookie_header = login_response.headers["set-cookie"].lower()
+    assert f"{main.AUTH_COOKIE_NAME}=" in auth_cookie_header
+    assert "domain=" not in auth_cookie_header
+    assert "httponly" in auth_cookie_header
+    assert "path=/" in auth_cookie_header
+    assert "samesite=lax" in auth_cookie_header
     current_user_response = client.get("/api/auth/me")
     assert current_user_response.status_code == 200
     assert current_user_response.json()["user"]["is_admin"] is False

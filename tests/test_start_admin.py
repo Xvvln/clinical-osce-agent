@@ -53,6 +53,8 @@ def test_existing_admin_email_list_is_preserved_and_local_admin_is_added(monkeyp
 def test_admin_script_uses_api_and_admin_ports_only() -> None:
     start_admin = load_start_admin_module()
 
+    assert start_admin.API_HOST == "127.0.0.1"
+    assert start_admin.ADMIN_HOST == "127.0.0.1"
     assert start_admin.API_URL == "http://127.0.0.1:8000"
     assert start_admin.ADMIN_URL == "http://127.0.0.1:3100"
     assert start_admin.DEV_PORTS == (3100,)

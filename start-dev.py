@@ -14,14 +14,18 @@ API_DIR = ROOT_DIR / "services" / "api"
 WEB_DIR = ROOT_DIR / "apps" / "web"
 ADMIN_DIR = ROOT_DIR / "apps" / "admin"
 AGENT_ENV_DIR = Path(os.environ.get("CLINICAL_OSCE_AGENT_ENV_DIR", "D:/Anaconda3/envs/agent"))
-API_URL = "http://127.0.0.1:8000"
-WEB_URL = "http://127.0.0.1:3000"
-ADMIN_URL = "http://127.0.0.1:3100"
-DEV_HOST = "127.0.0.1"
+API_HOST = "127.0.0.1"
+WEB_HOST = "localhost"
+ADMIN_HOST = "127.0.0.1"
+API_URL = f"http://{API_HOST}:8000"
+WEB_URL = f"http://{WEB_HOST}:3000"
+ADMIN_URL = f"http://{ADMIN_HOST}:3100"
+DEV_ENDPOINTS = ((API_HOST, 8000), (WEB_HOST, 3000), (ADMIN_HOST, 3100))
 DEV_PORTS = (8000, 3000, 3100)
 LOCAL_ADMIN_EMAIL = "admin@example.test"
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 ADMIN_API_URL_ENV_NAME = "CLINICAL_OSCE_ADMIN_API_URL"
+WEB_ADMIN_URL_ENV_NAME = "NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL"
 
 
 def main() -> int:
@@ -69,8 +73,8 @@ def _start_process(name: str, command: list[str], cwd: Path) -> subprocess.Popen
 
 
 def _stop_stale_dev_processes() -> None:
-    for port in DEV_PORTS:
-        _stop_stale_port_processes(DEV_HOST, port)
+    for host, port in DEV_ENDPOINTS:
+        _stop_stale_port_processes(host, port)
 
 
 def _stop_stale_port_processes(host: str, port: int) -> None:
@@ -184,6 +188,7 @@ def _process_env() -> dict[str, str]:
         )
     env[ADMIN_EMAILS_ENV_NAME] = _admin_email_list(env.get(ADMIN_EMAILS_ENV_NAME, ""))
     env[ADMIN_API_URL_ENV_NAME] = API_URL
+    env[WEB_ADMIN_URL_ENV_NAME] = ADMIN_URL
     return env
 
 
@@ -203,7 +208,7 @@ def _api_command() -> list[str]:
         "uvicorn",
         "app.main:app",
         "--host",
-        "127.0.0.1",
+        API_HOST,
         "--port",
         "8000",
         "--reload",
@@ -216,14 +221,14 @@ def _api_command() -> list[str]:
 
 
 def _web_command() -> list[str]:
-    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3000"]
+    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", WEB_HOST, "--port", "3000"]
     if platform.system() == "Windows":
         return ["cmd", "/c", *command]
     return command
 
 
 def _admin_command() -> list[str]:
-    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
+    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", ADMIN_HOST, "--port", "3100"]
     if platform.system() == "Windows":
         return ["cmd", "/c", *command]
     return command

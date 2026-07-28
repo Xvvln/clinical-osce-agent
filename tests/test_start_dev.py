@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -45,6 +46,7 @@ def test_child_processes_use_shared_api_and_admin_defaults() -> None:
     env = start_dev._process_env()
 
     assert env["CLINICAL_OSCE_ADMIN_API_URL"] == "http://127.0.0.1:8000"
+    assert env["NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL"] == "http://127.0.0.1:3100"
     assert "admin@example.test" in env["CLINICAL_OSCE_ADMIN_EMAILS"].split(",")
 
 
@@ -53,7 +55,7 @@ def test_web_command_starts_next_with_default_webpack_and_polling_config() -> No
 
     command = start_dev._web_command()
 
-    assert command[-6:] == ["next", "dev", "--hostname", "127.0.0.1", "--port", "3000"]
+    assert command[-6:] == ["next", "dev", "--hostname", "localhost", "--port", "3000"]
     assert "--webpack" not in command
     assert "--turbo" not in command
     assert "--turbopack" not in command
@@ -71,10 +73,27 @@ def test_unified_dev_script_uses_single_api_for_web_and_admin() -> None:
     start_dev = load_start_dev_module()
 
     assert start_dev.API_URL == "http://127.0.0.1:8000"
-    assert start_dev.WEB_URL == "http://127.0.0.1:3000"
+    assert start_dev.WEB_URL == "http://localhost:3000"
     assert start_dev.ADMIN_URL == "http://127.0.0.1:3100"
+    assert start_dev.DEV_ENDPOINTS == (
+        ("127.0.0.1", 8000),
+        ("localhost", 3000),
+        ("127.0.0.1", 3100),
+    )
     assert start_dev.DEV_PORTS == (8000, 3000, 3100)
     assert start_dev.ADMIN_DIR == start_dev.ROOT_DIR / "apps" / "admin"
+
+
+def test_student_and_admin_urls_use_distinct_hosts_for_host_only_cookie_isolation() -> None:
+    start_dev = load_start_dev_module()
+
+    student_url = urlsplit(start_dev.WEB_URL)
+    admin_url = urlsplit(start_dev.ADMIN_URL)
+
+    assert student_url.scheme == admin_url.scheme == "http"
+    assert student_url.hostname == start_dev.WEB_HOST == "localhost"
+    assert admin_url.hostname == start_dev.ADMIN_HOST == "127.0.0.1"
+    assert student_url.hostname != admin_url.hostname
 
 
 def test_main_stops_project_owned_stale_processes_before_starting_services() -> None:
@@ -93,7 +112,7 @@ def test_project_owned_stale_web_processes_are_terminated_until_port_is_free(mon
     stale_web_process_ids = iter([25580, 25581, None])
 
     def fake_listening_process_id(host: str, port: int) -> int | None:
-        assert host == "127.0.0.1"
+        assert host == ("localhost" if port == 3000 else "127.0.0.1")
         return next(stale_web_process_ids) if port == 3000 else None
 
     monkeypatch.setattr(start_dev, "_get_listening_process_id", fake_listening_process_id, raising=False)
@@ -131,7 +150,7 @@ def test_unrelated_port_owner_is_not_terminated(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(start_dev, "_get_process_command_line", lambda process_id: "C:/other-project/node.exe", raising=False)
     monkeypatch.setattr(start_dev, "_terminate_process_tree", terminated_process_ids.append, raising=False)
 
-    with pytest.raises(RuntimeError, match="127.0.0.1:3000"):
+    with pytest.raises(RuntimeError, match="localhost:3000"):
         start_dev._stop_stale_dev_processes()
 
     assert terminated_process_ids == []

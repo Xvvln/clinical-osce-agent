@@ -10,9 +10,11 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
 ADMIN_DIR = ROOT_DIR / "apps" / "admin"
-API_URL = "http://127.0.0.1:8000"
-ADMIN_URL = "http://127.0.0.1:3100"
-DEV_HOST = "127.0.0.1"
+API_HOST = "127.0.0.1"
+ADMIN_HOST = "127.0.0.1"
+API_URL = f"http://{API_HOST}:8000"
+ADMIN_URL = f"http://{ADMIN_HOST}:3100"
+DEV_HOST = ADMIN_HOST
 DEV_PORTS = (3100,)
 LOCAL_ADMIN_EMAIL = "admin@example.test"
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
@@ -160,7 +162,7 @@ def _admin_email_list(existing_value: str) -> str:
 
 
 def _admin_command() -> list[str]:
-    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
+    command = [*_pnpm_command(), "exec", "next", "dev", "--hostname", ADMIN_HOST, "--port", "3100"]
     if platform.system() == "Windows":
         return ["cmd", "/c", *command]
     return command
