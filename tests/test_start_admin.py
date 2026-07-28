@@ -31,7 +31,8 @@ def test_admin_command_starts_next_admin_app_on_3100() -> None:
     assert command[-6:] == ["next", "dev", "--hostname", "127.0.0.1", "--port", "3100"]
 
 
-def test_child_processes_default_to_local_admin_email_and_api_url() -> None:
+def test_child_processes_default_to_local_admin_email_and_api_url(monkeypatch) -> None:
+    monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
     start_admin = load_start_admin_module()
 
     env = start_admin._process_env()
