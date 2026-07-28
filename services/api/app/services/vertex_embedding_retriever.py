@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections import OrderedDict
@@ -23,10 +24,26 @@ DEFAULT_VERTEX_EMBEDDING_LOCATION = "global"
 DEFAULT_VERTEX_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY = 3072
 DEFAULT_VERTEX_EMBEDDING_PROXY_URL = "http://127.0.0.1:7897"
+DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE = 32
+MAX_VERTEX_EMBEDDING_BATCH_SIZE = 250
+DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES = 64 * 1024
+MAX_VERTEX_EMBEDDING_BATCH_MAX_BYTES = 256 * 1024
 DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS = 90
 MAX_VERTEX_EMBEDDING_QUOTA_COOLDOWN_ENTRIES = 128
 _vertex_embedding_quota_cooldowns: OrderedDict[tuple[str, ...], float] = OrderedDict()
 _vertex_embedding_quota_cooldown_lock = Lock()
+
+
+class VertexEmbeddingInputTooLargeError(ValueError):
+    def __init__(self, *, input_index: int, input_bytes: int, max_bytes: int) -> None:
+        self.input_index = input_index
+        self.input_bytes = input_bytes
+        self.max_bytes = max_bytes
+        super().__init__(
+            "Vertex embedding input "
+            f"at index {input_index} exceeds the UTF-8 byte limit "
+            f"({input_bytes} > {max_bytes})"
+        )
 
 
 @dataclass(frozen=True)
@@ -37,11 +54,23 @@ class VertexEmbeddingSettings:
     model: str = DEFAULT_VERTEX_EMBEDDING_MODEL
     output_dimensionality: int = DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY
     proxy_url: str = DEFAULT_VERTEX_EMBEDDING_PROXY_URL
+    batch_size: int = DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE
+    batch_max_bytes: int = DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES
 
 
 class VertexTextEmbeddingClient:
     def __init__(self, settings: VertexEmbeddingSettings) -> None:
         self._settings = settings
+        self._batch_size = _bounded_positive_int(
+            settings.batch_size,
+            default=DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE,
+            maximum=MAX_VERTEX_EMBEDDING_BATCH_SIZE,
+        )
+        self._batch_max_bytes = _bounded_positive_int(
+            settings.batch_max_bytes,
+            default=DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+            maximum=MAX_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+        )
         if settings.api_key:
             self._client = genai.Client(
                 vertexai=True,
@@ -60,45 +89,58 @@ class VertexTextEmbeddingClient:
         normalized_texts = [str(text) for text in texts]
         if not normalized_texts:
             return []
+        batches = _batch_embedding_texts(
+            normalized_texts,
+            batch_size=self._batch_size,
+            batch_max_bytes=self._batch_max_bytes,
+        )
         config = types.EmbedContentConfig(
             task_type=task_type,
             output_dimensionality=self._settings.output_dimensionality,
         )
-        started_at = time.perf_counter()
-        try:
-            response = run_model_provider_call(
-                lambda: self._client.models.embed_content(
-                    model=self._settings.model,
-                    contents=normalized_texts,
-                    config=config,
+        vectors: list[list[float]] = []
+        for batch in batches:
+            started_at = time.perf_counter()
+            try:
+                response = run_model_provider_call(
+                    lambda batch=batch: self._client.models.embed_content(
+                        model=self._settings.model,
+                        contents=batch,
+                        config=config,
+                    )
                 )
-            )
-        except Exception as exc:
-            if _is_resource_exhausted_error(exc):
-                mark_vertex_embedding_quota_exhausted(settings=self._settings)
+                if not response.embeddings:
+                    raise RuntimeError("Vertex embedding response did not include embeddings")
+                batch_vectors = [
+                    [float(value) for value in embedding.values]
+                    for embedding in response.embeddings
+                ]
+                if len(batch_vectors) != len(batch):
+                    raise RuntimeError(
+                        "Vertex embedding response count did not match input text count"
+                    )
+            except Exception as exc:
+                if _is_resource_exhausted_error(exc):
+                    mark_vertex_embedding_quota_exhausted(settings=self._settings)
+                api_call_log_store.record(
+                    provider="vertex_gemini_embedding",
+                    operation="embed_content",
+                    model=self._settings.model,
+                    endpoint="vertex://embed_content",
+                    success=False,
+                    duration_ms=(time.perf_counter() - started_at) * 1000,
+                    error=exc,
+                )
+                raise
             api_call_log_store.record(
                 provider="vertex_gemini_embedding",
                 operation="embed_content",
                 model=self._settings.model,
                 endpoint="vertex://embed_content",
-                success=False,
+                success=True,
                 duration_ms=(time.perf_counter() - started_at) * 1000,
-                error=exc,
             )
-            raise
-        api_call_log_store.record(
-            provider="vertex_gemini_embedding",
-            operation="embed_content",
-            model=self._settings.model,
-            endpoint="vertex://embed_content",
-            success=True,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-        )
-        if not response.embeddings:
-            raise RuntimeError("Vertex embedding response did not include embeddings")
-        vectors = [[float(value) for value in embedding.values] for embedding in response.embeddings]
-        if len(vectors) != len(normalized_texts):
-            raise RuntimeError("Vertex embedding response count did not match input text count")
+            vectors.extend(batch_vectors)
         return vectors
 
 
@@ -126,6 +168,16 @@ def _resolve_vertex_embedding_settings() -> VertexEmbeddingSettings | None:
             proxy_url=_env("OSCE_VERTEX_EMBEDDING_PROXY_URL")
             or runtime_vertex_config.proxy_url
             or DEFAULT_VERTEX_EMBEDDING_PROXY_URL,
+            batch_size=_bounded_int_env(
+                "OSCE_VERTEX_EMBEDDING_BATCH_SIZE",
+                DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE,
+                maximum=MAX_VERTEX_EMBEDDING_BATCH_SIZE,
+            ),
+            batch_max_bytes=_bounded_int_env(
+                "OSCE_VERTEX_EMBEDDING_BATCH_MAX_BYTES",
+                DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+                maximum=MAX_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+            ),
         )
         if settings.project or settings.api_key:
             return settings
@@ -145,6 +197,16 @@ def _resolve_vertex_embedding_settings() -> VertexEmbeddingSettings | None:
         model=_env("OSCE_VERTEX_EMBEDDING_MODEL", DEFAULT_VERTEX_EMBEDDING_MODEL),
         output_dimensionality=_int_env("OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY", DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY),
         proxy_url=_env("OSCE_VERTEX_EMBEDDING_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", DEFAULT_VERTEX_EMBEDDING_PROXY_URL),
+        batch_size=_bounded_int_env(
+            "OSCE_VERTEX_EMBEDDING_BATCH_SIZE",
+            DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE,
+            maximum=MAX_VERTEX_EMBEDDING_BATCH_SIZE,
+        ),
+        batch_max_bytes=_bounded_int_env(
+            "OSCE_VERTEX_EMBEDDING_BATCH_MAX_BYTES",
+            DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+            maximum=MAX_VERTEX_EMBEDDING_BATCH_MAX_BYTES,
+        ),
     )
     return settings
 
@@ -188,6 +250,75 @@ def _int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _bounded_int_env(name: str, default: int, *, maximum: int) -> int:
+    raw_value = _env(name)
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    return _bounded_positive_int(value, default=default, maximum=maximum)
+
+
+def _bounded_positive_int(value: int, *, default: int, maximum: int) -> int:
+    if value <= 0:
+        return default
+    return min(value, maximum)
+
+
+def _batch_embedding_texts(
+    texts: Sequence[str],
+    *,
+    batch_size: int,
+    batch_max_bytes: int,
+) -> list[list[str]]:
+    text_sizes: list[int] = []
+    for input_index, text in enumerate(texts):
+        encoded_text_bytes = _embedding_text_json_bytes(text)
+        input_bytes = encoded_text_bytes + 2
+        if input_bytes > batch_max_bytes:
+            raise VertexEmbeddingInputTooLargeError(
+                input_index=input_index,
+                input_bytes=input_bytes,
+                max_bytes=batch_max_bytes,
+            )
+        text_sizes.append(encoded_text_bytes)
+
+    batches: list[list[str]] = []
+    current_batch: list[str] = []
+    current_batch_bytes = 2
+    for text, encoded_text_bytes in zip(texts, text_sizes, strict=True):
+        exceeds_item_limit = len(current_batch) >= batch_size
+        exceeds_byte_limit = (
+            current_batch_bytes
+            + (1 if current_batch else 0)
+            + encoded_text_bytes
+            > batch_max_bytes
+        )
+        if current_batch and (exceeds_item_limit or exceeds_byte_limit):
+            batches.append(current_batch)
+            current_batch = []
+            current_batch_bytes = 2
+        if current_batch:
+            current_batch_bytes += 1
+        current_batch.append(text)
+        current_batch_bytes += encoded_text_bytes
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def _embedding_text_json_bytes(text: str) -> int:
+    return len(
+        json.dumps(
+            text,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 def _truthy_env(name: str) -> bool:
@@ -235,9 +366,14 @@ def _is_resource_exhausted_error(error: BaseException) -> bool:
 
 
 __all__ = [
+    "DEFAULT_VERTEX_EMBEDDING_BATCH_MAX_BYTES",
+    "DEFAULT_VERTEX_EMBEDDING_BATCH_SIZE",
     "DEFAULT_VERTEX_EMBEDDING_QUOTA_COOLDOWN_SECONDS",
     "DEFAULT_VERTEX_EMBEDDING_MODEL",
     "DEFAULT_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY",
+    "MAX_VERTEX_EMBEDDING_BATCH_MAX_BYTES",
+    "MAX_VERTEX_EMBEDDING_BATCH_SIZE",
+    "VertexEmbeddingInputTooLargeError",
     "VertexEmbeddingSettings",
     "VertexTextEmbeddingClient",
     "build_vertex_embedding_client_from_environment",
