@@ -11,9 +11,27 @@ from uuid import uuid4
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "reports.sqlite3"
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 4
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
 DEFAULT_ENRICHMENT_LEASE_SECONDS = 300
+REPORT_OUTBOX_COLUMNS = (
+    "id",
+    "event_key",
+    "session_id",
+    "case_id",
+    "student_id",
+    "event_type",
+    "payload_json",
+    "report_revision",
+    "created_at",
+    "updated_at",
+    "acknowledged_at",
+)
+LEGACY_REPORT_OUTBOX_COLUMNS = tuple(
+    column
+    for column in REPORT_OUTBOX_COLUMNS
+    if column not in {"case_id", "student_id"}
+)
 
 EnrichmentStatus = Literal["pending", "claimed", "completed", "failed"]
 
@@ -695,6 +713,7 @@ class ReportStore:
                     )
                     """
                 )
+                _migrate_legacy_report_outbox(connection)
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS report_tombstones (
@@ -827,6 +846,209 @@ class ReportStore:
 
 
 report_store = ReportStore()
+
+
+def _migrate_legacy_report_outbox(connection: sqlite3.Connection) -> None:
+    column_rows = connection.execute(
+        "PRAGMA table_info(report_outbox)"
+    ).fetchall()
+    column_info = {str(row[1]): row for row in column_rows}
+    columns = set(column_info)
+    expected_columns = set(REPORT_OUTBOX_COLUMNS)
+    required_not_null_columns = expected_columns - {
+        "acknowledged_at",
+        "id",
+    }
+    schema_is_current = (
+        columns == expected_columns
+        and int(column_info["id"][5]) == 1
+        and all(
+            int(column_info[column][3]) == 1
+            for column in required_not_null_columns
+        )
+        and _report_outbox_event_key_is_unique(connection)
+    )
+    if schema_is_current:
+        return
+    if (
+        not set(LEGACY_REPORT_OUTBOX_COLUMNS).issubset(columns)
+        or not columns.issubset(expected_columns)
+    ):
+        raise sqlite3.DatabaseError("unsupported legacy report outbox schema")
+
+    case_id_projection = "case_id" if "case_id" in columns else "NULL"
+    student_id_projection = (
+        "student_id" if "student_id" in columns else "NULL"
+    )
+    legacy_rows = connection.execute(
+        f"""
+        SELECT
+            id,
+            event_key,
+            session_id,
+            {case_id_projection},
+            {student_id_projection},
+            event_type,
+            payload_json,
+            report_revision,
+            created_at,
+            updated_at,
+            acknowledged_at
+        FROM report_outbox
+        ORDER BY id
+        """
+    ).fetchall()
+    migrated_rows: list[tuple[object, ...]] = []
+    for row in legacy_rows:
+        case_id, student_id = _resolve_legacy_report_outbox_identity(
+            connection,
+            session_id=str(row[2]),
+            payload_json=str(row[6]),
+            known_case_id=str(row[3] or ""),
+            known_student_id=str(row[4] or ""),
+        )
+        if not case_id or not student_id:
+            raise sqlite3.DatabaseError(
+                "legacy report outbox identity is unavailable"
+            )
+        migrated_rows.append(
+            (
+                row[0],
+                row[1],
+                row[2],
+                case_id,
+                student_id,
+                row[5],
+                row[6],
+                row[7],
+                row[8],
+                row[9],
+                row[10],
+            )
+        )
+
+    connection.execute(
+        """
+        CREATE TABLE report_outbox_schema_migration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_key TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            report_revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            acknowledged_at TEXT
+        )
+        """
+    )
+    connection.executemany(
+        """
+        INSERT INTO report_outbox_schema_migration (
+            id,
+            event_key,
+            session_id,
+            case_id,
+            student_id,
+            event_type,
+            payload_json,
+            report_revision,
+            created_at,
+            updated_at,
+            acknowledged_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        migrated_rows,
+    )
+    connection.execute("DROP TABLE report_outbox")
+    connection.execute(
+        "ALTER TABLE report_outbox_schema_migration RENAME TO report_outbox"
+    )
+
+
+def _report_outbox_event_key_is_unique(
+    connection: sqlite3.Connection,
+) -> bool:
+    for index_row in connection.execute(
+        "PRAGMA index_list(report_outbox)"
+    ).fetchall():
+        if int(index_row[2]) != 1:
+            continue
+        indexed_columns = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                (str(index_row[1]),),
+            ).fetchall()
+        ]
+        if indexed_columns == ["event_key"]:
+            return True
+    return False
+
+
+def _resolve_legacy_report_outbox_identity(
+    connection: sqlite3.Connection,
+    *,
+    session_id: str,
+    payload_json: str,
+    known_case_id: str,
+    known_student_id: str,
+) -> tuple[str, str]:
+    payload = _decode_json_object(
+        payload_json,
+        context="legacy report outbox payload",
+    )
+    report_row = connection.execute(
+        "SELECT report_json FROM reports WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    stored_report = (
+        _decode_json_object(
+            str(report_row[0]),
+            context="legacy report outbox report",
+        )
+        if report_row is not None
+        else {}
+    )
+    nested_report = payload.get("report")
+    sources = [
+        stored_report,
+        nested_report if isinstance(nested_report, dict) else {},
+        payload,
+    ]
+    student_sources = list(sources)
+    for source in sources:
+        candidate = source.get("personal_skill_candidate")
+        if isinstance(candidate, dict):
+            student_sources.append(candidate)
+    case_id = known_case_id.strip() or next(
+        (
+            str(source.get("case_id") or "").strip()
+            for source in sources
+            if str(source.get("case_id") or "").strip()
+        ),
+        "",
+    )
+    student_id = known_student_id.strip() or next(
+        (
+            str(
+                source.get("student_id")
+                or source.get("owner_student_id")
+                or ""
+            ).strip()
+            for source in student_sources
+            if str(
+                source.get("student_id")
+                or source.get("owner_student_id")
+                or ""
+            ).strip()
+        ),
+        "",
+    )
+    return case_id, student_id
 
 
 def _serialize_report(report: dict[str, Any]) -> tuple[str, str]:

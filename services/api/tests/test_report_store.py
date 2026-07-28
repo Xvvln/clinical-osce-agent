@@ -4,11 +4,13 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Barrier
 
 import pytest
 
 from app.services.report_store import (
+    DATABASE_SCHEMA_VERSION,
     ReportAlreadyExistsError,
     ReportClaimLostError,
     ReportDeletedError,
@@ -181,7 +183,7 @@ def test_legacy_reports_table_is_migrated_without_changing_business_json(tmp_pat
         schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"revision", "enrichment_status", "enrichment_retry_count"} <= columns
     assert tombstone_table == ("report_tombstones",)
-    assert schema_version == 3
+    assert schema_version == DATABASE_SCHEMA_VERSION
 
 
 def test_only_one_store_claims_enrichment_and_stale_pending_cannot_replace_approved(tmp_path) -> None:
@@ -417,6 +419,162 @@ def test_completed_report_creates_stable_pending_outbox_and_ack_is_idempotent(tm
     assert store.list_pending_outbox() == []
 
 
+def test_legacy_report_outbox_migration_preserves_rows_and_is_idempotent(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "reports.sqlite3"
+    _create_legacy_report_outbox_database(
+        database_path,
+        reports=[
+            {
+                "session_id": "session_legacy_pending",
+                "case_id": "appendicitis_001",
+                "student_id": "student_legacy_pending",
+            },
+            {
+                "session_id": "session_legacy_acknowledged",
+                "case_id": "appendicitis_002",
+                "student_id": "student_legacy_acknowledged",
+            },
+        ],
+    )
+
+    first_pending = ReportStore(database_path).list_pending_outbox()
+    second_pending = ReportStore(database_path).list_pending_outbox()
+
+    assert len(first_pending) == 1
+    assert second_pending == first_pending
+    assert first_pending[0].event_key == "legacy-pending"
+    assert first_pending[0].case_id == "appendicitis_001"
+    assert first_pending[0].student_id == "student_legacy_pending"
+    assert first_pending[0].payload == {"status": "pending"}
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(report_outbox)"
+            ).fetchall()
+        }
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                event_key,
+                case_id,
+                student_id,
+                acknowledged_at
+            FROM report_outbox
+            ORDER BY id
+            """
+        ).fetchall()
+        user_version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+    assert {"case_id", "student_id"}.issubset(columns)
+    assert rows == [
+        (
+            1,
+            "legacy-pending",
+            "appendicitis_001",
+            "student_legacy_pending",
+            None,
+        ),
+        (
+            2,
+            "legacy-acknowledged",
+            "appendicitis_002",
+            "student_legacy_acknowledged",
+            "2026-01-02T00:00:00+00:00",
+        ),
+    ]
+    assert user_version == DATABASE_SCHEMA_VERSION
+
+
+def test_legacy_report_outbox_migration_rolls_back_when_identity_is_unknown(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "reports.sqlite3"
+    _create_legacy_report_outbox_database(
+        database_path,
+        reports=[
+            {
+                "session_id": "session_legacy_unknown",
+                "case_id": "appendicitis_001",
+            },
+        ],
+    )
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="legacy report outbox identity is unavailable",
+    ):
+        ReportStore(database_path).list_pending_outbox()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(report_outbox)"
+            ).fetchall()
+        }
+        rows = connection.execute(
+            "SELECT id, event_key, payload_json FROM report_outbox"
+        ).fetchall()
+
+    assert "case_id" not in columns
+    assert "student_id" not in columns
+    assert rows == [
+        (
+            1,
+            "legacy-pending",
+            json.dumps({"status": "pending"}, ensure_ascii=False),
+        )
+    ]
+
+
+def test_legacy_report_outbox_migration_rejects_unknown_columns_without_data_loss(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "reports.sqlite3"
+    _create_legacy_report_outbox_database(
+        database_path,
+        reports=[
+            {
+                "session_id": "session_legacy_future",
+                "case_id": "appendicitis_001",
+                "student_id": "student_legacy_future",
+            },
+        ],
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "ALTER TABLE report_outbox ADD COLUMN future_metadata TEXT"
+        )
+        connection.execute(
+            "UPDATE report_outbox SET future_metadata = ?",
+            ("must-survive",),
+        )
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="unsupported legacy report outbox schema",
+    ):
+        ReportStore(database_path).list_pending_outbox()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(report_outbox)"
+            ).fetchall()
+        }
+        row = connection.execute(
+            "SELECT event_key, future_metadata FROM report_outbox"
+        ).fetchone()
+
+    assert "future_metadata" in columns
+    assert row == ("legacy-pending", "must-survive")
+
+
 def test_delete_session_report_is_idempotent_atomic_and_blocks_all_late_writers(tmp_path) -> None:
     database_path = tmp_path / "reports.sqlite3"
     store = ReportStore(database_path)
@@ -558,3 +716,75 @@ def _report(
             "scope": "personal",
         },
     }
+
+
+def _create_legacy_report_outbox_database(
+    database_path: Path,
+    *,
+    reports: list[dict[str, str]],
+) -> None:
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE reports (
+                session_id TEXT PRIMARY KEY,
+                report_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE report_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                report_revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                acknowledged_at TEXT
+            )
+            """
+        )
+        for index, report in enumerate(reports, start=1):
+            session_id = report["session_id"]
+            connection.execute(
+                "INSERT INTO reports (session_id, report_json) VALUES (?, ?)",
+                (session_id, json.dumps(report, ensure_ascii=False)),
+            )
+            connection.execute(
+                """
+                INSERT INTO report_outbox (
+                    id,
+                    event_key,
+                    session_id,
+                    event_type,
+                    payload_json,
+                    report_revision,
+                    created_at,
+                    updated_at,
+                    acknowledged_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    index,
+                    (
+                        "legacy-pending"
+                        if index == 1
+                        else "legacy-acknowledged"
+                    ),
+                    session_id,
+                    "report_generated",
+                    json.dumps({"status": "pending"}, ensure_ascii=False),
+                    index,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                    (
+                        None
+                        if index == 1
+                        else "2026-01-02T00:00:00+00:00"
+                    ),
+                ),
+            )
