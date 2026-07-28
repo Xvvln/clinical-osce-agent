@@ -6,6 +6,8 @@ from typing import Any
 from app.services.rag_knowledge_store import RagKnowledgeStore, rag_knowledge_store
 from app.services.retrieval_index import search_retrieval_documents
 
+MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS = 1_200
+
 
 def retrieve_agent_context(
     *,
@@ -80,11 +82,15 @@ def _agent_can_read_knowledge_item(
 
 def _serialize_agent_knowledge_item(item: dict[str, Any], *, forbidden_terms: list[str]) -> dict[str, Any]:
     knowledge_id = str(item.get("knowledge_id", "")).strip()
+    snippet = _sanitize_knowledge_context_text(
+        str(item.get("text", "")).strip(),
+        forbidden_terms,
+    )
     return {
         "reference": f"rag_knowledge:{knowledge_id}",
         "knowledge_id": knowledge_id,
         "title": _sanitize_knowledge_context_text(str(item.get("title", "")).strip(), forbidden_terms),
-        "snippet": _sanitize_knowledge_context_text(str(item.get("text", "")).strip(), forbidden_terms),
+        "snippet": snippet[:MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS],
         "source_id": str(item.get("source_id", "")).strip(),
         "case_id": str(item.get("case_id", "")).strip(),
         "visibility": str(item.get("visibility", "")).strip(),

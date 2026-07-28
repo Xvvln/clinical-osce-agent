@@ -4,6 +4,9 @@ from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import build_osce_graph, feedback_node
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services import agent_rag_context_service as agent_rag_context_module
+from app.services.agent_rag_context_service import (
+    MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS,
+)
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import RetrievalDocument
 from app.services.turn_intent_agent import DeterministicTurnIntentAgent
@@ -2406,6 +2409,7 @@ def test_osce_graph_passive_coach_review_does_not_route_skill_or_retrieve_rag() 
 
 
 def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, monkeypatch) -> None:
+    rag_tail_sentinel = "RAG-TAIL-MUST-NOT-ENTER-PROVIDER-OR-TURN-MEMORY"
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(
         {
@@ -2417,7 +2421,11 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
             "allowed_agents": ["coach"],
             "source_id": "fareez_osce_2022",
             "title": "疼痛迁移问诊 Coach 提示",
-            "text": "训练中可以提示学生追问疼痛是否迁移，但不得说出诊断答案。",
+            "text": (
+                "训练中可以提示学生追问疼痛是否迁移，但不得说出诊断答案。"
+                * 200
+            )
+            + rag_tail_sentinel,
             "tags": ["history_taking"],
             "version": 1,
         },
@@ -2469,6 +2477,8 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
 
     assert rag_context[0]["reference"] == "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     assert rag_context[0]["visibility"] == "pre_submit_safe"
+    assert len(rag_context[0]["snippet"]) <= MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS
+    assert rag_tail_sentinel not in str(request_payload)
     assert "隐藏答案" not in str(request_payload)
     assert "急性阑尾炎" not in str(request_payload)
     assert result["agent_turn_memory"][-1]["source_references"] == [
@@ -2481,6 +2491,12 @@ def test_osce_graph_injects_pre_submit_rag_context_into_coach_hint(tmp_path, mon
         "rag_knowledge:case:appendicitis_001:coach:pain_migration_hint"
     )
     assert result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0]["visibility"] == "pre_submit_safe"
+    assert len(
+        result["agent_turn_memory"][-1]["retrieved_knowledge_context"][0][
+            "snippet"
+        ]
+    ) <= MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS
+    assert rag_tail_sentinel not in str(result["agent_turn_memory"][-1])
     rag_step = next(step for step in result["agent_turn_memory"][-1]["processing_trace"] if step["step_id"] == "rag")
     assert rag_step["metadata"]["retrieved_count"] == 1
     assert rag_step["metadata"]["knowledge_references"] == [

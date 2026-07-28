@@ -356,6 +356,7 @@ type ChatMessage = {
   readonly apiMessageIndex?: number;
   readonly finalText?: string;
   readonly isPending?: boolean;
+  readonly deliveryState?: "uncertain";
   readonly processingTimeline?: AgentProcessingTimeline;
 };
 
@@ -1745,21 +1746,57 @@ async function getRequestErrorMessage(response: Response): Promise<string> {
   return detail;
 }
 
+type ApiRequestOutcome = "rejected" | "uncertain";
+
+class ApiRequestError extends Error {
+  readonly outcome: ApiRequestOutcome;
+  readonly status: number | null;
+
+  constructor(message: string, outcome: ApiRequestOutcome, status: number | null = null) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.outcome = outcome;
+    this.status = status;
+  }
+}
+
 async function requestJson<TResponse>(path: string, init: RequestInit): Promise<TResponse> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
 
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers,
-  });
-
-  if (!response.ok) {
-    throw new Error(await getRequestErrorMessage(response));
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers,
+    });
+  } catch {
+    throw new ApiRequestError(
+      "网络连接中断，服务器处理结果暂时无法确认。",
+      "uncertain",
+    );
   }
 
-  return (await response.json()) as TResponse;
+  if (!response.ok) {
+    throw new ApiRequestError(
+      await getRequestErrorMessage(response),
+      response.status >= 500 || response.status === 408
+        ? "uncertain"
+        : "rejected",
+      response.status,
+    );
+  }
+
+  try {
+    return (await response.json()) as TResponse;
+  } catch {
+    throw new ApiRequestError(
+      "服务器已处理请求，但响应无法解析，结果暂时无法确认。",
+      "uncertain",
+      response.status,
+    );
+  }
 }
 
 async function transcribeSpeechAudio(file: File): Promise<SpeechTranscriptionResponse> {
@@ -2475,12 +2512,17 @@ function HomeContent() {
   const previousRevealedFactIdsRef = useRef<readonly string[] | null>(null);
   const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
   const clientChatMessageSequenceRef = useRef(0);
+  const trainingContextEpochRef = useRef(0);
   const speechInputMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const speechInputStreamRef = useRef<MediaStream | null>(null);
   const speechInputChunksRef = useRef<Blob[]>([]);
   const patientSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
   const patientSpeechObjectUrlRef = useRef<string | null>(null);
   const isNextStepRequired = trainingDifficultyMode !== "beginner";
+
+  useEffect(() => {
+    trainingContextEpochRef.current += 1;
+  }, [authUser?.user_id, requestedSessionId]);
 
   function createClientChatMessageId(prefix: string): string {
     clientChatMessageSequenceRef.current += 1;
@@ -2863,6 +2905,8 @@ function HomeContent() {
     if (!authUser) {
       setIsCreating(false);
       setSession(null);
+      setOptimisticHistoryMessage(null);
+      setPendingPatientMessage(null);
       setPendingCoachHintMessage(null);
       setStatusText("请先登录后再开始或恢复训练。");
       return;
@@ -2871,6 +2915,8 @@ function HomeContent() {
     if (!requestedSessionId) {
       setIsCreating(false);
       setSession(null);
+      setOptimisticHistoryMessage(null);
+      setPendingPatientMessage(null);
       setPendingCoachHintMessage(null);
       setFeedbackReport(null);
       setProcedureResults([]);
@@ -2907,6 +2953,8 @@ function HomeContent() {
     async function loadRequestedSession() {
       setIsCreating(true);
       setSession(null);
+      setOptimisticHistoryMessage(null);
+      setPendingPatientMessage(null);
       setPendingCoachHintMessage(null);
       setInputValue("");
       setDiagnosisValue("");
@@ -3309,6 +3357,9 @@ function HomeContent() {
   const isSpeechInputRecording = speechInputState === "recording";
   const isSpeechInputTranscribing = speechInputState === "transcribing";
   const isSpeechInputBusy = isSpeechInputRecording || isSpeechInputTranscribing;
+  const hasUncertainHistoryMessage = (
+    optimisticHistoryMessage?.deliveryState === "uncertain"
+  );
   const isSpeechInputButtonDisabled =
     !authUser
     || !selectedCaseId
@@ -3316,6 +3367,7 @@ function HomeContent() {
     || isCurrentSessionCompleted
     || isCreating
     || isSending
+    || hasUncertainHistoryMessage
     || isSpeechInputTranscribing;
   const speechInputButtonAriaLabel = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "正在转写语音" : "开始语音输入";
   const speechInputButtonTitle = isSpeechInputRecording ? "结束录音" : isSpeechInputTranscribing ? "正在转写语音" : "语音输入";
@@ -3590,7 +3642,7 @@ function HomeContent() {
   }
 
   async function handleLogout() {
-    if (isSubmittingAuth) {
+    if (isSubmittingAuth || isSending) {
       return;
     }
 
@@ -3620,7 +3672,7 @@ function HomeContent() {
   }
 
   async function handleStartNewSession(): Promise<void> {
-    if (isCreating) {
+    if (isCreating || isSending) {
       return;
     }
 
@@ -3686,7 +3738,12 @@ function HomeContent() {
     }
   }
 
-  async function ensureActiveSession(): Promise<OsceSession | null> {
+  async function ensureActiveSession(
+    expectedContextEpoch: number = trainingContextEpochRef.current,
+  ): Promise<OsceSession | null> {
+    if (expectedContextEpoch !== trainingContextEpochRef.current) {
+      return null;
+    }
     if (session) {
       if (!isTrainingModelConfigReady) {
         promptTrainingModelConfigRequired();
@@ -3717,12 +3774,18 @@ function HomeContent() {
 
     try {
       const nextSession = await createSession(selectedCaseId, trainingDifficultyMode);
+      if (expectedContextEpoch !== trainingContextEpochRef.current) {
+        return null;
+      }
       setSession(nextSession);
       setSelectedCaseId(nextSession.case_id);
       setTrainingDifficultyMode(nextSession.training_difficulty);
       setStatusText("已创建训练会话，可以继续训练。");
       return nextSession;
     } catch (error) {
+      if (expectedContextEpoch !== trainingContextEpochRef.current) {
+        return null;
+      }
       const message = error instanceof Error ? error.message : "创建训练会话失败。";
       if (message === "请先登录后再继续训练。") {
         setAuthUser(null);
@@ -3732,7 +3795,9 @@ function HomeContent() {
       setErrorText(message);
       return null;
     } finally {
-      setIsCreating(false);
+      if (expectedContextEpoch === trainingContextEpochRef.current) {
+        setIsCreating(false);
+      }
     }
   }
 
@@ -3833,6 +3898,12 @@ function HomeContent() {
     event.preventDefault();
     const message = inputValue.trim();
 
+    if (hasUncertainHistoryMessage) {
+      setErrorText("上一轮问诊仍待确认，请先刷新训练记录或开启新会话。");
+      setStatusText("待确认问诊未解决前不会继续发送，避免产生重复记录。");
+      return;
+    }
+
     if (!authUser || !selectedCaseId || !message || isCreating || isSending || isSpeechInputBusy) {
       return;
     }
@@ -3848,11 +3919,17 @@ function HomeContent() {
 
     setIsSending(true);
     setErrorText(null);
+    let optimisticQuestionId: string | null = null;
     let pendingPatientReplyId: string | null = null;
     let stopProcessingTimelinePolling: (() => void) | null = null;
+    let requestContextEpoch: number | null = null;
 
     try {
-      const activeSession = await ensureActiveSession();
+      requestContextEpoch = trainingContextEpochRef.current;
+      const activeSession = await ensureActiveSession(requestContextEpoch);
+      if (requestContextEpoch !== trainingContextEpochRef.current) {
+        return;
+      }
       if (!activeSession) {
         return;
       }
@@ -3861,8 +3938,7 @@ function HomeContent() {
         setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
-
-      const optimisticQuestionId = createClientChatMessageId("optimistic-student");
+      optimisticQuestionId = createClientChatMessageId("optimistic-student");
       pendingPatientReplyId = createClientChatMessageId("pending-patient");
       const patientReplyProcessingStartedAtMs = Date.now();
       setInputValue("");
@@ -3892,6 +3968,9 @@ function HomeContent() {
       const updatedSession = await pendingHistoryMessage;
       stopProcessingTimelinePolling();
       stopProcessingTimelinePolling = null;
+      if (requestContextEpoch !== trainingContextEpochRef.current) {
+        return;
+      }
       const replyText = updatedSession.reply ?? "";
       const replyMessageMetadata = getReplyMessageMetadata(updatedSession, replyText);
       const replyStatusLabel = replyMessageMetadata.speaker === "coach" ? replyMessageMetadata.label : "标准化病人回复";
@@ -3921,14 +4000,50 @@ function HomeContent() {
       setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
       setStatusText(`正在显示${replyStatusLabel}...`);
       await animatePendingPatientReply(pendingPatientReplyId, updatedSession.reply ?? "");
+      if (requestContextEpoch !== trainingContextEpochRef.current) {
+        return;
+      }
       setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
     } catch (error) {
       stopProcessingTimelinePolling?.();
+      if (
+        requestContextEpoch !== null
+        && requestContextEpoch !== trainingContextEpochRef.current
+      ) {
+        return;
+      }
+      const errorMessage = error instanceof Error ? error.message : "发送问诊失败。";
+      const wasDefinitivelyRejected = (
+        error instanceof ApiRequestError
+        && error.outcome === "rejected"
+      );
       if (pendingPatientReplyId) {
         setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
       }
-      setErrorText(error instanceof Error ? error.message : "发送问诊失败。");
-      setStatusText("问诊处理失败，请查看错误详情。");
+      if (wasDefinitivelyRejected && optimisticQuestionId) {
+        setOptimisticHistoryMessage(
+          (currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage,
+        );
+      }
+      if (wasDefinitivelyRejected) {
+        setInputValue((currentValue) => currentValue || message);
+        if (error instanceof ApiRequestError && error.status === 401) {
+          setAuthUser(null);
+          setIsAuthDialogOpen(true);
+        }
+        setErrorText(errorMessage);
+        setStatusText("问诊未保存，请查看错误详情后重试。");
+      } else {
+        if (optimisticQuestionId) {
+          setOptimisticHistoryMessage(
+            (currentMessage) => currentMessage?.id === optimisticQuestionId
+              ? { ...currentMessage, deliveryState: "uncertain" }
+              : currentMessage,
+          );
+        }
+        setErrorText(`${errorMessage} 当前问题已标记为“待确认”，请先刷新训练记录，避免重复发送。`);
+        setStatusText("本轮问诊结果暂时无法确认，当前问题已保留为待确认记录。");
+      }
     } finally {
       stopProcessingTimelinePolling?.();
       setIsSending(false);
@@ -4392,7 +4507,7 @@ function HomeContent() {
               </Link>
               <button
                 className="flex w-fit items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-center text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating}
+                disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCreating || isSending}
                 onClick={() => void handleStartNewSession()}
                 type="button"
               >
@@ -4451,7 +4566,7 @@ function HomeContent() {
                   </Link>
                   <button
                     className="mt-2 inline-flex w-full items-center justify-center rounded-lg border border-[#B42318]/30 bg-[#FEF3F2] text-[#B42318] px-3 py-2 text-sm font-medium whitespace-nowrap transition hover:bg-[#FEE4E2] disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={isSubmittingAuth}
+                    disabled={isSubmittingAuth || isSending}
                     onClick={handleLogout}
                     type="button"
                   >
@@ -4491,7 +4606,11 @@ function HomeContent() {
                   </h2>
                 </div>
                 {errorText ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
+                  <div
+                    aria-live="assertive"
+                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-600"
+                    role="alert"
+                  >
                     {errorText}
                   </div>
                 ) : null}
@@ -4533,6 +4652,11 @@ function HomeContent() {
                             </span>
                           ) : null}
                           {message.label}
+                          {message.deliveryState === "uncertain" ? (
+                            <span className="ml-2 inline-flex items-center rounded-full border border-white/35 bg-white/10 px-2 py-0.5 text-[11px] font-medium text-white">
+                              待确认
+                            </span>
+                          ) : null}
                           {message.emotion ? (
                             <span className="ml-2 inline-flex items-center rounded-full border border-[#D8C3AF] bg-background px-2 py-0.5 text-[11px] font-medium text-[#8A5A00]">
                               情绪：{message.emotion}
@@ -4906,7 +5030,7 @@ function HomeContent() {
                 <div className="flex items-center gap-2">
                   <input
                     className="h-10 min-w-0 flex-1 rounded-full border-0 bg-transparent px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:ring-0"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSending || isSpeechInputBusy}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || isSending || hasUncertainHistoryMessage || isSpeechInputBusy}
                     id="history-question"
                     ref={questionInputRef}
                     autoComplete="off"
@@ -4933,10 +5057,10 @@ function HomeContent() {
                   </button>
                   <button
                     className="rounded-full border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || !inputValue.trim() || isSending || isSpeechInputBusy}
+                    disabled={!authUser || !selectedCaseId || !isTrainingModelConfigReady || isCurrentSessionCompleted || isCreating || !inputValue.trim() || isSending || hasUncertainHistoryMessage || isSpeechInputBusy}
                     type="submit"
                   >
-                    {isSending ? "发送中" : "发送问诊"}
+                    {isSending ? "发送中" : hasUncertainHistoryMessage ? "等待确认" : "发送问诊"}
                   </button>
                 </div>
                 {speechStatusText ? (

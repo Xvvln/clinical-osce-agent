@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.case import Case
+from app.services.model_context_window import bounded_provider_messages
+
+MAX_COACH_HYPOTHESES = 5
+MAX_COACH_HYPOTHESIS_CHARS = 1_280
 
 
 def build_coach_hint_context(
@@ -16,6 +20,7 @@ def build_coach_hint_context(
     """Build a compact, safe planning context for Coach hints."""
 
     clinical_reasoning_state = _dict(pedagogy_state.get("clinical_reasoning_state"))
+    student_hypotheses = _string_list(state.get("student_hypotheses", []))
     return {
         "session": {
             "session_id": str(state.get("session_id") or ""),
@@ -28,7 +33,8 @@ def build_coach_hint_context(
         "conversation": {
             "recent_turns": _recent_turns(state.get("messages", [])),
             "asked_questions_count": len(_string_list(state.get("asked_questions", []))),
-            "student_hypotheses": _string_list(state.get("student_hypotheses", [])),
+            "student_hypotheses": _recent_hypotheses(student_hypotheses),
+            "student_hypotheses_total_count": len(student_hypotheses),
         },
         "evidence_coverage": _evidence_coverage(state, case, clinical_reasoning_state),
         "next_step": {
@@ -218,17 +224,21 @@ def _compact_training_goals(value: Any, limit: int = 3) -> list[dict[str, Any]]:
 
 
 def _recent_turns(messages: Any, limit: int = 8) -> list[dict[str, str]]:
-    if not isinstance(messages, list):
-        return []
-    normalized: list[dict[str, str]] = []
-    for message in messages[-limit:]:
-        if not isinstance(message, dict):
+    return bounded_provider_messages(messages, max_messages=limit)
+
+
+def _recent_hypotheses(hypotheses: list[str]) -> list[str]:
+    remaining_chars = MAX_COACH_HYPOTHESIS_CHARS
+    newest_first: list[str] = []
+    for hypothesis in reversed(hypotheses[-MAX_COACH_HYPOTHESES:]):
+        if remaining_chars <= 0:
+            break
+        bounded = hypothesis[:remaining_chars]
+        if not bounded:
             continue
-        role = str(message.get("role") or "").strip()
-        content = str(message.get("content") or "").strip()
-        if role and content:
-            normalized.append({"role": role, "content": content})
-    return normalized
+        newest_first.append(bounded)
+        remaining_chars -= len(bounded)
+    return list(reversed(newest_first))
 
 
 def _training_difficulty(state: dict[str, Any]) -> str:

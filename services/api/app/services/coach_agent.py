@@ -16,6 +16,7 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_context_window import bounded_provider_messages
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -100,7 +101,7 @@ def _coach_provider_payload(request: CoachRequest) -> dict[str, Any]:
         "training_difficulty": request.training_difficulty,
         "prompt_kind": request.prompt_kind,
         "base_hint": request.base_hint,
-        "prior_messages": request.prior_messages,
+        "prior_messages": bounded_provider_messages(request.prior_messages),
         "pedagogy_state": request.pedagogy_state,
         "clinical_reasoning_state": request.clinical_reasoning_state,
         "skill_context": request.skill_context,
@@ -108,7 +109,31 @@ def _coach_provider_payload(request: CoachRequest) -> dict[str, Any]:
         "hint_context": request.hint_context,
     }
     redaction_terms = _coach_redaction_terms(request)
-    return _sanitize_coach_provider_value(payload, redaction_terms)
+    sanitized_payload = _sanitize_coach_provider_value(payload, redaction_terms)
+    if not isinstance(sanitized_payload, dict):
+        return {}
+    return _bound_and_deduplicate_coach_history(sanitized_payload)
+
+
+def _bound_and_deduplicate_coach_history(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    payload["prior_messages"] = bounded_provider_messages(
+        payload.get("prior_messages"),
+    )
+    hint_context = payload.get("hint_context")
+    if not isinstance(hint_context, dict):
+        return payload
+    conversation = hint_context.get("conversation")
+    if not isinstance(conversation, dict):
+        return payload
+    recent_turns = bounded_provider_messages(
+        conversation.get("recent_turns"),
+    )
+    conversation["recent_turns"] = recent_turns
+    if recent_turns:
+        payload.pop("prior_messages", None)
+    return payload
 
 
 def _coach_redaction_terms(request: CoachRequest) -> tuple[str, ...]:

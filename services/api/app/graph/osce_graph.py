@@ -41,6 +41,7 @@ from app.services.patient_affect_state_service import (
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
+from app.services.session_resource_policy import MAX_HYPOTHESIS_RECORDS_PER_SESSION
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
 from app.services.turn_intent_agent import (
     TurnIntentRequest,
@@ -611,10 +612,13 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
 def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
     diagnosis = state.get("submitted_diagnosis", "")
     reasoning = state.get("submitted_reasoning", "")
+    student_hypotheses = list(state.get("student_hypotheses", []))
+    if len(student_hypotheses) < MAX_HYPOTHESIS_RECORDS_PER_SESSION:
+        student_hypotheses.append(diagnosis)
     return {
         "stage": "diagnosis_submission",
         "final_submission": {"diagnosis": diagnosis, "reasoning": reasoning},
-        "student_hypotheses": [*state.get("student_hypotheses", []), diagnosis],
+        "student_hypotheses": student_hypotheses,
         "action_timeline": _append_action_timeline_events(
             state,
             action_type="diagnosis_submitted",

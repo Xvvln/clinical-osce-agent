@@ -15,6 +15,7 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_context_window import bounded_provider_messages
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
@@ -116,7 +117,7 @@ def _turn_intent_provider_payload(request: TurnIntentRequest) -> dict[str, Any]:
         "student_message": request.student_message,
         "keyword_intent": request.keyword_intent,
         "keyword_intents": list(request.keyword_intents),
-        "prior_messages": list(request.prior_messages),
+        "prior_messages": bounded_provider_messages(request.prior_messages),
         "allowed_intents": list(request.allowed_intents),
     }
 

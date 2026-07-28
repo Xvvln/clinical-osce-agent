@@ -118,6 +118,7 @@ from app.services.runtime_model_config_store import (
     RuntimeModelConfig,
     runtime_model_config_store,
 )
+from app.services.session_resource_policy import SessionResourceLimitError
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 from app.services.anthropic_chat_client import AnthropicSettings
 from app.services.startup_config_service import build_startup_config_self_check
@@ -444,6 +445,27 @@ async def handle_session_closed_error(_: Request, exc: SessionClosedError) -> JS
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(SessionResourceLimitError)
+async def handle_session_resource_limit_error(
+    _: Request,
+    exc: SessionResourceLimitError,
+) -> JSONResponse:
+    details = {
+        "message": "本次训练的问诊轮次已达到上限，请提交诊断或开始新的训练。",
+        "hint": "本次训练的过程提示次数已达到上限，请结合现有线索继续训练。",
+        "hypothesis": "本次训练记录的诊断假设已达到上限，请整理现有假设后提交诊断。",
+    }
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": details.get(
+                exc.resource_kind,
+                "本次训练的可用操作次数已达到上限。",
+            )
+        },
     )
 
 
@@ -2943,7 +2965,11 @@ def send_message(
             session = osce_session_service.handle_message(session_id, request.message)
         except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
             raise _model_provider_gateway_error(exc) from exc
-        except (SessionClosedError, SessionPersistenceError):
+        except (
+            SessionClosedError,
+            SessionPersistenceError,
+            SessionResourceLimitError,
+        ):
             raise
         except Exception as exc:
             raise _training_flow_runtime_error(exc) from exc

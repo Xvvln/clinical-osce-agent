@@ -18,6 +18,10 @@ from app.services.google_genai_http_options import (
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
 )
+from app.services.model_context_window import (
+    PROVIDER_DIALOGUE_ROLES,
+    bounded_provider_messages,
+)
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
 from app.services.patient_emotion import infer_patient_emotion, normalize_patient_emotion
 from app.services.runtime_model_config_store import runtime_model_config_store
@@ -340,6 +344,10 @@ def _build_patient_provider_payload(
 
     dialogue_context = request.dialogue_context if isinstance(request.dialogue_context, dict) else {}
     deterministic_hints = request.deterministic_hints if isinstance(request.deterministic_hints, dict) else {}
+    recent_dialogue_messages = _patient_provider_messages(
+        dialogue_context.get("recent_messages") or request.prior_messages,
+        protected_terms,
+    )
     return (
         {
             "case_title": _redact_patient_provider_text(request.case_title, protected_terms),
@@ -352,12 +360,8 @@ def _build_patient_provider_payload(
             ],
             "canonical_answer": _redact_patient_provider_text(request.canonical_answer, protected_terms),
             "answerable_fact_candidates": answerable_fact_candidates,
-            "prior_messages": _patient_provider_messages(request.prior_messages, protected_terms),
             "dialogue_context": {
-                "recent_messages": _patient_provider_messages(
-                    dialogue_context.get("recent_messages", []),
-                    protected_terms,
-                ),
+                "recent_messages": recent_dialogue_messages,
                 "asked_questions": [
                     _redact_patient_provider_text(str(question), protected_terms)
                     for question in dialogue_context.get("asked_questions", [])
@@ -400,21 +404,23 @@ def _build_patient_provider_payload(
 
 
 def _patient_provider_messages(messages: Any, protected_terms: list[str]) -> list[dict[str, str]]:
-    if not isinstance(messages, list):
-        return []
-    return [
+    redacted_messages = [
         {
-            "role": str(message.get("role") or ""),
+            "role": message["role"],
             "content": _redact_patient_provider_text(
-                str(message.get("content") or ""),
+                message["content"],
                 protected_terms,
             ),
         }
-        for message in messages
-        if isinstance(message, dict)
-        and str(message.get("role") or "") in {"student", "patient", "coach"}
-        and str(message.get("content") or "").strip()
+        for message in bounded_provider_messages(
+            messages,
+            allowed_roles=PROVIDER_DIALOGUE_ROLES,
+        )
     ]
+    return bounded_provider_messages(
+        redacted_messages,
+        allowed_roles=PROVIDER_DIALOGUE_ROLES,
+    )
 
 
 def _safe_patient_provider_value(value: Any, protected_terms: list[str]) -> Any:

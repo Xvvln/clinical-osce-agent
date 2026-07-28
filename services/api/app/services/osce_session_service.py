@@ -61,6 +61,12 @@ from app.services.training_skill_store import (
 )
 from app.services.rule_evaluator import LlmRubricScorer
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
+from app.services.session_resource_policy import (
+    MAX_HINT_REQUESTS_PER_SESSION,
+    MAX_HYPOTHESIS_RECORDS_PER_SESSION,
+    MAX_STUDENT_TURNS_PER_SESSION,
+    SessionResourceLimitError,
+)
 from app.services.vertex_gemini_scorer import create_default_vertex_gemini_scorer
 from app.validators.case_validator import validate_case
 
@@ -192,6 +198,9 @@ class OsceSession:
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
     procedure_simulation_audit_items: list[dict[str, Any]] = field(default_factory=list)
+    student_turn_count: int = 0
+    hint_request_count: int = 0
+    hypothesis_record_count: int = 0
 
 
 @dataclass
@@ -223,6 +232,71 @@ def _require_open_session(session: OsceSession) -> None:
         or session.stage in {"diagnosis_submission", "feedback"}
     ):
         raise SessionClosedError("训练已结束，请查看报告。")
+
+
+def _effective_student_turn_count(session: OsceSession) -> int:
+    message_count = sum(
+        isinstance(message, dict) and message.get("role") == "student"
+        for message in session.messages
+    )
+    memory_count = sum(
+        _is_primary_student_turn_memory(turn)
+        for turn in session.agent_turn_memory
+    )
+    return max(
+        max(0, session.student_turn_count),
+        message_count,
+        memory_count,
+    )
+
+
+def _is_primary_student_turn_memory(turn: Any) -> bool:
+    if not isinstance(turn, dict):
+        return False
+    student_message = str(turn.get("student_message") or "").strip()
+    turn_policy = str(turn.get("turn_policy") or "")
+    if not student_message or student_message == "请求提示":
+        return False
+    if turn_policy == "intent_short_circuit_hint" or turn_policy.startswith(
+        "passive_review_"
+    ):
+        return False
+    return not _is_explicit_hint_turn(turn)
+
+
+def _is_explicit_hint_turn(turn: Any) -> bool:
+    if not isinstance(turn, dict):
+        return False
+    current_intents = turn.get("current_intents")
+    if (
+        isinstance(current_intents, list)
+        and "socratic_hint" in current_intents
+    ):
+        return True
+    if str(turn.get("current_intent") or "") == "socratic_hint":
+        return True
+    return (
+        str(turn.get("student_message") or "").strip() == "请求提示"
+        and str(turn.get("turn_policy") or "").startswith("teaching_hint")
+    )
+
+
+def _effective_hint_request_count(session: OsceSession) -> int:
+    memory_count = sum(
+        _is_explicit_hint_turn(turn)
+        for turn in session.agent_turn_memory
+    )
+    return max(
+        max(0, session.hint_request_count),
+        memory_count,
+    )
+
+
+def _effective_hypothesis_record_count(session: OsceSession) -> int:
+    return max(
+        max(0, session.hypothesis_record_count),
+        len(session.student_hypotheses),
+    )
 
 
 class OsceSessionService:
@@ -492,12 +566,26 @@ class OsceSessionService:
         if session is None:
             return None
         _require_open_session(session)
+        student_turn_count = max(
+            _effective_student_turn_count(session),
+            self.training_event_store.count_session_events(
+                session_id,
+                event_types=[
+                    "history_message",
+                    "safety_boundary_triggered",
+                    "answer_request_redirected",
+                ],
+            ),
+        )
+        if student_turn_count >= MAX_STUDENT_TURNS_PER_SESSION:
+            raise SessionResourceLimitError("message")
+        working_session = deepcopy(session)
         self.begin_message_processing_status(session_id)
         try:
-            self._refresh_active_skill_context(session)
+            self._refresh_active_skill_context(working_session)
             graph_state = self.osce_graph.invoke(
                 _graph_state_from_session(
-                    session,
+                    working_session,
                     message,
                     processing_progress_callback=lambda event: self.update_message_processing_status(
                         session_id,
@@ -507,10 +595,11 @@ class OsceSessionService:
                     ),
                 )
             )
-            _apply_graph_state(session, graph_state)
-            self._refresh_active_skill_context(session)
-            agent_update = _refresh_agent_state(session)
-            self._save_session(session)
+            _apply_graph_state(working_session, graph_state)
+            working_session.student_turn_count = student_turn_count + 1
+            self._refresh_active_skill_context(working_session)
+            agent_update = _refresh_agent_state(working_session)
+            self._commit_working_session(session, working_session)
             self.complete_message_processing_status(session_id)
         except SessionPersistenceError:
             self.complete_message_processing_status(session_id, errored=True)
@@ -972,10 +1061,21 @@ class OsceSessionService:
         if session is None:
             return None
         _require_open_session(session)
-        session.student_hypotheses.append(hypothesis)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        hypothesis_record_count = max(
+            _effective_hypothesis_record_count(session),
+            self.training_event_store.count_session_events(
+                session_id,
+                event_types=["hypothesis_recorded"],
+            ),
+        )
+        if hypothesis_record_count >= MAX_HYPOTHESIS_RECORDS_PER_SESSION:
+            raise SessionResourceLimitError("hypothesis")
+        working_session = deepcopy(session)
+        working_session.student_hypotheses.append(hypothesis)
+        working_session.hypothesis_record_count = hypothesis_record_count + 1
+        self._refresh_active_skill_context(working_session)
+        agent_update = _refresh_agent_state(working_session)
+        self._commit_working_session(session, working_session)
         self._append_event(session, "hypothesis_recorded", {"hypothesis": hypothesis})
         self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))
@@ -986,12 +1086,22 @@ class OsceSessionService:
         if session is None:
             return None
         _require_open_session(session)
+        hint_request_count = max(
+            _effective_hint_request_count(session),
+            self.training_event_store.count_session_events(
+                session_id,
+                event_types=["hint_requested"],
+            ),
+        )
+        if hint_request_count >= MAX_HINT_REQUESTS_PER_SESSION:
+            raise SessionResourceLimitError("hint")
+        working_session = deepcopy(session)
         self.begin_message_processing_status(session_id)
         try:
-            self._refresh_active_skill_context(session)
+            self._refresh_active_skill_context(working_session)
             graph_state = self.osce_graph.invoke(
                 _graph_state_from_session(
-                    session,
+                    working_session,
                     hint_requested=True,
                     processing_progress_callback=lambda event: self.update_message_processing_status(
                         session_id,
@@ -1001,10 +1111,11 @@ class OsceSessionService:
                     ),
                 )
             )
-            _apply_graph_state(session, graph_state)
-            self._refresh_active_skill_context(session)
-            agent_update = _refresh_agent_state(session)
-            self._save_session(session)
+            _apply_graph_state(working_session, graph_state)
+            working_session.hint_request_count = hint_request_count + 1
+            self._refresh_active_skill_context(working_session)
+            agent_update = _refresh_agent_state(working_session)
+            self._commit_working_session(session, working_session)
             self.complete_message_processing_status(session_id)
         except Exception:
             self.complete_message_processing_status(session_id, errored=True)
@@ -1040,18 +1151,29 @@ class OsceSessionService:
         if session is None:
             return None
         _require_open_session(session)
-        self._refresh_active_skill_context(session)
+        existing_hypotheses = list(session.student_hypotheses)
+        working_session = deepcopy(session)
+        self._refresh_active_skill_context(working_session)
         graph_state = self.osce_graph.invoke(
             _graph_state_from_session(
-                session,
+                working_session,
                 submitted_diagnosis=diagnosis,
                 submitted_reasoning=reasoning,
             )
         )
-        _apply_graph_state(session, graph_state)
-        self._refresh_active_skill_context(session)
-        agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        _apply_graph_state(working_session, graph_state)
+        # The final diagnosis is already preserved in final_submission. Do not
+        # append it to a full history or truncate legacy sessions that already
+        # exceed the current explicit-hypothesis limit.
+        if len(existing_hypotheses) >= MAX_HYPOTHESIS_RECORDS_PER_SESSION:
+            working_session.student_hypotheses = existing_hypotheses
+        else:
+            working_session.student_hypotheses = working_session.student_hypotheses[
+                :MAX_HYPOTHESIS_RECORDS_PER_SESSION
+            ]
+        self._refresh_active_skill_context(working_session)
+        agent_update = _refresh_agent_state(working_session)
+        self._commit_working_session(session, working_session)
         self._append_event(session, "diagnosis_submitted", {"diagnosis": diagnosis, "reasoning": reasoning})
         self._append_agent_update_event(session, agent_update)
         return _serialize_session(session, load_case_node(session.case_id))

@@ -84,6 +84,32 @@ test("student inputs enforce the API business limits before submission", () => {
   assert.match(pageSource, /if \(reasoning\.length > DIAGNOSIS_REASONING_MAX_CHARS\)/);
 });
 
+test("history request failures distinguish rejection from uncertain writes", () => {
+  assert.match(pageSource, /type ApiRequestOutcome = "rejected" \| "uncertain";/);
+  assert.match(pageSource, /response\.status >= 500 \|\| response\.status === 408[\s\S]*?\? "uncertain"[\s\S]*?: "rejected"/);
+  assert.match(pageSource, /let optimisticQuestionId: string \| null = null;/);
+  assert.match(
+    pageSource,
+    /catch \(error\) \{[\s\S]*?wasDefinitivelyRejected[\s\S]*?setPendingPatientMessage\([\s\S]*?if \(wasDefinitivelyRejected && optimisticQuestionId\)[\s\S]*?setOptimisticHistoryMessage\([\s\S]*?if \(wasDefinitivelyRejected\) \{[\s\S]*?setInputValue\(\(currentValue\) => currentValue \|\| message\);/,
+  );
+  assert.match(pageSource, /error\.status === 401[\s\S]*?setAuthUser\(null\);[\s\S]*?setIsAuthDialogOpen\(true\);/);
+  assert.match(pageSource, /deliveryState: "uncertain"/);
+  assert.match(pageSource, /message\.deliveryState === "uncertain"[\s\S]*?待确认/);
+  assert.match(pageSource, /const trainingContextEpochRef = useRef\(0\);/);
+  assert.match(pageSource, /trainingContextEpochRef\.current \+= 1;[\s\S]*?\[authUser\?\.user_id, requestedSessionId\]/);
+  assert.match(pageSource, /requestContextEpoch = trainingContextEpochRef\.current;[\s\S]*?await ensureActiveSession\(requestContextEpoch\);[\s\S]*?requestContextEpoch !== trainingContextEpochRef\.current/);
+  assert.match(pageSource, /async function ensureActiveSession\([\s\S]*?expectedContextEpoch[\s\S]*?createSession\([\s\S]*?expectedContextEpoch !== trainingContextEpochRef\.current/);
+  assert.match(pageSource, /requestContextEpoch !== trainingContextEpochRef\.current/);
+  assert.match(pageSource, /hasUncertainHistoryMessage[\s\S]*?上一轮问诊仍待确认/);
+  assert.match(pageSource, /hasUncertainHistoryMessage \? "等待确认" : "发送问诊"/);
+  assert.match(pageSource, /async function handleStartNewSession[\s\S]*?if \(isCreating \|\| isSending\) \{/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCreating \|\| isSending\}/);
+  assert.match(
+    pageSource,
+    /aria-live="assertive"[\s\S]*?role="alert"[\s\S]*?\{errorText\}/,
+  );
+});
+
 test("speech input is bounded without silently truncating transcription text", () => {
   assert.match(
     pageSource,
@@ -319,7 +345,8 @@ test("home procedure result modal shows the whole returned batch", () => {
 });
 
 test("home message failure status is not limited to backend downtime", () => {
-  assert.match(pageSource, /setStatusText\("问诊处理失败，请查看错误详情。"\);/);
+  assert.match(pageSource, /setStatusText\("问诊未保存，请查看错误详情后重试。"\);/);
+  assert.match(pageSource, /setStatusText\("本轮问诊结果暂时无法确认，当前问题已保留为待确认记录。"\);/);
   assert.doesNotMatch(pageSource, /setStatusText\("问诊发送失败，请确认后端仍在运行。"\);/);
 });
 
@@ -1354,7 +1381,7 @@ test("home workspace can resume current user's persisted backend session", () =>
 test("home workspace treats completed sessions as read-only training records", () => {
   assert.match(pageSource, /const isCurrentSessionCompleted = isCompletedOsceSession\(session\);/);
   assert.match(pageSource, /if \(isCompletedOsceSession\(activeSession\)\) \{[\s\S]*?setErrorText\("训练已结束，请查看报告。"\);[\s\S]*?return;/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| isSpeechInputBusy\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| hasUncertainHistoryMessage \|\| isSpeechInputBusy\}/);
   assert.match(pageSource, /const isPhysicalExamActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
   assert.match(pageSource, /const isAuxiliaryTestActionDisabled = !authUser[\s\S]*?\|\| isCurrentSessionCompleted/);
   assert.match(pageSource, /disabled=\{isPhysicalExamActionDisabled\}/);
@@ -1388,7 +1415,7 @@ test("home workspace keeps implicit session creation and exposes explicit restar
   assert.match(pageSource, /const isTrainingModelConfigReady = Boolean\(runtimeApiConfig\?\.active\) \|\| \(!isStudentApiConfigEditable && backendConnectionStatus === "online"\);/);
   assert.match(pageSource, /function promptTrainingModelConfigRequired\(\): void \{[\s\S]*?setStatusText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setErrorText\(TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE\);[\s\S]*?setIsApiConfigHelpOpen\(true\);[\s\S]*?\}/);
   assert.match(pageSource, /async function handleStartNewSession\(\): Promise<void>/);
-  assert.match(pageSource, /async function ensureActiveSession\(\): Promise<OsceSession \| null>/);
+  assert.match(pageSource, /async function ensureActiveSession\([\s\S]*?expectedContextEpoch: number = trainingContextEpochRef\.current,[\s\S]*?\): Promise<OsceSession \| null>/);
   assert.match(pageSource, /if \(session\) \{[\s\S]*?return session;[\s\S]*?\}/);
   assert.match(pageSource, /if \(!selectedCaseId\) \{[\s\S]*?setStatusText\("请先选择病例，再开始训练。"\);[\s\S]*?return null;[\s\S]*?\}/);
   assert.match(pageSource, /if \(!isTrainingModelConfigReady\) \{[\s\S]*?promptTrainingModelConfigRequired\(\);[\s\S]*?return null;[\s\S]*?\}/);
@@ -1400,13 +1427,13 @@ test("home workspace keeps implicit session creation and exposes explicit restar
   assert.match(ensureActiveSessionSource, /const nextSession = await createSession\(selectedCaseId, trainingDifficultyMode\);/);
   assert.match(ensureActiveSessionSource, /setSession\(nextSession\);/);
   assert.match(ensureActiveSessionSource, /return nextSession;/);
-  assert.match(pageSource, /const activeSession = await ensureActiveSession\(\);/);
+  assert.match(pageSource, /const activeSession = await ensureActiveSession\(requestContextEpoch\);/);
   assert.match(pageSource, /sendHistoryMessage\(activeSession\.session_id, message\)/);
   assert.match(pageSource, /requestPhysicalExam\(activeSession\.session_id, examCode\)/);
   assert.match(pageSource, /requestAuxiliaryTest\(activeSession\.session_id, testCode\)/);
-  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| isSpeechInputBusy\}/);
+  assert.match(pageSource, /disabled=\{!authUser \|\| !selectedCaseId \|\| !isTrainingModelConfigReady \|\| isCurrentSessionCompleted \|\| isCreating \|\| isSending \|\| hasUncertainHistoryMessage \|\| isSpeechInputBusy\}/);
   assert.ok(pageSource.indexOf("if (!isTrainingModelConfigReady)") < pageSource.indexOf("setOptimisticHistoryMessage({"));
-  assert.ok(pageSource.indexOf("const activeSession = await ensureActiveSession();") < pageSource.indexOf("setOptimisticHistoryMessage({"));
+  assert.ok(pageSource.indexOf("const activeSession = await ensureActiveSession(requestContextEpoch);") < pageSource.indexOf("setOptimisticHistoryMessage({"));
 });
 
 
@@ -1810,7 +1837,7 @@ test("home inquiry submit keeps repeated identical turns as separate dialogue me
   assert.match(pageSource, /readonly apiMessageIndex\?: number;/);
   assert.match(pageSource, /const clientChatMessageSequenceRef = useRef\(0\);/);
   assert.match(pageSource, /function createClientChatMessageId\(prefix: string\): string/);
-  assert.match(pageSource, /const optimisticQuestionId = createClientChatMessageId\("optimistic-student"\);/);
+  assert.match(pageSource, /optimisticQuestionId = createClientChatMessageId\("optimistic-student"\);/);
   assert.match(pageSource, /pendingPatientReplyId = createClientChatMessageId\("pending-patient"\);/);
   assert.doesNotMatch(pageSource, /const requestTimestamp = Date\.now\(\);/);
   assert.doesNotMatch(pageSource, /!hasMessageWithSpeakerAndText\(nextMessages, optimisticHistoryMessage\.speaker, optimisticHistoryMessage\.text\)/);

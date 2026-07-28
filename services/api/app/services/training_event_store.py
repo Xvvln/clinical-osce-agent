@@ -312,6 +312,35 @@ class TrainingEventStore:
             for row in rows
         ]
 
+    def count_session_events(
+        self,
+        session_id: str,
+        *,
+        event_types: list[str],
+    ) -> int:
+        normalized_event_types = list(
+            dict.fromkeys(
+                str(event_type)
+                for event_type in event_types
+                if str(event_type)
+            )
+        )
+        if not normalized_event_types:
+            return 0
+        self._initialize()
+        placeholders = ",".join("?" for _ in normalized_event_types)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM training_events
+                WHERE session_id = ?
+                  AND event_type IN ({placeholders})
+                """,
+                (session_id, *normalized_event_types),
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def list_events_for_sessions(self, session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         self._initialize()
         unique_session_ids = list(dict.fromkeys(str(session_id) for session_id in session_ids if str(session_id)))
