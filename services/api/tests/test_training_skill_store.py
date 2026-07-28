@@ -1,11 +1,15 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, wait
+from threading import Event
 
 import pytest
 
+import app.services.training_skill_store as training_skill_store_module
 from app.services.training_skill_store import (
     TrainingSkillDeletedError,
     TrainingSkillOwnershipError,
+    TrainingSkillSourceDeletedError,
     TrainingSkillStore,
 )
 
@@ -424,6 +428,192 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
     assert "治疗方案" not in generated_memory_text
     assert "用药剂量" not in generated_memory_text
     assert "手术方案" not in generated_memory_text
+
+
+def test_global_skill_source_cleanup_marks_stale_disables_and_fences_late_enable(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    store = TrainingSkillStore(database_path)
+    source_session_id = "source-session"
+    source_report_id = f"{source_session_id}_report"
+
+    def candidate(
+        candidate_id: str,
+        trigger_item_id: str,
+        source_session_ids: list[str],
+    ) -> dict[str, object]:
+        return {
+            "candidate_id": candidate_id,
+            "trigger_item_id": trigger_item_id,
+            "trigger_item_ids": [trigger_item_id],
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["case_intro"],
+            "title": candidate_id,
+            "description": "derived skill",
+            "suggested_strategy": "review evidence",
+            "scope": "global",
+            "source_session_ids": source_session_ids,
+            "source_report_ids": [
+                f"{session_id}_report" for session_id in source_session_ids
+            ],
+            "source_turn_patterns": [
+                {
+                    "pattern_id": trigger_item_id,
+                    "count": len(source_session_ids),
+                    "session_ids": source_session_ids,
+                    "source_report_ids": [
+                        f"{session_id}_report"
+                        for session_id in source_session_ids
+                    ],
+                    "source_report_count": len(source_session_ids),
+                }
+            ],
+            "source_report_count": len(source_session_ids),
+            "support_count": len(source_session_ids),
+            "review": {
+                "candidate_id": candidate_id,
+                "status": "approved",
+                "regression_passed": True,
+            },
+        }
+
+    affected_candidate = candidate(
+        "candidate-affected",
+        "affected-trigger",
+        [source_session_id, "kept-session"],
+    )
+    unrelated_candidate = candidate(
+        "candidate-unrelated",
+        "unrelated-trigger",
+        ["unrelated-session"],
+    )
+    assert store.enable_candidate(affected_candidate)
+    assert store.enable_candidate(unrelated_candidate)
+
+    cleanup = store.remove_global_source_contributions(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        source_report_id=source_report_id,
+        affected_candidate_ids=["candidate-affected"],
+    )
+
+    assert cleanup.affected_skill_ids == ("skill_affected-trigger",)
+    stale = store.get_skill("skill_affected-trigger")
+    assert stale is not None
+    assert stale["status"] == "stale_requires_review"
+    assert stale["source_session_ids"] == ["kept-session"]
+    assert stale["source_report_ids"] == ["kept-session_report"]
+    assert source_session_id not in str(stale)
+    assert source_report_id not in str(stale)
+    assert stale["support_count"] == 0
+    assert stale["title"] == "来源证据已变化的训练 Skill"
+    assert "derived skill" not in str(stale)
+    assert [
+        skill["skill_id"] for skill in store.list_enabled_skills()
+    ] == ["skill_unrelated-trigger"]
+    assert TrainingSkillStore(database_path).remove_global_source_contributions(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        source_report_id=source_report_id,
+        affected_candidate_ids=["candidate-affected"],
+    ) == cleanup
+
+    with pytest.raises(TrainingSkillSourceDeletedError):
+        store.enable_candidate(affected_candidate)
+
+    regenerated = {
+        **affected_candidate,
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": ["kept-session"],
+        "source_report_ids": ["kept-session_report"],
+        "source_turn_patterns": [],
+        "source_report_count": 1,
+        "support_count": 1,
+    }
+    assert store.enable_candidate(regenerated)
+    assert store.get_skill("skill_affected-trigger")["status"] == "enabled"
+
+    with pytest.raises(TrainingSkillOwnershipError):
+        store.remove_global_source_contributions(
+            source_session_id=source_session_id,
+            owner_student_id="student-b",
+            source_report_id=source_report_id,
+            affected_candidate_ids=["candidate-affected"],
+        )
+
+
+def test_skill_hydration_cannot_overwrite_concurrent_source_cleanup(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    store = TrainingSkillStore(database_path)
+    source_session_id = "source-race"
+    candidate = {
+        "candidate_id": "candidate-race",
+        "trigger_item_id": "race-trigger",
+        "trigger_item_ids": ["race-trigger"],
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro"],
+        "title": "race-derived title",
+        "description": "race-derived description",
+        "suggested_strategy": "race-derived strategy",
+        "scope": "global",
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": [source_session_id],
+        "source_report_ids": [f"{source_session_id}_report"],
+        "source_report_count": 1,
+        "support_count": 1,
+        "review": {
+            "candidate_id": "candidate-race",
+            "status": "approved",
+            "regression_passed": True,
+        },
+    }
+    assert store.enable_candidate(candidate)
+
+    hydrate_entered = Event()
+    allow_hydrate = Event()
+    original_hydrate = (
+        training_skill_store_module._hydrate_skill_student_metadata
+    )
+
+    def paused_hydrate(skill):
+        hydrate_entered.set()
+        assert allow_hydrate.wait(timeout=5)
+        return original_hydrate(skill)
+
+    monkeypatch.setattr(
+        training_skill_store_module,
+        "_hydrate_skill_student_metadata",
+        paused_hydrate,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        read_future = executor.submit(store.get_skill, "skill_race-trigger")
+        assert hydrate_entered.wait(timeout=5)
+        cleanup_future = executor.submit(
+            store.remove_global_source_contributions,
+            source_session_id=source_session_id,
+            owner_student_id="student-a",
+            source_report_id=f"{source_session_id}_report",
+            affected_candidate_ids=["candidate-race"],
+        )
+        _done, pending = wait([cleanup_future], timeout=0.05)
+        assert cleanup_future in pending
+        allow_hydrate.set()
+        assert read_future.result(timeout=5) is not None
+        assert cleanup_future.result(timeout=5).affected_skill_ids == (
+            "skill_race-trigger",
+        )
+
+    stale = TrainingSkillStore(database_path).get_skill(
+        "skill_race-trigger"
+    )
+    assert stale is not None
+    assert stale["status"] == "stale_requires_review"
+    assert source_session_id not in str(stale)
+    assert "race-derived" not in str(stale)
 
 
 def test_personal_skill_delete_is_exact_idempotent_and_blocks_late_enable(tmp_path) -> None:

@@ -2023,6 +2023,11 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
     assert response.status_code == 200
     assert response.json() == {
         "insights": {
+            "analysis_session_ids": [
+                "session_insight_two",
+                "session_insight_one",
+            ],
+            "analysis_report_ids": ["report_one", "report_two"],
             "session_count": 2,
             "report_count": 2,
             "frequent_missed_items": [
@@ -2031,6 +2036,11 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "item_label": "推理链覆盖感染症状、体征和影像证据",
                     "count": 2,
                     "case_ids": ["appendicitis_001", "pneumonia_001"],
+                    "session_ids": [
+                        "session_insight_one",
+                        "session_insight_two",
+                    ],
+                    "source_report_ids": ["report_one", "report_two"],
                     "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
                 },
                 {
@@ -2038,6 +2048,8 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "item_label": "ht_location",
                     "count": 1,
                     "case_ids": ["appendicitis_001"],
+                    "session_ids": ["session_insight_one"],
+                    "source_report_ids": ["report_one"],
                     "case_titles": ["右下腹痛教学病例"],
                 },
             ],
@@ -2047,12 +2059,16 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
                     "reference_label": "评分项：右下腹痛教学病例 / reasoning_core（当前 Rubric 未收录）",
                     "title": "补充临床推理证据链",
                     "count": 1,
+                    "session_ids": ["session_insight_one"],
+                    "source_report_ids": ["report_one"],
                 },
                 {
                     "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
                     "reference_label": "评分项：推理链覆盖感染症状、体征和影像证据",
                     "title": "补充临床推理证据链",
                     "count": 1,
+                    "session_ids": ["session_insight_two"],
+                    "source_report_ids": ["report_two"],
                 },
             ],
             "frequent_source_references": [

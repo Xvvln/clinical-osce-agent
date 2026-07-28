@@ -5,6 +5,9 @@ from threading import Barrier
 import pytest
 
 from app.services.training_event_store import (
+    DATABASE_SCHEMA_VERSION,
+    TrainingEventDeletedSkillSourceError,
+    TrainingEventReferenceOwnershipError,
     TrainingEventStore,
     TrainingEventStreamDeletedError,
 )
@@ -112,7 +115,147 @@ def test_training_event_store_migrates_legacy_schema_and_preserves_unkeyed_event
         ).fetchone()
         schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert tombstone_table == ("training_event_stream_tombstones",)
-    assert schema_version == 2
+    assert schema_version == DATABASE_SCHEMA_VERSION
+
+
+def test_deleted_skill_source_references_are_exact_idempotent_and_fenced(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "training_events.sqlite3"
+    store = TrainingEventStore(database_path)
+    source_session_id = "source-session"
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    affected_global_skill_id = "skill_global_affected"
+    target_payload = {
+        "skill_id": personal_skill_id,
+        "source_session_id": source_session_id,
+        "owner_student_id": "student-a",
+    }
+    store.append_event(
+        session_id="follow-up-session",
+        case_id="appendicitis_001",
+        student_id="student-a",
+        event_type="training_skill_applied",
+        payload=target_payload,
+    )
+    store.append_event(
+        session_id="follow-up-session",
+        case_id="appendicitis_001",
+        student_id="student-a",
+        event_type="training_skill_applied",
+        payload={
+            "skill_id": "skill_global_keep",
+            "source_session_id": "other-source",
+        },
+    )
+    store.append_event(
+        session_id="other-owner-follow-up",
+        case_id="appendicitis_001",
+        student_id="student-b",
+        event_type="training_skill_applied",
+        payload={"skill_id": affected_global_skill_id},
+    )
+    store.append_event(
+        session_id="follow-up-session",
+        case_id="appendicitis_001",
+        student_id="student-a",
+        event_type="agent_decision_traced",
+        payload={
+            "pedagogy_state": {
+                "skill_context_ids": [
+                    personal_skill_id,
+                    affected_global_skill_id,
+                ]
+            }
+        },
+    )
+
+    assert store.delete_skill_source_references(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        personal_skill_id=personal_skill_id,
+        affected_global_skill_ids=[affected_global_skill_id],
+    ) == 3
+    assert [
+        event["payload"]
+        for event in store.list_session_events("follow-up-session")
+    ] == [
+        {
+            "skill_id": "skill_global_keep",
+            "source_session_id": "other-source",
+        }
+    ]
+    assert store.list_session_events("other-owner-follow-up") == []
+    assert TrainingEventStore(database_path).delete_skill_source_references(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        personal_skill_id=personal_skill_id,
+        affected_global_skill_ids=[affected_global_skill_id],
+    ) == 0
+
+    with pytest.raises(TrainingEventDeletedSkillSourceError):
+        TrainingEventStore(database_path).append_event(
+            session_id="late-session",
+            case_id="appendicitis_001",
+            student_id="student-a",
+            event_type="training_skill_applied",
+            payload=target_payload,
+        )
+    with pytest.raises(TrainingEventDeletedSkillSourceError):
+        TrainingEventStore(database_path).append_event(
+            session_id="late-global-session",
+            case_id="appendicitis_001",
+            student_id="student-b",
+            event_type="training_skill_applied",
+            payload={"skill_id": affected_global_skill_id},
+        )
+    assert (
+        TrainingEventStore(database_path).append_event(
+            session_id="late-agent-session",
+            case_id="appendicitis_001",
+            student_id="student-a",
+            event_type="agent_decision_traced",
+            payload={
+                "pedagogy_state": {
+                    "skill_context_ids": [affected_global_skill_id]
+                }
+            },
+        )
+        is False
+    )
+    assert (
+        TrainingEventStore(database_path).list_session_events(
+            "late-agent-session"
+        )
+        == []
+    )
+
+
+def test_deleted_skill_source_reference_ownership_conflict_fails_closed(
+    tmp_path,
+) -> None:
+    store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    source_session_id = "source-conflict"
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    store.append_event(
+        session_id="other-owner-session",
+        case_id="appendicitis_001",
+        student_id="student-b",
+        event_type="training_skill_applied",
+        payload={
+            "skill_id": personal_skill_id,
+            "source_session_id": source_session_id,
+            "owner_student_id": "student-b",
+        },
+    )
+
+    with pytest.raises(TrainingEventReferenceOwnershipError):
+        store.delete_skill_source_references(
+            source_session_id=source_session_id,
+            owner_student_id="student-a",
+            personal_skill_id=personal_skill_id,
+        )
+    assert store.list_session_events("other-owner-session")
 
 
 def test_training_event_store_replays_keyed_event_without_duplicate_insert(tmp_path) -> None:

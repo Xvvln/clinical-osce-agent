@@ -354,6 +354,7 @@ def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if trigger_gap_types:
         payload["trigger_gap_types"] = trigger_gap_types
         payload["training_gap_labels"] = list(candidate.get("training_gap_labels", []))
+    _add_skill_source_provenance(payload, skill)
     return payload
 
 
@@ -391,7 +392,26 @@ def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if trigger_gap_types:
         payload["trigger_gap_types"] = trigger_gap_types
         payload["training_gap_labels"] = list(candidate.get("training_gap_labels", []))
+    _add_skill_source_provenance(payload, skill)
     return payload
+
+
+def _add_skill_source_provenance(
+    payload: dict[str, Any],
+    skill: Mapping[str, Any],
+) -> None:
+    schema_version = str(
+        skill.get("source_provenance_schema_version", "")
+    ).strip()
+    if schema_version != "training_candidate_sources.v1":
+        return
+    payload["source_provenance_schema_version"] = schema_version
+    payload["source_session_ids"] = _normalized_string_list(
+        skill.get("source_session_ids")
+    )
+    payload["source_report_ids"] = _normalized_string_list(
+        skill.get("source_report_ids")
+    )
 
 
 def _trigger_item_ids(skill: Mapping[str, Any]) -> list[str]:

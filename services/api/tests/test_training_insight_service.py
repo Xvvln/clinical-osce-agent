@@ -529,6 +529,11 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
     insights = TrainingInsightService(store).summarize_sessions(["session_one", "session_two"])
 
     assert insights == {
+        "analysis_session_ids": ["session_one", "session_two"],
+        "analysis_report_ids": [
+            "session_one_report",
+            "session_two_report",
+        ],
         "session_count": 2,
         "report_count": 2,
         "frequent_missed_items": [
@@ -537,6 +542,11 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "item_label": "推理链覆盖感染症状、体征和影像证据",
                 "count": 2,
                 "case_ids": ["appendicitis_001", "pneumonia_001"],
+                "session_ids": ["session_one", "session_two"],
+                "source_report_ids": [
+                    "session_one_report",
+                    "session_two_report",
+                ],
                 "case_titles": ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"],
             },
             {
@@ -544,6 +554,8 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "item_label": "ht_location",
                 "count": 1,
                 "case_ids": ["appendicitis_001"],
+                "session_ids": ["session_one"],
+                "source_report_ids": ["session_one_report"],
                 "case_titles": ["右下腹痛教学病例"],
             },
         ],
@@ -553,18 +565,24 @@ def test_training_insight_service_summarizes_frequent_missed_items_from_report_e
                 "reference_label": "评分项：右下腹痛教学病例 / reasoning_core（当前 Rubric 未收录）",
                 "title": "推理链覆盖关键证据并能自圆其说",
                 "count": 1,
+                "session_ids": ["session_one"],
+                "source_report_ids": ["session_one_report"],
             },
             {
                 "reference": "rubric:pneumonia_001_rubric.item.reasoning_core",
                 "reference_label": "评分项：推理链覆盖感染症状、体征和影像证据",
                 "title": "推理链覆盖关键证据并能自圆其说",
                 "count": 1,
+                "session_ids": ["session_two"],
+                "source_report_ids": ["session_two_report"],
             },
             {
                 "reference": "knowledge:appendicitis_001.rp_03",
                 "reference_label": "知识条目：右下腹痛教学病例",
                 "title": "急性阑尾炎诊断依据",
                 "count": 1,
+                "session_ids": ["session_one"],
+                "source_report_ids": ["session_one_report"],
             },
         ],
         "frequent_source_references": [

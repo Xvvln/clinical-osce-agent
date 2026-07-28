@@ -18,8 +18,10 @@ import yaml
 from app.graph.osce_graph import build_osce_graph, reflection_node, training_strategy_node
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
 from app.services.osce_session_store import (
+    SESSION_DELETION_CLEANUP_VERSION,
     OsceSessionStore,
     SessionDeletionRecord,
+    SessionDerivedReferenceOwnershipError,
     SessionPersistenceError,
     SessionNotFoundError,
     osce_session_store,
@@ -38,7 +40,12 @@ from app.services.report_store import (
     report_store,
 )
 from app.services.student_profile_store import StudentProfileStore, student_profile_store
-from app.services.training_event_store import TrainingEventStore, training_event_store
+from app.services.training_event_store import (
+    TrainingEventDeletedSkillSourceError,
+    TrainingEventReferenceOwnershipError,
+    TrainingEventStore,
+    training_event_store,
+)
 from app.services.training_skill_candidate_store import (
     TrainingSkillCandidateOwnershipError,
     TrainingSkillCandidateStore,
@@ -276,8 +283,28 @@ class OsceSessionService:
             evolution_candidates=_enabled_skill_prompts(enabled_skills),
             active_skill_context=active_skill_context,
         )
+        active_skill_context_snapshot = json.dumps(
+            active_skill_context,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         agent_update = _refresh_agent_state(session)
         self._create_session(session)
+        if json.dumps(
+            session.active_skill_context,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) != active_skill_context_snapshot:
+            session.pedagogy_state = {}
+            session.agent_decision_trace = []
+            agent_update = _refresh_agent_state(session)
+            self._save_session(session)
+        enabled_skills = _enabled_skills_for_case(
+            self.training_skill_store.list_enabled_skills(),
+            case,
+            session.stage,
+            student_id,
+        )
         self._append_event(session, "session_created", {"stage": session.stage, "training_difficulty": session.training_difficulty})
         self._append_agent_update_event(session, agent_update)
         for skill in enabled_skills:
@@ -293,13 +320,32 @@ class OsceSessionService:
                 skill_event_payload["scope"] = skill["scope"]
             if skill.get("source_session_id"):
                 skill_event_payload["source_session_id"] = skill["source_session_id"]
+            if skill.get("source_session_ids"):
+                skill_event_payload["source_session_ids"] = list(
+                    skill["source_session_ids"]
+                )
+            if skill.get("source_report_ids"):
+                skill_event_payload["source_report_ids"] = list(
+                    skill["source_report_ids"]
+                )
+            if skill.get("source_provenance_schema_version"):
+                skill_event_payload["source_provenance_schema_version"] = str(
+                    skill["source_provenance_schema_version"]
+                )
             if skill.get("owner_student_id"):
                 skill_event_payload["owner_student_id"] = skill["owner_student_id"]
-            self._append_event(
-                session,
-                "training_skill_applied",
-                skill_event_payload,
-            )
+            try:
+                self._append_event(
+                    session,
+                    "training_skill_applied",
+                    skill_event_payload,
+                )
+            except TrainingEventDeletedSkillSourceError:
+                continue
+        latest_session = self._get_session(session.session_id)
+        if latest_session is None:
+            raise SessionNotFoundError(session.session_id)
+        session = latest_session
         return _serialize_session(session, case)
 
     @_serialize_session_operation
@@ -1144,6 +1190,21 @@ class OsceSessionService:
                     session_id=session_id,
                     student_id=student_id,
                 )
+                candidate_id = f"personal_skill_candidate_{session_id}"
+                skill_id = f"skill_personal_{session_id}"
+                source_report_id = f"{session_id}_report"
+                self.session_store.validate_skill_source_references(
+                    source_session_id=session_id,
+                    owner_user_id=student_id,
+                    personal_skill_id=skill_id,
+                    personal_candidate_id=candidate_id,
+                    source_report_id=source_report_id,
+                )
+                self.training_event_store.validate_skill_source_references(
+                    source_session_id=session_id,
+                    owner_student_id=student_id,
+                    personal_skill_id=skill_id,
+                )
                 deletion = self.session_store.begin_session_deletion(
                     session_id,
                     expected_user_id=student_id,
@@ -1153,7 +1214,11 @@ class OsceSessionService:
 
             assert student_id is not None
             deletion_started = True
-            if deletion.cleanup_status == "completed":
+            if (
+                deletion.cleanup_status == "completed"
+                and deletion.cleanup_version
+                >= SESSION_DELETION_CLEANUP_VERSION
+            ):
                 return True
 
             self._validate_personal_artifact_ownership(
@@ -1162,7 +1227,58 @@ class OsceSessionService:
             )
             candidate_id = f"personal_skill_candidate_{session_id}"
             skill_id = f"skill_personal_{session_id}"
+            source_report_id = f"{session_id}_report"
+            self.session_store.validate_skill_source_references(
+                source_session_id=session_id,
+                owner_user_id=student_id,
+                personal_skill_id=skill_id,
+                personal_candidate_id=candidate_id,
+                source_report_id=source_report_id,
+            )
+            self.training_event_store.validate_skill_source_references(
+                source_session_id=session_id,
+                owner_student_id=student_id,
+                personal_skill_id=skill_id,
+            )
             try:
+                candidate_cleanup = (
+                    self.training_skill_candidate_store.remove_global_source_contributions(
+                        source_session_id=session_id,
+                        owner_student_id=student_id,
+                        source_report_id=source_report_id,
+                    )
+                )
+                skill_cleanup = (
+                    self.training_skill_store.remove_global_source_contributions(
+                        source_session_id=session_id,
+                        owner_student_id=student_id,
+                        source_report_id=source_report_id,
+                        affected_candidate_ids=list(
+                            candidate_cleanup.affected_candidate_ids
+                        ),
+                    )
+                )
+                affected_global_skill_ids = list(
+                    skill_cleanup.affected_skill_ids
+                )
+                affected_session_ids = (
+                    self.session_store.delete_skill_source_references(
+                        source_session_id=session_id,
+                        owner_user_id=student_id,
+                        personal_skill_id=skill_id,
+                        personal_candidate_id=candidate_id,
+                        source_report_id=source_report_id,
+                        affected_global_skill_ids=affected_global_skill_ids,
+                    )
+                )
+                for affected_session_id in affected_session_ids:
+                    self._sessions.pop(affected_session_id, None)
+                self.training_event_store.delete_skill_source_references(
+                    source_session_id=session_id,
+                    owner_student_id=student_id,
+                    personal_skill_id=skill_id,
+                    affected_global_skill_ids=affected_global_skill_ids,
+                )
                 self.training_event_store.delete_event_streams(
                     [session_id, candidate_id],
                 )
@@ -1178,7 +1294,12 @@ class OsceSessionService:
                     owner_student_id=student_id,
                     source_session_id=session_id,
                 )
-            except (TrainingSkillOwnershipError, TrainingSkillCandidateOwnershipError) as exc:
+            except (
+                SessionDerivedReferenceOwnershipError,
+                TrainingEventReferenceOwnershipError,
+                TrainingSkillOwnershipError,
+                TrainingSkillCandidateOwnershipError,
+            ) as exc:
                 raise SessionDeletionConflictError(
                     "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
                 ) from exc
@@ -1195,7 +1316,12 @@ class OsceSessionService:
                 # snapshot can be rebuilt later without weakening deletion.
                 pass
             return True
-        except (TrainingSkillOwnershipError, TrainingSkillCandidateOwnershipError) as exc:
+        except (
+            SessionDerivedReferenceOwnershipError,
+            TrainingEventReferenceOwnershipError,
+            TrainingSkillOwnershipError,
+            TrainingSkillCandidateOwnershipError,
+        ) as exc:
             raise SessionDeletionConflictError(
                 "会话关联的个人训练数据存在归属冲突，删除已安全中止。"
             ) from exc
@@ -1433,10 +1559,18 @@ class OsceSessionService:
 
     def _create_session(self, session: OsceSession) -> None:
         revision = self.session_store.create_session(session)
+        stored_session = self.session_store.get_session(session.session_id)
+        if stored_session is None:
+            raise SessionNotFoundError(session.session_id)
+        _refresh_session_in_place(
+            session,
+            OsceSession(**stored_session.payload),
+        )
         self._sessions[session.session_id] = _CachedSession(
             session=session,
-            revision=revision,
+            revision=stored_session.revision,
         )
+        assert stored_session.revision == revision
 
     def _save_session(self, session: OsceSession) -> None:
         cached_session = self._sessions.get(session.session_id)
@@ -1444,10 +1578,18 @@ class OsceSessionService:
             self._sessions.pop(session.session_id, None)
             raise SessionNotFoundError(session.session_id)
         try:
-            cached_session.revision = self.session_store.update_session(
+            revision = self.session_store.update_session(
                 session,
                 expected_revision=cached_session.revision,
             )
+            stored_session = self.session_store.get_session(session.session_id)
+            if stored_session is None or stored_session.revision != revision:
+                raise SessionNotFoundError(session.session_id)
+            _refresh_session_in_place(
+                session,
+                OsceSession(**stored_session.payload),
+            )
+            cached_session.revision = revision
         except SessionPersistenceError:
             self._sessions.pop(session.session_id, None)
             raise

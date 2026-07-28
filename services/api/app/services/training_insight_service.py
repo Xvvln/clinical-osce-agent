@@ -49,8 +49,12 @@ class TrainingInsightService:
     def summarize_sessions(self, session_ids: list[str]) -> dict[str, Any]:
         missed_item_counts: Counter[str] = Counter()
         missed_item_case_ids: dict[str, set[str]] = defaultdict(set)
+        missed_item_session_ids: dict[str, set[str]] = defaultdict(set)
+        missed_item_report_ids: dict[str, set[str]] = defaultdict(set)
         recommendation_counts: Counter[str] = Counter()
         recommendation_titles: dict[str, str] = {}
+        recommendation_session_ids: dict[str, set[str]] = defaultdict(set)
+        recommendation_report_ids: dict[str, set[str]] = defaultdict(set)
         source_reference_counts: Counter[str] = Counter()
         source_reference_case_ids: dict[str, set[str]] = defaultdict(set)
         source_reference_types: dict[str, str] = {}
@@ -65,6 +69,7 @@ class TrainingInsightService:
         turn_pattern_source_report_ids: dict[str, set[str]] = defaultdict(set)
         humanistic_reports: list[dict[str, Any]] = []
         report_count = 0
+        analysis_report_ids: set[str] = set()
 
         normalized_session_ids = unique_session_ids(session_ids)
         events_by_session = normalize_report_events_by_session(
@@ -79,6 +84,7 @@ class TrainingInsightService:
                 if is_report_snapshot_event(event)
                 and report_snapshot_payload(event).get("report_id")
             ]
+            analysis_report_ids.update(session_report_ids)
             history_fact_disclosure_count = 0
             physical_exam_request_count = 0
             for event in events:
@@ -107,17 +113,24 @@ class TrainingInsightService:
                 report_count += 1
                 payload = report_snapshot_payload(event)
                 case_id = event["case_id"]
+                report_id = str(payload.get("report_id") or "")
                 if _has_humanistic_payload(payload):
                     humanistic_reports.append(payload)
                 for item_id in payload.get("missed_items", []):
                     missed_item_counts[item_id] += 1
                     missed_item_case_ids[item_id].add(case_id)
+                    missed_item_session_ids[item_id].add(session_id)
+                    if report_id:
+                        missed_item_report_ids[item_id].add(report_id)
                 for recommendation in payload.get("knowledge_recommendations", []):
                     reference = recommendation["reference"]
                     if reference.startswith("case:"):
                         continue
                     recommendation_counts[reference] += 1
                     recommendation_titles[reference] = recommendation["title"]
+                    recommendation_session_ids[reference].add(session_id)
+                    if report_id:
+                        recommendation_report_ids[reference].add(report_id)
                 for source_reference_item in payload.get("source_reference_items", []):
                     reference = source_reference_item["reference"]
                     source_reference_counts[reference] += 1
@@ -127,6 +140,8 @@ class TrainingInsightService:
                     source_reference_metadata[reference] = source_reference_item.get("metadata", {})
 
         return {
+            "analysis_session_ids": normalized_session_ids,
+            "analysis_report_ids": sorted(analysis_report_ids),
             "session_count": len(normalized_session_ids),
             "report_count": report_count,
             "frequent_missed_items": [
@@ -135,6 +150,12 @@ class TrainingInsightService:
                         "item_id": item_id,
                         "count": count,
                         "case_ids": sorted(missed_item_case_ids[item_id]),
+                        "session_ids": sorted(
+                            missed_item_session_ids[item_id]
+                        ),
+                        "source_report_ids": sorted(
+                            missed_item_report_ids[item_id]
+                        ),
                     }
                 )
                 for item_id, count in sorted(missed_item_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -145,6 +166,12 @@ class TrainingInsightService:
                         "reference": reference,
                         "title": recommendation_titles[reference],
                         "count": count,
+                        "session_ids": sorted(
+                            recommendation_session_ids[reference]
+                        ),
+                        "source_report_ids": sorted(
+                            recommendation_report_ids[reference]
+                        ),
                     }
                 )
                 for reference, count in sorted(

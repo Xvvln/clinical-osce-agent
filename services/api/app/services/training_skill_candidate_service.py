@@ -34,6 +34,8 @@ class TrainingSkillCandidateMissedItem:
     item_id: str
     count: int
     case_ids: list[str]
+    session_ids: list[str] = field(default_factory=list)
+    source_report_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ class TrainingSkillCandidateContext:
     case_ids: list[str]
     source_report_count: int
     related_recommendations: list[str]
+    source_session_ids: list[str] = field(default_factory=list)
+    source_report_ids: list[str] = field(default_factory=list)
     turn_patterns: list[TrainingSkillCandidateTurnPattern] = field(default_factory=list)
     retrieved_knowledge_context: list[dict[str, Any]] = field(default_factory=list)
     teacher_analysis_context: dict[str, Any] = field(default_factory=dict)
@@ -292,11 +296,41 @@ class TrainingSkillCandidateService:
 
     def propose_candidates(self, insights: dict[str, Any], min_count: int = 2) -> list[dict[str, Any]]:
         source_report_count = int(insights.get("report_count", 0))
+        analysis_session_ids = _normalized_source_ids(
+            insights.get("analysis_session_ids")
+        )
+        analysis_report_ids = _normalized_source_ids(
+            insights.get("analysis_report_ids")
+        )
         recurring_missed_items = _recurring_missed_items(insights, min_count)
         related_recommendations = [
             recommendation["reference"]
             for recommendation in insights.get("frequent_learning_recommendations", [])
         ]
+        related_source_session_ids = sorted(
+            {
+                session_id
+                for recommendation in insights.get(
+                    "frequent_learning_recommendations",
+                    [],
+                )
+                for session_id in _normalized_source_ids(
+                    recommendation.get("session_ids")
+                )
+            }
+        )
+        related_source_report_ids = sorted(
+            {
+                report_id
+                for recommendation in insights.get(
+                    "frequent_learning_recommendations",
+                    [],
+                )
+                for report_id in _normalized_source_ids(
+                    recommendation.get("source_report_ids")
+                )
+            }
+        )
         candidates: list[dict[str, Any]] = []
         if recurring_missed_items:
             context = TrainingSkillCandidateContext(
@@ -304,11 +338,40 @@ class TrainingSkillCandidateService:
                 missed_items=recurring_missed_items,
                 support_count=max(item.count for item in recurring_missed_items),
                 case_ids=_pattern_case_ids(recurring_missed_items),
-                source_report_count=source_report_count,
+                source_report_count=len(
+                    {
+                        report_id
+                        for item in recurring_missed_items
+                        for report_id in item.source_report_ids
+                    }
+                )
+                or source_report_count,
                 related_recommendations=related_recommendations,
+                source_session_ids=sorted(
+                    set(related_source_session_ids)
+                    | {
+                        session_id
+                        for item in recurring_missed_items
+                        for session_id in item.session_ids
+                    }
+                ),
+                source_report_ids=sorted(
+                    set(related_source_report_ids)
+                    | {
+                        report_id
+                        for item in recurring_missed_items
+                        for report_id in item.source_report_ids
+                    }
+                ),
             )
             context = _with_skill_generation_knowledge_context(context)
-            candidates.append(self._generate_candidate(context))
+            candidates.append(
+                _with_analysis_source_provenance(
+                    self._generate_candidate(context),
+                    analysis_session_ids=analysis_session_ids,
+                    analysis_report_ids=analysis_report_ids,
+                )
+            )
 
         for turn_pattern in _recurring_turn_patterns(insights, min_count):
             context = TrainingSkillCandidateContext(
@@ -318,10 +381,18 @@ class TrainingSkillCandidateService:
                 case_ids=list(turn_pattern.case_ids),
                 source_report_count=turn_pattern.source_report_count,
                 related_recommendations=related_recommendations,
+                source_session_ids=related_source_session_ids,
+                source_report_ids=related_source_report_ids,
                 turn_patterns=[turn_pattern],
             )
             context = _with_skill_generation_knowledge_context(context)
-            candidates.append(self._generate_candidate(context))
+            candidates.append(
+                _with_analysis_source_provenance(
+                    self._generate_candidate(context),
+                    analysis_session_ids=analysis_session_ids,
+                    analysis_report_ids=analysis_report_ids,
+                )
+            )
         return candidates
 
     def _generate_candidate(self, context: TrainingSkillCandidateContext) -> dict[str, Any]:
@@ -329,12 +400,13 @@ class TrainingSkillCandidateService:
             create_default_training_skill_candidate_generator
         )
         try:
-            return generator.generate_candidate(context)
+            candidate = generator.generate_candidate(context)
         except TrainingSkillCandidateGenerationError as exc:
             candidate = self._fallback_generator.generate_candidate(context)
             candidate["generation_mode"] = "template_fallback"
             candidate["generation_warnings"] = [str(exc)]
-            return candidate
+        _add_turn_pattern_source_fields(candidate, context)
+        return candidate
 
 
 def _recurring_missed_items(insights: dict[str, Any], min_count: int) -> list[TrainingSkillCandidateMissedItem]:
@@ -343,6 +415,12 @@ def _recurring_missed_items(insights: dict[str, Any], min_count: int) -> list[Tr
             item_id=missed_item["item_id"],
             count=int(missed_item["count"]),
             case_ids=sorted(str(case_id) for case_id in missed_item["case_ids"]),
+            session_ids=_normalized_source_ids(
+                missed_item.get("session_ids")
+            ),
+            source_report_ids=_normalized_source_ids(
+                missed_item.get("source_report_ids")
+            ),
         )
         for missed_item in insights.get("frequent_missed_items", [])
         if int(missed_item["count"]) >= min_count
@@ -387,6 +465,8 @@ def _missed_item_payloads(missed_items: list[TrainingSkillCandidateMissedItem]) 
             "item_id": item.item_id,
             "count": item.count,
             "case_ids": item.case_ids,
+            "session_ids": item.session_ids,
+            "source_report_ids": item.source_report_ids,
         }
         for item in missed_items
     ]
@@ -527,6 +607,8 @@ def _with_skill_generation_knowledge_context(context: TrainingSkillCandidateCont
         case_ids=context.case_ids,
         source_report_count=context.source_report_count,
         related_recommendations=context.related_recommendations,
+        source_session_ids=context.source_session_ids,
+        source_report_ids=context.source_report_ids,
         turn_patterns=context.turn_patterns,
         retrieved_knowledge_context=_retrieve_skill_generation_knowledge_context(context),
         teacher_analysis_context=dict(context.teacher_analysis_context),
@@ -714,19 +796,72 @@ def _context_trigger_item_ids(context: TrainingSkillCandidateContext) -> list[st
 
 
 def _context_source_report_ids(context: TrainingSkillCandidateContext) -> list[str]:
-    return sorted({report_id for pattern in context.turn_patterns for report_id in pattern.source_report_ids})
+    return sorted(
+        {
+            *context.source_report_ids,
+            *{
+                report_id
+                for pattern in context.turn_patterns
+                for report_id in pattern.source_report_ids
+            },
+        }
+    )
 
 
 def _context_source_session_ids(context: TrainingSkillCandidateContext) -> list[str]:
-    return sorted({session_id for pattern in context.turn_patterns for session_id in pattern.session_ids})
+    return sorted(
+        {
+            *context.source_session_ids,
+            *{
+                session_id
+                for pattern in context.turn_patterns
+                for session_id in pattern.session_ids
+            },
+        }
+    )
+
+
+def _normalized_source_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted({str(item) for item in value if str(item)})
+
+
+def _with_analysis_source_provenance(
+    candidate: dict[str, Any],
+    *,
+    analysis_session_ids: list[str],
+    analysis_report_ids: list[str],
+) -> dict[str, Any]:
+    candidate_session_ids = _normalized_source_ids(
+        candidate.get("source_session_ids")
+    )
+    candidate_report_ids = _normalized_source_ids(
+        candidate.get("source_report_ids")
+    )
+    source_session_ids = candidate_session_ids or analysis_session_ids
+    source_report_ids = candidate_report_ids or analysis_report_ids
+    if not source_session_ids and not source_report_ids:
+        return candidate
+    return {
+        **candidate,
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": list(source_session_ids),
+        "source_report_ids": list(source_report_ids),
+    }
 
 
 def _add_turn_pattern_source_fields(candidate: dict[str, Any], context: TrainingSkillCandidateContext) -> None:
-    if not context.turn_patterns:
-        return
-    candidate["source_report_ids"] = _context_source_report_ids(context)
-    candidate["source_session_ids"] = _context_source_session_ids(context)
-    candidate["source_turn_patterns"] = _turn_pattern_payloads(context.turn_patterns)
+    source_report_ids = _context_source_report_ids(context)
+    source_session_ids = _context_source_session_ids(context)
+    if source_report_ids:
+        candidate["source_report_ids"] = source_report_ids
+    if source_session_ids:
+        candidate["source_session_ids"] = source_session_ids
+    if context.turn_patterns:
+        candidate["source_turn_patterns"] = _turn_pattern_payloads(
+            context.turn_patterns
+        )
 
 
 training_skill_candidate_service = TrainingSkillCandidateService()

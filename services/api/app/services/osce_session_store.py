@@ -14,10 +14,11 @@ if TYPE_CHECKING:
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "osce_sessions.sqlite3"
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 5
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
 SESSION_DELETION_PENDING = "pending"
 SESSION_DELETION_COMPLETED = "completed"
+SESSION_DELETION_CLEANUP_VERSION = 3
 
 
 class SessionPersistenceError(RuntimeError):
@@ -45,6 +46,10 @@ class SessionNotFoundError(SessionPersistenceError):
     pass
 
 
+class SessionDerivedReferenceOwnershipError(SessionPersistenceError):
+    pass
+
+
 @dataclass(frozen=True)
 class StoredSession:
     payload: dict[str, object]
@@ -60,6 +65,7 @@ class SessionDeletionRecord:
     deleted_at: str
     cleanup_status: str
     cleanup_completed_at: str | None
+    cleanup_version: int
 
 
 class OsceSessionStore:
@@ -76,6 +82,11 @@ class OsceSessionStore:
             connection.execute("BEGIN IMMEDIATE")
             if self._tombstone_revision(connection, session.session_id) is not None:
                 raise SessionAlreadyExistsError(session.session_id)
+            payload = _scrub_payload_for_deleted_skill_sources(
+                connection,
+                payload,
+                user_id=session.student_id,
+            )
             try:
                 connection.execute(
                     """
@@ -113,6 +124,11 @@ class OsceSessionStore:
         payload = asdict(session)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            payload = _scrub_payload_for_deleted_skill_sources(
+                connection,
+                payload,
+                user_id=session.student_id,
+            )
             cursor = connection.execute(
                 """
                 UPDATE osce_sessions
@@ -243,9 +259,10 @@ class OsceSessionStore:
                     deleted_revision,
                     deleted_at,
                     cleanup_status,
-                    cleanup_completed_at
+                    cleanup_completed_at,
+                    cleanup_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(session_id) DO UPDATE SET
                     user_id = excluded.user_id,
                     case_id = excluded.case_id,
@@ -255,7 +272,8 @@ class OsceSessionStore:
                     ),
                     deleted_at = excluded.deleted_at,
                     cleanup_status = excluded.cleanup_status,
-                    cleanup_completed_at = excluded.cleanup_completed_at
+                    cleanup_completed_at = excluded.cleanup_completed_at,
+                    cleanup_version = excluded.cleanup_version
                 """,
                 (
                     session_id,
@@ -314,6 +332,7 @@ class OsceSessionStore:
                 deleted_at=deleted_at,
                 cleanup_status=SESSION_DELETION_PENDING,
                 cleanup_completed_at=None,
+                cleanup_version=SESSION_DELETION_CLEANUP_VERSION,
             )
             connection.execute(
                 """
@@ -324,9 +343,10 @@ class OsceSessionStore:
                     deleted_revision,
                     deleted_at,
                     cleanup_status,
-                    cleanup_completed_at
+                    cleanup_completed_at,
+                    cleanup_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     deletion.session_id,
@@ -336,6 +356,7 @@ class OsceSessionStore:
                     deletion.deleted_at,
                     deletion.cleanup_status,
                     deletion.cleanup_completed_at,
+                    deletion.cleanup_version,
                 ),
             )
             cursor = connection.execute(
@@ -397,7 +418,8 @@ class OsceSessionStore:
                     user_id = ?,
                     case_id = ?,
                     cleanup_status = ?,
-                    cleanup_completed_at = NULL
+                    cleanup_completed_at = NULL,
+                    cleanup_version = ?
                 WHERE session_id = ?
                   AND user_id = ''
                 """,
@@ -405,6 +427,7 @@ class OsceSessionStore:
                     normalized_user_id,
                     normalized_case_id,
                     SESSION_DELETION_PENDING,
+                    SESSION_DELETION_CLEANUP_VERSION,
                     session_id,
                 ),
             )
@@ -427,9 +450,13 @@ class OsceSessionStore:
             return []
         limit_clause = "" if limit is None else "LIMIT ?"
         parameters: tuple[object, ...] = (
-            (SESSION_DELETION_PENDING,)
+            (SESSION_DELETION_PENDING, SESSION_DELETION_CLEANUP_VERSION)
             if limit is None
-            else (SESSION_DELETION_PENDING, limit)
+            else (
+                SESSION_DELETION_PENDING,
+                SESSION_DELETION_CLEANUP_VERSION,
+                limit,
+            )
         )
         with self._connect() as connection:
             rows = connection.execute(
@@ -441,9 +468,11 @@ class OsceSessionStore:
                     deleted_revision,
                     deleted_at,
                     cleanup_status,
-                    cleanup_completed_at
+                    cleanup_completed_at,
+                    cleanup_version
                 FROM osce_session_tombstones
                 WHERE cleanup_status = ?
+                   OR cleanup_version < ?
                 ORDER BY deleted_at, session_id
                 {limit_clause}
                 """,
@@ -471,7 +500,8 @@ class OsceSessionStore:
                     deleted_revision,
                     deleted_at,
                     cleanup_status,
-                    cleanup_completed_at
+                    cleanup_completed_at,
+                    cleanup_version
                 FROM osce_session_tombstones
                 WHERE user_id = ''
                 ORDER BY deleted_at, session_id
@@ -480,6 +510,237 @@ class OsceSessionStore:
                 parameters,
             ).fetchall()
         return [_session_deletion_record_from_row(row) for row in rows]
+
+    def validate_skill_source_references(
+        self,
+        *,
+        source_session_id: str,
+        owner_user_id: str,
+        personal_skill_id: str,
+        personal_candidate_id: str,
+        source_report_id: str,
+    ) -> None:
+        _validate_deleted_skill_source_identity(
+            source_session_id=source_session_id,
+            owner_user_id=owner_user_id,
+            personal_skill_id=personal_skill_id,
+            personal_candidate_id=personal_candidate_id,
+            source_report_id=source_report_id,
+        )
+        self._initialize()
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT
+                    owner_user_id,
+                    personal_skill_id,
+                    personal_candidate_id,
+                    source_report_id
+                FROM osce_deleted_skill_sources
+                WHERE source_session_id = ?
+                """,
+                (source_session_id,),
+            ).fetchone()
+            if existing is not None and tuple(str(value) for value in existing) != (
+                owner_user_id,
+                personal_skill_id,
+                personal_candidate_id,
+                source_report_id,
+            ):
+                raise SessionDerivedReferenceOwnershipError(source_session_id)
+            rows = connection.execute(
+                """
+                SELECT session_id, user_id, session_json
+                FROM osce_sessions
+                ORDER BY created_at, session_id
+                """
+            ).fetchall()
+        for raw_session_id, raw_user_id, raw_payload in rows:
+            payload = _decode_session_payload(
+                raw_payload,
+                session_id=str(raw_session_id),
+            )
+            if (
+                _session_payload_references_applied_skill_id(
+                    payload,
+                    skill_id=personal_skill_id,
+                )
+                and (
+                    str(raw_user_id) != owner_user_id
+                    or str(payload.get("student_id", "")) != owner_user_id
+                )
+            ):
+                raise SessionDerivedReferenceOwnershipError(source_session_id)
+
+    def delete_skill_source_references(
+        self,
+        *,
+        source_session_id: str,
+        owner_user_id: str,
+        personal_skill_id: str,
+        personal_candidate_id: str,
+        source_report_id: str,
+        affected_global_skill_ids: list[str] | None = None,
+    ) -> list[str]:
+        _validate_deleted_skill_source_identity(
+            source_session_id=source_session_id,
+            owner_user_id=owner_user_id,
+            personal_skill_id=personal_skill_id,
+            personal_candidate_id=personal_candidate_id,
+            source_report_id=source_report_id,
+        )
+        normalized_global_skill_ids = _normalized_skill_ids(
+            affected_global_skill_ids,
+            excluded_skill_id=personal_skill_id,
+        )
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT
+                    owner_user_id,
+                    personal_skill_id,
+                    personal_candidate_id,
+                    source_report_id,
+                    affected_global_skill_ids_json,
+                    affected_session_ids_json
+                FROM osce_deleted_skill_sources
+                WHERE source_session_id = ?
+                """,
+                (source_session_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    tuple(str(value) for value in existing[:4])
+                    != (
+                        owner_user_id,
+                        personal_skill_id,
+                        personal_candidate_id,
+                        source_report_id,
+                    )
+                    or _decode_string_list(existing[4])
+                    != normalized_global_skill_ids
+                ):
+                    raise SessionDerivedReferenceOwnershipError(
+                        source_session_id
+                    )
+                return _decode_string_list(existing[5])
+
+            rows = connection.execute(
+                """
+                SELECT session_id, user_id, session_json, revision
+                FROM osce_sessions
+                ORDER BY created_at, session_id
+                """
+            ).fetchall()
+            updates: list[tuple[str, str, int, str]] = []
+            for raw_session_id, raw_user_id, raw_payload, raw_revision in rows:
+                session_id = str(raw_session_id)
+                payload = _decode_session_payload(
+                    raw_payload,
+                    session_id=session_id,
+                )
+                blocked_global_skill_ids = (
+                    _blocked_global_skill_ids_for_session_payload(
+                        payload,
+                        skill_ids=set(normalized_global_skill_ids),
+                        source_session_id=source_session_id,
+                        source_report_id=source_report_id,
+                    )
+                )
+                referenced_skill_ids = _session_payload_referenced_skill_ids(
+                    payload,
+                    skill_ids={
+                        personal_skill_id,
+                        *blocked_global_skill_ids,
+                    },
+                )
+                if not referenced_skill_ids:
+                    continue
+                if (
+                    _session_payload_references_applied_skill_id(
+                        payload,
+                        skill_id=personal_skill_id,
+                    )
+                    and (
+                        str(raw_user_id) != owner_user_id
+                        or str(payload.get("student_id", ""))
+                        != owner_user_id
+                    )
+                ):
+                    raise SessionDerivedReferenceOwnershipError(
+                        source_session_id
+                    )
+                sanitized = _remove_skill_ids_from_session_payload(
+                    payload,
+                    skill_ids=referenced_skill_ids,
+                )
+                updates.append(
+                    (
+                        session_id,
+                        json.dumps(sanitized, ensure_ascii=False),
+                        int(raw_revision),
+                        str(raw_user_id),
+                    )
+                )
+
+            affected_session_ids = sorted(
+                session_id for session_id, _, _, _ in updates
+            )
+            connection.execute(
+                """
+                INSERT INTO osce_deleted_skill_sources (
+                    source_session_id,
+                    owner_user_id,
+                    personal_skill_id,
+                    personal_candidate_id,
+                    source_report_id,
+                    affected_global_skill_ids_json,
+                    affected_session_ids_json,
+                    deleted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_session_id,
+                    owner_user_id,
+                    personal_skill_id,
+                    personal_candidate_id,
+                    source_report_id,
+                    json.dumps(normalized_global_skill_ids),
+                    json.dumps(affected_session_ids),
+                    deleted_at,
+                ),
+            )
+            for session_id, serialized_payload, revision, session_user_id in updates:
+                cursor = connection.execute(
+                    """
+                    UPDATE osce_sessions
+                    SET
+                        session_json = ?,
+                        revision = revision + 1,
+                        updated_at = ?
+                    WHERE session_id = ?
+                      AND revision = ?
+                      AND user_id = ?
+                    """,
+                    (
+                        serialized_payload,
+                        deleted_at,
+                        session_id,
+                        revision,
+                        session_user_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise SessionWriteConflictError(
+                        session_id,
+                        expected_revision=revision,
+                        current_revision=revision,
+                    )
+        return affected_session_ids
 
     def mark_session_deletion_complete(
         self,
@@ -492,14 +753,25 @@ class OsceSessionStore:
             deletion = self._tombstone_record(connection, session_id)
             if deletion is None:
                 return None
-            if deletion.cleanup_status != SESSION_DELETION_COMPLETED:
+            if (
+                deletion.cleanup_status != SESSION_DELETION_COMPLETED
+                or deletion.cleanup_version < SESSION_DELETION_CLEANUP_VERSION
+            ):
                 connection.execute(
                     """
                     UPDATE osce_session_tombstones
-                    SET cleanup_status = ?, cleanup_completed_at = ?
+                    SET
+                        cleanup_status = ?,
+                        cleanup_completed_at = ?,
+                        cleanup_version = ?
                     WHERE session_id = ?
                     """,
-                    (SESSION_DELETION_COMPLETED, completed_at, session_id),
+                    (
+                        SESSION_DELETION_COMPLETED,
+                        completed_at,
+                        SESSION_DELETION_CLEANUP_VERSION,
+                        session_id,
+                    ),
                 )
             return self._tombstone_record(connection, session_id)
 
@@ -552,7 +824,8 @@ class OsceSessionStore:
                         deleted_at TEXT NOT NULL,
                         cleanup_status TEXT NOT NULL DEFAULT 'completed'
                             CHECK(cleanup_status IN ('pending', 'completed')),
-                        cleanup_completed_at TEXT
+                        cleanup_completed_at TEXT,
+                        cleanup_version INTEGER NOT NULL DEFAULT 1
                     )
                     """
                 )
@@ -588,6 +861,44 @@ class OsceSessionStore:
                         """
                         ALTER TABLE osce_session_tombstones
                         ADD COLUMN cleanup_completed_at TEXT
+                        """
+                    )
+                if "cleanup_version" not in tombstone_columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_session_tombstones
+                        ADD COLUMN cleanup_version INTEGER NOT NULL DEFAULT 1
+                        """
+                    )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS osce_deleted_skill_sources (
+                        source_session_id TEXT PRIMARY KEY,
+                        owner_user_id TEXT NOT NULL,
+                        personal_skill_id TEXT NOT NULL,
+                        personal_candidate_id TEXT NOT NULL,
+                        source_report_id TEXT NOT NULL,
+                        affected_global_skill_ids_json TEXT NOT NULL DEFAULT '[]',
+                        affected_session_ids_json TEXT NOT NULL,
+                        deleted_at TEXT NOT NULL
+                    )
+                    """
+                )
+                deleted_skill_source_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(osce_deleted_skill_sources)"
+                    ).fetchall()
+                }
+                if (
+                    "affected_global_skill_ids_json"
+                    not in deleted_skill_source_columns
+                ):
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_deleted_skill_sources
+                        ADD COLUMN affected_global_skill_ids_json
+                            TEXT NOT NULL DEFAULT '[]'
                         """
                     )
                 connection.execute(
@@ -632,7 +943,8 @@ class OsceSessionStore:
                 deleted_revision,
                 deleted_at,
                 cleanup_status,
-                cleanup_completed_at
+                cleanup_completed_at,
+                cleanup_version
             FROM osce_session_tombstones
             WHERE session_id = ?
             """,
@@ -657,7 +969,447 @@ def _session_deletion_record_from_row(
         deleted_at=str(row[4]),
         cleanup_status=str(row[5]),
         cleanup_completed_at=None if row[6] is None else str(row[6]),
+        cleanup_version=int(row[7]),
     )
+
+
+def _decode_string_list(value: object) -> list[str]:
+    decoded = json.loads(str(value))
+    if not isinstance(decoded, list):
+        return []
+    return [str(item) for item in decoded if str(item)]
+
+
+def _decode_session_payload(
+    value: object,
+    *,
+    session_id: str,
+) -> dict[str, object]:
+    payload = json.loads(str(value))
+    if not isinstance(payload, dict):
+        raise SessionDerivedReferenceOwnershipError(session_id)
+    return payload
+
+
+def _validate_deleted_skill_source_identity(
+    *,
+    source_session_id: str,
+    owner_user_id: str,
+    personal_skill_id: str,
+    personal_candidate_id: str,
+    source_report_id: str,
+) -> None:
+    if (
+        not source_session_id
+        or not owner_user_id
+        or personal_skill_id != f"skill_personal_{source_session_id}"
+        or personal_candidate_id
+        != f"personal_skill_candidate_{source_session_id}"
+        or source_report_id != f"{source_session_id}_report"
+    ):
+        raise SessionDerivedReferenceOwnershipError(source_session_id)
+
+
+def _normalized_skill_ids(
+    value: object,
+    *,
+    excluded_skill_id: str = "",
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted(
+        {
+            str(item)
+            for item in value
+            if str(item) and str(item) != excluded_skill_id
+        }
+    )
+
+
+def _scrub_payload_for_deleted_skill_sources(
+    connection: sqlite3.Connection,
+    payload: dict[str, object],
+    *,
+    user_id: str,
+) -> dict[str, object]:
+    rows = connection.execute(
+        """
+        SELECT
+            source_session_id,
+            owner_user_id,
+            personal_skill_id,
+            source_report_id,
+            affected_global_skill_ids_json
+        FROM osce_deleted_skill_sources
+        """,
+    ).fetchall()
+    sanitized = dict(payload)
+    for row in rows:
+        source_session_id = str(row[0])
+        source_owner_user_id = str(row[1])
+        personal_skill_id = str(row[2])
+        source_report_id = str(row[3])
+        global_skill_ids = _blocked_global_skill_ids_for_session_payload(
+            sanitized,
+            skill_ids=set(_decode_string_list(row[4])),
+            source_session_id=source_session_id,
+            source_report_id=source_report_id,
+        )
+        if _session_payload_references_skill_ids(
+            sanitized,
+            skill_ids={personal_skill_id},
+        ):
+            if (
+                source_owner_user_id != user_id
+                and _session_payload_references_applied_skill_id(
+                    sanitized,
+                    skill_id=personal_skill_id,
+                )
+            ):
+                raise SessionDerivedReferenceOwnershipError(
+                    source_session_id
+                )
+            sanitized = _remove_skill_ids_from_session_payload(
+                sanitized,
+                skill_ids={personal_skill_id},
+            )
+        if global_skill_ids:
+            sanitized = _remove_skill_ids_from_session_payload(
+                sanitized,
+                skill_ids=global_skill_ids,
+            )
+    return sanitized
+
+
+def _blocked_global_skill_ids_for_session_payload(
+    payload: dict[str, object],
+    *,
+    skill_ids: set[str],
+    source_session_id: str,
+    source_report_id: str,
+) -> set[str]:
+    return {
+        skill_id
+        for skill_id in skill_ids
+        if not _session_payload_has_explicit_remaining_skill_source(
+            payload,
+            skill_id=skill_id,
+            source_session_id=source_session_id,
+            source_report_id=source_report_id,
+        )
+    }
+
+
+def _session_payload_has_explicit_remaining_skill_source(
+    payload: dict[str, object],
+    *,
+    skill_id: str,
+    source_session_id: str,
+    source_report_id: str,
+) -> bool:
+    active_skill_context = payload.get("active_skill_context")
+    if not isinstance(active_skill_context, dict):
+        return False
+    matching_items: list[dict[str, object]] = []
+    for field_name in ("skill_index", "selected_skills"):
+        items = active_skill_context.get(field_name)
+        if not isinstance(items, list):
+            continue
+        matching_items.extend(
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("skill_id", "")) == skill_id
+        )
+    return bool(matching_items) and all(
+        _skill_reference_has_explicit_remaining_source(
+            item,
+            source_session_id=source_session_id,
+            source_report_id=source_report_id,
+        )
+        for item in matching_items
+    )
+
+
+def _skill_reference_has_explicit_remaining_source(
+    value: dict[str, object],
+    *,
+    source_session_id: str,
+    source_report_id: str,
+) -> bool:
+    if (
+        str(value.get("source_provenance_schema_version", ""))
+        != "training_candidate_sources.v1"
+    ):
+        return False
+    source_session_ids = _normalized_reference_ids(
+        value.get("source_session_ids")
+    )
+    source_report_ids = _normalized_reference_ids(
+        value.get("source_report_ids")
+    )
+    return bool(source_session_ids or source_report_ids) and (
+        source_session_id not in source_session_ids
+        and source_report_id not in source_report_ids
+    )
+
+
+def _normalized_reference_ids(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        normalized
+        for item in value
+        if (normalized := str(item).strip())
+    }
+
+
+def _session_payload_references_skill_ids(
+    payload: dict[str, object],
+    *,
+    skill_ids: set[str],
+) -> bool:
+    return bool(
+        _session_payload_referenced_skill_ids(
+            payload,
+            skill_ids=skill_ids,
+        )
+    )
+
+
+def _session_payload_references_applied_skill_id(
+    payload: dict[str, object],
+    *,
+    skill_id: str,
+) -> bool:
+    active_skill_context = payload.get("active_skill_context")
+    if isinstance(active_skill_context, dict):
+        for field_name in ("skill_index", "selected_skills"):
+            items = active_skill_context.get(field_name)
+            if not isinstance(items, list):
+                continue
+            if any(
+                isinstance(item, dict)
+                and str(item.get("skill_id", "")) == skill_id
+                for item in items
+            ):
+                return True
+    return any(
+        _nested_referenced_skill_ids(
+            payload.get(field_name),
+            skill_ids={skill_id},
+        )
+        for field_name in (
+            "agent_turn_memory",
+            "pedagogy_state",
+            "agent_decision_trace",
+        )
+    )
+
+
+def _session_payload_referenced_skill_ids(
+    payload: dict[str, object],
+    *,
+    skill_ids: set[str],
+) -> set[str]:
+    if not skill_ids:
+        return set()
+    referenced_skill_ids: set[str] = set()
+    active_skill_context = payload.get("active_skill_context")
+    if isinstance(active_skill_context, dict):
+        for field_name in ("skill_index", "selected_skills", "skipped_reasons"):
+            items = active_skill_context.get(field_name)
+            if not isinstance(items, list):
+                continue
+            referenced_skill_ids.update(
+                str(item.get("skill_id", ""))
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("skill_id", "")) in skill_ids
+            )
+    referenced_skill_ids.update(
+        _nested_referenced_skill_ids(
+            payload.get("agent_turn_memory"),
+            skill_ids=skill_ids,
+        )
+    )
+    referenced_skill_ids.update(
+        _nested_referenced_skill_ids(
+            payload.get("pedagogy_state"),
+            skill_ids=skill_ids,
+        )
+    )
+    referenced_skill_ids.update(
+        _nested_referenced_skill_ids(
+            payload.get("agent_decision_trace"),
+            skill_ids=skill_ids,
+        )
+    )
+    return referenced_skill_ids
+
+
+def _remove_skill_ids_from_session_payload(
+    payload: dict[str, object],
+    *,
+    skill_ids: set[str],
+) -> dict[str, object]:
+    referenced_skill_ids = _session_payload_referenced_skill_ids(
+        payload,
+        skill_ids=skill_ids,
+    )
+    if not referenced_skill_ids:
+        return payload
+    sanitized = dict(payload)
+    active_skill_context = payload.get("active_skill_context")
+    if isinstance(active_skill_context, dict):
+        next_context = dict(active_skill_context)
+        for field_name in ("skill_index", "selected_skills", "skipped_reasons"):
+            items = active_skill_context.get(field_name)
+            if not isinstance(items, list):
+                continue
+            next_context[field_name] = [
+                item
+                for item in items
+                if not (
+                    isinstance(item, dict)
+                    and str(item.get("skill_id", ""))
+                    in referenced_skill_ids
+                )
+            ]
+        sanitized["active_skill_context"] = next_context
+        sanitized["evolution_candidates"] = (
+            _skill_prompts_from_selected_context(
+                next_context.get("selected_skills", [])
+            )
+        )
+    for field_name in ("agent_turn_memory", "agent_decision_trace"):
+        items = sanitized.get(field_name)
+        if not isinstance(items, list):
+            continue
+        sanitized[field_name] = [
+            item
+            for item in items
+            if not _nested_referenced_skill_ids(
+                item,
+                skill_ids=referenced_skill_ids,
+            )
+        ]
+    pedagogy_state = sanitized.get("pedagogy_state")
+    if isinstance(pedagogy_state, dict) and _nested_referenced_skill_ids(
+        pedagogy_state,
+        skill_ids=referenced_skill_ids,
+    ):
+        next_pedagogy_state = _remove_skill_ids_from_nested_value(
+            pedagogy_state,
+            skill_ids=referenced_skill_ids,
+        )
+        assert isinstance(next_pedagogy_state, dict)
+        for key in (
+            "teaching_plan",
+            "next_best_action",
+            "active_learning_goal",
+        ):
+            next_pedagogy_state.pop(key, None)
+        next_pedagogy_state["skill_context_ids"] = []
+        next_pedagogy_state["coaching_mode"] = "socratic"
+        sanitized["pedagogy_state"] = next_pedagogy_state
+    if not isinstance(active_skill_context, dict) and (
+        "evolution_candidates" in sanitized
+    ):
+        sanitized["evolution_candidates"] = []
+    return sanitized
+
+
+def _nested_referenced_skill_ids(
+    value: object,
+    *,
+    skill_ids: set[str],
+) -> set[str]:
+    if isinstance(value, dict):
+        found: set[str] = set()
+        for nested_value in value.values():
+            found.update(
+                _nested_referenced_skill_ids(
+                    nested_value,
+                    skill_ids=skill_ids,
+                )
+            )
+        return found
+    if isinstance(value, list):
+        found = set()
+        for nested_value in value:
+            found.update(
+                _nested_referenced_skill_ids(
+                    nested_value,
+                    skill_ids=skill_ids,
+                )
+            )
+        return found
+    normalized = str(value) if value is not None else ""
+    return {normalized} if normalized in skill_ids else set()
+
+
+def _remove_skill_ids_from_nested_value(
+    value: object,
+    *,
+    skill_ids: set[str],
+) -> object:
+    if isinstance(value, dict):
+        sanitized = {
+            key: _remove_skill_ids_from_nested_value(
+                nested_value,
+                skill_ids=skill_ids,
+            )
+            for key, nested_value in value.items()
+            if str(key) not in skill_ids and str(nested_value) not in skill_ids
+        }
+        skill_context_ids = sanitized.get("skill_context_ids")
+        if (
+            isinstance(skill_context_ids, list)
+            and not skill_context_ids
+            and sanitized.get("coaching_mode") == "skill_guided"
+        ):
+            sanitized["coaching_mode"] = "socratic"
+        return sanitized
+    if isinstance(value, list):
+        return [
+            _remove_skill_ids_from_nested_value(
+                nested_value,
+                skill_ids=skill_ids,
+            )
+            for nested_value in value
+            if str(nested_value) not in skill_ids
+        ]
+    return value
+
+
+def _remove_personal_skill_from_session_payload(
+    payload: dict[str, object],
+    *,
+    personal_skill_id: str,
+) -> dict[str, object]:
+    return _remove_skill_ids_from_session_payload(
+        payload,
+        skill_ids={personal_skill_id},
+    )
+
+
+def _skill_prompts_from_selected_context(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    prompts: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        strategy = str(item.get("suggested_strategy", "")).strip()
+        if title and strategy:
+            prompts.append(f"{title}：{strategy}")
+        elif title:
+            prompts.append(title)
+        elif strategy:
+            prompts.append(strategy)
+    return prompts
 
 
 def _session_completion_summary(session_json: str, stage: str, case_id: str) -> dict[str, object]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from app.services.training_skill_policy import (
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skills.sqlite3"
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 
 STAGE_SCOPE_LABELS = {
     "case_intro": "训练开始",
@@ -52,6 +53,17 @@ class TrainingSkillOwnershipError(RuntimeError):
         self.skill_id = skill_id
 
 
+class TrainingSkillSourceDeletedError(RuntimeError):
+    def __init__(self, source_session_id: str) -> None:
+        super().__init__(source_session_id)
+        self.source_session_id = source_session_id
+
+
+@dataclass(frozen=True)
+class GlobalSkillSourceCleanup:
+    affected_skill_ids: tuple[str, ...]
+
+
 class TrainingSkillStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
@@ -68,6 +80,12 @@ class TrainingSkillStore:
             skill_id = str(skill["skill_id"])
             if self._is_skill_deleted(connection, skill_id):
                 raise TrainingSkillDeletedError(skill_id)
+            deleted_source_session_id = self._deleted_source_reference(
+                connection,
+                candidate,
+            )
+            if deleted_source_session_id is not None:
+                raise TrainingSkillSourceDeletedError(deleted_source_session_id)
             connection.execute(
                 """
                 INSERT INTO training_skills (skill_id, skill_json)
@@ -81,16 +99,16 @@ class TrainingSkillStore:
     def get_skill(self, skill_id: str) -> dict[str, Any] | None:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT skill_json FROM training_skills WHERE skill_id = ?",
                 (skill_id,),
             ).fetchone()
-        if row is None:
-            return None
-        skill = json.loads(row[0])
-        hydrated_skill = _hydrate_skill_student_metadata(skill)
-        if hydrated_skill != skill:
-            with sqlite3.connect(self.database_path) as connection:
+            if row is None:
+                return None
+            skill = json.loads(row[0])
+            hydrated_skill = _hydrate_skill_student_metadata(skill)
+            if hydrated_skill != skill:
                 connection.execute(
                     "UPDATE training_skills SET skill_json = ? WHERE skill_id = ?",
                     (json.dumps(hydrated_skill, ensure_ascii=False), skill_id),
@@ -100,6 +118,7 @@ class TrainingSkillStore:
     def list_enabled_skills(self) -> list[dict[str, Any]]:
         self._initialize()
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute("SELECT skill_id, skill_json FROM training_skills ORDER BY id").fetchall()
             skills: list[dict[str, Any]] = []
             for skill_id, skill_json in rows:
@@ -110,7 +129,8 @@ class TrainingSkillStore:
                         "UPDATE training_skills SET skill_json = ? WHERE skill_id = ?",
                         (json.dumps(hydrated_skill, ensure_ascii=False), skill_id),
                     )
-                skills.append(hydrated_skill)
+                if str(hydrated_skill.get("status", "enabled")) == "enabled":
+                    skills.append(hydrated_skill)
         return skills
 
     def delete_personal_skill(
@@ -199,6 +219,128 @@ class TrainingSkillStore:
             )
         return cursor.rowcount == 1
 
+    def remove_global_source_contributions(
+        self,
+        *,
+        source_session_id: str,
+        owner_student_id: str,
+        source_report_id: str,
+        affected_candidate_ids: list[str],
+    ) -> GlobalSkillSourceCleanup:
+        normalized_candidate_ids = sorted(
+            {
+                str(candidate_id)
+                for candidate_id in affected_candidate_ids
+                if str(candidate_id)
+            }
+        )
+        if (
+            not source_session_id
+            or not owner_student_id
+            or source_report_id != f"{source_session_id}_report"
+        ):
+            raise TrainingSkillOwnershipError(source_session_id)
+
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT
+                    owner_student_id,
+                    source_report_id,
+                    affected_candidate_ids_json,
+                    affected_skill_ids_json
+                FROM training_skill_source_tombstones
+                WHERE source_session_id = ?
+                """,
+                (source_session_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing[0]) != owner_student_id
+                    or str(existing[1]) != source_report_id
+                    or _decode_string_list(existing[2]) != normalized_candidate_ids
+                ):
+                    raise TrainingSkillOwnershipError(source_session_id)
+                return GlobalSkillSourceCleanup(
+                    affected_skill_ids=tuple(_decode_string_list(existing[3]))
+                )
+
+            rows = connection.execute(
+                """
+                SELECT skill_id, skill_json
+                FROM training_skills
+                ORDER BY id
+                """
+            ).fetchall()
+            affected_skill_ids: list[str] = []
+            stale_payloads: list[tuple[str, str]] = []
+            for raw_skill_id, raw_skill_json in rows:
+                skill_id = str(raw_skill_id)
+                skill = _decode_skill(str(raw_skill_json), skill_id=skill_id)
+                if str(skill.get("scope", "global")) != "global":
+                    continue
+                if (
+                    str(skill.get("source_candidate_id", ""))
+                    not in normalized_candidate_ids
+                    and not _payload_references_source(
+                        skill,
+                        source_session_id=source_session_id,
+                        source_report_id=source_report_id,
+                    )
+                ):
+                    continue
+                affected_skill_ids.append(skill_id)
+                stale_payloads.append(
+                    (
+                        skill_id,
+                        json.dumps(
+                            _stale_global_skill_without_source(
+                                skill,
+                                source_session_id=source_session_id,
+                                source_report_id=source_report_id,
+                            ),
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
+
+            affected_skill_ids.sort()
+            connection.execute(
+                """
+                INSERT INTO training_skill_source_tombstones (
+                    source_session_id,
+                    owner_student_id,
+                    source_report_id,
+                    affected_candidate_ids_json,
+                    affected_skill_ids_json,
+                    deleted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_session_id,
+                    owner_student_id,
+                    source_report_id,
+                    json.dumps(normalized_candidate_ids),
+                    json.dumps(affected_skill_ids),
+                    deleted_at,
+                ),
+            )
+            connection.executemany(
+                """
+                UPDATE training_skills
+                SET skill_json = ?
+                WHERE skill_id = ?
+                """,
+                [(payload, skill_id) for skill_id, payload in stale_payloads],
+            )
+        return GlobalSkillSourceCleanup(
+            affected_skill_ids=tuple(affected_skill_ids)
+        )
+
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:
@@ -223,6 +365,18 @@ class TrainingSkillStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS training_skill_source_tombstones (
+                    source_session_id TEXT PRIMARY KEY,
+                    owner_student_id TEXT NOT NULL,
+                    source_report_id TEXT NOT NULL,
+                    affected_candidate_ids_json TEXT NOT NULL,
+                    affected_skill_ids_json TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL
+                )
+                """
+            )
             connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
 
     @staticmethod
@@ -239,6 +393,36 @@ class TrainingSkillStore:
             (skill_id,),
         ).fetchone()
         return row is not None
+
+    @staticmethod
+    def _deleted_source_reference(
+        connection: sqlite3.Connection,
+        candidate: dict[str, Any],
+    ) -> str | None:
+        rows = connection.execute(
+            """
+            SELECT
+                source_session_id,
+                source_report_id,
+                affected_candidate_ids_json
+            FROM training_skill_source_tombstones
+            """
+        ).fetchall()
+        candidate_id = str(candidate.get("candidate_id", ""))
+        for raw_session_id, raw_report_id, raw_affected_ids in rows:
+            source_session_id = str(raw_session_id)
+            if _payload_references_source(
+                candidate,
+                source_session_id=source_session_id,
+                source_report_id=str(raw_report_id),
+            ):
+                return source_session_id
+            if (
+                candidate_id in _decode_string_list(raw_affected_ids)
+                and not _has_explicit_remaining_source_provenance(candidate)
+            ):
+                return source_session_id
+        return None
 
 
 def _validate_personal_skill_delete_identity(
@@ -366,8 +550,18 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         skill["scope"] = scope
         skill["owner_student_id"] = str(candidate.get("owner_student_id", ""))
         skill["source_session_id"] = str(candidate.get("source_session_id", ""))
+    if candidate.get("source_session_ids"):
         skill["source_session_ids"] = list(candidate.get("source_session_ids", []))
+    if candidate.get("source_report_ids"):
         skill["source_report_ids"] = list(candidate.get("source_report_ids", []))
+    if candidate.get("source_turn_patterns"):
+        skill["source_turn_patterns"] = list(
+            candidate.get("source_turn_patterns", [])
+        )
+    if candidate.get("source_provenance_schema_version"):
+        skill["source_provenance_schema_version"] = str(
+            candidate["source_provenance_schema_version"]
+        )
     if scope != "global" or candidate.get("rag_evidence_items"):
         skill["rag_evidence_items"] = list(candidate.get("rag_evidence_items", []))
     if scope != "global" or candidate.get("approval_dialogue"):
@@ -377,6 +571,138 @@ def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     if scope != "global" or candidate.get("external_evidence_checks"):
         skill["external_evidence_checks"] = list(candidate.get("external_evidence_checks", []))
     return _hydrate_skill_student_metadata(skill)
+
+
+def _decode_string_list(value: object) -> list[str]:
+    decoded = json.loads(str(value))
+    if not isinstance(decoded, list):
+        return []
+    return sorted(str(item) for item in decoded if str(item))
+
+
+def _payload_references_source(
+    payload: dict[str, Any],
+    *,
+    source_session_id: str,
+    source_report_id: str,
+) -> bool:
+    if str(payload.get("source_session_id", "")) == source_session_id:
+        return True
+    if source_session_id in _normalized_string_list(
+        payload.get("source_session_ids")
+    ):
+        return True
+    if source_report_id in _normalized_string_list(payload.get("source_report_ids")):
+        return True
+    for pattern in _mapping_list(payload.get("source_turn_patterns")):
+        if source_session_id in _normalized_string_list(pattern.get("session_ids")):
+            return True
+        if source_report_id in _normalized_string_list(
+            pattern.get("source_report_ids")
+        ):
+            return True
+    return False
+
+
+def _stale_global_skill_without_source(
+    skill: dict[str, Any],
+    *,
+    source_session_id: str,
+    source_report_id: str,
+) -> dict[str, Any]:
+    sanitized = dict(skill)
+    for key in (
+        "teaching_action_plan",
+        "problem_pattern",
+        "router_index",
+        "intervention",
+        "effect_tracking",
+        "teacher_analysis_context",
+        "rag_evidence_items",
+        "approval_dialogue",
+        "external_evidence_checks",
+        "reasoning_pattern_labels",
+        "trigger_item_labels",
+        "student_visible_summary",
+        "learning_action",
+        "activation_summary",
+        "effect_status_label",
+        "scope_label",
+    ):
+        sanitized.pop(key, None)
+    sanitized["title"] = "来源证据已变化的训练 Skill"
+    sanitized["description"] = "原 Skill 内容已失效，需基于剩余证据重新生成。"
+    sanitized["suggested_strategy"] = "重新生成并完成评审后，方可再次启用。"
+    sanitized["related_recommendations"] = []
+    sanitized.pop("source_session_id", None)
+    sanitized["source_session_ids"] = [
+        value
+        for value in _normalized_string_list(skill.get("source_session_ids"))
+        if value != source_session_id
+    ]
+    sanitized["source_report_ids"] = [
+        value
+        for value in _normalized_string_list(skill.get("source_report_ids"))
+        if value != source_report_id
+    ]
+    sanitized_patterns: list[dict[str, Any]] = []
+    for pattern in _mapping_list(skill.get("source_turn_patterns")):
+        next_pattern = dict(pattern)
+        next_pattern["session_ids"] = [
+            value
+            for value in _normalized_string_list(pattern.get("session_ids"))
+            if value != source_session_id
+        ]
+        next_pattern["source_report_ids"] = [
+            value
+            for value in _normalized_string_list(pattern.get("source_report_ids"))
+            if value != source_report_id
+        ]
+        if not next_pattern["session_ids"] and not next_pattern["source_report_ids"]:
+            continue
+        next_pattern["count"] = 0
+        next_pattern["source_report_count"] = len(
+            next_pattern["source_report_ids"]
+        )
+        sanitized_patterns.append(next_pattern)
+    sanitized["source_turn_patterns"] = sanitized_patterns
+    sanitized["source_report_count"] = len(sanitized["source_report_ids"])
+    sanitized["support_count"] = 0
+    sanitized["status"] = "stale_requires_review"
+    sanitized["effect_status"] = "insufficient_samples"
+    sanitized["source_summary"] = "来源证据已变化，需重新生成并评审后启用。"
+    applies_when = sanitized.get("applies_when")
+    if isinstance(applies_when, dict):
+        sanitized["applies_when"] = {
+            **applies_when,
+            "min_support_count": 0,
+        }
+    return sanitized
+
+
+def _mapping_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _has_explicit_remaining_source_provenance(
+    candidate: dict[str, Any],
+) -> bool:
+    if (
+        str(candidate.get("source_provenance_schema_version", ""))
+        != "training_candidate_sources.v1"
+    ):
+        return False
+    if _normalized_string_list(candidate.get("source_session_ids")):
+        return True
+    if _normalized_string_list(candidate.get("source_report_ids")):
+        return True
+    return any(
+        _normalized_string_list(pattern.get("session_ids"))
+        or _normalized_string_list(pattern.get("source_report_ids"))
+        for pattern in _mapping_list(candidate.get("source_turn_patterns"))
+    )
 
 
 def _hydrate_skill_student_metadata(skill: dict[str, Any]) -> dict[str, Any]:

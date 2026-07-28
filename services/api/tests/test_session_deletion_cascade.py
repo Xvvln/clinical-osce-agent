@@ -1,5 +1,7 @@
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 from fastapi import FastAPI
@@ -12,7 +14,11 @@ from app.services.osce_session_service import (
     OsceSessionService,
     SessionDeletionConflictError,
 )
-from app.services.osce_session_store import OsceSessionStore, SessionNotFoundError
+from app.services.osce_session_store import (
+    SESSION_DELETION_CLEANUP_VERSION,
+    OsceSessionStore,
+    SessionNotFoundError,
+)
 from app.services.report_store import (
     ReportDeletedError,
     ReportOutboxEvent,
@@ -20,15 +26,18 @@ from app.services.report_store import (
 )
 from app.services.student_profile_store import StudentProfileStore
 from app.services.training_event_store import (
+    TrainingEventDeletedSkillSourceError,
     TrainingEventStore,
     TrainingEventStreamDeletedError,
 )
 from app.services.training_skill_candidate_store import (
     TrainingSkillCandidateDeletedError,
+    TrainingSkillCandidateSourceDeletedError,
     TrainingSkillCandidateStore,
 )
 from app.services.training_skill_store import (
     TrainingSkillDeletedError,
+    TrainingSkillSourceDeletedError,
     TrainingSkillStore,
 )
 
@@ -95,6 +104,53 @@ def _global_candidate() -> dict[str, object]:
         "review": {
             "candidate_id": "global_skill_candidate_keep",
             "status": "approved",
+            "regression_passed": True,
+        },
+    }
+
+
+def _source_global_candidate(
+    *,
+    candidate_id: str,
+    trigger_item_id: str,
+    source_session_id: str,
+    review_status: str,
+) -> dict[str, object]:
+    source_report_id = f"{source_session_id}_report"
+    return {
+        "candidate_id": candidate_id,
+        "trigger_item_id": trigger_item_id,
+        "trigger_item_ids": [trigger_item_id],
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro"],
+        "title": f"source-derived-marker {candidate_id}",
+        "description": "source-derived-marker description",
+        "suggested_strategy": "source-derived-marker strategy",
+        "scope": "global",
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": [source_session_id, "remaining-source"],
+        "source_report_ids": [
+            source_report_id,
+            "remaining-source_report",
+        ],
+        "source_turn_patterns": [
+            {
+                "pattern_id": trigger_item_id,
+                "count": 2,
+                "session_ids": [source_session_id, "remaining-source"],
+                "source_report_ids": [
+                    source_report_id,
+                    "remaining-source_report",
+                ],
+                "source_report_count": 2,
+            }
+        ],
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": ["source-derived-marker recommendation"],
+        "review": {
+            "candidate_id": candidate_id,
+            "status": review_status,
             "regression_passed": True,
         },
     }
@@ -314,6 +370,310 @@ def test_delete_session_cascades_all_personal_artifacts_and_preserves_unrelated_
         service.training_skill_store.enable_candidate(target_candidate)
 
 
+def test_delete_session_cleans_personal_and_global_derivatives_across_follow_up_sessions(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    student_id = "student-derived-owner"
+    other_student_id = "student-derived-other"
+    source_session_id = str(
+        service.create_session("appendicitis_001", student_id)[
+            "session_id"
+        ]
+    )
+    personal_candidate = _personal_candidate(
+        session_id=source_session_id,
+        student_id=student_id,
+    )
+    _save_candidate_and_skill(service, personal_candidate)
+
+    reviewed_global = _source_global_candidate(
+        candidate_id="candidate_global_affected",
+        trigger_item_id="global_affected",
+        source_session_id=source_session_id,
+        review_status="approved",
+    )
+    unreviewed_global = _source_global_candidate(
+        candidate_id="candidate_global_unreviewed",
+        trigger_item_id="global_unreviewed",
+        source_session_id=source_session_id,
+        review_status="ready_for_review",
+    )
+    unrelated_global = {
+        **_global_candidate(),
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": ["unrelated-source"],
+        "source_report_ids": ["unrelated-source_report"],
+    }
+    _save_candidate_and_skill(service, reviewed_global)
+    service.training_skill_candidate_store.save_candidate(
+        unreviewed_global,
+        dict(unreviewed_global["review"]),
+    )
+    _save_candidate_and_skill(service, unrelated_global)
+
+    owner_follow_up_id = str(
+        service.create_session("appendicitis_001", student_id)[
+            "session_id"
+        ]
+    )
+    other_follow_up_id = str(
+        service.create_session("appendicitis_001", other_student_id)[
+            "session_id"
+        ]
+    )
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    affected_global_skill_id = "skill_global_affected"
+    unrelated_global_skill_id = "skill_global_keep"
+    owner_before = service.session_store.get_session(owner_follow_up_id)
+    other_before = service.session_store.get_session(other_follow_up_id)
+    assert owner_before is not None
+    assert other_before is not None
+    assert personal_skill_id in str(owner_before.payload)
+    assert affected_global_skill_id in str(owner_before.payload)
+    assert affected_global_skill_id in str(other_before.payload)
+    assert any(
+        event["payload"].get("skill_id") == affected_global_skill_id
+        for event in service.training_event_store.list_session_events(
+            other_follow_up_id
+        )
+        if event["event_type"] == "training_skill_applied"
+    )
+
+    assert service.delete_session(
+        source_session_id,
+        expected_student_id=student_id,
+    )
+
+    for follow_up_id in (owner_follow_up_id, other_follow_up_id):
+        stored = service.session_store.get_session(follow_up_id)
+        assert stored is not None
+        serialized = str(stored.payload)
+        assert source_session_id not in serialized
+        assert personal_skill_id not in serialized
+        assert affected_global_skill_id not in serialized
+        assert unrelated_global_skill_id in serialized
+        remaining_events = (
+            service.training_event_store.list_session_events(follow_up_id)
+        )
+        assert all(
+            personal_skill_id not in str(event["payload"])
+            and affected_global_skill_id not in str(event["payload"])
+            and source_session_id not in str(event["payload"])
+            for event in remaining_events
+        )
+        assert any(
+            event["payload"].get("skill_id")
+            == unrelated_global_skill_id
+            for event in remaining_events
+            if event["event_type"] == "training_skill_applied"
+        )
+
+    assert (
+        service.training_skill_candidate_store.get_candidate(
+            "candidate_global_unreviewed"
+        )
+        is None
+    )
+    stale_candidate = (
+        service.training_skill_candidate_store.get_candidate(
+            "candidate_global_affected"
+        )
+    )
+    assert stale_candidate is not None
+    assert stale_candidate["review"]["status"] == "stale_requires_review"
+    assert source_session_id not in str(stale_candidate)
+    assert "source-derived-marker" not in str(stale_candidate)
+    stale_skill = service.training_skill_store.get_skill(
+        affected_global_skill_id
+    )
+    assert stale_skill is not None
+    assert stale_skill["status"] == "stale_requires_review"
+    assert source_session_id not in str(stale_skill)
+    assert "source-derived-marker" not in str(stale_skill)
+    assert affected_global_skill_id not in {
+        skill["skill_id"]
+        for skill in service.training_skill_store.list_enabled_skills()
+    }
+    assert (
+        service.training_skill_candidate_store.get_candidate(
+            "global_skill_candidate_keep"
+        )
+        is not None
+    )
+    assert service.training_skill_store.get_skill(
+        unrelated_global_skill_id
+    ) is not None
+
+    restarted_service = _build_service(tmp_path)
+    assert restarted_service.delete_session(
+        source_session_id,
+        expected_student_id=student_id,
+    )
+    completed = restarted_service.session_store.get_session_deletion(
+        source_session_id
+    )
+    assert completed is not None
+    assert completed.cleanup_status == "completed"
+    assert (
+        completed.cleanup_version
+        == SESSION_DELETION_CLEANUP_VERSION
+    )
+
+    with pytest.raises(TrainingEventDeletedSkillSourceError):
+        restarted_service.training_event_store.append_event(
+            session_id="late-global-application",
+            case_id="appendicitis_001",
+            student_id=other_student_id,
+            event_type="training_skill_applied",
+            payload={"skill_id": affected_global_skill_id},
+        )
+    with pytest.raises(TrainingSkillCandidateSourceDeletedError):
+        restarted_service.training_skill_candidate_store.save_candidate(
+            reviewed_global,
+            dict(reviewed_global["review"]),
+        )
+    with pytest.raises(TrainingSkillSourceDeletedError):
+        restarted_service.training_skill_store.enable_candidate(
+            reviewed_global
+        )
+
+    regenerated_global = {
+        **reviewed_global,
+        "title": "基于剩余来源重新生成的全局 Skill",
+        "description": "仅使用 remaining-source 重新生成。",
+        "suggested_strategy": "使用剩余证据继续训练。",
+        "source_session_ids": ["remaining-source"],
+        "source_report_ids": ["remaining-source_report"],
+        "source_turn_patterns": [
+            {
+                "pattern_id": "global_affected",
+                "count": 1,
+                "session_ids": ["remaining-source"],
+                "source_report_ids": ["remaining-source_report"],
+                "source_report_count": 1,
+            }
+        ],
+        "source_report_count": 1,
+        "support_count": 1,
+    }
+    restarted_service.training_skill_candidate_store.save_candidate(
+        regenerated_global,
+        dict(regenerated_global["review"]),
+    )
+    assert restarted_service.training_skill_store.enable_candidate(
+        regenerated_global
+    )
+    regenerated_session_id = str(
+        restarted_service.create_session(
+            "appendicitis_001",
+            other_student_id,
+        )["session_id"]
+    )
+    regenerated_session = restarted_service.session_store.get_session(
+        regenerated_session_id
+    )
+    assert regenerated_session is not None
+    assert affected_global_skill_id in str(regenerated_session.payload)
+    assert source_session_id not in str(regenerated_session.payload)
+    assert "remaining-source" in str(regenerated_session.payload)
+    regenerated_events = (
+        restarted_service.training_event_store.list_session_events(
+            regenerated_session_id
+        )
+    )
+    regenerated_application = next(
+        event
+        for event in regenerated_events
+        if event["event_type"] == "training_skill_applied"
+        and event["payload"].get("skill_id") == affected_global_skill_id
+    )
+    assert regenerated_application["payload"][
+        "source_provenance_schema_version"
+    ] == "training_candidate_sources.v1"
+    assert regenerated_application["payload"]["source_session_ids"] == [
+        "remaining-source"
+    ]
+    assert source_session_id not in str(regenerated_application["payload"])
+
+
+def test_concurrent_late_session_create_is_scrubbed_without_partial_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    creating_service = _build_service(tmp_path)
+    student_id = "student-late-create-race"
+    source_session_id = str(
+        creating_service.create_session(
+            "appendicitis_001",
+            student_id,
+        )["session_id"]
+    )
+    personal_candidate = _personal_candidate(
+        session_id=source_session_id,
+        student_id=student_id,
+    )
+    _save_candidate_and_skill(creating_service, personal_candidate)
+    personal_skill_id = f"skill_personal_{source_session_id}"
+
+    create_reached_store = Event()
+    allow_create_to_continue = Event()
+    original_create_session = (
+        creating_service.session_store.create_session
+    )
+
+    def paused_create_session(session: OsceSession) -> int:
+        create_reached_store.set()
+        assert allow_create_to_continue.wait(timeout=5)
+        return original_create_session(session)
+
+    monkeypatch.setattr(
+        creating_service.session_store,
+        "create_session",
+        paused_create_session,
+    )
+    deleting_service = _build_service(tmp_path)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        create_future = executor.submit(
+            creating_service.create_session,
+            "appendicitis_001",
+            student_id,
+        )
+        assert create_reached_store.wait(timeout=5)
+        try:
+            assert deleting_service.delete_session(
+                source_session_id,
+                expected_student_id=student_id,
+            )
+        finally:
+            allow_create_to_continue.set()
+        created_payload = create_future.result(timeout=5)
+
+    created_session_id = str(created_payload["session_id"])
+    stored = creating_service.session_store.get_session(
+        created_session_id
+    )
+    assert stored is not None
+    assert personal_skill_id not in str(stored.payload)
+    assert source_session_id not in str(stored.payload)
+    events = creating_service.training_event_store.list_session_events(
+        created_session_id
+    )
+    assert events
+    assert all(
+        personal_skill_id not in str(event["payload"])
+        and source_session_id not in str(event["payload"])
+        for event in events
+    )
+    assert all(
+        not (
+            event["event_type"] == "training_skill_applied"
+            and event["payload"].get("skill_id") == personal_skill_id
+        )
+        for event in events
+    )
+
+
 def test_delete_session_failure_stays_pending_and_same_owner_retry_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -424,6 +784,154 @@ def test_delete_session_fails_closed_on_personal_artifact_ownership_conflict(
         )
         is not None
     )
+
+
+def test_delete_session_preflights_cross_owner_derived_reference_before_tombstoning_source(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+    source_owner = "student-source-owner"
+    source_session_id = str(
+        service.create_session("appendicitis_001", source_owner)[
+            "session_id"
+        ]
+    )
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    conflicting_follow_up = OsceSession(
+        session_id="cross-owner-derived-reference",
+        student_id="student-other-owner",
+        case_id="appendicitis_001",
+        stage="case_intro",
+        active_skill_context={
+            "skill_index": [{"skill_id": personal_skill_id}],
+            "selected_skills": [{"skill_id": personal_skill_id}],
+            "skipped_reasons": [],
+        },
+    )
+    service.session_store.create_session(conflicting_follow_up)
+
+    with pytest.raises(SessionDeletionConflictError, match="归属冲突"):
+        service.delete_session(
+            source_session_id,
+            expected_student_id=source_owner,
+        )
+
+    assert service.session_store.get_session(source_session_id) is not None
+    assert (
+        service.session_store.get_session_deletion(source_session_id)
+        is None
+    )
+    preserved = service.session_store.get_session(
+        conflicting_follow_up.session_id
+    )
+    assert preserved is not None
+    assert personal_skill_id in str(preserved.payload)
+
+
+@pytest.mark.parametrize(
+    ("conflict_store", "completed_cleanup_version"),
+    [
+        ("session", None),
+        ("event", SESSION_DELETION_CLEANUP_VERSION - 1),
+    ],
+)
+def test_deletion_recovery_preflights_cross_owner_references_before_global_cleanup(
+    tmp_path: Path,
+    conflict_store: str,
+    completed_cleanup_version: int | None,
+) -> None:
+    service = _build_service(tmp_path)
+    source_owner = "student-recovery-source"
+    source_session_id = str(
+        service.create_session("appendicitis_001", source_owner)[
+            "session_id"
+        ]
+    )
+    reviewed_global = _source_global_candidate(
+        candidate_id="candidate_recovery_global",
+        trigger_item_id="recovery_global",
+        source_session_id=source_session_id,
+        review_status="approved",
+    )
+    _save_candidate_and_skill(service, reviewed_global)
+    global_candidate_id = str(reviewed_global["candidate_id"])
+    global_skill_id = "skill_recovery_global"
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    candidate_before = (
+        service.training_skill_candidate_store.get_candidate(
+            global_candidate_id
+        )
+    )
+    skill_before = service.training_skill_store.get_skill(global_skill_id)
+    assert candidate_before is not None
+    assert skill_before is not None
+
+    deletion = service.session_store.begin_session_deletion(
+        source_session_id,
+        source_owner,
+    )
+    assert deletion is not None
+    if completed_cleanup_version is not None:
+        with sqlite3.connect(service.session_store.database_path) as connection:
+            connection.execute(
+                """
+                UPDATE osce_session_tombstones
+                SET
+                    cleanup_status = 'completed',
+                    cleanup_completed_at = deleted_at,
+                    cleanup_version = ?
+                WHERE session_id = ?
+                """,
+                (completed_cleanup_version, source_session_id),
+            )
+
+    cross_owner_session_id = "cross-owner-recovery-reference"
+    if conflict_store == "session":
+        service.session_store.create_session(
+            OsceSession(
+                session_id=cross_owner_session_id,
+                student_id="student-recovery-other",
+                case_id="appendicitis_001",
+                stage="case_intro",
+                active_skill_context={
+                    "skill_index": [{"skill_id": personal_skill_id}],
+                    "selected_skills": [{"skill_id": personal_skill_id}],
+                    "skipped_reasons": [],
+                },
+            )
+        )
+    else:
+        service.training_event_store.append_event(
+            session_id=cross_owner_session_id,
+            case_id="appendicitis_001",
+            student_id="student-recovery-other",
+            event_type="training_skill_applied",
+            payload={
+                "skill_id": personal_skill_id,
+                "owner_student_id": "student-recovery-other",
+                "source_session_id": source_session_id,
+            },
+        )
+
+    with pytest.raises(SessionDeletionConflictError, match="归属冲突"):
+        service.delete_session(
+            source_session_id,
+            expected_student_id=source_owner,
+        )
+
+    assert (
+        service.training_skill_candidate_store.get_candidate(
+            global_candidate_id
+        )
+        == candidate_before
+    )
+    assert service.training_skill_store.get_skill(global_skill_id) == skill_before
+    if conflict_store == "session":
+        assert service.session_store.get_session(cross_owner_session_id) is not None
+    else:
+        assert service.training_event_store.list_session_events(
+            cross_owner_session_id
+        )
 
 
 def test_legacy_tombstone_is_adopted_only_by_residual_authoritative_owner(
@@ -598,6 +1106,83 @@ def test_process_startup_resumes_pending_session_deletion_after_restart(
     assert legacy_completed.user_id == legacy_student_id
     assert legacy_completed.cleanup_status == "completed"
     assert restarted_service.report_store.get_report(legacy_session_id) is None
+
+
+def test_restart_upgrades_completed_legacy_cleanup_and_removes_derived_references(
+    tmp_path: Path,
+) -> None:
+    first_service = _build_service(tmp_path)
+    student_id = "student-cleanup-upgrade"
+    source_session_id = str(
+        first_service.create_session("appendicitis_001", student_id)[
+            "session_id"
+        ]
+    )
+    personal_candidate = _personal_candidate(
+        session_id=source_session_id,
+        student_id=student_id,
+    )
+    _save_candidate_and_skill(first_service, personal_candidate)
+    follow_up_id = str(
+        first_service.create_session("appendicitis_001", student_id)[
+            "session_id"
+        ]
+    )
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    before = first_service.session_store.get_session(follow_up_id)
+    assert before is not None
+    assert personal_skill_id in str(before.payload)
+
+    assert first_service.session_store.delete_session(source_session_id)
+    with sqlite3.connect(first_service.session_store.database_path) as connection:
+        connection.execute(
+            """
+            UPDATE osce_session_tombstones
+            SET cleanup_version = ?
+            WHERE session_id = ?
+            """,
+            (
+                SESSION_DELETION_CLEANUP_VERSION - 1,
+                source_session_id,
+            ),
+        )
+    legacy_completed = first_service.session_store.get_session_deletion(
+        source_session_id
+    )
+    assert legacy_completed is not None
+    assert legacy_completed.cleanup_status == "completed"
+    assert (
+        legacy_completed.cleanup_version
+        < SESSION_DELETION_CLEANUP_VERSION
+    )
+
+    restarted_service = _build_service(tmp_path)
+    assert restarted_service.resume_pending_session_deletions() == {
+        "scanned": 1,
+        "adopted": 0,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+    upgraded = restarted_service.session_store.get_session_deletion(
+        source_session_id
+    )
+    assert upgraded is not None
+    assert upgraded.cleanup_status == "completed"
+    assert (
+        upgraded.cleanup_version
+        == SESSION_DELETION_CLEANUP_VERSION
+    )
+    after = restarted_service.session_store.get_session(follow_up_id)
+    assert after is not None
+    assert personal_skill_id not in str(after.payload)
+    assert all(
+        personal_skill_id not in str(event["payload"])
+        for event in restarted_service.training_event_store.list_session_events(
+            follow_up_id
+        )
+    )
 
 
 def test_pending_deletion_recovery_isolates_failures(

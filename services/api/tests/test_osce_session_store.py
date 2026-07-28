@@ -9,9 +9,11 @@ import pytest
 from app.services.osce_session_service import OsceSession
 from app.services.osce_session_store import (
     DATABASE_SCHEMA_VERSION,
+    SESSION_DELETION_CLEANUP_VERSION,
     OsceSessionStore,
     SessionAlreadyExistsError,
     SessionDeletionRecord,
+    SessionDerivedReferenceOwnershipError,
     SessionDeletedError,
     SessionNotFoundError,
     SessionWriteConflictError,
@@ -155,6 +157,7 @@ def test_legacy_schema_migrates_once_under_concurrent_initialization(tmp_path: P
         "deleted_at",
         "cleanup_status",
         "cleanup_completed_at",
+        "cleanup_version",
     } <= tombstone_columns
 
 
@@ -173,6 +176,7 @@ def test_v2_tombstones_migrate_as_completed_without_inventing_ownership(
         deleted_at="2026-01-02T00:00:00+00:00",
         cleanup_status="completed",
         cleanup_completed_at="2026-01-02T00:00:00+00:00",
+        cleanup_version=1,
     )
     assert store.is_session_deleted("legacy-deleted") is True
     assert store.begin_session_deletion("legacy-deleted", "student-a") is None
@@ -180,7 +184,10 @@ def test_v2_tombstones_migrate_as_completed_without_inventing_ownership(
         store.get_session_deletion("legacy-deleted")
     ]
     with sqlite3.connect(database_path) as connection:
-        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert (
+            int(connection.execute("PRAGMA user_version").fetchone()[0])
+            == DATABASE_SCHEMA_VERSION
+        )
 
 
 def test_legacy_tombstone_adoption_is_atomic_and_becomes_pending(
@@ -204,6 +211,7 @@ def test_legacy_tombstone_adoption_is_atomic_and_becomes_pending(
         deleted_at="2026-01-02T00:00:00+00:00",
         cleanup_status="pending",
         cleanup_completed_at=None,
+        cleanup_version=SESSION_DELETION_CLEANUP_VERSION,
     )
     assert store.list_pending_deletions() == [adopted]
     assert (
@@ -427,3 +435,213 @@ def test_missing_session_update_is_typed_and_delete_keeps_boolean_contract(tmp_p
     with pytest.raises(SessionNotFoundError):
         store.update_session(missing_session, expected_revision=1)
     assert store.delete_session(missing_session.session_id) is False
+
+
+def test_deleted_skill_source_scrubs_dependent_sessions_and_blocks_stale_reintroduction(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "sessions.sqlite3"
+    store = OsceSessionStore(database_path)
+    source_session_id = "source-session"
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    personal_candidate_id = f"personal_skill_candidate_{source_session_id}"
+    source_report_id = f"{source_session_id}_report"
+    affected_global_skill_id = "skill_global_affected"
+    follow_up = _session("follow-up")
+    follow_up.active_skill_context = {
+        "skill_index": [
+            {"skill_id": personal_skill_id, "title": "deleted"},
+            {"skill_id": affected_global_skill_id, "title": "global deleted"},
+            {"skill_id": "skill_keep", "title": "keep"},
+        ],
+        "selected_skills": [
+            {
+                "skill_id": personal_skill_id,
+                "title": "deleted",
+                "suggested_strategy": "deleted strategy",
+            },
+            {
+                "skill_id": affected_global_skill_id,
+                "title": "global deleted",
+                "suggested_strategy": "global deleted strategy",
+            },
+            {
+                "skill_id": "skill_keep",
+                "title": "keep",
+                "suggested_strategy": "keep strategy",
+            },
+        ],
+        "skipped_reasons": [
+            {"skill_id": personal_skill_id, "reason": "not selected"},
+        ],
+    }
+    follow_up.evolution_candidates = [
+        "deleted：deleted strategy",
+        "global deleted：global deleted strategy",
+        "keep：keep strategy",
+    ]
+    follow_up.agent_turn_memory = [
+        {
+            "selected_skill_ids": [
+                personal_skill_id,
+                affected_global_skill_id,
+                "skill_keep",
+            ],
+        }
+    ]
+    follow_up.pedagogy_state = {
+        "skill_context_ids": [
+            personal_skill_id,
+            affected_global_skill_id,
+        ],
+        "coaching_mode": "skill_guided",
+    }
+    follow_up.agent_decision_trace = [
+        {
+            "skill_context_ids": [
+                personal_skill_id,
+                affected_global_skill_id,
+            ],
+            "coaching_mode": "skill_guided",
+        }
+    ]
+    store.create_session(follow_up)
+    stale_record = store.get_session(follow_up.session_id)
+    assert stale_record is not None
+
+    assert store.delete_skill_source_references(
+        source_session_id=source_session_id,
+        owner_user_id=follow_up.student_id,
+        personal_skill_id=personal_skill_id,
+        personal_candidate_id=personal_candidate_id,
+        source_report_id=source_report_id,
+        affected_global_skill_ids=[affected_global_skill_id],
+    ) == [follow_up.session_id]
+
+    scrubbed = store.get_session(follow_up.session_id)
+    assert scrubbed is not None
+    assert scrubbed.revision == 2
+    assert personal_skill_id not in str(scrubbed.payload)
+    assert affected_global_skill_id not in str(scrubbed.payload)
+    assert scrubbed.payload["evolution_candidates"] == [
+        "keep：keep strategy"
+    ]
+    assert scrubbed.payload["pedagogy_state"]["skill_context_ids"] == []
+    assert scrubbed.payload["pedagogy_state"]["coaching_mode"] == "socratic"
+    assert scrubbed.payload["agent_turn_memory"] == []
+    assert scrubbed.payload["agent_decision_trace"] == []
+    assert OsceSessionStore(database_path).delete_skill_source_references(
+        source_session_id=source_session_id,
+        owner_user_id=follow_up.student_id,
+        personal_skill_id=personal_skill_id,
+        personal_candidate_id=personal_candidate_id,
+        source_report_id=source_report_id,
+        affected_global_skill_ids=[affected_global_skill_id],
+    ) == [follow_up.session_id]
+
+    stale_session = OsceSession(**stale_record.payload)
+    with pytest.raises(SessionWriteConflictError):
+        store.update_session(
+            stale_session,
+            expected_revision=stale_record.revision,
+        )
+
+    latest_session = OsceSession(**scrubbed.payload)
+    latest_session.active_skill_context["selected_skills"].append(
+        {
+            "skill_id": personal_skill_id,
+            "title": "late",
+            "suggested_strategy": "late strategy",
+        }
+    )
+    assert store.update_session(
+        latest_session,
+        expected_revision=scrubbed.revision,
+    ) == 3
+    persisted_after_late_update = store.get_session(follow_up.session_id)
+    assert persisted_after_late_update is not None
+    assert personal_skill_id not in str(persisted_after_late_update.payload)
+
+    late_created = _session("late-created")
+    late_created.active_skill_context = {
+        "skill_index": [{"skill_id": personal_skill_id}],
+        "selected_skills": [
+            {
+                "skill_id": personal_skill_id,
+                "title": "late",
+                "suggested_strategy": "late strategy",
+            }
+        ],
+        "skipped_reasons": [],
+    }
+    late_created.evolution_candidates = ["late：late strategy"]
+    store.create_session(late_created)
+    persisted_late_created = store.get_session(late_created.session_id)
+    assert persisted_late_created is not None
+    assert personal_skill_id not in str(persisted_late_created.payload)
+    assert persisted_late_created.payload["evolution_candidates"] == []
+
+    wrong_owner_late_create = _session("wrong-owner-late-create")
+    wrong_owner_late_create.student_id = "student-b"
+    wrong_owner_late_create.active_skill_context = {
+        "skill_index": [{"skill_id": personal_skill_id}],
+        "selected_skills": [{"skill_id": personal_skill_id}],
+        "skipped_reasons": [],
+    }
+    with pytest.raises(SessionDerivedReferenceOwnershipError):
+        store.create_session(wrong_owner_late_create)
+    assert store.get_session(wrong_owner_late_create.session_id) is None
+
+    global_late_create = _session("global-late-create")
+    global_late_create.student_id = "student-b"
+    global_late_create.active_skill_context = {
+        "skill_index": [{"skill_id": affected_global_skill_id}],
+        "selected_skills": [
+            {
+                "skill_id": affected_global_skill_id,
+                "title": "late global",
+                "suggested_strategy": "late strategy",
+            }
+        ],
+        "skipped_reasons": [],
+    }
+    global_late_create.evolution_candidates = ["late global：late strategy"]
+    store.create_session(global_late_create)
+    persisted_global_late_create = store.get_session(
+        global_late_create.session_id
+    )
+    assert persisted_global_late_create is not None
+    assert affected_global_skill_id not in str(
+        persisted_global_late_create.payload
+    )
+
+
+def test_deleted_skill_source_owner_conflict_preserves_other_users_session(
+    tmp_path: Path,
+) -> None:
+    store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    source_session_id = "source-conflict"
+    personal_skill_id = f"skill_personal_{source_session_id}"
+    other_owner = _session("other-owner-follow-up")
+    other_owner.student_id = "student-b"
+    other_owner.active_skill_context = {
+        "skill_index": [{"skill_id": personal_skill_id}],
+        "selected_skills": [{"skill_id": personal_skill_id}],
+        "skipped_reasons": [],
+    }
+    store.create_session(other_owner)
+
+    with pytest.raises(SessionDerivedReferenceOwnershipError):
+        store.delete_skill_source_references(
+            source_session_id=source_session_id,
+            owner_user_id="student-a",
+            personal_skill_id=personal_skill_id,
+            personal_candidate_id=(
+                f"personal_skill_candidate_{source_session_id}"
+            ),
+            source_report_id=f"{source_session_id}_report",
+        )
+
+    preserved = store.get_session(other_owner.session_id)
+    assert preserved is not None
+    assert personal_skill_id in str(preserved.payload)

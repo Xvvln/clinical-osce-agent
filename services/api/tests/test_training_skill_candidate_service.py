@@ -1105,6 +1105,11 @@ def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_m
             }
 
     insights = {
+        "analysis_session_ids": ["session_one", "session_two"],
+        "analysis_report_ids": [
+            "session_one_report",
+            "session_two_report",
+        ],
         "session_count": 2,
         "report_count": 2,
         "frequent_missed_items": [
@@ -1184,8 +1189,28 @@ def test_training_skill_candidate_service_uses_agent_turn_patterns_when_report_m
             "status": "draft",
             "source_report_count": 2,
             "support_count": 2,
+            "source_provenance_schema_version": "training_candidate_sources.v1",
+            "source_session_ids": ["session_one", "session_two"],
             "source_report_ids": ["session_one_report", "session_two_report"],
-            "source_turn_patterns": ["turn_pattern_off_topic_redirect"],
+            "source_turn_patterns": [
+                {
+                    "pattern_id": "turn_pattern_off_topic_redirect",
+                    "pattern_type": "off_topic_redirect",
+                    "title": "偏题或寒暄后需要回到问诊目标",
+                    "count": 2,
+                    "trigger_item_ids": [
+                        "turn_intent:unknown_history_intent",
+                        "turn_policy:patient_context_redirect",
+                    ],
+                    "case_ids": ["appendicitis_001"],
+                    "session_ids": ["session_one", "session_two"],
+                    "source_report_ids": [
+                        "session_one_report",
+                        "session_two_report",
+                    ],
+                    "source_report_count": 2,
+                }
+            ],
             "related_recommendations": ["rubric:appendicitis_001_rubric.item.ht_location"],
         }
     ]

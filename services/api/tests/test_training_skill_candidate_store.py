@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from app.services.training_skill_candidate_store import (
+    TrainingSkillCandidateSourceDeletedError,
     TrainingSkillCandidateDeletedError,
     TrainingSkillCandidateOwnershipError,
     TrainingSkillCandidateStore,
@@ -337,6 +338,159 @@ def test_training_skill_candidate_store_does_not_approve_blocked_candidate(tmp_p
 
     assert approved is False
     assert TrainingSkillCandidateStore(database_path).get_candidate("skill_candidate_ht_location")["review"]["status"] == "blocked_by_regression"
+
+
+def test_global_candidate_source_cleanup_deletes_unreviewed_stales_reviewed_and_fences_late_writes(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    store = TrainingSkillCandidateStore(database_path)
+    source_session_id = "source-session"
+    source_report_id = f"{source_session_id}_report"
+
+    def candidate(candidate_id: str, review_status: str) -> dict[str, object]:
+        return {
+            "candidate_id": candidate_id,
+            "trigger_item_id": candidate_id,
+            "title": candidate_id,
+            "description": "derived candidate",
+            "suggested_strategy": "review evidence",
+            "scope": "global",
+            "source_session_ids": [source_session_id, "kept-session"],
+            "source_report_ids": [source_report_id, "kept-session_report"],
+            "source_turn_patterns": [
+                {
+                    "pattern_id": "turn-pattern",
+                    "count": 2,
+                    "session_ids": [source_session_id, "kept-session"],
+                    "source_report_ids": [
+                        source_report_id,
+                        "kept-session_report",
+                    ],
+                    "source_report_count": 2,
+                }
+            ],
+            "source_report_count": 2,
+            "support_count": 2,
+            "review": {
+                "candidate_id": candidate_id,
+                "status": review_status,
+                "regression_passed": True,
+            },
+        }
+
+    unreviewed = candidate("candidate-unreviewed", "ready_for_review")
+    reviewed = candidate("candidate-reviewed", "approved")
+    unrelated = {
+        **candidate("candidate-unrelated", "approved"),
+        "source_session_ids": ["unrelated-session"],
+        "source_report_ids": ["unrelated-session_report"],
+        "source_turn_patterns": [],
+    }
+    for item in (unreviewed, reviewed, unrelated):
+        store.save_candidate(item, dict(item["review"]))
+
+    cleanup = store.remove_global_source_contributions(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        source_report_id=source_report_id,
+    )
+
+    assert cleanup.deleted_candidate_ids == ("candidate-unreviewed",)
+    assert cleanup.stale_candidate_ids == ("candidate-reviewed",)
+    assert cleanup.affected_candidate_ids == (
+        "candidate-reviewed",
+        "candidate-unreviewed",
+    )
+    assert store.get_candidate("candidate-unreviewed") is None
+    stale = store.get_candidate("candidate-reviewed")
+    assert stale is not None
+    assert stale["source_session_ids"] == ["kept-session"]
+    assert stale["source_report_ids"] == ["kept-session_report"]
+    assert source_session_id not in str(stale)
+    assert source_report_id not in str(stale)
+    assert stale["support_count"] == 0
+    assert stale["review"]["status"] == "stale_requires_review"
+    assert stale["title"] == "来源证据已变化的训练候选"
+    assert "derived candidate" not in str(stale)
+    assert store.get_candidate("candidate-unrelated") is not None
+    assert TrainingSkillCandidateStore(
+        database_path
+    ).remove_global_source_contributions(
+        source_session_id=source_session_id,
+        owner_student_id="student-a",
+        source_report_id=source_report_id,
+    ) == cleanup
+
+    with pytest.raises(TrainingSkillCandidateSourceDeletedError):
+        store.save_candidate(unreviewed, dict(unreviewed["review"]))
+
+    regenerated = {
+        **unreviewed,
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": ["kept-session"],
+        "source_report_ids": ["kept-session_report"],
+        "source_turn_patterns": [],
+    }
+    store.save_candidate(regenerated, dict(regenerated["review"]))
+    assert store.get_candidate("candidate-unreviewed") is not None
+
+    with pytest.raises(TrainingSkillCandidateOwnershipError):
+        store.remove_global_source_contributions(
+            source_session_id=source_session_id,
+            owner_student_id="student-b",
+            source_report_id=source_report_id,
+        )
+
+
+def test_reviewed_candidate_stays_stale_when_remaining_source_is_later_deleted(
+    tmp_path,
+) -> None:
+    store = TrainingSkillCandidateStore(
+        tmp_path / "training_skill_candidates.sqlite3"
+    )
+    candidate = {
+        "candidate_id": "candidate-reviewed-sequential",
+        "trigger_item_id": "reviewed-sequential",
+        "title": "source-derived title",
+        "description": "source-derived description",
+        "suggested_strategy": "source-derived strategy",
+        "scope": "global",
+        "source_provenance_schema_version": "training_candidate_sources.v1",
+        "source_session_ids": ["source-a", "source-b"],
+        "source_report_ids": ["source-a_report", "source-b_report"],
+        "source_report_count": 2,
+        "support_count": 2,
+        "review": {
+            "candidate_id": "candidate-reviewed-sequential",
+            "status": "approved",
+            "regression_passed": True,
+        },
+    }
+    store.save_candidate(candidate, dict(candidate["review"]))
+
+    first = store.remove_global_source_contributions(
+        source_session_id="source-a",
+        owner_student_id="student-a",
+        source_report_id="source-a_report",
+    )
+    second = store.remove_global_source_contributions(
+        source_session_id="source-b",
+        owner_student_id="student-a",
+        source_report_id="source-b_report",
+    )
+
+    assert first.stale_candidate_ids == (
+        "candidate-reviewed-sequential",
+    )
+    assert second.stale_candidate_ids == (
+        "candidate-reviewed-sequential",
+    )
+    stale = store.get_candidate("candidate-reviewed-sequential")
+    assert stale is not None
+    assert stale["review"]["status"] == "stale_requires_review"
+    assert stale["source_session_ids"] == []
+    assert stale["source_report_ids"] == []
 
 
 def test_personal_candidate_delete_is_exact_idempotent_and_blocks_late_saves(tmp_path) -> None:
