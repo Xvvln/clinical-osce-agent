@@ -223,7 +223,10 @@ def _test_vertex_gemini_adc(*, project: str, location: str, model: str, proxy_ur
             vertexai=True,
             project=project,
             location=location,
-            http_options=build_google_genai_http_options(proxy_url),
+            http_options=build_google_genai_http_options(
+                proxy_url,
+                timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
+            ),
         )
         client.models.generate_content(
             model=model,
@@ -254,7 +257,10 @@ def _test_vertex_gemini_api_key(*, api_key: str, model: str, proxy_url: str) -> 
         client = genai.Client(
             vertexai=True,
             api_key=api_key,
-            http_options=build_google_genai_http_options(proxy_url),
+            http_options=build_google_genai_http_options(
+                proxy_url,
+                timeout_seconds=STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS,
+            ),
         )
         client.models.generate_content(
             model=model,

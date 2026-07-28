@@ -5,7 +5,9 @@ import pytest
 
 from app.services import google_genai_http_options as http_options_module
 from app.services.google_genai_http_options import (
+    DEFAULT_GOOGLE_GENAI_TIMEOUT_SECONDS,
     INVALID_GOOGLE_GENAI_PROXY_MESSAGE,
+    INVALID_GOOGLE_GENAI_TIMEOUT_MESSAGE,
     RUNTIME_VERTEX_ADC_PROXY_UNSUPPORTED_MESSAGE,
     build_google_genai_http_options,
     require_direct_runtime_vertex_adc_proxy,
@@ -45,6 +47,11 @@ def test_google_genai_http_options_do_not_mutate_process_proxy_environment(monke
     assert direct_options.async_client_args["follow_redirects"] is False
     assert direct_options.async_client_args["trust_env"] is False
     assert "proxy" not in direct_options.async_client_args
+    assert direct_options.timeout == int(
+        DEFAULT_GOOGLE_GENAI_TIMEOUT_SECONDS * 1_000
+    )
+    assert direct_options.retry_options is not None
+    assert direct_options.retry_options.attempts == 1
     assert proxied_options.client_args == {
         "follow_redirects": False,
         "trust_env": False,
@@ -53,6 +60,34 @@ def test_google_genai_http_options_do_not_mutate_process_proxy_environment(monke
     assert proxied_options.async_client_args["follow_redirects"] is False
     assert proxied_options.async_client_args["trust_env"] is False
     assert proxied_options.async_client_args["proxy"] == "http://request-proxy.example:8080"
+
+
+def test_google_genai_http_options_accept_a_shorter_operation_timeout() -> None:
+    options = build_google_genai_http_options(
+        "direct",
+        timeout_seconds=5.0,
+    )
+
+    assert options.timeout == 5_000
+    assert options.retry_options is not None
+    assert options.retry_options.attempts == 1
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    [0, -1, float("inf"), float("nan"), True, "30"],
+)
+def test_google_genai_http_options_reject_invalid_timeouts(
+    timeout_seconds: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=INVALID_GOOGLE_GENAI_TIMEOUT_MESSAGE,
+    ):
+        build_google_genai_http_options(
+            "direct",
+            timeout_seconds=timeout_seconds,  # type: ignore[arg-type]
+        )
 
 
 def test_google_genai_http_options_keep_a_and_b_proxy_settings_isolated() -> None:

@@ -504,6 +504,11 @@ def test_student_model_config_test_vertex_gemini_adc_uses_adc_without_api_key(tm
         "follow_redirects": False,
         "trust_env": False,
     }
+    assert client_kwargs["http_options"].timeout == int(
+        student_model_config_service.STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS
+        * 1_000
+    )
+    assert client_kwargs["http_options"].retry_options.attempts == 1
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-3.1-pro-preview"
     assert "api_key" not in str(_FakeVertexGeminiClient.created)
@@ -578,6 +583,11 @@ def test_student_model_config_test_vertex_gemini_api_key_uses_express_mode_witho
         "trust_env": False,
         "proxy": "http://127.0.0.1:7897",
     }
+    assert client_kwargs["http_options"].timeout == int(
+        student_model_config_service.STUDENT_MODEL_CONFIG_TIMEOUT_SECONDS
+        * 1_000
+    )
+    assert client_kwargs["http_options"].retry_options.attempts == 1
     assert client_kwargs["http_options"].async_client_args["trust_env"] is False
     assert client_kwargs["http_options"].async_client_args["proxy"] == "http://127.0.0.1:7897"
     assert _FakeVertexGeminiModels.calls[0]["model"] == "gemini-2.5-flash"
