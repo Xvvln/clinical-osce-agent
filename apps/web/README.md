@@ -60,7 +60,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-打开浏览器访问 `http://localhost:3000`。同一浏览器演示时，学生端必须保留 `localhost`，管理端使用 `127.0.0.1`，让两端的 host-only 登录 Cookie 相互隔离。若 3000 端口被占用，请为学生端显式选择其他空闲端口并继续使用 `localhost`；不要把学生端改为 `127.0.0.1:3000`，也不要占用 Compose 管理端使用的 3001。
+打开浏览器访问 `http://localhost:3000`。同一浏览器演示时，学生端必须保留 `localhost`，管理端使用 `127.0.0.1`，让两端的 host-only 登录 Cookie 相互隔离。若 3000 端口被占用，请为学生端显式选择其他空闲端口并继续使用 `localhost`，同时把新入口加入 API 端的 `CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS`；不要把学生端改为 `127.0.0.1:3000`，也不要占用 Compose 管理端使用的 3001。
 
 ### ChromaDB 召回稳定性配置
 

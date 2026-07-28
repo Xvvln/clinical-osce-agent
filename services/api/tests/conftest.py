@@ -23,6 +23,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     runtime_model_config_store.clear()
     for env_name in [
         "CLINICAL_OSCE_DEPLOYMENT_MODE",
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
         "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG",
         "CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS",
         "CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS",

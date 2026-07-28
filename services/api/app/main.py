@@ -44,6 +44,7 @@ from app.services.admin_display_resolver import (
 )
 from app.services.api_call_log_service import api_call_log_store, reset_api_call_context, set_api_call_context
 from app.services.auth_store import auth_store
+from app.services.browser_origin_policy import browser_state_change_request_rejection_reason
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
     get_admin_teaching_focus_pattern,
@@ -434,6 +435,23 @@ async def bind_api_call_log_context(request: Request, call_next: Any) -> Respons
         return await call_next(request)
     finally:
         reset_api_call_context(token)
+
+
+@app.middleware("http")
+async def enforce_browser_state_change_origin(request: Request, call_next: Any) -> Response:
+    rejection_reason = browser_state_change_request_rejection_reason(
+        method=request.method,
+        path=request.url.path,
+        origin=request.headers.get("origin"),
+        referer=request.headers.get("referer"),
+        sec_fetch_site=request.headers.get("sec-fetch-site"),
+    )
+    if rejection_reason is not None:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "cross-origin state-changing request rejected"},
+        )
+    return await call_next(request)
 
 
 class AuthRegisterRequest(BaseModel):

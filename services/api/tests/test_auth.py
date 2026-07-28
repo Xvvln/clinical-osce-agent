@@ -30,9 +30,11 @@ def test_register_is_disabled_for_fixed_demo_accounts(client: TestClient) -> Non
 
 def test_register_is_disabled_in_production_deployment_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS", "https://osce.example")
 
     response = client.post(
         "/api/auth/register",
+        headers={"Origin": "https://osce.example", "Sec-Fetch-Site": "same-origin"},
         json={"email": "someone@example.test", "password": "safe-password-123", "display_name": "学生甲"},
     )
 
@@ -263,13 +265,17 @@ def test_production_mode_rejects_explicit_demo_accounts(
     student_email, student_password = _configure_demo_student(monkeypatch)
     admin_email, admin_password = _configure_demo_admin(monkeypatch)
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS", "https://osce.example")
+    browser_headers = {"Origin": "https://osce.example", "Sec-Fetch-Site": "same-origin"}
 
     student_response = client.post(
         "/api/auth/login",
+        headers=browser_headers,
         json={"email": student_email, "password": student_password},
     )
     admin_response = client.post(
         "/api/auth/login",
+        headers=browser_headers,
         json={"email": admin_email, "password": admin_password},
     )
 

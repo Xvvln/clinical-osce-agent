@@ -359,10 +359,12 @@ def test_student_model_config_test_rejects_remote_provider_without_api_key(tmp_p
 
 def test_student_model_config_test_is_disabled_in_production_deployment_mode(monkeypatch) -> None:
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS", "https://osce.example")
 
     with TestClient(main.app) as client:
         response = client.post(
             "/api/model-config/test",
+            headers={"Origin": "https://osce.example", "Sec-Fetch-Site": "same-origin"},
             json={
                 "provider": "openai_compatible",
                 "api_key": "student-openai-secret",
@@ -854,6 +856,7 @@ def test_server_managed_model_config_ignores_previously_saved_user_runtime_confi
 
 def test_production_training_uses_environment_default_when_runtime_write_is_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS", "https://osce.example")
     monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
     monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
     monkeypatch.setenv("OSCE_OPENAI_API_KEY", "server-gemini-secret")
@@ -862,7 +865,11 @@ def test_production_training_uses_environment_default_when_runtime_write_is_disa
     monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
     client = _authenticated_client(tmp_path, monkeypatch, "student-prod-session@example.test")
 
-    response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    response = client.post(
+        "/api/sessions",
+        headers={"Origin": "https://osce.example", "Sec-Fetch-Site": "same-origin"},
+        json={"case_id": "appendicitis_001"},
+    )
 
     assert response.status_code == 200
     assert response.json()["case_id"] == "appendicitis_001"

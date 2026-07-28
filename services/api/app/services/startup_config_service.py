@@ -22,12 +22,18 @@ from app.services.deployment_config import (
     is_account_registration_supported,
     is_runtime_model_config_write_supported,
 )
+from app.services.browser_origin_policy import (
+    TRUSTED_BROWSER_ORIGINS_ENV_NAME,
+    resolve_trusted_browser_origin_config,
+)
 from app.services.model_config_service import build_admin_model_config
 from app.services.runtime_model_config_store import runtime_model_config_store
+
 
 def build_startup_config_self_check() -> dict[str, Any]:
     mode = get_deployment_mode()
     production = is_production_deployment_mode(mode)
+    browser_origin_config = resolve_trusted_browser_origin_config(mode)
     runtime_status = runtime_model_config_store.public_status()
     model_config = build_admin_model_config()
     issues = _build_startup_config_issues(mode, production, model_config["providers"])
@@ -53,6 +59,8 @@ def build_startup_config_self_check() -> dict[str, Any]:
             "runtime_write_supported": is_runtime_model_config_write_supported(mode),
             "account_registration_supported": is_account_registration_supported(mode),
             "configuration_source": "environment_only" if production else "environment_or_runtime_memory",
+            "trusted_browser_origins": sorted(browser_origin_config.origins),
+            "trusted_browser_origins_explicit": browser_origin_config.explicit,
         },
         "providers": model_config["providers"],
         "issues": issues,
@@ -71,6 +79,27 @@ def _build_startup_config_issues(
                 code="invalid_deployment_mode",
                 message=f"{DEPLOYMENT_MODE_ENV_NAME} must be one of {', '.join(ALLOWED_DEPLOYMENT_MODES)}.",
                 missing_env=[],
+            )
+        )
+
+    browser_origin_config = resolve_trusted_browser_origin_config(mode)
+    if browser_origin_config.invalid_values:
+        issues.append(
+            _issue(
+                code="invalid_trusted_browser_origins",
+                message=(
+                    f"{TRUSTED_BROWSER_ORIGINS_ENV_NAME} must contain exact browser origins "
+                    "without wildcards, paths, credentials, or null values; production origins must use HTTPS."
+                ),
+                missing_env=[],
+            )
+        )
+    elif production and not browser_origin_config.explicit:
+        issues.append(
+            _issue(
+                code="missing_trusted_browser_origins",
+                message=f"{TRUSTED_BROWSER_ORIGINS_ENV_NAME} is required in production deployment modes.",
+                missing_env=[TRUSTED_BROWSER_ORIGINS_ENV_NAME],
             )
         )
 
