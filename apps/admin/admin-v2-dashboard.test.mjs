@@ -230,6 +230,13 @@ test("admin v2 renders insight aggregation lists instead of a placeholder-only i
   assert.doesNotMatch(dashboardSource, /高频漏项、教学重点和来源热度已由后端聚合，用于生成候选 Skill 和教师复盘。/);
 });
 
+test("admin v2 renders rubric-normalized completion instead of comparing raw scores", () => {
+  for (const token of ["average_percentage", "formatNormalizedScoreMetric", "临床完成度", "人文完成度"]) {
+    assert.match(dashboardSource, new RegExp(token), `normalized analytics should expose ${token}`);
+  }
+  assert.doesNotMatch(dashboardSource, /item\.average_score\s*\/\s*10/);
+});
+
 test("admin v2 exposes actionable learning drills for all-user, case, and student analytics", () => {
   for (const label of ["可执行训练任务", "触发", "学生动作", "成功信号"]) {
     assert.match(dashboardSource, new RegExp(label), `learning analytics should expose ${label}`);

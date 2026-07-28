@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
+from app.services.report_score_metrics import aggregate_score_metrics, score_group_metric
 from app.services.report_store import ReportStore, report_store
 
 HUMANISTIC_DIMENSIONS = {
@@ -109,8 +110,7 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "case_count": len({str(session.get("case_id") or "") for session in sessions if session.get("case_id")}),
         "student_count": len({str(session.get("student_id") or "") for session in sessions if session.get("student_id")}),
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
-        "average_clinical_score": _average([_score_group_value(report, "clinical_osce") for report in reports]),
-        "average_humanistic_score": _average([_score_group_value(report, "humanistic_communication") for report in reports]),
+        **_score_analytics_fields(reports),
         "frequent_missed_items": _frequent_missed_items(reports),
         "frequent_humanistic_gaps": frequent_humanistic_gaps,
         "frequent_missed_opportunities": frequent_missed_opportunities,
@@ -137,8 +137,7 @@ def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[
         "session_count": len(sessions),
         "report_count": len(reports),
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
-        "average_clinical_score": _average([_score_group_value(report, "clinical_osce") for report in reports]),
-        "average_humanistic_score": _average([_score_group_value(report, "humanistic_communication") for report in reports]),
+        **_score_analytics_fields(reports),
         "frequent_missed_items": _frequent_missed_items(reports),
         "frequent_humanistic_gaps": frequent_humanistic_gaps,
         "frequent_missed_opportunities": frequent_missed_opportunities,
@@ -165,8 +164,7 @@ def _build_student_analytics(student_id: str, sessions: list[dict[str, Any]]) ->
         "session_count": len(sessions),
         "report_count": len(reports),
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
-        "average_clinical_score": _average([_score_group_value(report, "clinical_osce") for report in reports]),
-        "average_humanistic_score": _average([_score_group_value(report, "humanistic_communication") for report in reports]),
+        **_score_analytics_fields(reports),
         "case_titles": case_titles,
         "persistent_gaps": frequent_humanistic_gaps,
         "current_humanistic_gaps": current_humanistic_gaps,
@@ -569,8 +567,23 @@ def _training_drill_id(scope: str, scope_id: str, source: str, target: str) -> s
     return f"{scope}:{normalized_scope_id}:{source}:{target}"
 
 
-def _score_group_value(report: dict[str, Any], group_id: str) -> float:
-    return _float_value(_mapping(_mapping(report.get("score_groups")).get(group_id)).get("score"))
+def _score_analytics_fields(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    clinical_score = aggregate_score_metrics(
+        metric
+        for report in reports
+        if (metric := score_group_metric(report, "clinical_osce")) is not None
+    )
+    humanistic_score = aggregate_score_metrics(
+        metric
+        for report in reports
+        if (metric := score_group_metric(report, "humanistic_communication")) is not None
+    )
+    return {
+        "average_clinical_score": clinical_score["average_score"],
+        "average_humanistic_score": humanistic_score["average_score"],
+        "clinical_score": clinical_score,
+        "humanistic_score": humanistic_score,
+    }
 
 
 def _is_humanistic_gap(gap: dict[str, Any]) -> bool:

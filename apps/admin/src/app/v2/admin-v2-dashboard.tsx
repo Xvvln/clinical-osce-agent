@@ -510,12 +510,17 @@ type TrainingInsights = Readonly<{
 
 type HumanisticCommunicationInsight = Readonly<{
   report_count: number;
+  score_sample_count: number;
   average_score: number;
   max_score: number;
+  average_percentage: number | null;
   dimension_averages: readonly Readonly<{
     dimension_id: string;
     dimension_label: string;
+    sample_count: number;
     average_score: number;
+    average_max_score: number;
+    average_percentage: number | null;
   }>[];
   frequent_gaps: readonly Readonly<{
     gap_type: string;
@@ -539,6 +544,18 @@ type HumanisticCommunicationInsight = Readonly<{
     recent_average_score: number;
     delta: number;
   }>;
+  percentage_trend: Readonly<{
+    previous_average_score: number;
+    recent_average_score: number;
+    delta: number;
+  }>;
+}>;
+
+type AdminNormalizedScoreMetric = Readonly<{
+  sample_count: number;
+  average_score: number;
+  average_max_score: number;
+  average_percentage: number | null;
 }>;
 
 type AdminLearningGap = Readonly<{
@@ -581,6 +598,8 @@ type AdminCaseLearningAnalytics = Readonly<{
   average_total_score: number;
   average_clinical_score: number;
   average_humanistic_score: number;
+  clinical_score: AdminNormalizedScoreMetric;
+  humanistic_score: AdminNormalizedScoreMetric;
   frequent_missed_items: readonly AdminLearningGap[];
   frequent_humanistic_gaps: readonly AdminLearningGap[];
   frequent_missed_opportunities: readonly AdminLearningGap[];
@@ -596,6 +615,8 @@ type AdminStudentLearningAnalytics = Readonly<{
   average_total_score: number;
   average_clinical_score: number;
   average_humanistic_score: number;
+  clinical_score: AdminNormalizedScoreMetric;
+  humanistic_score: AdminNormalizedScoreMetric;
   case_titles: readonly string[];
   persistent_gaps: readonly AdminLearningGap[];
   current_humanistic_gaps: readonly AdminLearningGap[];
@@ -614,6 +635,8 @@ type AdminCohortLearningAnalytics = Readonly<{
   average_total_score: number;
   average_clinical_score: number;
   average_humanistic_score: number;
+  clinical_score: AdminNormalizedScoreMetric;
+  humanistic_score: AdminNormalizedScoreMetric;
   frequent_missed_items: readonly AdminLearningGap[];
   frequent_humanistic_gaps: readonly AdminLearningGap[];
   frequent_missed_opportunities: readonly AdminLearningGap[];
@@ -2905,9 +2928,9 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
         <MetricCard icon={<Brain />} label="错误模式" value={formatCount(data.insights?.frequent_turn_patterns?.length ?? 0)} helper="训练模式级聚合" />
         <MetricCard
           icon={<GraduationCap />}
-          label="人文均分"
-          value={`${formatInsightNumber(humanisticInsight?.average_score ?? 0)}/${formatInsightNumber(humanisticInsight?.max_score ?? 30)}`}
-          helper={`趋势 ${formatTrendDelta(humanisticInsight?.trend.delta ?? 0)}`}
+          label="人文完成度"
+          value={formatPercentage(humanisticInsight?.average_percentage)}
+          helper={`趋势 ${formatPercentageTrend(humanisticInsight?.percentage_trend.delta ?? 0)}`}
         />
       </div>
       <Card>
@@ -3010,8 +3033,8 @@ function CohortLearningAnalyticsOverview({ item }: Readonly<{ item: AdminCohortL
         <Badge variant="warning">总体均分 {formatInsightNumber(item.average_total_score)}</Badge>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-4">
-        <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
-        <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+        <LearningCompactMetric label="临床完成度" value={formatNormalizedScoreMetric(item.clinical_score)} />
+        <LearningCompactMetric label="人文完成度" value={formatNormalizedScoreMetric(item.humanistic_score)} />
         <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_signals)} />
         <LearningCompactMetric label="Top 缺口" value={getLearningGapTitle(topGap)} />
       </div>
@@ -3048,8 +3071,8 @@ function CaseLearningAnalyticsList({ items }: Readonly<{ items: readonly AdminCa
               <Badge variant="warning">均分 {formatInsightNumber(item.average_total_score)}</Badge>
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
-              <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+              <LearningCompactMetric label="临床完成度" value={formatNormalizedScoreMetric(item.clinical_score)} />
+              <LearningCompactMetric label="人文完成度" value={formatNormalizedScoreMetric(item.humanistic_score)} />
               <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_signals)} />
               <LearningCompactMetric label="Top 缺口" value={getLearningGapTitle(topGap)} />
             </div>
@@ -3086,8 +3109,8 @@ function StudentLearningAnalyticsList({ items }: Readonly<{ items: readonly Admi
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-4">
               <LearningCompactMetric label="训练报告" value={`${formatCount(item.report_count)}/${formatCount(item.session_count)}`} />
-              <LearningCompactMetric label="临床均分" value={formatInsightNumber(item.average_clinical_score)} />
-              <LearningCompactMetric label="人文均分" value={formatInsightNumber(item.average_humanistic_score)} />
+              <LearningCompactMetric label="临床完成度" value={formatNormalizedScoreMetric(item.clinical_score)} />
+              <LearningCompactMetric label="人文完成度" value={formatNormalizedScoreMetric(item.humanistic_score)} />
               <LearningCompactMetric label="情绪回应" value={formatAffectSignalText(item.affect_response)} />
             </div>
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -3182,8 +3205,8 @@ function HumanisticInsightsPanel({ insight }: Readonly<{ insight?: HumanisticCom
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-3">
-          <MiniStat label="人文沟通均分" value={`${formatInsightNumber(insight?.average_score ?? 0)}/${formatInsightNumber(insight?.max_score ?? 30)}`} />
-          <MiniStat label="近期变化" value={formatTrendDelta(insight?.trend.delta ?? 0)} />
+          <MiniStat label="人文沟通完成度" value={formatPercentage(insight?.average_percentage)} />
+          <MiniStat label="近期变化" value={formatPercentageTrend(insight?.percentage_trend.delta ?? 0)} />
           <MiniStat label="锚点候选" value={formatCount(insight?.anchor_candidate_count ?? 0)} />
         </div>
         <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
@@ -3198,10 +3221,12 @@ function HumanisticInsightsPanel({ insight }: Readonly<{ insight?: HumanisticCom
                   <div className="rounded-2xl border border-[#F0E8DC] bg-[#FAF9F5] p-3" key={item.dimension_id}>
                     <div className="flex items-center justify-between gap-3 text-sm">
                       <span className="font-medium">{item.dimension_label}</span>
-                      <span className="text-[#AE5630]">{formatInsightNumber(item.average_score)} 分</span>
+                      <span className="text-[#AE5630]">
+                        {formatPercentage(item.average_percentage)} · {formatInsightNumber(item.average_score)}/{formatInsightNumber(item.average_max_score)}
+                      </span>
                     </div>
                     <div className="mt-2 h-2 rounded-full bg-[#EFE7DA]">
-                      <div className="h-2 rounded-full bg-[#AE5630]" style={{ width: `${Math.min(100, Math.max(0, (item.average_score / 10) * 100))}%` }} />
+                      <div className="h-2 rounded-full bg-[#AE5630]" style={{ width: `${Math.min(100, Math.max(0, item.average_percentage ?? 0))}%` }} />
                     </div>
                   </div>
                 ))}
@@ -4904,12 +4929,34 @@ function formatInsightNumber(value: number): string {
   return Number.isInteger(value) ? formatCount(value) : value.toFixed(1);
 }
 
+function formatPercentage(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "--";
+  }
+  return `${formatInsightNumber(value)}%`;
+}
+
+function formatNormalizedScoreMetric(metric?: AdminNormalizedScoreMetric): string {
+  if (!metric || metric.sample_count <= 0 || metric.average_percentage === null) {
+    return "不适用";
+  }
+  return `${formatPercentage(metric.average_percentage)} · ${formatCount(metric.sample_count)} 份`;
+}
+
 function formatTrendDelta(value: number): string {
   if (!Number.isFinite(value) || value === 0) {
     return "持平";
   }
   const prefix = value > 0 ? "+" : "";
   return `${prefix}${formatInsightNumber(value)} 分`;
+}
+
+function formatPercentageTrend(value: number): string {
+  if (!Number.isFinite(value) || value === 0) {
+    return "持平";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${formatInsightNumber(value)} 个百分点`;
 }
 
 function getHumanisticGapLabel(gapType: string): string {

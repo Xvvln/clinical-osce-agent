@@ -9,6 +9,12 @@ from app.services.admin_display_resolver import (
     enrich_training_insight_source_reference,
     enrich_training_insight_turn_pattern,
 )
+from app.services.report_score_metrics import (
+    NormalizedScoreMetric,
+    aggregate_score_metrics,
+    dimension_score_metrics,
+    score_group_metric,
+)
 from app.services.training_event_store import TrainingEventStore, training_event_store
 from app.services.training_report_event_normalizer import (
     normalize_report_events_by_session,
@@ -197,9 +203,8 @@ def _source_reference_kind_rank(reference: str) -> int:
 
 
 def _summarize_humanistic_communication(reports: list[dict[str, Any]]) -> dict[str, Any]:
-    score_values: list[float] = []
-    max_score = 30
-    dimension_scores: dict[str, list[float]] = defaultdict(list)
+    score_metrics: list[NormalizedScoreMetric] = []
+    dimension_metrics: dict[str, list[NormalizedScoreMetric]] = defaultdict(list)
     gap_counts: Counter[str] = Counter()
     gap_missing_score_totals: Counter[str] = Counter()
     gap_labels: dict[str, str] = {}
@@ -209,13 +214,11 @@ def _summarize_humanistic_communication(reports: list[dict[str, Any]]) -> dict[s
     anchor_candidate_status_counts: Counter[str] = Counter()
 
     for report in reports:
-        score_group = _mapping(report.get("score_groups")).get("humanistic_communication")
-        if isinstance(score_group, dict):
-            score_values.append(_float_value(score_group.get("score")))
-            max_score = int(_float_value(score_group.get("max_score")) or max_score)
-        for dimension_id, score in _mapping(report.get("dimension_scores")).items():
+        if (metric := score_group_metric(report, "humanistic_communication")) is not None:
+            score_metrics.append(metric)
+        for dimension_id, metric in dimension_score_metrics(report).items():
             if dimension_id in HUMANISTIC_DIMENSION_LABELS:
-                dimension_scores[dimension_id].append(_float_value(score))
+                dimension_metrics[dimension_id].append(metric)
         for gap in _mapping_list(report.get("training_gaps")):
             if not _is_humanistic_gap(gap):
                 continue
@@ -235,21 +238,25 @@ def _summarize_humanistic_communication(reports: list[dict[str, Any]]) -> dict[s
             status = str(candidate.get("status") or "candidate")
             anchor_candidate_status_counts[status] += 1
 
+    score_summary = aggregate_score_metrics(score_metrics)
+    percentage_values = [metric.percentage for metric in score_metrics]
+    dimension_averages = [
+        _humanistic_dimension_average(dimension_id, metrics)
+        for dimension_id, metrics in dimension_metrics.items()
+    ]
+    dimension_averages.sort(
+        key=lambda item: (
+            -float(item["average_percentage"] or 0),
+            HUMANISTIC_DIMENSION_ORDER.get(str(item["dimension_id"]), 99),
+        )
+    )
     return {
-        "report_count": len(score_values),
-        "average_score": _average_score(score_values),
-        "max_score": max_score,
-        "dimension_averages": [
-            {
-                "dimension_id": dimension_id,
-                "dimension_label": HUMANISTIC_DIMENSION_LABELS[dimension_id],
-                "average_score": _average_score(scores),
-            }
-            for dimension_id, scores in sorted(
-                dimension_scores.items(),
-                key=lambda item: (-_average_score(item[1]), HUMANISTIC_DIMENSION_ORDER.get(item[0], 99)),
-            )
-        ],
+        "report_count": len(reports),
+        "score_sample_count": score_summary["sample_count"],
+        "average_score": score_summary["average_score"],
+        "max_score": score_summary["average_max_score"],
+        "average_percentage": score_summary["average_percentage"],
+        "dimension_averages": dimension_averages,
         "frequent_gaps": [
             {
                 "gap_type": gap_type,
@@ -276,15 +283,30 @@ def _summarize_humanistic_communication(reports: list[dict[str, Any]]) -> dict[s
             {"status": status, "count": count}
             for status, count in sorted(anchor_candidate_status_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
-        "trend": _humanistic_score_trend(score_values),
+        "trend": _humanistic_score_trend([metric.score for metric in score_metrics]),
+        "percentage_trend": _humanistic_score_trend(percentage_values),
     }
 
 
 def _has_humanistic_payload(payload: dict[str, Any]) -> bool:
-    score_groups = _mapping(payload.get("score_groups"))
-    if "humanistic_communication" in score_groups:
+    if score_group_metric(payload, "humanistic_communication") is not None:
         return True
     return any(dimension_id in HUMANISTIC_DIMENSION_LABELS for dimension_id in _mapping(payload.get("dimension_scores")))
+
+
+def _humanistic_dimension_average(
+    dimension_id: str,
+    metrics: list[NormalizedScoreMetric],
+) -> dict[str, Any]:
+    summary = aggregate_score_metrics(metrics)
+    return {
+        "dimension_id": dimension_id,
+        "dimension_label": HUMANISTIC_DIMENSION_LABELS[dimension_id],
+        "sample_count": summary["sample_count"],
+        "average_score": summary["average_score"],
+        "average_max_score": summary["average_max_score"],
+        "average_percentage": summary["average_percentage"],
+    }
 
 
 def _is_humanistic_gap(gap: dict[str, Any]) -> bool:

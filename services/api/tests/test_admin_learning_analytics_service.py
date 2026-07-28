@@ -13,6 +13,8 @@ def _report(
     total_score: int,
     clinical_score: int,
     humanistic_score: int,
+    clinical_max_score: int = 70,
+    humanistic_max_score: int = 30,
     missed_items: list[str],
     training_gaps: list[dict[str, object]],
     missed_opportunities: list[dict[str, object]],
@@ -23,8 +25,8 @@ def _report(
         "student_id": student_id,
         "total_score": total_score,
         "score_groups": {
-            "clinical_osce": {"score": clinical_score, "max_score": 70},
-            "humanistic_communication": {"score": humanistic_score, "max_score": 30},
+            "clinical_osce": {"score": clinical_score, "max_score": clinical_max_score},
+            "humanistic_communication": {"score": humanistic_score, "max_score": humanistic_max_score},
         },
         "missed_items": missed_items,
         "training_gaps": training_gaps,
@@ -135,6 +137,18 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert cohort_analytics["average_total_score"] == 65
     assert cohort_analytics["average_clinical_score"] == 46.5
     assert cohort_analytics["average_humanistic_score"] == 18.5
+    assert cohort_analytics["clinical_score"] == {
+        "sample_count": 2,
+        "average_score": 46.5,
+        "average_max_score": 70,
+        "average_percentage": 66.43,
+    }
+    assert cohort_analytics["humanistic_score"] == {
+        "sample_count": 2,
+        "average_score": 18.5,
+        "average_max_score": 30,
+        "average_percentage": 61.67,
+    }
     assert cohort_analytics["frequent_missed_items"][0]["item_id"] == "reasoning_core"
     assert cohort_analytics["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert cohort_analytics["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
@@ -161,6 +175,8 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert case_analytics["average_total_score"] == 65
     assert case_analytics["average_clinical_score"] == 46.5
     assert case_analytics["average_humanistic_score"] == 18.5
+    assert case_analytics["clinical_score"]["average_percentage"] == 66.43
+    assert case_analytics["humanistic_score"]["average_percentage"] == 61.67
     assert case_analytics["frequent_missed_items"][0]["item_id"] == "reasoning_core"
     assert case_analytics["frequent_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert case_analytics["frequent_missed_opportunities"][0]["gap_type"] == "relationship_empathy_missing"
@@ -175,6 +191,8 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     student_analytics = analytics["student_analytics"][0]
     assert student_analytics["student_id"] == "student_a"
     assert student_analytics["report_count"] == 2
+    assert student_analytics["clinical_score"]["average_percentage"] == 66.43
+    assert student_analytics["humanistic_score"]["average_percentage"] == 61.67
     assert student_analytics["persistent_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert student_analytics["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert student_analytics["affect_response"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
@@ -204,3 +222,69 @@ def test_admin_learning_analytics_filters_by_case_and_student(tmp_path) -> None:
     assert analytics["summary"]["session_count"] == 1
     assert [item["case_id"] for item in analytics["case_analytics"]] == ["appendicitis_001"]
     assert [item["student_id"] for item in analytics["student_analytics"]] == ["student_a"]
+
+
+def test_admin_learning_analytics_normalizes_mixed_rubrics_and_excludes_absent_group(tmp_path) -> None:
+    session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    session_store.create_session(
+        OsceSession(
+            session_id="session_appendicitis",
+            student_id="student_a",
+            case_id="appendicitis_001",
+            stage="feedback",
+        )
+    )
+    session_store.create_session(
+        OsceSession(
+            session_id="session_acs",
+            student_id="student_a",
+            case_id="acs_001",
+            stage="feedback",
+        )
+    )
+    report_store.save_report(
+        _report(
+            "session_appendicitis",
+            student_id="student_a",
+            total_score=50,
+            clinical_score=35,
+            humanistic_score=15,
+            missed_items=[],
+            training_gaps=[],
+            missed_opportunities=[],
+        )
+    )
+    report_store.save_report(
+        _report(
+            "session_acs",
+            student_id="student_a",
+            total_score=60,
+            clinical_score=60,
+            clinical_max_score=100,
+            humanistic_score=0,
+            humanistic_max_score=0,
+            missed_items=[],
+            training_gaps=[],
+            missed_opportunities=[],
+        )
+    )
+
+    analytics = AdminLearningAnalyticsService(
+        session_store=session_store,
+        report_store=report_store,
+    ).summarize()
+
+    cohort = analytics["cohort_analytics"]
+    assert cohort["clinical_score"] == {
+        "sample_count": 2,
+        "average_score": 47.5,
+        "average_max_score": 85,
+        "average_percentage": 55,
+    }
+    assert cohort["humanistic_score"] == {
+        "sample_count": 1,
+        "average_score": 15,
+        "average_max_score": 30,
+        "average_percentage": 50,
+    }

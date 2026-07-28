@@ -5,8 +5,10 @@ from app.services.training_skill_candidate_service import TrainingSkillCandidate
 
 EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT = {
     "report_count": 0,
+    "score_sample_count": 0,
     "average_score": 0,
-    "max_score": 30,
+    "max_score": 0,
+    "average_percentage": None,
     "dimension_averages": [],
     "frequent_gaps": [],
     "frequent_missed_opportunities": [],
@@ -17,7 +19,33 @@ EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT = {
         "recent_average_score": 0,
         "delta": 0,
     },
+    "percentage_trend": {
+        "previous_average_score": 0,
+        "recent_average_score": 0,
+        "delta": 0,
+    },
 }
+
+
+def _humanistic_rubric_scores() -> dict[str, dict[str, object]]:
+    return {
+        "narrative": {
+            "dimension_id": "narrative_medicine",
+            "max_score": 8,
+        },
+        "communication": {
+            "dimension_id": "communication_skill",
+            "max_score": 10,
+        },
+        "ethics": {
+            "dimension_id": "medical_ethics",
+            "max_score": 7,
+        },
+        "relationship": {
+            "dimension_id": "relationship_building",
+            "max_score": 5,
+        },
+    }
 
 
 class BatchOnlyTrainingEventStore:
@@ -150,6 +178,7 @@ def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_
                 "medical_ethics": 1,
                 "relationship_building": 2,
             },
+            "rubric_scores": _humanistic_rubric_scores(),
             "training_gaps": [
                 {
                     "dimension_id": "medical_ethics",
@@ -185,6 +214,7 @@ def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_
                 "medical_ethics": 2,
                 "relationship_building": 3,
             },
+            "rubric_scores": _humanistic_rubric_scores(),
             "training_gaps": [
                 {
                     "dimension_id": "medical_ethics",
@@ -212,13 +242,43 @@ def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_
 
     assert insights["humanistic_communication"] == {
         "report_count": 2,
+        "score_sample_count": 2,
         "average_score": 11,
         "max_score": 30,
+        "average_percentage": 36.67,
         "dimension_averages": [
-            {"dimension_id": "narrative_medicine", "dimension_label": "叙事医学", "average_score": 3.5},
-            {"dimension_id": "communication_skill", "dimension_label": "沟通技巧", "average_score": 3.5},
-            {"dimension_id": "relationship_building", "dimension_label": "关系建立", "average_score": 2.5},
-            {"dimension_id": "medical_ethics", "dimension_label": "医学伦理", "average_score": 1.5},
+            {
+                "dimension_id": "relationship_building",
+                "dimension_label": "关系建立",
+                "sample_count": 2,
+                "average_score": 2.5,
+                "average_max_score": 5,
+                "average_percentage": 50,
+            },
+            {
+                "dimension_id": "narrative_medicine",
+                "dimension_label": "叙事医学",
+                "sample_count": 2,
+                "average_score": 3.5,
+                "average_max_score": 8,
+                "average_percentage": 43.75,
+            },
+            {
+                "dimension_id": "communication_skill",
+                "dimension_label": "沟通技巧",
+                "sample_count": 2,
+                "average_score": 3.5,
+                "average_max_score": 10,
+                "average_percentage": 35,
+            },
+            {
+                "dimension_id": "medical_ethics",
+                "dimension_label": "医学伦理",
+                "sample_count": 2,
+                "average_score": 1.5,
+                "average_max_score": 7,
+                "average_percentage": 21.43,
+            },
         ],
         "frequent_gaps": [
             {
@@ -253,7 +313,42 @@ def test_training_insight_service_summarizes_humanistic_communication_stats(tmp_
             "recent_average_score": 14,
             "delta": 6,
         },
+        "percentage_trend": {
+            "previous_average_score": 26.67,
+            "recent_average_score": 46.67,
+            "delta": 20,
+        },
     }
+
+
+def test_training_insight_excludes_reports_without_humanistic_dimensions(tmp_path) -> None:
+    store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+    store.append_event(
+        session_id="session_acs",
+        case_id="acs_001",
+        student_id="student_demo",
+        event_type="report_generated",
+        payload={
+            "report_id": "session_acs_report",
+            "score_groups": {
+                "clinical_osce": {"score": 60, "max_score": 100},
+                "humanistic_communication": {"score": 0, "max_score": 0},
+            },
+            "dimension_scores": {"history_taking": 15},
+            "rubric_scores": {
+                "history": {
+                    "dimension_id": "history_taking",
+                    "score": 15,
+                    "max_score": 25,
+                }
+            },
+        },
+    )
+
+    insights = TrainingInsightService(store).summarize_sessions(["session_acs"])
+
+    assert insights["report_count"] == 1
+    assert insights["humanistic_communication"] == EMPTY_HUMANISTIC_COMMUNICATION_INSIGHT
 
 
 def test_training_insight_service_summarizes_frequent_missed_items_from_report_events(tmp_path) -> None:
