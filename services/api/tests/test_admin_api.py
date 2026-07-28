@@ -1713,7 +1713,7 @@ def test_admin_enriches_skill_candidate_labels_from_related_references(tmp_path,
 
 def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_old",
             student_id="student_a",
@@ -1721,7 +1721,7 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
             stage="history",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_recent",
             student_id="student_b",
@@ -1774,7 +1774,7 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
 
 def test_admin_can_paginate_training_session_summaries(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_old",
             student_id="student_a",
@@ -1782,7 +1782,7 @@ def test_admin_can_paginate_training_session_summaries(tmp_path, monkeypatch) ->
             stage="history",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_recent",
             student_id="student_b",
@@ -1804,7 +1804,7 @@ def test_admin_can_paginate_training_session_summaries(tmp_path, monkeypatch) ->
 
 def test_admin_can_filter_training_session_summaries(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_old",
             student_id="student_a",
@@ -1812,7 +1812,7 @@ def test_admin_can_filter_training_session_summaries(tmp_path, monkeypatch) -> N
             stage="history",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_recent",
             student_id="student_b",
@@ -1867,7 +1867,7 @@ def test_admin_can_read_session_training_events(tmp_path, monkeypatch) -> None:
 
 def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_insight_one",
             student_id="student_a",
@@ -1875,7 +1875,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             stage="report_ready",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_insight_two",
             student_id="student_b",
@@ -1883,7 +1883,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
             stage="report_ready",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_eval",
             student_id="admin_eval_student_pass",
@@ -2047,7 +2047,7 @@ def test_admin_can_read_training_insights_from_all_sessions(tmp_path, monkeypatc
 def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     report_store = ReportStore(tmp_path / "reports.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_learning_one",
             student_id="student_a",
@@ -2061,7 +2061,7 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
             },
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_learning_two",
             student_id="student_a",
@@ -2075,7 +2075,7 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
             },
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_admin_learning_other",
             student_id="student_b",
@@ -2187,7 +2187,7 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
 
 def test_admin_can_read_training_skill_effect_summary_with_insufficient_samples(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_effect_with_skill",
             student_id="student_a",
@@ -2195,7 +2195,7 @@ def test_admin_can_read_training_skill_effect_summary_with_insufficient_samples(
             stage="report_ready",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_effect_without_skill",
             student_id="student_b",
@@ -2611,7 +2611,7 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
 
 def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_skill_candidate_one",
             student_id="student_a",
@@ -2619,7 +2619,7 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
             stage="report_ready",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_skill_candidate_two",
             student_id="student_b",
@@ -2627,7 +2627,7 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
             stage="report_ready",
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_skill_candidate_admin_eval",
             student_id="admin_eval_student_pass",
@@ -2799,7 +2799,7 @@ def test_admin_auto_approval_agent_revises_and_enables_generated_skill(tmp_path,
         ("session_auto_skill_one", "student_a"),
         ("session_auto_skill_two", "student_b"),
     ]:
-        session_store.save_session(
+        session_store.create_session(
             OsceSession(
                 session_id=session_id,
                 student_id=student_id,
@@ -2924,7 +2924,7 @@ def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_ca
         ("session_reviewed_one", "student_a", "appendicitis_001"),
         ("session_reviewed_two", "student_b", "pneumonia_001"),
     ]:
-        session_store.save_session(
+        session_store.create_session(
             OsceSession(
                 session_id=session_id,
                 student_id=student_id,

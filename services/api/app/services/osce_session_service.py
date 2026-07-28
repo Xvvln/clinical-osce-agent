@@ -6,7 +6,7 @@ import hashlib
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from functools import wraps
 from pathlib import Path
 from threading import Lock, RLock
@@ -17,7 +17,12 @@ import yaml
 
 from app.graph.osce_graph import build_osce_graph, reflection_node, training_strategy_node
 from app.models.case import AuxiliaryTestItem, Case, PhysicalExamItem
-from app.services.osce_session_store import OsceSessionStore, osce_session_store
+from app.services.osce_session_store import (
+    OsceSessionStore,
+    SessionPersistenceError,
+    SessionNotFoundError,
+    osce_session_store,
+)
 from app.services.patient_affect_state_service import build_initial_patient_affect_state
 from app.services.patient_language_service import build_patient_opening_utterance
 from app.services.procedure_request_router import (
@@ -142,6 +147,17 @@ class OsceSession:
     procedure_simulation_audit_items: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class _CachedSession:
+    session: OsceSession
+    revision: int
+
+
+def _refresh_session_in_place(target: OsceSession, source: OsceSession) -> None:
+    for session_field in fields(OsceSession):
+        setattr(target, session_field.name, getattr(source, session_field.name))
+
+
 def _require_open_session(session: OsceSession) -> None:
     if (
         session.final_submission is not None
@@ -165,7 +181,7 @@ class OsceSessionService:
         patient_responder: Any | None = None,
         procedure_request_router: Any | None = None,
     ) -> None:
-        self._sessions: dict[str, OsceSession] = {}
+        self._sessions: dict[str, _CachedSession] = {}
         self._session_locks = _SessionLockRegistry()
         self._runtime_llm_scorer_cache: RuntimeModelObjectCache[LlmRubricScorer | None] | None = None
         if graph is not None:
@@ -243,7 +259,7 @@ class OsceSessionService:
             active_skill_context=active_skill_context,
         )
         agent_update = _refresh_agent_state(session)
-        self._save_session(session)
+        self._create_session(session)
         self._append_event(session, "session_created", {"stage": session.stage, "training_difficulty": session.training_difficulty})
         self._append_agent_update_event(session, agent_update)
         for skill in enabled_skills:
@@ -399,6 +415,9 @@ class OsceSessionService:
             agent_update = _refresh_agent_state(session)
             self._save_session(session)
             self.complete_message_processing_status(session_id)
+        except SessionPersistenceError:
+            self.complete_message_processing_status(session_id, errored=True)
+            raise
         except Exception as exc:
             self.complete_message_processing_status(session_id, errored=True)
             trace_id = self._append_runtime_error_event(
@@ -897,19 +916,32 @@ class OsceSessionService:
 
     @_serialize_session_operation
     def delete_session(self, session_id: str) -> bool:
-        self._sessions.pop(session_id, None)
-        return self.session_store.delete_session(session_id)
+        try:
+            deleted = self.session_store.delete_session(session_id)
+            if not deleted:
+                raise SessionNotFoundError(session_id)
+            return True
+        finally:
+            self._sessions.pop(session_id, None)
 
     def _get_session(self, session_id: str) -> OsceSession | None:
-        session = self._sessions.get(session_id)
-        if session is not None:
-            return session
-        session_payload = self.session_store.get_session_payload(session_id)
-        if session_payload is None:
+        stored_session = self.session_store.get_session(session_id)
+        cached_session = self._sessions.get(session_id)
+        if stored_session is None:
+            self._sessions.pop(session_id, None)
             return None
-        session = OsceSession(**session_payload)
-        self._sessions[session.session_id] = session
-        return session
+        if cached_session is None:
+            session = OsceSession(**stored_session.payload)
+            self._sessions[session.session_id] = _CachedSession(
+                session=session,
+                revision=stored_session.revision,
+            )
+            return session
+        if cached_session.revision != stored_session.revision:
+            refreshed_session = OsceSession(**stored_session.payload)
+            _refresh_session_in_place(cached_session.session, refreshed_session)
+            cached_session.revision = stored_session.revision
+        return cached_session.session
 
     def _refresh_active_skill_context(self, session: OsceSession) -> dict[str, Any]:
         case = load_case_node(session.case_id)
@@ -958,9 +990,26 @@ class OsceSessionService:
         self.student_profile_store.save_profile(student_id, profile)
         return profile
 
+    def _create_session(self, session: OsceSession) -> None:
+        revision = self.session_store.create_session(session)
+        self._sessions[session.session_id] = _CachedSession(
+            session=session,
+            revision=revision,
+        )
+
     def _save_session(self, session: OsceSession) -> None:
-        self._sessions[session.session_id] = session
-        self.session_store.save_session(session)
+        cached_session = self._sessions.get(session.session_id)
+        if cached_session is None or cached_session.session is not session:
+            self._sessions.pop(session.session_id, None)
+            raise SessionNotFoundError(session.session_id)
+        try:
+            cached_session.revision = self.session_store.update_session(
+                session,
+                expected_revision=cached_session.revision,
+            )
+        except SessionPersistenceError:
+            self._sessions.pop(session.session_id, None)
+            raise
 
     def _append_event(self, session: OsceSession, event_type: str, payload: dict[str, Any]) -> None:
         self.training_event_store.append_event(

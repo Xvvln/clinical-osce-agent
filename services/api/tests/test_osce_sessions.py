@@ -14,7 +14,12 @@ from app.services.osce_session_service import (
     load_case_node,
     osce_session_service,
 )
-from app.services.osce_session_store import OsceSessionStore
+from app.services.osce_session_store import (
+    OsceSessionStore,
+    SessionDeletedError,
+    SessionNotFoundError,
+    SessionWriteConflictError,
+)
 from app.services.report_store import ReportStore
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.student_profile_store import StudentProfileStore
@@ -252,6 +257,55 @@ def test_message_provider_auth_error_returns_readable_gateway_error() -> None:
     assert create_response.status_code == 200
     assert response.status_code == 502
     assert response.json()["detail"] == "模型服务调用失败：HTTP 401：Invalid API Key；invalid_key"
+
+
+def test_session_write_conflict_returns_refreshable_http_409(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    def raise_conflict(_: str, __: str) -> None:
+        raise SessionWriteConflictError(
+            session_id,
+            expected_revision=1,
+            current_revision=2,
+        )
+
+    monkeypatch.setattr(osce_session_service, "handle_message", raise_conflict)
+    response = client.post(
+        f"/api/sessions/{session_id}/message",
+        json={"message": "什么时候开始疼的？"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "训练会话已被其他请求更新，请刷新后重试。",
+    }
+
+
+@pytest.mark.parametrize(
+    "persistence_error",
+    [SessionDeletedError, SessionNotFoundError],
+)
+def test_deleted_or_missing_session_during_write_returns_http_404(
+    monkeypatch: pytest.MonkeyPatch,
+    persistence_error: type[SessionDeletedError] | type[SessionNotFoundError],
+) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+
+    def raise_missing(_: str, __: str) -> None:
+        raise persistence_error(session_id)
+
+    monkeypatch.setattr(osce_session_service, "record_hypothesis", raise_missing)
+    response = client.post(
+        f"/api/sessions/{session_id}/hypotheses",
+        json={"hypothesis": "急性阑尾炎"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "session not found"}
 
 
 def test_message_google_provider_quota_error_returns_readable_gateway_error() -> None:
@@ -2612,6 +2666,65 @@ def test_current_user_report_defers_optional_personal_skill_enrichment(
     assert calls["include_optional_agents"] is False
     assert calls["enriched_session_id"] == session_id
     assert response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+
+
+def test_background_report_conflict_keeps_pending_report_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    enrichment_attempts = 0
+
+    def pending_report(session_id_arg: str, *, include_optional_agents: bool = True) -> dict[str, object]:
+        assert session_id_arg == session_id
+        assert include_optional_agents is False
+        return {
+            "report_id": f"{session_id_arg}_report",
+            "session_id": session_id_arg,
+            "case_id": "appendicitis_001",
+            "total_score": 0,
+            "dimension_scores": {},
+            "rubric_scores": {},
+            "missed_items": [],
+            "source_references": [],
+            "source_reference_items": [],
+            "explanation_source_items": [],
+            "feedback_summary": "基础报告。",
+            "personal_skill_candidate": {
+                "status": "generation_pending",
+                "scope": "personal",
+            },
+        }
+
+    def enrich_report(session_id_arg: str) -> dict[str, object]:
+        nonlocal enrichment_attempts
+        assert session_id_arg == session_id
+        enrichment_attempts += 1
+        if enrichment_attempts == 1:
+            raise SessionWriteConflictError(
+                session_id,
+                expected_revision=1,
+                current_revision=2,
+            )
+        return {
+            "session_id": session_id,
+            "personal_skill_candidate": {
+                "status": "approved",
+                "scope": "personal",
+            },
+        }
+
+    monkeypatch.setattr(main.osce_session_service, "get_report", pending_report)
+    monkeypatch.setattr(main.osce_session_service, "enrich_report_optional_agents", enrich_report)
+
+    first_response = client.get(f"/api/me/sessions/{session_id}/report")
+    second_response = client.get(f"/api/me/sessions/{session_id}/report")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+    assert second_response.json()["personal_skill_candidate"]["status"] == "generation_pending"
+    assert enrichment_attempts == 2
 
 
 def test_current_user_report_poll_can_force_optional_personal_skill_enrichment(

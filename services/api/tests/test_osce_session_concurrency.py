@@ -7,7 +7,11 @@ import pytest
 
 from app.graph.osce_graph import build_osce_graph
 from app.services.osce_session_service import OsceSessionService, SessionClosedError
-from app.services.osce_session_store import OsceSessionStore
+from app.services.osce_session_store import (
+    OsceSessionStore,
+    SessionDeletedError,
+    SessionWriteConflictError,
+)
 from app.services.report_store import ReportStore
 from app.services.student_profile_store import StudentProfileStore
 from app.services.training_event_store import TrainingEventStore
@@ -300,3 +304,95 @@ def test_missing_session_reads_do_not_grow_lock_registry(tmp_path: Path) -> None
         assert service.get_session(f"missing-{index}") is None
 
     assert service._session_locks.active_entry_count() == 0
+
+
+def test_second_service_refreshes_a_stale_cached_object_in_place(tmp_path: Path) -> None:
+    first_service = _build_service(tmp_path, _CoordinatedGraph())
+    second_service = _build_service(tmp_path, _CoordinatedGraph())
+    session_id = str(first_service.create_session("appendicitis_001", "student-a")["session_id"])
+    held_session = second_service._get_session(session_id)
+    assert held_session is not None
+
+    first_service.record_hypothesis(session_id, "急性阑尾炎")
+    refreshed_session = second_service._get_session(session_id)
+
+    assert refreshed_session is held_session
+    assert held_session.student_hypotheses == ["急性阑尾炎"]
+
+
+def test_cross_service_stale_write_raises_conflict_without_lost_update(tmp_path: Path) -> None:
+    message_entered = Event()
+    release_message = Event()
+    first_service = _build_service(tmp_path, _CoordinatedGraph())
+    second_service = _build_service(
+        tmp_path,
+        _CoordinatedGraph(
+            first_message_entered=message_entered,
+            release_first_message=release_message,
+        ),
+    )
+    session_id = str(first_service.create_session("appendicitis_001", "student-a")["session_id"])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_write_future = executor.submit(
+            second_service.handle_message,
+            session_id,
+            "什么时候开始疼的？",
+        )
+        assert message_entered.wait(timeout=5)
+        first_service.record_hypothesis(session_id, "急性阑尾炎")
+        release_message.set()
+        with pytest.raises(SessionWriteConflictError):
+            stale_write_future.result(timeout=10)
+
+    assert session_id not in second_service._sessions
+    persisted_after_conflict = first_service.session_store.get_session_payload(session_id)
+    assert persisted_after_conflict is not None
+    assert persisted_after_conflict["student_hypotheses"] == ["急性阑尾炎"]
+    assert not any(
+        message.get("role") == "student"
+        and message.get("content") == "什么时候开始疼的？"
+        for message in persisted_after_conflict["messages"]
+    )
+
+    retried = second_service.handle_message(session_id, "什么时候开始疼的？")
+    assert retried is not None
+    persisted_after_retry = first_service.session_store.get_session(session_id)
+    assert persisted_after_retry is not None
+    assert persisted_after_retry.revision == 3
+    assert persisted_after_retry.payload["student_hypotheses"] == ["急性阑尾炎"]
+    assert any(
+        message.get("role") == "student"
+        and message.get("content") == "什么时候开始疼的？"
+        for message in persisted_after_retry.payload["messages"]
+    )
+
+
+def test_cross_service_delete_tombstone_blocks_in_flight_stale_write(tmp_path: Path) -> None:
+    message_entered = Event()
+    release_message = Event()
+    first_service = _build_service(tmp_path, _CoordinatedGraph())
+    second_service = _build_service(
+        tmp_path,
+        _CoordinatedGraph(
+            first_message_entered=message_entered,
+            release_first_message=release_message,
+        ),
+    )
+    session_id = str(first_service.create_session("appendicitis_001", "student-a")["session_id"])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_write_future = executor.submit(
+            second_service.handle_message,
+            session_id,
+            "什么时候开始疼的？",
+        )
+        assert message_entered.wait(timeout=5)
+        assert first_service.delete_session(session_id) is True
+        release_message.set()
+        with pytest.raises(SessionDeletedError):
+            stale_write_future.result(timeout=10)
+
+    assert session_id not in second_service._sessions
+    assert first_service.session_store.get_session(session_id) is None
+    assert second_service.get_session(session_id) is None

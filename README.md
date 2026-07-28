@@ -180,6 +180,8 @@ python '.\start-admin.py'
 
 Compose 和 API 进程默认都不启用固定演示管理员或固定演示学生，也不提供默认邮箱与密码。受控演示环境必须在不提交到仓库的私有 `.env` 中分别显式设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED/EMAIL/PASSWORD` 与 `CLINICAL_OSCE_DEMO_STUDENT_ENABLED/EMAIL/PASSWORD`；两类账号只在 `local-dev` / `local-demo` 生效，生产模式即使误设 enabled 也会拒绝固定账号登录。演示 seed API 与脚本同样要求两组配置完整，否则会在写入前失败关闭。
 
+Session 主记录使用 SQLite revision 的 compare-and-swap（比较并交换）更新和独立删除墓碑：共享同一台机器数据库文件的多个 API worker 不会再静默覆盖彼此写入，旧 worker 也不能把已删除 session 重新插回；版本冲突返回 409，客户端刷新后再重试。该机制仍是单机 SQLite 边界，不支持把数据库文件放到 NFS / SMB 后当作多机一致性存储；升级时应排空并一次性重启旧 worker，正式多机部署应迁移 PostgreSQL。
+
 本地和测试阶段默认采用服务端统一托管模型配置，关键默认值与 `.env.example` 保持一致：
 
 ```env

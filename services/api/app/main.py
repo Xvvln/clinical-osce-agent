@@ -81,6 +81,13 @@ from app.services.osce_session_service import (
     load_case_node,
     osce_session_service,
 )
+from app.services.osce_session_store import (
+    SessionAlreadyExistsError,
+    SessionDeletedError,
+    SessionNotFoundError,
+    SessionPersistenceError,
+    SessionWriteConflictError,
+)
 from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rag_document_ingestion_service import (
@@ -338,6 +345,30 @@ async def handle_session_closed_error(_: Request, exc: SessionClosedError) -> JS
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(SessionAlreadyExistsError)
+@app.exception_handler(SessionWriteConflictError)
+async def handle_session_write_conflict_error(
+    _: Request,
+    __: SessionAlreadyExistsError | SessionWriteConflictError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": "训练会话已被其他请求更新，请刷新后重试。"},
+    )
+
+
+@app.exception_handler(SessionDeletedError)
+@app.exception_handler(SessionNotFoundError)
+async def handle_missing_persisted_session_error(
+    _: Request,
+    __: SessionDeletedError | SessionNotFoundError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": "session not found"},
     )
 
 
@@ -673,8 +704,11 @@ def _use_user_runtime_model_config(
 
 
 def _enrich_report_optional_agents_for_user(session_id: str, user_id: str) -> dict[str, Any] | None:
-    with _use_user_runtime_model_config(user_id, require_for_training=False):
-        return osce_session_service.enrich_report_optional_agents(session_id)
+    try:
+        with _use_user_runtime_model_config(user_id, require_for_training=False):
+            return osce_session_service.enrich_report_optional_agents(session_id)
+    except SessionPersistenceError:
+        return None
 
 
 def _model_provider_gateway_error(exc: BaseException) -> HTTPException:
@@ -2647,7 +2681,7 @@ def send_message(
             session = osce_session_service.handle_message(session_id, request.message)
         except MODEL_PROVIDER_EXCEPTION_TYPES as exc:
             raise _model_provider_gateway_error(exc) from exc
-        except SessionClosedError:
+        except (SessionClosedError, SessionPersistenceError):
             raise
         except Exception as exc:
             raise _training_flow_runtime_error(exc) from exc

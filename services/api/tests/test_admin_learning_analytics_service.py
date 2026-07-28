@@ -35,7 +35,7 @@ def _report(
 def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_path) -> None:
     session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
     report_store = ReportStore(tmp_path / "reports.sqlite3")
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_case_one",
             student_id="student_a",
@@ -54,7 +54,7 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
             },
         )
     )
-    session_store.save_session(
+    session_store.create_session(
         OsceSession(
             session_id="session_case_two",
             student_id="student_a",
@@ -191,8 +191,8 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
 def test_admin_learning_analytics_filters_by_case_and_student(tmp_path) -> None:
     session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
     report_store = ReportStore(tmp_path / "reports.sqlite3")
-    session_store.save_session(OsceSession(session_id="session_a", student_id="student_a", case_id="appendicitis_001", stage="feedback"))
-    session_store.save_session(OsceSession(session_id="session_b", student_id="student_b", case_id="pneumonia_001", stage="feedback"))
+    session_store.create_session(OsceSession(session_id="session_a", student_id="student_a", case_id="appendicitis_001", stage="feedback"))
+    session_store.create_session(OsceSession(session_id="session_b", student_id="student_b", case_id="pneumonia_001", stage="feedback"))
     report_store.save_report(_report("session_a", student_id="student_a", total_score=60, clinical_score=43, humanistic_score=17, missed_items=[], training_gaps=[], missed_opportunities=[]))
     report_store.save_report(_report("session_b", student_id="student_b", total_score=80, clinical_score=58, humanistic_score=22, missed_items=[], training_gaps=[], missed_opportunities=[]))
 

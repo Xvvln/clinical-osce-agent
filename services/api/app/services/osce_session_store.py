@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,53 +14,153 @@ if TYPE_CHECKING:
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "osce_sessions.sqlite3"
+DATABASE_SCHEMA_VERSION = 2
+DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
+
+
+class SessionPersistenceError(RuntimeError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+
+
+class SessionAlreadyExistsError(SessionPersistenceError):
+    pass
+
+
+class SessionWriteConflictError(SessionPersistenceError):
+    def __init__(self, session_id: str, *, expected_revision: int, current_revision: int) -> None:
+        super().__init__(session_id)
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+
+
+class SessionDeletedError(SessionPersistenceError):
+    pass
+
+
+class SessionNotFoundError(SessionPersistenceError):
+    pass
+
+
+@dataclass(frozen=True)
+class StoredSession:
+    payload: dict[str, object]
+    revision: int
 
 
 class OsceSessionStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
+        self._initialization_lock = Lock()
+        self._initialized = False
 
-    def save_session(self, session: OsceSession) -> None:
+    def create_session(self, session: OsceSession) -> int:
         self._initialize()
         now = datetime.now(UTC).isoformat()
         payload = asdict(session)
-        with sqlite3.connect(self.database_path) as connection:
-            connection.execute(
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if self._tombstone_revision(connection, session.session_id) is not None:
+                raise SessionAlreadyExistsError(session.session_id)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO osce_sessions (
+                        session_id,
+                        user_id,
+                        case_id,
+                        stage,
+                        session_json,
+                        revision,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        session.session_id,
+                        session.student_id,
+                        session.case_id,
+                        session.stage,
+                        json.dumps(payload, ensure_ascii=False),
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise SessionAlreadyExistsError(session.session_id) from exc
+        return 1
+
+    def update_session(self, session: OsceSession, *, expected_revision: int) -> int:
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be positive")
+        self._initialize()
+        now = datetime.now(UTC).isoformat()
+        payload = asdict(session)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
                 """
-                INSERT INTO osce_sessions (session_id, user_id, case_id, stage, session_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    user_id = excluded.user_id,
-                    case_id = excluded.case_id,
-                    stage = excluded.stage,
-                    session_json = excluded.session_json,
-                    updated_at = excluded.updated_at
+                UPDATE osce_sessions
+                SET
+                    user_id = ?,
+                    case_id = ?,
+                    stage = ?,
+                    session_json = ?,
+                    revision = revision + 1,
+                    updated_at = ?
+                WHERE session_id = ?
+                  AND revision = ?
                 """,
                 (
-                    session.session_id,
                     session.student_id,
                     session.case_id,
                     session.stage,
                     json.dumps(payload, ensure_ascii=False),
                     now,
-                    now,
+                    session.session_id,
+                    expected_revision,
                 ),
             )
-
-    def get_session_payload(self, session_id: str) -> dict[str, object] | None:
-        self._initialize()
-        with sqlite3.connect(self.database_path) as connection:
+            if cursor.rowcount == 1:
+                return expected_revision + 1
+            deleted_revision = self._tombstone_revision(connection, session.session_id)
+            if deleted_revision is not None:
+                raise SessionDeletedError(session.session_id)
             row = connection.execute(
-                "SELECT session_json FROM osce_sessions WHERE session_id = ?",
+                "SELECT revision FROM osce_sessions WHERE session_id = ?",
+                (session.session_id,),
+            ).fetchone()
+            if row is None:
+                raise SessionNotFoundError(session.session_id)
+            raise SessionWriteConflictError(
+                session.session_id,
+                expected_revision=expected_revision,
+                current_revision=int(row[0]),
+            )
+
+    def get_session(self, session_id: str) -> StoredSession | None:
+        self._initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT session_json, revision FROM osce_sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row[0])
+        payload = json.loads(row[0])
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid persisted session payload: {session_id}")
+        return StoredSession(payload=payload, revision=int(row[1]))
+
+    def get_session_payload(self, session_id: str) -> dict[str, object] | None:
+        stored_session = self.get_session(session_id)
+        return None if stored_session is None else stored_session.payload
 
     def list_user_session_summaries(self, user_id: str) -> list[dict[str, object]]:
         self._initialize()
-        with sqlite3.connect(self.database_path) as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT session_id, case_id, stage, created_at, updated_at, session_json
@@ -83,7 +184,7 @@ class OsceSessionStore:
 
     def list_session_summaries(self) -> list[dict[str, object]]:
         self._initialize()
-        with sqlite3.connect(self.database_path) as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT session_id, user_id, case_id, stage, created_at, updated_at, session_json
@@ -106,26 +207,102 @@ class OsceSessionStore:
 
     def delete_session(self, session_id: str) -> bool:
         self._initialize()
-        with sqlite3.connect(self.database_path) as connection:
-            cursor = connection.execute("DELETE FROM osce_sessions WHERE session_id = ?", (session_id,))
-        return cursor.rowcount > 0
-
-    def _initialize(self) -> None:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.database_path) as connection:
+        deleted_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT revision FROM osce_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            deleted_revision = int(row[0]) + 1
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS osce_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    case_id TEXT NOT NULL,
-                    stage TEXT NOT NULL,
-                    session_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
+                INSERT INTO osce_session_tombstones (session_id, deleted_revision, deleted_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    deleted_revision = MAX(
+                        osce_session_tombstones.deleted_revision,
+                        excluded.deleted_revision
+                    ),
+                    deleted_at = excluded.deleted_at
+                """,
+                (session_id, deleted_revision, deleted_at),
             )
+            cursor = connection.execute(
+                "DELETE FROM osce_sessions WHERE session_id = ? AND revision = ?",
+                (session_id, int(row[0])),
+            )
+            if cursor.rowcount != 1:
+                raise SessionWriteConflictError(
+                    session_id,
+                    expected_revision=int(row[0]),
+                    current_revision=int(row[0]),
+                )
+        return True
+
+    def _initialize(self) -> None:
+        if self._initialized:
+            return
+        with self._initialization_lock:
+            if self._initialized:
+                return
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS osce_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        case_id TEXT NOT NULL,
+                        stage TEXT NOT NULL,
+                        session_json TEXT NOT NULL,
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(osce_sessions)").fetchall()
+                }
+                if "revision" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE osce_sessions
+                        ADD COLUMN revision INTEGER NOT NULL DEFAULT 1
+                        """
+                    )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS osce_session_tombstones (
+                        session_id TEXT PRIMARY KEY,
+                        deleted_revision INTEGER NOT NULL,
+                        deleted_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
+            self._initialized = True
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=DATABASE_BUSY_TIMEOUT_MILLISECONDS / 1000,
+        )
+        connection.execute(f"PRAGMA busy_timeout = {DATABASE_BUSY_TIMEOUT_MILLISECONDS}")
+        return connection
+
+    @staticmethod
+    def _tombstone_revision(connection: sqlite3.Connection, session_id: str) -> int | None:
+        row = connection.execute(
+            "SELECT deleted_revision FROM osce_session_tombstones WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return None if row is None else int(row[0])
 
 
 osce_session_store = OsceSessionStore()
