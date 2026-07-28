@@ -2718,6 +2718,7 @@ def test_advanced_unconfigured_procedure_returns_unavailable_without_invoking_ll
 
     monkeypatch.setattr(osce_session_service, "procedure_result_simulator", UnexpectedAgent(), raising=False)
     monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", UnexpectedAgent(), raising=False)
+    monkeypatch.setattr(osce_session_service, "procedure_request_router", UnexpectedAgent(), raising=False)
 
     create_response = client.post(
         "/api/sessions",

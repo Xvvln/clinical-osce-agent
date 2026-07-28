@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
+from collections.abc import Iterable
 from typing import Any, Literal
 
 from google import genai
@@ -39,11 +41,36 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 高级训练中的自由申请路由 Age
 
 输出要求：
 - 只输出 JSON。
+- known_catalog_labels 只是与未匹配片段存在词法近邻关系的少量目录提示，不是完整目录；
+  不得因为该列表为空或未包含某个项目，就推断项目不存在或改变安全判断。
 - routed_items 必须与 unmatched_requests 一一对应或覆盖其中可判断片段。
 - decision 只能是 generate、clarify、block。
 - kind 只能是 physical_exam、auxiliary_test、patient_profile、vital_sign、other。
 - name_cn 用学生可读的中文项目名；generate 时必须填写。
 """
+
+PROVIDER_CATALOG_LABEL_MAX_COUNT = 8
+PROVIDER_CATALOG_LABEL_MAX_BYTES = 96
+PROVIDER_CATALOG_TOTAL_MAX_BYTES = 640
+_CATALOG_QUERY_MAX_COUNT = 16
+_CATALOG_QUERY_MAX_BYTES = 256
+_LEXICAL_BOILERPLATE = (
+    "辅助检查",
+    "体格检查",
+    "检查项目",
+    "查体项目",
+    "请帮我",
+    "帮我",
+    "我想",
+    "想要",
+    "申请",
+    "检查",
+    "查体",
+    "项目",
+    "结果",
+    "看看",
+    "一下",
+)
 
 
 class ProcedureRequestRouteItem(BaseModel):
@@ -73,8 +100,124 @@ def _procedure_router_provider_payload(request: ProcedureRequestRoutingRequest) 
     return {
         "request_text": request.request_text,
         "unmatched_requests": list(request.unmatched_requests),
-        "known_catalog_labels": list(request.known_catalog_labels),
+        "known_catalog_labels": _nearest_catalog_labels(
+            request.unmatched_requests,
+            request.known_catalog_labels,
+        ),
     }
+
+
+def _nearest_catalog_labels(unmatched_requests: list[str], catalog_labels: list[str]) -> list[str]:
+    query_lexemes = _dedupe_lexemes(
+        _catalog_lexeme(_truncate_utf8(str(raw_text), _CATALOG_QUERY_MAX_BYTES))
+        for raw_text in unmatched_requests[:_CATALOG_QUERY_MAX_COUNT]
+    )
+    if not query_lexemes:
+        return []
+
+    # Choose a canonical display value before ranking so equal inputs have the
+    # same output regardless of the catalog's traversal order.
+    display_by_lexeme: dict[str, str] = {}
+    for raw_label in catalog_labels:
+        display_label = _truncate_utf8(str(raw_label).strip(), PROVIDER_CATALOG_LABEL_MAX_BYTES)
+        label_lexeme = _catalog_lexeme(display_label)
+        if not display_label or not label_lexeme:
+            continue
+        previous_display = display_by_lexeme.get(label_lexeme)
+        if previous_display is None or (display_label.casefold(), display_label) < (
+            previous_display.casefold(),
+            previous_display,
+        ):
+            display_by_lexeme[label_lexeme] = display_label
+
+    ranked_labels: list[tuple[tuple[int, int, int, int, int], str, str]] = []
+    for label_lexeme, display_label in display_by_lexeme.items():
+        scores = [
+            score
+            for query_lexeme in query_lexemes
+            if (score := _lexical_nearness_score(query_lexeme, label_lexeme)) is not None
+        ]
+        if scores:
+            ranked_labels.append((max(scores), label_lexeme, display_label))
+    ranked_labels.sort(
+        key=lambda item: (
+            *(-value for value in item[0]),
+            item[1],
+            item[2].casefold(),
+            item[2],
+        )
+    )
+
+    selected_labels: list[str] = []
+    for _, _, display_label in ranked_labels:
+        if len(selected_labels) >= PROVIDER_CATALOG_LABEL_MAX_COUNT:
+            break
+        candidate_labels = [*selected_labels, display_label]
+        if _catalog_labels_utf8_size(candidate_labels) <= PROVIDER_CATALOG_TOTAL_MAX_BYTES:
+            selected_labels.append(display_label)
+    return selected_labels
+
+
+def _catalog_lexeme(value: str) -> str:
+    normalized_value = unicodedata.normalize("NFKC", value).casefold()
+    normalized_value = "".join(
+        character
+        for character in normalized_value
+        if unicodedata.category(character)[0] not in {"C", "P", "Z"}
+    )
+    for fragment in _LEXICAL_BOILERPLATE:
+        normalized_value = normalized_value.replace(fragment, "")
+    return normalized_value
+
+
+def _dedupe_lexemes(values: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _lexical_nearness_score(query: str, label: str) -> tuple[int, int, int, int, int] | None:
+    if not query or not label:
+        return None
+    exact_match = int(query == label)
+    shorter_length = min(len(query), len(label))
+    containment_match = int(shorter_length >= 2 and (query in label or label in query))
+    query_bigrams = _character_bigrams(query)
+    label_bigrams = _character_bigrams(label)
+    shared_bigram_count = len(query_bigrams & label_bigrams)
+    if not exact_match and not containment_match and shared_bigram_count == 0:
+        return None
+    denominator = len(query_bigrams) + len(label_bigrams)
+    dice_score = (2_000 * shared_bigram_count // denominator) if denominator else 0
+    length_closeness = max(0, 1_000 - abs(len(query) - len(label)))
+    return (
+        exact_match,
+        containment_match,
+        dice_score,
+        shared_bigram_count,
+        length_closeness,
+    )
+
+
+def _character_bigrams(value: str) -> set[str]:
+    if len(value) <= 1:
+        return {value} if value else set()
+    return {value[index : index + 2] for index in range(len(value) - 1)}
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded_value = value.encode("utf-8")
+    if len(encoded_value) <= max_bytes:
+        return value
+    return encoded_value[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _catalog_labels_utf8_size(labels: list[str]) -> int:
+    return len(
+        json.dumps(
+            labels,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 class DeterministicProcedureRequestRouter:

@@ -1,3 +1,5 @@
+import json
+
 from app.services import procedure_request_router as router_module
 from app.services import procedure_result_approval_agent as approval_module
 from app.services import procedure_result_simulator as simulator_module
@@ -38,6 +40,90 @@ def test_procedure_router_provider_payload_excludes_case_secrets_and_denylist() 
     }
     assert "appendicitis_001" not in payload_text
     assert "急性阑尾炎" not in payload_text
+
+
+def test_procedure_router_projects_only_bounded_lexical_catalog_neighbors() -> None:
+    expected_response = router_module.ProcedureRequestRoutingResponse(
+        routed_items=[
+            router_module.ProcedureRequestRouteItem(
+                raw_text="心脏电图🫀",
+                decision="generate",
+                kind="auxiliary_test",
+                name_cn="心电图",
+            )
+        ]
+    )
+    recording_client = RecordingClient(expected_response)
+    router = router_module.OpenAICompatibleProcedureRequestRouter(object(), client=recording_client)
+    unrelated_labels = [
+        f"无关目录{i:03d}-{'🧪' * 40}"
+        for i in range(198)
+    ]
+    catalog_labels = [
+        *unrelated_labels[:99],
+        f"心脏电活动检查🫀-{'超长说明' * 80}",
+        "心电图",
+        *unrelated_labels[99:],
+    ]
+    assert len(catalog_labels) == 200
+
+    response = router(
+        router_module.ProcedureRequestRoutingRequest(
+            case_id="case_001",
+            case_title="教学病例",
+            chief_complaint="不适",
+            request_text="请帮我做心脏电图🫀",
+            unmatched_requests=["心脏电图🫀"],
+            known_catalog_labels=catalog_labels,
+        )
+    )
+
+    provider_payload = recording_client.calls[0]["payload"]
+    projected_labels = provider_payload["known_catalog_labels"]
+    assert response == expected_response
+    assert "心电图" in projected_labels
+    assert any(label.startswith("心脏电活动") for label in projected_labels)
+    assert not any(label.startswith("无关目录") for label in projected_labels)
+    assert len(projected_labels) <= router_module.PROVIDER_CATALOG_LABEL_MAX_COUNT
+    assert all(
+        len(label.encode("utf-8")) <= router_module.PROVIDER_CATALOG_LABEL_MAX_BYTES
+        for label in projected_labels
+    )
+    assert (
+        len(json.dumps(projected_labels, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        <= router_module.PROVIDER_CATALOG_TOTAL_MAX_BYTES
+    )
+    assert all(label.encode("utf-8").decode("utf-8") == label for label in projected_labels)
+
+
+def test_procedure_router_catalog_projection_is_stable_across_input_order() -> None:
+    recording_client = RecordingClient(router_module.ProcedureRequestRoutingResponse())
+    router = router_module.OpenAICompatibleProcedureRequestRouter(object(), client=recording_client)
+    labels = [
+        "心电图动态监测",
+        "心电图",
+        "超声心动图",
+        "心脏电活动",
+        "腹部超声",
+        "尿常规",
+    ]
+    base_request = {
+        "case_id": "case_001",
+        "case_title": "教学病例",
+        "chief_complaint": "不适",
+        "request_text": "心脏电图",
+        "unmatched_requests": ["心脏电图"],
+    }
+
+    router(router_module.ProcedureRequestRoutingRequest(**base_request, known_catalog_labels=labels))
+    router(router_module.ProcedureRequestRoutingRequest(**base_request, known_catalog_labels=list(reversed(labels))))
+
+    first_payload = recording_client.calls[0]["payload"]
+    second_payload = recording_client.calls[1]["payload"]
+    assert first_payload["known_catalog_labels"] == second_payload["known_catalog_labels"]
+    assert "心电图" in first_payload["known_catalog_labels"]
+    assert "腹部超声" not in first_payload["known_catalog_labels"]
+    assert "尿常规" not in first_payload["known_catalog_labels"]
 
 
 def test_procedure_simulator_provider_payload_excludes_private_case_truth() -> None:
