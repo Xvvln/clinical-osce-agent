@@ -17,6 +17,15 @@ class FakeTextEmbedding:
         return [[float(index), 0.5, 1.0] for index, _ in enumerate(texts)]
 
 
+class RecordingExecutor:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def run(self, call, *, timeout_seconds: float):
+        self.timeouts.append(timeout_seconds)
+        return call()
+
+
 def test_local_embedding_client_is_disabled_by_default(monkeypatch) -> None:
     monkeypatch.delenv("OSCE_LOCAL_EMBEDDING_ENABLED", raising=False)
 
@@ -27,11 +36,19 @@ def test_local_embedding_client_is_disabled_by_default(monkeypatch) -> None:
 
 def test_local_embedding_client_uses_fastembed_with_query_batches(monkeypatch) -> None:
     FakeTextEmbedding.created_args = []
+    recording_executor = RecordingExecutor()
+    local_embedding_retriever_module._cached_client.cache_clear()
     monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_ENABLED", "true")
     monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
     monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_DEVICE", "cpu")
     monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_CACHE_FOLDER", "/tmp/hf-cache")
     monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_BATCH_SIZE", "7")
+    monkeypatch.setenv("OSCE_LOCAL_EMBEDDING_TIMEOUT_SECONDS", "77")
+    monkeypatch.setattr(
+        local_embedding_retriever_module,
+        "local_embedding_executor",
+        recording_executor,
+    )
     monkeypatch.setattr(
         local_embedding_retriever_module,
         "_load_text_embedding_class",
@@ -50,3 +67,6 @@ def test_local_embedding_client_uses_fastembed_with_query_batches(monkeypatch) -
             "batch_size": 7,
         }
     ]
+    # Model construction/download and CPU inference both avoid the request
+    # worker pool and share the dedicated bounded executor.
+    assert recording_executor.timeouts == [77.0, 77.0]
