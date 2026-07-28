@@ -3756,19 +3756,27 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         assert later_session_response.status_code == 200
         later_session = later_session_response.json()
         later_session_id = later_session["session_id"]
-        assert f"{candidate['title']}：{candidate['suggested_strategy']}" in later_session["evolution_candidates"]
+        assert "evolution_candidates" not in later_session
+        later_internal_session = session_service._get_session(later_session_id)
+        assert later_internal_session is not None
+        assert (
+            f"{candidate['title']}：{candidate['suggested_strategy']}"
+            in later_internal_session.evolution_candidates
+        )
 
         opening_hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert opening_hint_response.status_code == 200
         assert "本轮训练重点" not in opening_hint_response.json()["hint"]
-        assert opening_hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"] == []
+        assert "selected_skill_ids" not in opening_hint_response.json()["agent_turn_memory"][-1]
+        assert later_internal_session.agent_turn_memory[-1]["selected_skill_ids"] == []
 
         message_response = client.post(f"/api/sessions/{later_session_id}/message", json={"message": "什么时候开始疼的？"})
         assert message_response.status_code == 200
         hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert hint_response.status_code == 200
         assert "本轮训练重点" in hint_response.json()["hint"]
-        assert hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"]
+        assert "selected_skill_ids" not in hint_response.json()["agent_turn_memory"][-1]
+        assert later_internal_session.agent_turn_memory[-1]["selected_skill_ids"]
         profile_response = client.get("/api/me/profile")
         assert profile_response.status_code == 200
         skill_accumulation = profile_response.json()["profile"]["skill_accumulation"]

@@ -10,7 +10,7 @@
 - 中间：医患对话区与问诊输入栏；
 - 右侧：已收集线索、诊断假设、查体/检查申请、评分报告。
 
-当前已接入后端 session API：进入训练工作台后可按病例创建训练会话，问诊输入会调用 `/api/sessions/{session_id}/message` 并展示标准化病人回复；查体和辅助检查快捷项会随当前病例 session 返回的 `physical_exam_options` 与 `auxiliary_test_options` 动态渲染，并分别调用 `/api/sessions/{session_id}/physical-exam` 与 `/api/sessions/{session_id}/auxiliary-test` 展示返回结果；诊断提交表单保持空白结构化草稿，学生需自行填写诊断、鉴别诊断、支持依据、排除依据和下一步方向，后端不得下发标准诊断作为默认值；提交时调用 `/api/sessions/{session_id}/submit-diagnosis`，随后读取 `/api/sessions/{session_id}/report` 并在右侧展示结构化评分报告，包括总分、维度进度、亮点、推理问题、下一轮训练重点，以及按 `case`、`source`、`rubric`、`evidence` 分组展示的来源引用。
+当前已接入后端 session API：进入训练工作台后可按病例创建训练会话，问诊输入会调用 `/api/sessions/{session_id}/message` 并展示标准化病人回复；活动会话使用版本化的 `student_session.v2` 学生安全投影，只返回已揭示线索、已申请的 `collected_procedure_results`、安全进度计数和当前教学提示，不下发未覆盖事实、未申请结果、Rubric、Skill 选择细节或审计轨迹。初级模式可从 session 获得不含结果与诊断作用的查体/检查快捷项，中高级模式通过通用目录或自由输入申请；各动作分别调用 `/api/sessions/{session_id}/physical-exam` 与 `/api/sessions/{session_id}/auxiliary-test` 展示本次返回结果。诊断提交表单保持空白结构化草稿，学生需自行填写诊断、鉴别诊断、支持依据、排除依据和下一步方向，后端不得下发标准诊断作为默认值；提交时调用 `/api/sessions/{session_id}/submit-diagnosis`，随后读取 `/api/sessions/{session_id}/report` 并在右侧展示结构化评分报告，包括总分、维度进度、亮点、推理问题、下一轮训练重点，以及按 `case`、`source`、`rubric`、`evidence` 分组展示的来源引用。
 
 病例选择入口已在左侧落地，并会从 `/api/cases` 读取 `data/cases/*.json` 生成的学生可见病例摘要；独立病例选择页 `/cases` 已接入，可展示 5 个结构化病例并跳转工作台创建对应训练 session，但不再读取完整病例 raw JSON；当前 5 个结构化病例均可创建训练 session，查体和辅助检查按钮会按病例数据动态切换，诊断提交表单仍保持空白以避免预填标准答案。
 

@@ -104,20 +104,18 @@ type OsceDockDragState = Readonly<{
   moved: boolean;
 }>;
 
-type CoverageMapItem = Readonly<{
+type StudentRevealedItem = Readonly<{
   id: string;
   label: string;
-  status: "covered" | "pending";
   topic?: string | null;
   slot?: string | null;
-  linked_rubric_items?: readonly string[];
 }>;
 
-type CoverageMapPayload = Readonly<{
-  history: readonly CoverageMapItem[];
-  physical_exam: readonly CoverageMapItem[];
-  auxiliary_test: readonly CoverageMapItem[];
-  reasoning: readonly CoverageMapItem[];
+type StudentRevealedItems = Readonly<{
+  history: readonly StudentRevealedItem[];
+  physical_exam: readonly StudentRevealedItem[];
+  auxiliary_test: readonly StudentRevealedItem[];
+  reasoning: readonly StudentRevealedItem[];
 }>;
 
 type ApiMessage = {
@@ -149,54 +147,9 @@ type OpeningTaskCard = Readonly<{
   tasks: readonly string[];
 }>;
 
-type CaseTeachingErrorPattern = Readonly<{
-  pattern_id: string;
-  title: string;
-  focus: string;
-  related_rubric_items: readonly string[];
-}>;
-
-type CaseTeachingFocus = Readonly<{
-  learning_objectives: readonly string[];
-  common_error_patterns: readonly CaseTeachingErrorPattern[];
-  recommended_training_path: readonly string[];
-}>;
-
-type DerivedTeachingFocusPattern = Readonly<{
-  focus_id: string;
-  scope: string;
-  pattern: string;
-  title: string;
-  description: string;
-  training_suggestion: string;
-  trigger_item_ids: readonly string[];
-  case_ids: readonly string[];
-  support_count: number;
-  source_report_count: number;
-  source_reference_ids: readonly string[];
-  severity: string;
-  visibility_level: string;
-  why_now: string;
-}>;
-
-type DerivedTeachingFocus = Readonly<{
-  case_id: string;
-  session_id?: string;
-  scope: string;
-  patterns: readonly DerivedTeachingFocusPattern[];
-}>;
-
-type InquiryGuidance = Readonly<{
-  priority: string;
-  suggested_questions: readonly string[];
-  categories: readonly string[];
-}>;
-
 type PhysicalExamOption = Readonly<{
   exam_code: string;
   exam_name_cn: string;
-  result: string;
-  is_abnormal: boolean;
 }>;
 
 type AuxiliaryTestOption = Readonly<{
@@ -205,12 +158,6 @@ type AuxiliaryTestOption = Readonly<{
   category: string;
   invasiveness: string;
   cost_hint: string;
-  diagnostic_role: string;
-  rules_out: readonly string[];
-  recommended_stage: string;
-  overuse_warning: string | null;
-  result: string;
-  is_abnormal: boolean;
 }>;
 
 type PhysicalExamQuickOption = Readonly<Pick<PhysicalExamOption, "exam_code" | "exam_name_cn">>;
@@ -218,15 +165,7 @@ type PhysicalExamQuickOption = Readonly<Pick<PhysicalExamOption, "exam_code" | "
 type AuxiliaryTestQuickOption = Readonly<
   Pick<
     AuxiliaryTestOption,
-    | "test_code"
-    | "test_name_cn"
-    | "category"
-    | "invasiveness"
-    | "cost_hint"
-    | "diagnostic_role"
-    | "rules_out"
-    | "recommended_stage"
-    | "overuse_warning"
+    "test_code" | "test_name_cn" | "category" | "invasiveness" | "cost_hint"
   >
 >;
 
@@ -261,66 +200,21 @@ type TrainingProgress = Readonly<{
   history: TrainingProgressSection &
     Readonly<{
       covered: number;
-      covered_fact_ids: readonly string[];
-      pending_fact_ids: readonly string[];
     }>;
   physical_exam: TrainingProgressSection &
     Readonly<{
       requested: number;
-      requested_codes: readonly string[];
-      pending_codes: readonly string[];
-      must_total: number;
-      must_requested: number;
-      must_pending_codes: readonly string[];
     }>;
   auxiliary_test: TrainingProgressSection &
     Readonly<{
       requested: number;
-      requested_codes: readonly string[];
-      pending_codes: readonly string[];
-      must_total: number;
-      must_requested: number;
-      must_pending_codes: readonly string[];
     }>;
   reasoning: Readonly<{
-    total_evidence: number;
     collected_evidence_count: number;
-    collected_evidence: readonly string[];
-    pending_evidence: readonly string[];
     ready_for_hypothesis: boolean;
   }>;
-  coverage_map: CoverageMapPayload;
+  revealed_items: StudentRevealedItems;
   next_focus: string;
-}>;
-
-type TeachingPlan = Readonly<{
-  plan_id: string;
-  case_id: string;
-  session_id?: string | null;
-  stage: string;
-  observed_gap_ids: readonly string[];
-  active_focus_ids: readonly string[];
-  selected_strategy: string;
-  strategy_reason: string;
-  learning_goal: string;
-  next_best_action: string;
-  allowed_actions: readonly string[];
-  blocked_actions: readonly string[];
-  source_references: readonly string[];
-  skill_ids: readonly string[];
-  safety_boundary: string;
-}>;
-
-type StageCheckpoint = Readonly<{
-  checkpoint_id: string;
-  case_id: string;
-  session_id?: string | null;
-  stage: string;
-  status: string;
-  readiness: string;
-  covered_signal_ids: readonly string[];
-  pending_signal_ids: readonly string[];
-  safety_note: string;
 }>;
 
 type ClinicalReasoningNextBestAction = Readonly<{
@@ -334,7 +228,6 @@ type ClinicalReasoningState = Readonly<{
   last_action_stage: string;
   pedagogical_phase: string;
   readiness: Readonly<Record<string, string>>;
-  safe_pending_points: Readonly<Record<string, unknown>>;
   sequence_flags: readonly string[];
   next_best_action: ClinicalReasoningNextBestAction;
   socratic_question: string;
@@ -342,71 +235,8 @@ type ClinicalReasoningState = Readonly<{
   safety_note: string;
 }>;
 
-type HintLadderStep = Readonly<{
-  action_type: string;
-  level: number;
-  message_template: string;
-  trigger_item_ids: readonly string[];
-  disclosure_policy: string;
-}>;
-
 type PedagogyState = Readonly<{
-  training_phase: string;
-  active_learning_goal: string;
-  missing_rubric_items: readonly string[];
-  evidence_gap: string;
-  differential_gap: string;
-  next_best_action: string;
-  skill_context_ids: readonly string[];
-  coaching_mode: string;
-  safety_mode: string;
-  reflection_summary_id: string | null;
-  teaching_plan: TeachingPlan;
-  stage_checkpoint: StageCheckpoint;
-  clinical_reasoning_state: ClinicalReasoningState;
-  hint_ladder: readonly HintLadderStep[];
-}>;
-
-type AgentTraceObserve = Readonly<{
-  stage: string;
-  observed_gap_ids: readonly string[];
-  checkpoint_status: string;
-  covered_signal_ids: readonly string[];
-  pending_signal_ids: readonly string[];
-  sequence_flags?: readonly string[];
-}>;
-
-type AgentTraceDecide = Readonly<{
-  active_learning_goal: string;
-  selected_strategy: string;
-  strategy_reason: string;
-}>;
-
-type AgentTraceAct = Readonly<{
-  next_best_action: string;
-  allowed_actions: readonly string[];
-  blocked_actions: readonly string[];
-  hint_ladder_levels: readonly number[];
-}>;
-
-type AgentTraceReflect = Readonly<{
-  reflection_summary_id: string | null;
-  safety_mode: string;
-}>;
-
-type AgentDecisionTraceItem = Readonly<{
-  trace_id: string;
-  node: string;
-  stage: string;
-  decision: string;
-  next_best_action: string;
-  skill_context_ids: readonly string[];
-  coaching_mode: string;
-  safety_mode: string;
-  observe: AgentTraceObserve;
-  decide: AgentTraceDecide;
-  act: AgentTraceAct;
-  reflect: AgentTraceReflect;
+  clinical_reasoning_state?: ClinicalReasoningState;
 }>;
 
 type BackendProcessingTraceItem = Readonly<{
@@ -440,45 +270,33 @@ type AgentTurnMemoryItem = Readonly<{
   reply_role: "student" | "patient" | "coach" | string;
   current_intents: readonly string[];
   turn_policy: string;
-  agent_path: readonly string[];
-  selected_skill_ids?: readonly string[];
-  selected_skill_reasons?: readonly SkillSelectionReason[];
-  skill_context?: readonly string[];
-  revealed_fact_id: string | null;
-  revealed_fact_ids?: readonly string[];
-  source_references: readonly string[];
-  knowledge_references?: readonly string[];
-  retrieved_knowledge_context?: readonly Readonly<Record<string, unknown>>[];
+  revealed_fact_count: number;
+  selected_skill_count: number;
+  knowledge_reference_count: number;
   processing_trace?: readonly BackendProcessingTraceItem[];
   processing_duration_ms?: number;
   safety_flags: readonly string[];
 }>;
 
-type SkillSelectionReason = Readonly<{
-  skill_id: string;
-  title: string;
-  why_selected_label: string;
-  trigger_item_labels: readonly string[];
-  effect_status: string;
+type CollectedPhysicalExamResult = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+  result: string;
 }>;
 
-type ReflectionPrompt = Readonly<{
-  prompt_id: string;
-  question: string;
-  related_item_ids: readonly string[];
+type CollectedAuxiliaryTestResult = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+  result: string;
 }>;
 
-type ReflectionSummary = Readonly<{
-  reflection_summary_id: string;
-  missed_item_count: number;
-  missed_item_ids: readonly string[];
-  summary: string;
-  next_focus: string;
-  reflection_prompts: readonly ReflectionPrompt[];
-  safety_note: string;
+type CollectedProcedureResults = Readonly<{
+  physical_exams: readonly CollectedPhysicalExamResult[];
+  auxiliary_tests: readonly CollectedAuxiliaryTestResult[];
 }>;
 
 type OsceSession = Readonly<{
+  payload_schema_version: "student_session.v2";
   session_id: string;
   student_id: string;
   case_id: string;
@@ -489,31 +307,22 @@ type OsceSession = Readonly<{
   patient_opening_utterance: string;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
-  teaching_focus: CaseTeachingFocus;
-  dynamic_teaching_focus: DerivedTeachingFocus;
-  inquiry_guidance: InquiryGuidance;
   diagnosis_draft: DiagnosisDraft;
   physical_exam_options: readonly PhysicalExamOption[];
   auxiliary_test_options: readonly AuxiliaryTestOption[];
+  collected_procedure_results: CollectedProcedureResults;
   training_progress: TrainingProgress;
   messages: readonly ApiMessage[];
   asked_questions: readonly string[];
-  intent_history: readonly string[];
   revealed_facts: readonly string[];
   requested_exams: readonly string[];
   requested_tests: readonly string[];
   student_hypotheses: readonly string[];
   final_submission: FinalSubmission | null;
-  rubric_scores: Readonly<Record<string, unknown>>;
-  missed_items: readonly string[];
-  retrieved_sources: readonly string[];
   feedback_report: Readonly<Record<string, unknown>> | null;
   safety_flags: readonly string[];
-  evolution_candidates: readonly string[];
   agent_turn_memory: readonly AgentTurnMemoryItem[];
   pedagogy_state: PedagogyState;
-  agent_decision_trace: readonly AgentDecisionTraceItem[];
-  reflection_summary: ReflectionSummary | null;
   reply?: string;
   current_intents?: readonly string[];
 }>;
@@ -547,7 +356,6 @@ type ChatMessage = {
   readonly apiMessageIndex?: number;
   readonly finalText?: string;
   readonly isPending?: boolean;
-  readonly skillSelectionReasons?: readonly SkillSelectionReason[];
   readonly processingTimeline?: AgentProcessingTimeline;
 };
 
@@ -698,7 +506,6 @@ type CaseOption = Readonly<{
   enabled: boolean;
   patientProfile: StudentVisiblePatientProfile;
   openingTaskCard: OpeningTaskCard;
-  teachingFocus: CaseTeachingFocus;
   physicalExamOptions: readonly PhysicalExamQuickOption[];
   auxiliaryTestOptions: readonly AuxiliaryTestQuickOption[];
 }>;
@@ -713,7 +520,6 @@ type CaseSummary = Readonly<{
   enabled: boolean;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
-  teaching_focus: CaseTeachingFocus;
   physical_exam_options: readonly PhysicalExamQuickOption[];
   auxiliary_test_options: readonly AuxiliaryTestQuickOption[];
 }>;
@@ -755,10 +561,6 @@ const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
     category: "实验室",
     invasiveness: "微创",
     cost_hint: "基础",
-    diagnostic_role: "supports_primary_diagnosis",
-    rules_out: [],
-    recommended_stage: "auxiliary_test",
-    overuse_warning: null,
   },
   {
     test_code: "lab.crp",
@@ -766,10 +568,6 @@ const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
     category: "实验室",
     invasiveness: "微创",
     cost_hint: "基础",
-    diagnostic_role: "supports_primary_diagnosis",
-    rules_out: [],
-    recommended_stage: "auxiliary_test",
-    overuse_warning: null,
   },
   {
     test_code: "img.abd_us",
@@ -777,10 +575,6 @@ const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
     category: "影像",
     invasiveness: "无创",
     cost_hint: "基础",
-    diagnostic_role: "supports_primary_diagnosis",
-    rules_out: [],
-    recommended_stage: "auxiliary_test",
-    overuse_warning: null,
   },
   {
     test_code: "lab.urinalysis",
@@ -788,10 +582,6 @@ const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
     category: "实验室",
     invasiveness: "无创",
     cost_hint: "基础",
-    diagnostic_role: "rules_out_alternative",
-    rules_out: ["右侧输尿管结石"],
-    recommended_stage: "auxiliary_test",
-    overuse_warning: null,
   },
   {
     test_code: "img.abd_ct",
@@ -799,10 +589,6 @@ const appendicitisAuxiliaryTestOptions: readonly AuxiliaryTestQuickOption[] = [
     category: "影像",
     invasiveness: "无创",
     cost_hint: "中等",
-    diagnostic_role: "supports_primary_diagnosis",
-    rules_out: [],
-    recommended_stage: "auxiliary_test",
-    overuse_warning: "基础证据已足够支持训练推理时，不应把 CT 作为第一步机械申请。",
   },
 ];
 
@@ -827,12 +613,6 @@ const appendicitisOpeningTaskCard: OpeningTaskCard = {
 
 const appendicitisPatientOpeningUtterance = "医生您好，我这次主要是肚子疼，后来右下腹更明显，有点想吐，也有点发热。";
 
-const emptyTeachingFocus: CaseTeachingFocus = {
-  learning_objectives: [],
-  common_error_patterns: [],
-  recommended_training_path: [],
-};
-
 const defaultCaseOption: CaseOption = {
   id: DEFAULT_CASE_ID,
   title: "右下腹痛教学病例",
@@ -843,7 +623,6 @@ const defaultCaseOption: CaseOption = {
   enabled: true,
   patientProfile: appendicitisPatientProfile,
   openingTaskCard: appendicitisOpeningTaskCard,
-  teachingFocus: emptyTeachingFocus,
   physicalExamOptions: appendicitisPhysicalExamOptions,
   auxiliaryTestOptions: appendicitisAuxiliaryTestOptions,
 };
@@ -952,7 +731,6 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
-    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -966,7 +744,6 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
-    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -980,7 +757,6 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
-    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -994,7 +770,6 @@ const caseOptions: readonly CaseOption[] = [
     enabled: false,
     patientProfile: unavailablePatientProfile,
     openingTaskCard: unavailableOpeningTaskCard,
-    teachingFocus: emptyTeachingFocus,
     physicalExamOptions: [],
     auxiliaryTestOptions: [],
   },
@@ -1018,25 +793,6 @@ const workflowStepDefinitions: readonly WorkflowStepDefinition[] = [
   { key: "diagnosis_submission", label: "提交诊断" },
   { key: "feedback", label: "查看报告" },
 ];
-
-const evidenceByFactId: Readonly<Record<string, EvidenceItem>> = {
-  "appendicitis_001.hf_01": {
-    label: "起病时间",
-    detail: "24 小时前开始，最初是上腹部隐痛。",
-  },
-  "appendicitis_001.hf_02": {
-    label: "疼痛部位",
-    detail: "疼痛后来转移并固定到右下腹。",
-  },
-  "appendicitis_001.hf_03": {
-    label: "伴随表现",
-    detail: "伴有恶心，没有明显腹泻。",
-  },
-  "appendicitis_001.hf_04": {
-    label: "既往史",
-    detail: "既往体健，无腹部手术史。",
-  },
-};
 
 const scoreDimensionLabels: Readonly<Record<string, string>> = {
   history_taking: "问诊",
@@ -1232,17 +988,6 @@ function normalizePatientEmotion(emotion: string | null | undefined): string | n
   return normalizedEmotion;
 }
 
-function getDiagnosticRoleLabel(role: string): string {
-  const labels: Readonly<Record<string, string>> = {
-    supports_primary_diagnosis: "支持主诊断",
-    rules_out_alternative: "排除鉴别",
-    risk_stratification: "风险分层",
-    contextual_baseline: "基础背景",
-  };
-
-  return labels[role] ?? "教学证据";
-}
-
 function mapApiMessage(
   message: ApiMessage,
   index: number,
@@ -1268,7 +1013,6 @@ function mapApiMessage(
       label: coachLabel,
       text: message.content,
       apiMessageIndex: index,
-      skillSelectionReasons: coachLabel === "安全边界" ? undefined : getSkillSelectionReasonsForReply(session, message.content),
       processingTimeline: coachLabel === "安全边界" ? undefined : session ? buildCompletedCoachProcessingTimeline(session, message.content) : undefined,
     };
   }
@@ -1282,19 +1026,6 @@ function mapApiMessage(
     apiMessageIndex: index,
     processingTimeline: session ? buildCompletedAgentProcessingTimeline(session, message.content) : undefined,
   };
-}
-
-function getSkillSelectionReasonsForReply(
-  session: OsceSession | undefined,
-  replyText: string,
-): readonly SkillSelectionReason[] {
-  if (!session) {
-    return [];
-  }
-  const matchingTurn = [...session.agent_turn_memory].reverse().find(
-    (turn) => turn.reply === replyText && turn.reply_role === "coach",
-  );
-  return matchingTurn?.selected_skill_reasons ?? [];
 }
 
 function formatAgentProcessingElapsed(elapsedMs: number | undefined): string {
@@ -1474,11 +1205,7 @@ function buildCompletedAgentProcessingTimeline(session: OsceSession, replyText: 
   const patientTraceSteps = getPatientReplyProcessingSteps(backendTraceSteps);
   const elapsedMs = getBackendProcessingTraceElapsedMs(patientTurn);
   const hasCurrentIntents = Boolean(session.current_intents?.length || (patientTurn?.current_intents?.length ?? 0) > 0);
-  const hasCaseReferences = Boolean(
-    patientTurn?.revealed_fact_id
-    || patientTurn?.revealed_fact_ids?.length
-    || (patientTurn?.source_references ?? []).some((reference) => reference.startsWith("case:")),
-  );
+  const hasCaseReferences = (patientTurn?.revealed_fact_count ?? 0) > 0;
   const completedParts = [
     hasCurrentIntents ? "意图解析" : "",
     hasCaseReferences ? "病例事实" : "",
@@ -1515,10 +1242,10 @@ function buildCompletedCoachProcessingTimeline(session: OsceSession, replyText: 
   }
   const backendTraceSteps = getTimelineStepsFromBackendProcessingTrace(coachTurn.processing_trace);
   const elapsedMs = getBackendProcessingTraceElapsedMs(coachTurn);
-  const selectedSkillCount = coachTurn.selected_skill_ids?.length ?? coachTurn.selected_skill_reasons?.length ?? 0;
+  const selectedSkillCount = coachTurn.selected_skill_count;
   const knowledgeReferenceCount = Math.max(
     getKnowledgeReferenceCountFromProcessingSteps(backendTraceSteps),
-    coachTurn.knowledge_references?.length ?? 0,
+    coachTurn.knowledge_reference_count,
   );
   const completedParts = [
     "教师复核",
@@ -1708,7 +1435,7 @@ function getEvidenceSlotLabel(slot?: string | null): string | null {
   return evidenceSlotLabels[normalizedSlot] ?? normalizedSlot.replaceAll("_", " ");
 }
 
-function getEvidenceLabelFromCoverageItem(item: CoverageMapItem, fallbackIndex: number): string {
+function getEvidenceLabelFromRevealedItem(item: StudentRevealedItem, fallbackIndex: number): string {
   const topicLabel = getEvidenceTopicLabel(item.topic);
   const slotLabel = getEvidenceSlotLabel(item.slot);
   if (slotLabel) {
@@ -1723,25 +1450,37 @@ function getEvidenceLabelFromCoverageItem(item: CoverageMapItem, fallbackIndex: 
 
 function getEvidenceItem(factId: string, trainingProgress: TrainingProgress | null, fallbackIndex: number): EvidenceItem {
   const shortFactId = getShortEvidenceId(factId);
-  const coveredHistoryItem = trainingProgress?.coverage_map.history.find(
+  const revealedHistoryItem = trainingProgress?.revealed_items.history.find(
     (item) => item.id === factId || item.id === shortFactId,
   );
-  if (coveredHistoryItem) {
+  if (revealedHistoryItem) {
     return {
-      label: getEvidenceLabelFromCoverageItem(coveredHistoryItem, fallbackIndex),
-      detail: coveredHistoryItem.label,
+      label: getEvidenceLabelFromRevealedItem(revealedHistoryItem, fallbackIndex),
+      detail: revealedHistoryItem.label,
     };
-  }
-
-  const knownEvidenceItem = evidenceByFactId[factId];
-  if (knownEvidenceItem) {
-    return knownEvidenceItem;
   }
 
   return {
     label: `问诊线索 ${fallbackIndex + 1}`,
     detail: "已收集该结构化问诊事实。",
   };
+}
+
+function mapCollectedProcedureResults(
+  collectedProcedureResults: CollectedProcedureResults,
+): readonly ProcedureResult[] {
+  return [
+    ...collectedProcedureResults.physical_exams.map((exam) => ({
+      id: `exam:${exam.exam_code}`,
+      label: `查体：${exam.exam_name_cn}`,
+      result: exam.result,
+    })),
+    ...collectedProcedureResults.auxiliary_tests.map((test) => ({
+      id: `test:${test.test_code}`,
+      label: `检查：${test.test_name_cn}`,
+      result: test.result,
+    })),
+  ];
 }
 
 function getSourceReferenceLabel(reference: string): string {
@@ -1969,7 +1708,6 @@ function mapCaseSummary(caseSummary: CaseSummary): CaseOption {
     enabled: caseSummary.enabled,
     patientProfile: caseSummary.patient_profile,
     openingTaskCard: caseSummary.opening_task_card,
-    teachingFocus: caseSummary.teaching_focus,
     physicalExamOptions: caseSummary.physical_exam_options,
     auxiliaryTestOptions: caseSummary.auxiliary_test_options,
   };
@@ -2199,10 +1937,6 @@ function normalizeTrainingDifficultyMode(rawMode: string | null | undefined): Tr
 
 function getTrainingDifficultyModeFromSearchParams(searchParams: SearchParamReader): TrainingDifficultyMode {
   return normalizeTrainingDifficultyMode(searchParams.get("difficulty"));
-}
-
-function canViewAdminCoverageMap(authUser: AuthUser | null): boolean {
-  return authUser?.is_admin === true;
 }
 
 function getTrainingDifficultyLabel(trainingDifficultyMode: TrainingDifficultyMode): string {
@@ -2592,57 +2326,6 @@ function AgentProcessingTimelineView({ timeline }: Readonly<{ timeline: AgentPro
   );
 }
 
-function CoverageMapSection({ items, title }: Readonly<{ items: readonly CoverageMapItem[]; title: string }>) {
-  const coveredCount = items.filter((item) => item.status === "covered").length;
-
-  return (
-    <section className="rounded-xl border border-border bg-muted/40 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
-          {coveredCount}/{items.length}
-        </span>
-      </div>
-      <div className="mt-3 grid gap-2">
-        {items.length > 0 ? (
-          items.map((item) => {
-            const visibleLabel = item.label;
-            return (
-              <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs" key={item.id}>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate">{visibleLabel}</span>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
-                      item.status === "covered" ? "bg-[#EEF6EF] text-[#236146]" : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {item.status === "covered" ? "已覆盖" : "待覆盖"}
-                  </span>
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <p className="rounded-lg border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            暂无素材项。
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function CoverageMap({ trainingProgress }: Readonly<{ trainingProgress: TrainingProgress }>) {
-  return (
-    <div className="grid gap-3">
-      <CoverageMapSection items={trainingProgress.coverage_map.history} title="问诊线索覆盖" />
-      <CoverageMapSection items={trainingProgress.coverage_map.physical_exam} title="查体项目覆盖" />
-      <CoverageMapSection items={trainingProgress.coverage_map.auxiliary_test} title="辅助检查覆盖" />
-      <CoverageMapSection items={trainingProgress.coverage_map.reasoning} title="推理证据覆盖" />
-    </div>
-  );
-}
-
 function CaseSelectionPrompt({ onDismiss }: Readonly<{ onDismiss: () => void }>) {
   return (
     <div className="flex justify-center">
@@ -2757,7 +2440,6 @@ function HomeContent() {
   const [isAdvancedProcedureRequestSummaryOpen, setIsAdvancedProcedureRequestSummaryOpen] = useState(false);
   const [advancedProcedureRequestSummary, setAdvancedProcedureRequestSummary] = useState<AdvancedProcedureRequestSummary | null>(null);
   const [latestRevealedFactId, setLatestRevealedFactId] = useState<string | null>(null);
-  const [isCoverageMapOpen, setIsCoverageMapOpen] = useState(false);
   const [isPatientProfileOpen, setIsPatientProfileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
@@ -2789,7 +2471,6 @@ function HomeContent() {
   const patientSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
   const patientSpeechObjectUrlRef = useRef<string | null>(null);
   const isNextStepRequired = trainingDifficultyMode !== "beginner";
-  const canOpenAdminCoverageMap = canViewAdminCoverageMap(authUser);
 
   function createClientChatMessageId(prefix: string): string {
     clientChatMessageSequenceRef.current += 1;
@@ -3047,12 +2728,6 @@ function HomeContent() {
   }, [authUser, isCheckingAuth]);
 
   useEffect(() => {
-    if (!canOpenAdminCoverageMap && isCoverageMapOpen) {
-      setIsCoverageMapOpen(false);
-    }
-  }, [canOpenAdminCoverageMap, isCoverageMapOpen]);
-
-  useEffect(() => {
     if (!isApiConfigHelpOpen || !authUser) {
       return;
     }
@@ -3243,6 +2918,7 @@ function HomeContent() {
         setSession(nextSession);
         setSelectedCaseId(nextSession.case_id);
         setTrainingDifficultyMode(nextSession.training_difficulty);
+        setProcedureResults(mapCollectedProcedureResults(nextSession.collected_procedure_results));
         setStatusText(isCompletedOsceSession(nextSession) ? "该训练已提交诊断，训练已结束。可以查看评分报告或重新选择病例开始新训练。" : "已恢复后端训练会话，可以继续训练。");
         setErrorText(null);
       } catch (error) {
@@ -4252,7 +3928,7 @@ function HomeContent() {
         setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
-      const shouldShowPhysicalExamSequenceReminder = activeSession.training_progress.history.covered === 0;
+      const shouldShowPhysicalExamSequenceReminder = activeSession.revealed_facts.length === 0;
       const updatedSession = await requestPhysicalExam(activeSession.session_id, examCode);
       const nextProcedureResult = {
         id: `exam:${updatedSession.exam_code}`,
@@ -4312,7 +3988,7 @@ function HomeContent() {
         return;
       }
 
-      const shouldShowPhysicalExamSequenceReminder = activeSession.training_progress.history.covered === 0;
+      const shouldShowPhysicalExamSequenceReminder = activeSession.revealed_facts.length === 0;
       const updatedSession = await requestPhysicalExamBatch(activeSession.session_id, selectedIntermediateExamCodes);
       const nextProcedureResults = updatedSession.exam_results.map((examResult) => ({
         id: `exam:${examResult.exam_code}`,
@@ -4360,7 +4036,7 @@ function HomeContent() {
         setStatusText("该训练已结束，请打开报告复盘或重新选择病例开始新训练。");
         return;
       }
-      const shouldShowAuxiliaryTestSequenceReminder = activeSession.training_progress.physical_exam.requested === 0;
+      const shouldShowAuxiliaryTestSequenceReminder = activeSession.requested_exams.length === 0;
       const updatedSession = await requestAuxiliaryTest(activeSession.session_id, testCode);
       const nextProcedureResult = {
         id: `test:${updatedSession.test_code}`,
@@ -4404,7 +4080,7 @@ function HomeContent() {
         return;
       }
 
-      const shouldShowAuxiliaryTestSequenceReminder = activeSession.training_progress.physical_exam.requested === 0;
+      const shouldShowAuxiliaryTestSequenceReminder = activeSession.requested_exams.length === 0;
       const updatedSession = await requestAuxiliaryTestBatch(activeSession.session_id, selectedIntermediateTestCodes);
       const nextProcedureResults = updatedSession.test_results.map((testResult) => ({
         id: `test:${testResult.test_code}`,
@@ -4846,27 +4522,6 @@ function HomeContent() {
                       {processingTimeline && !(message.isPending && !message.finalText) ? (
                         <AgentProcessingTimelineView timeline={processingTimeline} />
                       ) : null}
-                      {isCoach && message.skillSelectionReasons && message.skillSelectionReasons.length > 0 ? (
-                        <details className="mt-3 rounded-lg border border-[#E7C98B] bg-white/70 p-3 text-xs leading-5 text-[#6F6257]">
-                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold text-[#8A5A00]">
-                            <span>本轮 Skill 依据</span>
-                            <span className="rounded-full border border-[#E7C98B] bg-[#FFF8E8] px-2 py-0.5 text-[11px] font-medium">
-                              {message.skillSelectionReasons.length} 条
-                            </span>
-                          </summary>
-                          <div className="mt-3 grid gap-2">
-                            {message.skillSelectionReasons.map((reason) => (
-                              <div className="rounded-md border border-[#E6DFD2] bg-background px-3 py-2" key={reason.skill_id}>
-                                <p className="font-medium text-foreground">{reason.title || reason.skill_id}</p>
-                                <p className="mt-1">{reason.why_selected_label}</p>
-                                <p className="mt-1 text-muted-foreground">
-                                  关联训练点：{reason.trigger_item_labels.join("、") || "未标注"}
-                                </p>
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      ) : null}
                     </div>
                   </div>
                 );
@@ -5164,16 +4819,11 @@ function HomeContent() {
                                   setOpenProcedureActionGroup(null);
                                   void handleAuxiliaryTestRequest(testOption.test_code);
                                 }}
-                                title={
-                                  testOption.rules_out.length > 0
-                                    ? `用于排除：${testOption.rules_out.join("、")}`
-                                    : testOption.overuse_warning ?? undefined
-                                }
                                 type="button"
                               >
                                 <span className="block whitespace-nowrap">{isRequestingTest ? "检查中" : `${testOption.category}：${testOption.test_name_cn}`}</span>
                                 <span className="mt-1 block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
-                                  {testOption.cost_hint} · {testOption.invasiveness} · {getDiagnosticRoleLabel(testOption.diagnostic_role)}
+                                  {testOption.cost_hint} · {testOption.invasiveness}
                                 </span>
                               </button>
                             ))
@@ -5575,22 +5225,6 @@ function HomeContent() {
                 </div>
               ) : null}
             </CollapsiblePanel>
-            {canOpenAdminCoverageMap ? (
-              <div className="rounded-xl border border-dashed border-border bg-background/80 p-3 text-xs leading-5">
-                <p className="font-medium text-foreground">管理员图谱</p>
-                <p className="mt-1 text-muted-foreground">
-                  查看本次训练素材覆盖状态；会展示结构化素材内容，方便答辩和调试训练路径。
-                </p>
-                <button
-                  className="mt-3 inline-flex w-fit items-center justify-center rounded-md border border-[#141413] bg-[#141413] px-3 py-2 text-xs font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-[#2A2926] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!session}
-                  onClick={() => setIsCoverageMapOpen(true)}
-                  type="button"
-                >
-                  查看素材覆盖图谱
-                </button>
-              </div>
-            ) : null}
           </aside>
         </div>
       </section>
@@ -5800,32 +5434,6 @@ function HomeContent() {
                 已返回 {advancedProcedureRequestSummaryToShow.returnedResultCount} 项结果
                 {advancedProcedureRequestSummaryToShow.simulatedResultCount > 0 ? `，其中 ${advancedProcedureRequestSummaryToShow.simulatedResultCount} 项为教学模拟补充，不计入评分` : ""}。
               </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {isCoverageMapOpen && canOpenAdminCoverageMap && session ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setIsCoverageMapOpen(false)}>
-          <div className="max-h-[82vh] w-full max-w-3xl overflow-y-scroll rounded-2xl border border-border bg-background p-5 shadow-xl student-chat-scrollbar" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-medium text-brand">管理员图谱</p>
-                    <h2 className="mt-1 text-base font-semibold">管理员图谱 · 素材覆盖</h2>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      用于答辩和调试训练路径覆盖，会显示结构化素材内容；不参与评分决策。
-                    </p>
-              </div>
-              <button
-                aria-label="关闭素材覆盖图谱"
-                className="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-xs font-medium whitespace-nowrap shadow-xs transition hover:bg-accent"
-                onClick={() => setIsCoverageMapOpen(false)}
-                type="button"
-              >
-                关闭
-              </button>
-            </div>
-            <div className="mt-4">
-              <CoverageMap trainingProgress={session.training_progress} />
             </div>
           </div>
         </div>

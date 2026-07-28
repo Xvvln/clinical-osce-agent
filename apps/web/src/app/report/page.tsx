@@ -73,10 +73,20 @@ type BackendMessage = Readonly<{
 type BackendPhysicalExamOption = Readonly<{
   exam_code: string;
   exam_name_cn: string;
-  result: string;
 }>;
 
 type BackendAuxiliaryTestOption = Readonly<{
+  test_code: string;
+  test_name_cn: string;
+}>;
+
+type BackendCollectedPhysicalExamResult = Readonly<{
+  exam_code: string;
+  exam_name_cn: string;
+  result: string;
+}>;
+
+type BackendCollectedAuxiliaryTestResult = Readonly<{
   test_code: string;
   test_name_cn: string;
   result: string;
@@ -91,6 +101,10 @@ type BackendSession = Readonly<{
   requested_tests: readonly string[];
   physical_exam_options: readonly BackendPhysicalExamOption[];
   auxiliary_test_options: readonly BackendAuxiliaryTestOption[];
+  collected_procedure_results: Readonly<{
+    physical_exams: readonly BackendCollectedPhysicalExamResult[];
+    auxiliary_tests: readonly BackendCollectedAuxiliaryTestResult[];
+  }>;
 }>;
 
 type BackendProcedureResult = Readonly<{
@@ -668,23 +682,17 @@ function buildBackendProcedureResults(session: BackendSession | null): readonly 
     return [];
   }
 
-  const examResults = session.requested_exams.map((examCode) => {
-    const exam = session.physical_exam_options.find((option) => option.exam_code === examCode);
-    return {
-      id: `exam:${examCode}`,
-      label: `查体：${exam?.exam_name_cn ?? examCode}`,
-      result: exam?.result ?? "后端 session 未保存该查体结果。",
-    };
-  });
+  const examResults = session.collected_procedure_results.physical_exams.map((exam) => ({
+    id: `exam:${exam.exam_code}`,
+    label: `查体：${exam.exam_name_cn}`,
+    result: exam.result,
+  }));
 
-  const testResults = session.requested_tests.map((testCode) => {
-    const test = session.auxiliary_test_options.find((option) => option.test_code === testCode);
-    return {
-      id: `test:${testCode}`,
-      label: `检查：${test?.test_name_cn ?? testCode}`,
-      result: test?.result ?? "后端 session 未保存该辅助检查结果。",
-    };
-  });
+  const testResults = session.collected_procedure_results.auxiliary_tests.map((test) => ({
+    id: `test:${test.test_code}`,
+    label: `检查：${test.test_name_cn}`,
+    result: test.result,
+  }));
 
   return [...examResults, ...testResults];
 }

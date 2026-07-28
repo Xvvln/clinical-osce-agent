@@ -24,19 +24,6 @@ type OpeningTaskCard = Readonly<{
   tasks: readonly string[];
 }>;
 
-type CaseTeachingErrorPattern = Readonly<{
-  pattern_id: string;
-  title: string;
-  focus: string;
-  related_rubric_items: readonly string[];
-}>;
-
-type CaseTeachingFocus = Readonly<{
-  learning_objectives: readonly string[];
-  common_error_patterns: readonly CaseTeachingErrorPattern[];
-  recommended_training_path: readonly string[];
-}>;
-
 type PhysicalExamQuickOption = Readonly<{
   exam_code: string;
   exam_name_cn: string;
@@ -65,7 +52,6 @@ type CaseSummary = Readonly<{
   content_stats: CaseContentStats;
   patient_profile: StudentVisiblePatientProfile;
   opening_task_card: OpeningTaskCard;
-  teaching_focus: CaseTeachingFocus;
   physical_exam_options: readonly PhysicalExamQuickOption[];
   auxiliary_test_options: readonly AuxiliaryTestQuickOption[];
 }>;

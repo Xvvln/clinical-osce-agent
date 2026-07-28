@@ -1539,7 +1539,6 @@ def _serialize_case_summary(case: Case) -> dict[str, Any]:
         "content_stats": _serialize_case_content_stats(case),
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
-        "teaching_focus": _serialize_teaching_focus(case),
         "physical_exam_options": [
             _serialize_physical_exam_quick_option(exam)
             for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
@@ -2203,10 +2202,6 @@ def _serialize_auxiliary_test_quick_option(test: AuxiliaryTestItem) -> dict[str,
         "category": test.category,
         "invasiveness": test.invasiveness,
         "cost_hint": test.cost_hint,
-        "diagnostic_role": test.diagnostic_role,
-        "rules_out": test.rules_out,
-        "recommended_stage": test.recommended_stage,
-        "overuse_warning": test.overuse_warning,
     }
 
 
@@ -2214,8 +2209,6 @@ def _serialize_physical_exam_option(exam: PhysicalExamItem) -> dict[str, Any]:
     return {
         "exam_code": exam.exam_code,
         "exam_name_cn": exam.exam_name_cn,
-        "result": exam.result,
-        "is_abnormal": exam.is_abnormal,
     }
 
 
@@ -2226,12 +2219,6 @@ def _serialize_auxiliary_test_option(test: AuxiliaryTestItem) -> dict[str, Any]:
         "category": test.category,
         "invasiveness": test.invasiveness,
         "cost_hint": test.cost_hint,
-        "diagnostic_role": test.diagnostic_role,
-        "rules_out": test.rules_out,
-        "recommended_stage": test.recommended_stage,
-        "overuse_warning": test.overuse_warning,
-        "result": test.result,
-        "is_abnormal": test.is_abnormal,
     }
 
 
@@ -2349,6 +2336,160 @@ def _serialize_training_progress(session: OsceSession, case: Case) -> dict[str, 
             requested_exam_codes,
             requested_test_codes,
         ),
+    }
+
+
+def _serialize_student_training_progress(session: OsceSession, case: Case) -> dict[str, Any]:
+    fact_ids = [
+        (fact.fact_id, _student_safe_evidence_id(case, fact.fact_id))
+        for fact in case.history.hidden_facts
+    ]
+    covered_fact_ids = [safe_id for fact_id, safe_id in fact_ids if fact_id in session.revealed_facts]
+    exam_codes = _physical_exam_codes(case.physical_exam.must_items, case.physical_exam.optional_items)
+    test_codes = _auxiliary_test_codes(case.auxiliary_tests.must_items, case.auxiliary_tests.optional_items)
+    requested_exam_codes = [exam_code for exam_code in exam_codes if exam_code in session.requested_exams]
+    requested_test_codes = [test_code for test_code in test_codes if test_code in session.requested_tests]
+    collected_reasoning_evidence = [
+        evidence for evidence in _reasoning_evidence(case) if _session_has_evidence(session, evidence)
+    ]
+
+    return {
+        "history": {
+            "total": len(fact_ids),
+            "covered": len(covered_fact_ids),
+        },
+        "physical_exam": {
+            "total": len(exam_codes),
+            "requested": len(requested_exam_codes),
+        },
+        "auxiliary_test": {
+            "total": len(test_codes),
+            "requested": len(requested_test_codes),
+        },
+        "reasoning": {
+            "collected_evidence_count": len(collected_reasoning_evidence),
+            "ready_for_hypothesis": bool(covered_fact_ids and requested_exam_codes and requested_test_codes),
+        },
+        "revealed_items": _serialize_student_revealed_items(
+            session,
+            case,
+            collected_reasoning_evidence,
+        ),
+        "next_focus": _training_progress_next_focus(
+            session,
+            covered_fact_ids,
+            requested_exam_codes,
+            requested_test_codes,
+        ),
+    }
+
+
+def _serialize_student_revealed_items(
+    session: OsceSession,
+    case: Case,
+    collected_reasoning_evidence: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    history_items = [
+        {
+            "id": _student_safe_evidence_id(case, fact.fact_id),
+            "label": fact.canonical_answer,
+            "topic": fact.topic,
+            "slot": fact.slot,
+        }
+        for fact in case.history.hidden_facts
+        if fact.fact_id in session.revealed_facts
+    ]
+    physical_exam_items = [
+        {
+            "id": exam.exam_code,
+            "label": exam.exam_name_cn,
+        }
+        for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+        if exam.exam_code in session.requested_exams
+    ]
+    auxiliary_test_items = [
+        {
+            "id": test.test_code,
+            "label": test.test_name_cn,
+        }
+        for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+        if test.test_code in session.requested_tests
+    ]
+    reasoning_items = [
+        {
+            "id": _student_safe_evidence_id(case, evidence),
+            "label": _student_revealed_reasoning_label(case, evidence),
+        }
+        for evidence in collected_reasoning_evidence
+    ]
+    return {
+        "history": history_items,
+        "physical_exam": physical_exam_items,
+        "auxiliary_test": auxiliary_test_items,
+        "reasoning": reasoning_items,
+    }
+
+
+def _student_revealed_reasoning_label(case: Case, evidence: str) -> str:
+    for fact in case.history.hidden_facts:
+        if fact.fact_id == evidence:
+            return fact.canonical_answer
+    for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
+        if exam.exam_code == evidence:
+            return exam.exam_name_cn
+    for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
+        if test.test_code == evidence:
+            return test.test_name_cn
+    return _student_safe_evidence_id(case, evidence)
+
+
+def _serialize_collected_procedure_results(session: OsceSession, case: Case) -> dict[str, list[dict[str, str]]]:
+    case_exam_map = _case_physical_exam_map(case)
+    case_test_map = _case_auxiliary_test_map(case)
+    catalog_exam_map = _catalog_physical_exam_map()
+    catalog_test_map = _catalog_auxiliary_test_map()
+    physical_exams: list[dict[str, str]] = []
+    auxiliary_tests: list[dict[str, str]] = []
+
+    for exam_code in session.requested_exams:
+        exam = case_exam_map.get(exam_code)
+        physical_exams.append(
+            {
+                "exam_code": exam_code,
+                "exam_name_cn": (
+                    exam.exam_name_cn
+                    if exam is not None
+                    else str(catalog_exam_map.get(exam_code, {}).get("exam_name_cn") or "未提供查体")
+                ),
+                "result": (
+                    exam.result
+                    if exam is not None
+                    else "该项目已记录，但本训练站点未提供该查体结果。"
+                ),
+            }
+        )
+
+    for test_code in session.requested_tests:
+        test = case_test_map.get(test_code)
+        auxiliary_tests.append(
+            {
+                "test_code": test_code,
+                "test_name_cn": (
+                    test.test_name_cn
+                    if test is not None
+                    else str(catalog_test_map.get(test_code, {}).get("test_name_cn") or "未提供检查")
+                ),
+                "result": (
+                    test.result
+                    if test is not None
+                    else "该项目已记录，但本训练站点未提供该辅助检查结果。"
+                ),
+            }
+        )
+
+    return {
+        "physical_exams": physical_exams,
+        "auxiliary_tests": auxiliary_tests,
     }
 
 
@@ -2617,8 +2758,106 @@ def _normalize_training_difficulty(training_difficulty: str) -> str:
     return normalized if normalized in TRAINING_DIFFICULTY_MODES else "beginner"
 
 
-def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
+def _serialize_student_pedagogy_state(session: OsceSession) -> dict[str, Any]:
+    clinical_reasoning_state = session.pedagogy_state.get("clinical_reasoning_state")
+    if not isinstance(clinical_reasoning_state, dict):
+        return {}
+    next_best_action = clinical_reasoning_state.get("next_best_action")
     return {
+        "clinical_reasoning_state": {
+            "last_action_stage": str(clinical_reasoning_state.get("last_action_stage") or session.stage),
+            "pedagogical_phase": str(clinical_reasoning_state.get("pedagogical_phase") or ""),
+            "readiness": dict(clinical_reasoning_state.get("readiness") or {}),
+            "sequence_flags": [
+                str(flag)
+                for flag in clinical_reasoning_state.get("sequence_flags", [])
+                if str(flag).strip()
+            ],
+            "next_best_action": (
+                {
+                    "action_type": str(next_best_action.get("action_type") or ""),
+                    "target_category": str(next_best_action.get("target_category") or ""),
+                    "message": str(next_best_action.get("message") or ""),
+                    "why": str(next_best_action.get("why") or ""),
+                }
+                if isinstance(next_best_action, dict)
+                else {
+                    "action_type": "",
+                    "target_category": "",
+                    "message": "",
+                    "why": "",
+                }
+            ),
+            "socratic_question": str(clinical_reasoning_state.get("socratic_question") or ""),
+            "reasoning_rationale": str(clinical_reasoning_state.get("reasoning_rationale") or ""),
+            "safety_note": str(clinical_reasoning_state.get("safety_note") or ""),
+        }
+    }
+
+
+def _serialize_student_agent_turn_memory(session: OsceSession) -> list[dict[str, Any]]:
+    return [
+        {
+            "turn_id": str(turn.get("turn_id") or ""),
+            "student_message": str(turn.get("student_message") or ""),
+            "reply": str(turn.get("reply") or ""),
+            "reply_role": str(turn.get("reply_role") or ""),
+            "current_intents": [
+                str(intent)
+                for intent in turn.get("current_intents", [])
+                if str(intent).strip()
+            ],
+            "turn_policy": str(turn.get("turn_policy") or ""),
+            "revealed_fact_count": len(
+                turn.get("revealed_fact_ids")
+                or ([turn.get("revealed_fact_id")] if turn.get("revealed_fact_id") else [])
+            ),
+            "selected_skill_count": len(turn.get("selected_skill_ids") or turn.get("selected_skill_reasons") or []),
+            "knowledge_reference_count": len(turn.get("knowledge_references") or []),
+            "processing_trace": _serialize_student_processing_trace(turn.get("processing_trace")),
+            "processing_duration_ms": turn.get("processing_duration_ms"),
+            "safety_flags": [
+                str(flag)
+                for flag in turn.get("safety_flags", [])
+                if str(flag).strip()
+            ],
+        }
+        for turn in session.agent_turn_memory
+        if isinstance(turn, dict)
+    ]
+
+
+def _serialize_student_processing_trace(raw_trace: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_trace, list):
+        return []
+    serialized_trace: list[dict[str, Any]] = []
+    for step in raw_trace:
+        if not isinstance(step, dict):
+            continue
+        raw_metadata = step.get("metadata")
+        metadata: dict[str, Any] = {}
+        if isinstance(raw_metadata, dict):
+            for key in ("retrieved_count", "retrievedCount", "reply_role"):
+                if key in raw_metadata:
+                    metadata[key] = raw_metadata[key]
+        serialized_step = {
+            "step_id": str(step.get("step_id") or ""),
+            "label": str(step.get("label") or ""),
+            "status": str(step.get("status") or ""),
+            "started_at": str(step.get("started_at") or ""),
+            "completed_at": str(step.get("completed_at") or ""),
+            "duration_ms": step.get("duration_ms") if isinstance(step.get("duration_ms"), (int, float)) else 0,
+        }
+        if metadata:
+            serialized_step["metadata"] = metadata
+        serialized_trace.append(serialized_step)
+    return serialized_trace
+
+
+def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
+    include_case_specific_options = session.training_difficulty == "beginner"
+    return {
+        "payload_schema_version": "student_session.v2",
         "session_id": session.session_id,
         "student_id": session.student_id,
         "case_id": session.case_id,
@@ -2629,41 +2868,36 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "patient_opening_utterance": build_patient_opening_utterance(case.chief_complaint),
         "patient_profile": _serialize_student_visible_patient_profile(case),
         "opening_task_card": _serialize_opening_task_card(case),
-        "teaching_focus": _serialize_teaching_focus(case),
-        "dynamic_teaching_focus": _serialize_dynamic_teaching_focus(session),
-        "inquiry_guidance": _serialize_inquiry_guidance(),
         "diagnosis_draft": _serialize_diagnosis_draft(case),
-        "physical_exam_options": [
-            _serialize_physical_exam_option(exam)
-            for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
-        ],
-        "auxiliary_test_options": [
-            _serialize_auxiliary_test_option(test)
-            for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
-        ],
-        "training_progress": _serialize_training_progress(session, case),
+        "physical_exam_options": (
+            [
+                _serialize_physical_exam_option(exam)
+                for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]
+            ]
+            if include_case_specific_options
+            else []
+        ),
+        "auxiliary_test_options": (
+            [
+                _serialize_auxiliary_test_option(test)
+                for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]
+            ]
+            if include_case_specific_options
+            else []
+        ),
+        "collected_procedure_results": _serialize_collected_procedure_results(session, case),
+        "training_progress": _serialize_student_training_progress(session, case),
         "messages": session.messages,
         "asked_questions": session.asked_questions,
-        "intent_history": session.intent_history,
         "revealed_facts": session.revealed_facts,
         "requested_exams": session.requested_exams,
         "requested_tests": session.requested_tests,
         "student_hypotheses": session.student_hypotheses,
         "final_submission": session.final_submission,
-        "rubric_scores": session.rubric_scores,
-        "missed_items": session.missed_items,
-        "retrieved_sources": session.retrieved_sources,
         "feedback_report": session.feedback_report,
         "safety_flags": session.safety_flags,
-        "evolution_candidates": session.evolution_candidates,
-        "active_skill_context": session.active_skill_context or _empty_active_skill_context(),
-        "agent_turn_memory": session.agent_turn_memory,
-        "action_timeline": session.action_timeline,
-        "patient_affect_state": session.patient_affect_state,
-        "pedagogy_state": session.pedagogy_state,
-        "agent_decision_trace": session.agent_decision_trace,
-        "reflection_summary": session.reflection_summary,
-        "procedure_simulation_audit_items": session.procedure_simulation_audit_items,
+        "agent_turn_memory": _serialize_student_agent_turn_memory(session),
+        "pedagogy_state": _serialize_student_pedagogy_state(session),
     }
 
 

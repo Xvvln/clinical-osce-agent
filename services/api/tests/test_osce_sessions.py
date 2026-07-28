@@ -8,7 +8,11 @@ from app import main
 from app.graph.osce_graph import build_osce_graph
 from app.main import AUTH_COOKIE_NAME, app
 from app.services.auth_store import AuthStore
-from app.services.osce_session_service import _ensure_personal_skill_report_defaults, osce_session_service
+from app.services.osce_session_service import (
+    _ensure_personal_skill_report_defaults,
+    load_case_node,
+    osce_session_service,
+)
 from app.services.osce_session_store import OsceSessionStore
 from app.services.procedure_result_simulator import ProcedureResultSimulationResponse
 from app.services.report_store import ReportStore
@@ -69,6 +73,84 @@ def assert_training_progress_hides_diagnosis(progress: dict[str, object]) -> Non
     assert "阑尾炎" not in progress_text
     assert "Acute appendicitis" not in progress_text
     assert "appendicitis" not in progress_text
+
+
+def assert_student_payload_hides_unrevealed_case_evidence(
+    payload: dict[str, object],
+    *,
+    revealed_fact_ids: set[str] | None = None,
+    requested_exam_codes: set[str] | None = None,
+    requested_test_codes: set[str] | None = None,
+) -> None:
+    case = load_case_node(str(payload["case_id"]))
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    revealed_fact_ids = revealed_fact_ids or set()
+    requested_exam_codes = requested_exam_codes or set()
+    requested_test_codes = requested_test_codes or set()
+
+    for fact in case.history.hidden_facts:
+        if fact.fact_id not in revealed_fact_ids:
+            assert fact.canonical_answer not in payload_text
+    for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
+        if exam.exam_code not in requested_exam_codes:
+            assert exam.result not in payload_text
+    for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
+        if test.test_code not in requested_test_codes:
+            assert test.result not in payload_text
+
+    forbidden_keys = {
+        "active_skill_context",
+        "agent_decision_trace",
+        "action_timeline",
+        "coverage_map",
+        "diagnostic_role",
+        "dynamic_teaching_focus",
+        "evolution_candidates",
+        "inquiry_guidance",
+        "is_abnormal",
+        "linked_rubric_items",
+        "missing_rubric_items",
+        "missed_items",
+        "must_pending_codes",
+        "must_requested",
+        "must_total",
+        "patient_affect_state",
+        "pending_codes",
+        "pending_evidence",
+        "pending_fact_ids",
+        "pending_signal_ids",
+        "reflection_summary",
+        "retrieved_knowledge_context",
+        "retrieved_sources",
+        "rubric_scores",
+        "rules_out",
+        "safe_pending_points",
+        "selected_skill_ids",
+        "selected_skill_reasons",
+        "skill_context",
+        "source_references",
+        "teaching_focus",
+    }
+    assert not (forbidden_keys & _recursive_dict_keys(payload))
+
+
+def _recursive_dict_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return {
+            *[str(key) for key in value],
+            *(
+                nested_key
+                for nested_value in value.values()
+                for nested_key in _recursive_dict_keys(nested_value)
+            ),
+        }
+    if isinstance(value, list):
+        return {
+            nested_key
+            for nested_value in value
+            for nested_key in _recursive_dict_keys(nested_value)
+        }
+    return set()
 
 
 def business_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -379,13 +461,20 @@ def test_agent_decision_trace_is_persisted(tmp_path, authenticated_user: dict[st
     session_id = create_response.json()["session_id"]
 
     client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
-    before_reload = client.get(f"/api/sessions/{session_id}").json()
+    before_reload_payload = client.get(f"/api/sessions/{session_id}").json()
+    before_reload_session = osce_session_service._get_session(session_id)
+    assert before_reload_session is not None
+    before_reload_trace = json.loads(json.dumps(before_reload_session.agent_decision_trace))
     osce_session_service._sessions.clear()
-    after_reload = client.get(f"/api/sessions/{session_id}").json()
+    after_reload_payload = client.get(f"/api/sessions/{session_id}").json()
+    after_reload_session = osce_session_service._get_session(session_id)
 
-    assert before_reload["agent_decision_trace"]
-    assert after_reload["agent_decision_trace"] == before_reload["agent_decision_trace"]
-    assert after_reload["agent_decision_trace"][0]["node"] == "training_strategy_node"
+    assert "agent_decision_trace" not in before_reload_payload
+    assert "agent_decision_trace" not in after_reload_payload
+    assert before_reload_trace
+    assert after_reload_session is not None
+    assert after_reload_session.agent_decision_trace == before_reload_trace
+    assert after_reload_session.agent_decision_trace[0]["node"] == "training_strategy_node"
 
 
 def test_history_message_returns_backend_processing_trace_with_timestamps() -> None:
@@ -459,13 +548,20 @@ def test_agent_state_recovers_with_session(tmp_path, authenticated_user: dict[st
     session_id = create_response.json()["session_id"]
 
     client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation.rebound"})
-    expected_state = client.get(f"/api/sessions/{session_id}").json()["pedagogy_state"]
+    expected_payload = client.get(f"/api/sessions/{session_id}").json()
+    expected_session = osce_session_service._get_session(session_id)
+    assert expected_session is not None
+    expected_state = json.loads(json.dumps(expected_session.pedagogy_state))
     osce_session_service._sessions.clear()
-    loaded_state = client.get(f"/api/sessions/{session_id}").json()["pedagogy_state"]
+    loaded_payload = client.get(f"/api/sessions/{session_id}").json()
+    loaded_session = osce_session_service._get_session(session_id)
 
-    assert loaded_state == expected_state
-    assert loaded_state["training_phase"] == "physical_exam"
-    assert loaded_state["next_best_action"]
+    assert loaded_payload["pedagogy_state"] == expected_payload["pedagogy_state"]
+    assert "training_phase" not in loaded_payload["pedagogy_state"]
+    assert loaded_session is not None
+    assert loaded_session.pedagogy_state == expected_state
+    assert loaded_session.pedagogy_state["training_phase"] == "physical_exam"
+    assert loaded_session.pedagogy_state["next_best_action"]
 
 
 def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str, str] | None]]:
@@ -1017,7 +1113,10 @@ def test_new_session_skill_selection_uses_recent_profile_errors(tmp_path) -> Non
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    selected_skills = second_response.json()["active_skill_context"]["selected_skills"]
+    assert "active_skill_context" not in second_response.json()
+    second_session = osce_session_service._get_session(second_response.json()["session_id"])
+    assert second_session is not None
+    selected_skills = second_session.active_skill_context["selected_skills"]
     assert [skill["skill_id"] for skill in selected_skills[:2]] == [
         "skill_ht_migration",
         "skill_ax_cbc",
@@ -1161,7 +1260,7 @@ def test_create_session_returns_student_visible_patient_profile() -> None:
     assert "social_background" not in patient_profile
 
 
-def test_create_session_returns_opening_task_card_and_inquiry_guidance() -> None:
+def test_create_session_returns_opening_task_card_without_hidden_inquiry_guidance() -> None:
     create_response = client.post(
         "/api/sessions",
         json={"case_id": "appendicitis_001", "student_id": "student_demo"},
@@ -1180,19 +1279,8 @@ def test_create_session_returns_opening_task_card_and_inquiry_guidance() -> None
             "最终提交诊断与推理依据",
         ],
     }
-    assert created["inquiry_guidance"] == {
-        "priority": "先完成现病史的 OPQRST 和伴随症状，再进入既往史、用药过敏史和 ICE。",
-        "suggested_questions": [
-            "什么时候开始疼的？",
-            "最开始和现在分别疼在哪里？",
-            "疼痛是什么性质，程度如何？",
-            "有没有恶心、呕吐、发热或腹泻？",
-            "排尿、排便有没有异常？",
-        ],
-        "categories": ["起病时间", "部位变化", "疼痛性质", "疼痛程度", "伴随症状", "排尿排便", "既往史", "用药过敏史", "ICE"],
-    }
+    assert "inquiry_guidance" not in created
     assert "急性阑尾炎" not in str(created["opening_task_card"])
-    assert "急性阑尾炎" not in str(created["inquiry_guidance"])
 
 
 def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> None:
@@ -1228,11 +1316,13 @@ def test_osce_session_routes_real_medical_request_to_safety_event(tmp_path) -> N
     assert [event["event_type"] for event in business_events(events)] == ["session_created", "safety_boundary_triggered"]
     assert "current_intent" not in payload["agent_turn_memory"][0]
     assert payload["agent_turn_memory"][0]["current_intents"] == ["safety_boundary"]
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
     assert find_event(events, "safety_boundary_triggered")["payload"] == {
         "message": message,
         "safety_flag": "real_medical_advice_request",
         "reply": payload["reply"],
-        "agent_turn": payload["agent_turn_memory"][0],
+        "agent_turn": internal_session.agent_turn_memory[0],
     }
 
 
@@ -1267,10 +1357,12 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
     assert [event["event_type"] for event in business_events(events)] == ["session_created", "answer_request_redirected"]
     assert "current_intent" not in payload["agent_turn_memory"][0]
     assert payload["agent_turn_memory"][0]["current_intents"] == ["answer_request_redirect"]
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
     assert find_event(events, "answer_request_redirected")["payload"] == {
         "message": message,
         "reply": payload["reply"],
-        "agent_turn": payload["agent_turn_memory"][0],
+        "agent_turn": internal_session.agent_turn_memory[0],
     }
 
 
@@ -1299,7 +1391,10 @@ def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> Non
     )
 
     assert create_response.status_code == 200
-    assert create_response.json()["evolution_candidates"] == [
+    assert "evolution_candidates" not in create_response.json()
+    created_session = osce_session_service._get_session(create_response.json()["session_id"])
+    assert created_session is not None
+    assert created_session.evolution_candidates == [
         "临床推理链纠偏提示：在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
     ]
 
@@ -1328,7 +1423,10 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
     )
 
     assert create_response.status_code == 200
-    active_skill_context = create_response.json()["active_skill_context"]
+    assert "active_skill_context" not in create_response.json()
+    created_session = osce_session_service._get_session(create_response.json()["session_id"])
+    assert created_session is not None
+    active_skill_context = created_session.active_skill_context
     assert active_skill_context["skill_index"] == [
         {
             "skill_id": "skill_ht_migration",
@@ -1389,17 +1487,25 @@ def test_active_skill_context_refreshes_after_session_stage_changes(tmp_path) ->
 
     create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
     session_id = create_response.json()["session_id"]
+    created_session = osce_session_service._get_session(session_id)
+    assert created_session is not None
+    initial_skill_id = created_session.active_skill_context["selected_skills"][0]["skill_id"]
     exam_response = client.post(f"/api/sessions/{session_id}/physical-exam", json={"exam_code": "abd.palpation"})
     hint_response = client.post(f"/api/sessions/{session_id}/hint")
 
     assert create_response.status_code == 200
-    assert create_response.json()["active_skill_context"]["selected_skills"][0]["skill_id"] == "skill_ht_migration"
+    assert "active_skill_context" not in create_response.json()
+    assert initial_skill_id == "skill_ht_migration"
     assert exam_response.status_code == 200
     assert exam_response.json()["stage"] == "physical_exam"
-    assert exam_response.json()["active_skill_context"]["selected_skills"][0]["skill_id"] == "skill_pe_tenderness"
+    assert "active_skill_context" not in exam_response.json()
+    refreshed_session = osce_session_service._get_session(session_id)
+    assert refreshed_session is not None
+    assert refreshed_session.active_skill_context["selected_skills"][0]["skill_id"] == "skill_pe_tenderness"
     assert hint_response.status_code == 200
     assert "右下腹压痛查体训练" in hint_response.json()["hint"]
-    assert hint_response.json()["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_pe_tenderness"]
+    assert "selected_skill_ids" not in hint_response.json()["agent_turn_memory"][-1]
+    assert refreshed_session.agent_turn_memory[-1]["selected_skill_ids"] == ["skill_pe_tenderness"]
 
 
 def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_case(tmp_path) -> None:
@@ -1426,7 +1532,10 @@ def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_cas
     )
 
     assert create_response.status_code == 200
-    assert create_response.json()["evolution_candidates"] == []
+    assert "evolution_candidates" not in create_response.json()
+    created_session = osce_session_service._get_session(create_response.json()["session_id"])
+    assert created_session is not None
+    assert created_session.evolution_candidates == []
 
 
 def test_create_session_filters_enabled_skill_with_case_incompatible_teaching_content(tmp_path) -> None:
@@ -1463,7 +1572,10 @@ def test_create_session_filters_enabled_skill_with_case_incompatible_teaching_co
     session_id = create_response.json()["session_id"]
 
     assert create_response.status_code == 200
-    assert create_response.json()["evolution_candidates"] == []
+    assert "evolution_candidates" not in create_response.json()
+    created_session = osce_session_service._get_session(session_id)
+    assert created_session is not None
+    assert created_session.evolution_candidates == []
     assert [event["event_type"] for event in business_events(event_store.list_session_events(session_id))] == [
         "session_created"
     ]
@@ -1502,7 +1614,10 @@ def test_create_session_respects_enabled_training_skill_stage_scope(tmp_path) ->
     session_id = create_response.json()["session_id"]
 
     assert create_response.status_code == 200
-    assert create_response.json()["evolution_candidates"] == []
+    assert "evolution_candidates" not in create_response.json()
+    created_session = osce_session_service._get_session(session_id)
+    assert created_session is not None
+    assert created_session.evolution_candidates == []
     assert [event["event_type"] for event in business_events(event_store.list_session_events(session_id))] == [
         "session_created"
     ]
@@ -1518,99 +1633,35 @@ def test_osce_session_returns_training_progress_map() -> None:
     created = create_response.json()
     session_id = created["session_id"]
     progress = created["training_progress"]
+    assert created["payload_schema_version"] == "student_session.v2"
     assert progress["history"] == {
         "total": 10,
         "covered": 0,
-        "covered_fact_ids": [],
-        "pending_fact_ids": [
-            "hf_01",
-            "hf_02",
-            "hf_03",
-            "hf_04",
-            "hf_05",
-            "hf_06",
-            "hf_07",
-            "hf_08",
-            "hf_09",
-            "hf_10",
-        ],
     }
     assert progress["physical_exam"] == {
         "total": 7,
         "requested": 0,
-        "requested_codes": [],
-        "pending_codes": [
-            "vital.temperature",
-            "abd.inspection",
-            "abd.palpation.tenderness",
-            "abd.palpation.rebound",
-            "abd.palpation.guarding",
-            "abd.special.rovsing",
-            "abd.special.psoas",
-        ],
-        "must_total": 4,
-        "must_requested": 0,
-        "must_pending_codes": [
-            "vital.temperature",
-            "abd.inspection",
-            "abd.palpation.tenderness",
-            "abd.palpation.rebound",
-        ],
     }
     assert progress["auxiliary_test"] == {
         "total": 5,
         "requested": 0,
-        "requested_codes": [],
-        "pending_codes": ["lab.cbc", "lab.crp", "img.abd_us", "lab.urinalysis", "img.abd_ct"],
-        "must_total": 3,
-        "must_requested": 0,
-        "must_pending_codes": ["lab.cbc", "lab.crp", "img.abd_us"],
     }
     assert progress["reasoning"] == {
-        "total_evidence": 13,
         "collected_evidence_count": 0,
-        "collected_evidence": [],
-        "pending_evidence": [
-            "hf_02",
-            "abd.palpation.tenderness",
-            "abd.palpation.rebound",
-            "abd.palpation.guarding",
-            "abd.special.rovsing",
-            "lab.cbc",
-            "lab.crp",
-            "img.abd_us",
-            "img.abd_ct",
-            "lab.urinalysis",
-            "hf_05",
-            "vital.temperature",
-            "abd.inspection",
-        ],
         "ready_for_hypothesis": False,
     }
+    assert progress["revealed_items"] == {
+        "history": [],
+        "physical_exam": [],
+        "auxiliary_test": [],
+        "reasoning": [],
+    }
     assert progress["next_focus"] == "先用开放式问题明确起病、部位、性质、程度和伴随症状。"
-    assert progress["coverage_map"]["history"][0] == {
-        "id": "hf_01",
-        "label": "24 小时前开始，最初是上腹部隐痛。",
-        "status": "pending",
-        "topic": "现病史",
-        "slot": "onset",
-        "linked_rubric_items": ["ht_onset"],
+    assert created["collected_procedure_results"] == {
+        "physical_exams": [],
+        "auxiliary_tests": [],
     }
-    assert progress["coverage_map"]["physical_exam"][2] == {
-        "id": "abd.palpation.tenderness",
-        "label": "McBurney 点压痛：右下腹 McBurney 点明显压痛。",
-        "status": "pending",
-    }
-    assert progress["coverage_map"]["auxiliary_test"][0] == {
-        "id": "lab.cbc",
-        "label": "血常规：白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
-        "status": "pending",
-    }
-    assert progress["coverage_map"]["reasoning"][0] == {
-        "id": "hf_02",
-        "label": "开始在上腹部，大约 8 小时前转移并固定到右下腹。",
-        "status": "pending",
-    }
+    assert_student_payload_hides_unrevealed_case_evidence(created)
     assert_training_progress_hides_diagnosis(progress)
 
     message_response = client.post(
@@ -1623,8 +1674,18 @@ def test_osce_session_returns_training_progress_map() -> None:
     assert_training_progress_hides_diagnosis(message_progress)
     history_progress = message_progress["history"]
     assert history_progress["covered"] == 1
-    assert history_progress["covered_fact_ids"] == ["hf_01"]
-    assert "hf_01" not in history_progress["pending_fact_ids"]
+    assert message_progress["revealed_items"]["history"] == [
+        {
+            "id": "hf_01",
+            "label": "24 小时前开始，最初是上腹部隐痛。",
+            "topic": "现病史",
+            "slot": "onset",
+        }
+    ]
+    assert_student_payload_hides_unrevealed_case_evidence(
+        message_response.json(),
+        revealed_fact_ids={"appendicitis_001.hf_01"},
+    )
 
     exam_response = client.post(
         f"/api/sessions/{session_id}/physical-exam",
@@ -1635,9 +1696,22 @@ def test_osce_session_returns_training_progress_map() -> None:
     exam_progress = exam_response.json()["training_progress"]
     assert_training_progress_hides_diagnosis(exam_progress)
     assert exam_progress["physical_exam"]["requested"] == 1
-    assert exam_progress["physical_exam"]["requested_codes"] == ["abd.palpation.rebound"]
-    assert exam_progress["reasoning"]["collected_evidence"] == ["abd.palpation.rebound"]
+    assert exam_progress["revealed_items"]["physical_exam"] == [
+        {"id": "abd.palpation.rebound", "label": "反跳痛（Blumberg 征）"}
+    ]
+    assert exam_response.json()["collected_procedure_results"]["physical_exams"] == [
+        {
+            "exam_code": "abd.palpation.rebound",
+            "exam_name_cn": "反跳痛（Blumberg 征）",
+            "result": "右下腹反跳痛阳性。",
+        }
+    ]
     assert exam_progress["next_focus"] == "你已经获得部分病史和查体信息，可以申请能验证当前假设的辅助检查。"
+    assert_student_payload_hides_unrevealed_case_evidence(
+        exam_response.json(),
+        revealed_fact_ids={"appendicitis_001.hf_01"},
+        requested_exam_codes={"abd.palpation.rebound"},
+    )
 
     test_response = client.post(
         f"/api/sessions/{session_id}/auxiliary-test",
@@ -1648,10 +1722,76 @@ def test_osce_session_returns_training_progress_map() -> None:
     test_progress = test_response.json()["training_progress"]
     assert_training_progress_hides_diagnosis(test_progress)
     assert test_progress["auxiliary_test"]["requested"] == 1
-    assert test_progress["auxiliary_test"]["requested_codes"] == ["lab.cbc"]
-    assert test_progress["reasoning"]["collected_evidence"] == ["abd.palpation.rebound", "lab.cbc"]
+    assert test_progress["revealed_items"]["auxiliary_test"] == [
+        {"id": "lab.cbc", "label": "血常规"}
+    ]
+    assert test_response.json()["collected_procedure_results"]["auxiliary_tests"] == [
+        {
+            "test_code": "lab.cbc",
+            "test_name_cn": "血常规",
+            "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
+        }
+    ]
     assert test_progress["reasoning"]["ready_for_hypothesis"] is True
     assert test_progress["next_focus"] == "已有病史、查体和辅助检查证据，先记录一个诊断假设，再继续补齐关键证据。"
+    assert_student_payload_hides_unrevealed_case_evidence(
+        test_response.json(),
+        revealed_fact_ids={"appendicitis_001.hf_01"},
+        requested_exam_codes={"abd.palpation.rebound"},
+        requested_test_codes={"lab.cbc"},
+    )
+
+
+@pytest.mark.parametrize("training_difficulty", ["intermediate", "advanced"])
+def test_non_beginner_session_does_not_expose_case_specific_quick_options(
+    training_difficulty: str,
+) -> None:
+    response = client.post(
+        "/api/sessions",
+        json={
+            "case_id": "appendicitis_001",
+            "training_difficulty": training_difficulty,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["training_difficulty"] == training_difficulty
+    assert payload["physical_exam_options"] == []
+    assert payload["auxiliary_test_options"] == []
+    assert_student_payload_hides_unrevealed_case_evidence(payload)
+
+
+def test_session_resume_restores_only_collected_procedure_results() -> None:
+    created = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001"},
+    ).json()
+    session_id = created["session_id"]
+
+    exam_response = client.post(
+        f"/api/sessions/{session_id}/physical-exam",
+        json={"exam_code": "abd.palpation.rebound"},
+    )
+    assert exam_response.status_code == 200
+
+    resumed_response = client.get(f"/api/sessions/{session_id}")
+    assert resumed_response.status_code == 200
+    resumed = resumed_response.json()
+    assert resumed["collected_procedure_results"] == {
+        "physical_exams": [
+            {
+                "exam_code": "abd.palpation.rebound",
+                "exam_name_cn": "反跳痛（Blumberg 征）",
+                "result": "右下腹反跳痛阳性。",
+            }
+        ],
+        "auxiliary_tests": [],
+    }
+    assert_student_payload_hides_unrevealed_case_evidence(
+        resumed,
+        requested_exam_codes={"abd.palpation.rebound"},
+    )
 
 
 def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1703,48 +1843,13 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
         "reasoning": "",
     }
     assert created["physical_exam_options"] == [
-        {
-            "exam_code": "vital.temperature",
-            "exam_name_cn": "体温",
-            "result": "37.8 ℃。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.inspection",
-            "exam_name_cn": "腹部视诊",
-            "result": "腹平坦，无胃肠型，呼吸运动减弱。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.palpation.tenderness",
-            "exam_name_cn": "McBurney 点压痛",
-            "result": "右下腹 McBurney 点明显压痛。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.palpation.rebound",
-            "exam_name_cn": "反跳痛（Blumberg 征）",
-            "result": "右下腹反跳痛阳性。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.palpation.guarding",
-            "exam_name_cn": "肌紧张",
-            "result": "右下腹轻度肌紧张。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.special.rovsing",
-            "exam_name_cn": "Rovsing 征",
-            "result": "Rovsing 征阳性。",
-            "is_abnormal": True,
-        },
-        {
-            "exam_code": "abd.special.psoas",
-            "exam_name_cn": "腰大肌征",
-            "result": "腰大肌征阴性。",
-            "is_abnormal": False,
-        },
+        {"exam_code": "vital.temperature", "exam_name_cn": "体温"},
+        {"exam_code": "abd.inspection", "exam_name_cn": "腹部视诊"},
+        {"exam_code": "abd.palpation.tenderness", "exam_name_cn": "McBurney 点压痛"},
+        {"exam_code": "abd.palpation.rebound", "exam_name_cn": "反跳痛（Blumberg 征）"},
+        {"exam_code": "abd.palpation.guarding", "exam_name_cn": "肌紧张"},
+        {"exam_code": "abd.special.rovsing", "exam_name_cn": "Rovsing 征"},
+        {"exam_code": "abd.special.psoas", "exam_name_cn": "腰大肌征"},
     ]
     assert created["auxiliary_test_options"] == [
         {
@@ -1753,12 +1858,6 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "category": "实验室",
             "invasiveness": "微创",
             "cost_hint": "基础",
-            "diagnostic_role": "supports_primary_diagnosis",
-            "rules_out": [],
-            "recommended_stage": "auxiliary_test",
-            "overuse_warning": None,
-            "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
-            "is_abnormal": True,
         },
         {
             "test_code": "lab.crp",
@@ -1766,12 +1865,6 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "category": "实验室",
             "invasiveness": "微创",
             "cost_hint": "基础",
-            "diagnostic_role": "supports_primary_diagnosis",
-            "rules_out": [],
-            "recommended_stage": "auxiliary_test",
-            "overuse_warning": None,
-            "result": "CRP 48 mg/L。",
-            "is_abnormal": True,
         },
         {
             "test_code": "img.abd_us",
@@ -1779,12 +1872,6 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "category": "影像",
             "invasiveness": "无创",
             "cost_hint": "基础",
-            "diagnostic_role": "supports_primary_diagnosis",
-            "rules_out": [],
-            "recommended_stage": "auxiliary_test",
-            "overuse_warning": None,
-            "result": "右下腹见管状低回声结构，直径 9 mm，周围少量渗出。",
-            "is_abnormal": True,
         },
         {
             "test_code": "lab.urinalysis",
@@ -1792,12 +1879,6 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "category": "实验室",
             "invasiveness": "无创",
             "cost_hint": "基础",
-            "diagnostic_role": "rules_out_alternative",
-            "rules_out": ["右侧输尿管结石"],
-            "recommended_stage": "auxiliary_test",
-            "overuse_warning": None,
-            "result": "尿常规阴性，未见血尿。",
-            "is_abnormal": False,
         },
         {
             "test_code": "img.abd_ct",
@@ -1805,14 +1886,9 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "category": "影像",
             "invasiveness": "无创",
             "cost_hint": "中等",
-            "diagnostic_role": "supports_primary_diagnosis",
-            "rules_out": [],
-            "recommended_stage": "auxiliary_test",
-            "overuse_warning": "基础病史、查体、血常规和超声已足够支持训练推理时，不应把 CT 作为第一步机械申请。",
-            "result": "阑尾增粗，周围脂肪间隙模糊。",
-            "is_abnormal": True,
         },
     ]
+    assert_student_payload_hides_unrevealed_case_evidence(created)
 
     procedure_catalog_response = client.get("/api/procedure-catalog")
     procedure_catalog = procedure_catalog_response.json()
@@ -1968,6 +2044,8 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
     assert state_payload["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert state_payload["requested_exams"] == ["abd.palpation.rebound", "vital.blood_pressure"]
     assert state_payload["requested_tests"] == ["lab.cbc", "ecg.st_segment"]
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
     expected_action_timeline = [
         {
             "turn_index": 1,
@@ -2013,9 +2091,12 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str], 
             "source_id": item["source_id"],
             "label": item["label"],
         }
-        for item in state_payload["action_timeline"]
+        for item in internal_session.action_timeline
     ] == expected_action_timeline
-    assert all(isinstance(item.get("message_turn_index"), int) and item["message_turn_index"] >= 1 for item in state_payload["action_timeline"])
+    assert all(
+        isinstance(item.get("message_turn_index"), int) and item["message_turn_index"] >= 1
+        for item in internal_session.action_timeline
+    )
 
     report_response = client.get(f"/api/sessions/{session_id}/report")
 
@@ -2306,7 +2387,10 @@ def test_osce_session_records_diagnosis_hypothesis_before_final_submission(tmp_p
     assert payload["stage"] == "history_taking"
     assert payload["student_hypotheses"] == ["急性阑尾炎"]
     assert payload["final_submission"] is None
-    assert payload["rubric_scores"] == {}
+    assert "rubric_scores" not in payload
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
+    assert internal_session.rubric_scores == {}
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
     assert [event["event_type"] for event in business_events(events)] == [
@@ -2337,7 +2421,7 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
     assert payload["training_progress"]["next_focus"] == "已获得部分病史，下一步选择关键查体来验证当前线索。"
     assert payload["messages"][-1] == {"role": "coach", "content": payload["hint"]}
     assert payload["final_submission"] is None
-    assert payload["rubric_scores"] == {}
+    assert "rubric_scores" not in payload
     for forbidden_term in ["急性阑尾炎", "阑尾炎", "手术", "治疗方案"]:
         assert forbidden_term not in payload["hint"]
 
@@ -2348,10 +2432,13 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
         "hint_requested",
     ]
     hint_event_payload = find_event(events, "hint_requested")["payload"]
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
     assert hint_event_payload == {
         "hint": payload["hint"],
-        "agent_turn": payload["agent_turn_memory"][-1],
+        "agent_turn": internal_session.agent_turn_memory[-1],
     }
+    assert "agent_path" not in payload["agent_turn_memory"][-1]
     assert "current_intent" not in hint_event_payload["agent_turn"]
     assert hint_event_payload["agent_turn"]["current_intents"] == ["socratic_hint"]
     assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
@@ -2389,7 +2476,7 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
     assert payload["hint"] == "本轮训练重点是临床推理链纠偏提示。提交诊断前，请按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
     assert payload["messages"][-1] == {"role": "coach", "content": payload["hint"]}
     assert payload["final_submission"] is None
-    assert payload["rubric_scores"] == {}
+    assert "rubric_scores" not in payload
     for forbidden_term in ["急性阑尾炎", "阑尾炎", "手术", "治疗方案"]:
         assert forbidden_term not in payload["hint"]
 
@@ -2401,10 +2488,13 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         "hint_requested",
     ]
     hint_event_payload = find_event(events, "hint_requested")["payload"]
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
     assert hint_event_payload == {
         "hint": payload["hint"],
-        "agent_turn": payload["agent_turn_memory"][-1],
+        "agent_turn": internal_session.agent_turn_memory[-1],
     }
+    assert "agent_path" not in payload["agent_turn_memory"][-1]
     assert "current_intent" not in hint_event_payload["agent_turn"]
     assert hint_event_payload["agent_turn"]["current_intents"] == ["socratic_hint"]
     assert hint_event_payload["agent_turn"]["turn_policy"] == "teaching_hint"
@@ -2528,7 +2618,10 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     skill_events = [event for event in next_events if event["event_type"] == "training_skill_applied"]
 
     assert next_session_response.status_code == 200
-    assert next_session["evolution_candidates"] == [
+    assert "evolution_candidates" not in next_session
+    next_internal_session = osce_session_service._get_session(next_session["session_id"])
+    assert next_internal_session is not None
+    assert next_internal_session.evolution_candidates == [
         f"{enabled_skill['title']}：{enabled_skill['suggested_strategy']}"
     ]
     assert skill_events[0]["payload"]["skill_id"] == skill_id
@@ -2543,7 +2636,11 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
         other_session_response = other_client.post("/api/sessions", json={"case_id": "appendicitis_001"})
 
     assert other_session_response.status_code == 200
-    assert other_session_response.json()["evolution_candidates"] == []
+    other_session_payload = other_session_response.json()
+    assert "evolution_candidates" not in other_session_payload
+    other_internal_session = osce_session_service._get_session(other_session_payload["session_id"])
+    assert other_internal_session is not None
+    assert other_internal_session.evolution_candidates == []
 
 
 def test_current_user_report_defers_optional_personal_skill_enrichment(
@@ -3098,6 +3195,8 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
     )
     client.get(f"/api/sessions/{session_id}/report")
     state_payload = client.get(f"/api/sessions/{session_id}").json()
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
 
     events = TrainingEventStore(database_path).list_session_events(session_id)
 
@@ -3126,8 +3225,9 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
         "message": "什么时候开始疼的？",
         "current_intents": ["ask_onset"],
         "reply": "24 小时前开始，最初是上腹部隐痛。",
-        "agent_turn": state_payload["agent_turn_memory"][0],
+        "agent_turn": internal_session.agent_turn_memory[0],
     }
+    assert "agent_path" not in state_payload["agent_turn_memory"][0]
     assert filtered_business_events[3]["payload"] == {"exam_code": "abd.palpation.rebound", "result": "右下腹反跳痛阳性。"}
     assert filtered_business_events[4]["payload"] == {"test_code": "lab.cbc", "result": "白细胞 14.2×10^9/L，中性粒细胞比例 85%。"}
     assert filtered_business_events[5]["payload"] == {
