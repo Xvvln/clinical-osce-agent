@@ -165,7 +165,7 @@ python '.\start-dev.py'
 该命令会启动同一套本地后端和两个前端：
 
 - API：`http://127.0.0.1:8000`
-- 学生端：`http://127.0.0.1:3000`
+- 学生端：`http://localhost:3000`
 - 管理端：`http://127.0.0.1:3100`
 
 如需在 API 已经运行时单独调试管理端，可参考：
@@ -176,7 +176,7 @@ python '.\start-admin.py'
 
 `start-admin.py` 不再启动第二套 API，只会将管理端连接到 `http://127.0.0.1:8000`。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md`、`apps/admin/README.md` 和 `docker-compose.yml` 为准。
 
-本地脚本与 Docker Compose 使用不同的管理端端口：`start-dev.py` 使用 `3100`，Compose 使用 `3001`。Compose 默认只绑定回环地址，入口分别为 API `127.0.0.1:8000`、学生端 `127.0.0.1:3000`、管理端 `127.0.0.1:3001`；如需对外提供服务，应在反向代理和访问控制就绪后再显式调整 `CLINICAL_OSCE_BIND_HOST`。
+本地脚本与 Docker Compose 使用不同的管理端端口：`start-dev.py` 使用 `3100`，Compose 使用 `3001`。Compose 默认只绑定回环地址，浏览器入口分别为 API `127.0.0.1:8000`、学生端 `localhost:3000`、管理端 `127.0.0.1:3001`；请保留学生端的 `localhost` 与管理端的 `127.0.0.1` 两种 hostname 写法，让同一浏览器中的 host-only 登录 Cookie 相互隔离。如需对外提供服务，应在反向代理、独立子域名和访问控制就绪后再显式调整 `CLINICAL_OSCE_BIND_HOST`。
 
 Compose 和 API 进程默认都不启用固定演示管理员或固定演示学生，也不提供默认邮箱与密码。受控演示环境必须在不提交到仓库的私有 `.env` 中分别显式设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED/EMAIL/PASSWORD` 与 `CLINICAL_OSCE_DEMO_STUDENT_ENABLED/EMAIL/PASSWORD`；两类账号只在 `local-dev` / `local-demo` 生效，生产模式即使误设 enabled 也会拒绝固定账号登录。演示 seed API 与脚本同样要求两组配置完整，否则会在写入前失败关闭。
 
