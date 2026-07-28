@@ -3299,6 +3299,96 @@ def test_admin_can_list_procedure_simulation_audits(tmp_path, monkeypatch) -> No
     }
 
 
+def test_admin_session_read_routes_hide_pending_deletion_residue(tmp_path, monkeypatch) -> None:
+    deleted_session_id = "session_pending_deletion"
+    visible_session_id = "session_still_visible"
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
+
+    for session_id in [deleted_session_id, visible_session_id]:
+        session_store.create_session(
+            OsceSession(
+                session_id=session_id,
+                student_id=f"student_{session_id}",
+                case_id="appendicitis_001",
+                stage="report_ready",
+            )
+        )
+        report_store.save_report(
+            {
+                "report_id": f"report_{session_id}",
+                "session_id": session_id,
+                "case_id": "appendicitis_001",
+                "student_id": f"student_{session_id}",
+                "total_score": 80,
+                "dimension_scores": {},
+                "missed_items": [],
+                "knowledge_recommendations": [],
+                "procedure_simulation_audit_items": [
+                    {
+                        "procedure_id": f"test:{session_id}",
+                        "kind": "test",
+                        "code": session_id,
+                        "label": session_id,
+                        "result": "训练模拟结果",
+                        "approval_status": "approved",
+                        "approval_agent_review": {"decision": "approved"},
+                    }
+                ],
+            }
+        )
+        event_store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id=f"student_{session_id}",
+            event_type="session_created",
+            payload={"stage": "history"},
+        )
+
+    stale_session_summaries = session_store.list_session_summaries()
+    pending_deletion = session_store.begin_session_deletion(
+        deleted_session_id,
+        f"student_{deleted_session_id}",
+    )
+    assert pending_deletion is not None
+    assert pending_deletion.cleanup_status == "pending"
+    assert session_store.is_session_deleted(deleted_session_id) is True
+    monkeypatch.setattr(session_store, "list_session_summaries", lambda: stale_session_summaries)
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "training_event_store", event_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        sessions_response = client.get("/api/admin/sessions")
+        reports_response = client.get("/api/admin/reports")
+        audits_response = client.get("/api/admin/procedure-simulation-audits")
+        deleted_report_response = client.get(f"/api/admin/sessions/{deleted_session_id}/report")
+        deleted_events_response = client.get(f"/api/admin/sessions/{deleted_session_id}/events")
+        visible_report_response = client.get(f"/api/admin/sessions/{visible_session_id}/report")
+        visible_events_response = client.get(f"/api/admin/sessions/{visible_session_id}/events")
+
+    assert sessions_response.status_code == 200
+    assert [item["session_id"] for item in sessions_response.json()["sessions"]] == [visible_session_id]
+    assert sessions_response.json()["pagination"]["total"] == 1
+    assert reports_response.status_code == 200
+    assert [item["session_id"] for item in reports_response.json()["reports"]] == [visible_session_id]
+    assert reports_response.json()["pagination"]["total"] == 1
+    assert audits_response.status_code == 200
+    assert [
+        item["session_id"]
+        for item in audits_response.json()["procedure_simulation_audits"]
+    ] == [visible_session_id]
+    assert audits_response.json()["summary"]["total"] == 1
+    assert audits_response.json()["pagination"]["total"] == 1
+    assert deleted_report_response.status_code == 404
+    assert deleted_report_response.json() == {"detail": "report not found"}
+    assert deleted_events_response.status_code == 404
+    assert deleted_events_response.json() == {"detail": "session not found"}
+    assert visible_report_response.status_code == 200
+    assert visible_events_response.status_code == 200
+
+
 
 def test_admin_can_read_session_report(tmp_path, monkeypatch) -> None:
     report_store = ReportStore(tmp_path / "reports.sqlite3")

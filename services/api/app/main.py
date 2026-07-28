@@ -255,9 +255,18 @@ def _build_paginated_admin_payload(
     }
 
 
+def _is_deleted_admin_session(session_id: object) -> bool:
+    normalized_session_id = str(session_id or "").strip()
+    return bool(normalized_session_id) and osce_session_service.session_store.is_session_deleted(
+        normalized_session_id
+    )
+
+
 def _build_admin_procedure_simulation_audit_items() -> list[dict[str, Any]]:
     audit_items: list[dict[str, Any]] = []
     for report in osce_session_service.report_store.list_reports():
+        if _is_deleted_admin_session(report.get("session_id")):
+            continue
         enriched_report = enrich_report(report)
         report_audit_items = enriched_report.get("procedure_simulation_audit_items", [])
         if not isinstance(report_audit_items, list):
@@ -2570,7 +2579,11 @@ def list_admin_reports(
     _require_admin_user(auth_token)
     return _build_paginated_admin_payload(
         "reports",
-        [enrich_report(report) for report in osce_session_service.report_store.list_reports()],
+        [
+            enrich_report(report)
+            for report in osce_session_service.report_store.list_reports()
+            if not _is_deleted_admin_session(report.get("session_id"))
+        ],
         limit,
         offset,
         q,
@@ -2587,7 +2600,11 @@ def list_admin_sessions(
     _require_admin_user(auth_token)
     return _build_paginated_admin_payload(
         "sessions",
-        [enrich_session_summary(session) for session in osce_session_service.session_store.list_session_summaries()],
+        [
+            enrich_session_summary(session)
+            for session in osce_session_service.session_store.list_session_summaries()
+            if not _is_deleted_admin_session(session.get("session_id"))
+        ],
         limit,
         offset,
         q,
@@ -2617,6 +2634,8 @@ def get_admin_session_report(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
+    if _is_deleted_admin_session(session_id):
+        raise HTTPException(status_code=404, detail="report not found")
     report = osce_session_service.report_store.get_report(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
@@ -2629,6 +2648,8 @@ def list_admin_session_events(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
+    if _is_deleted_admin_session(session_id):
+        raise HTTPException(status_code=404, detail="session not found")
     return {"events": osce_session_service.training_event_store.list_session_events(session_id)}
 
 
