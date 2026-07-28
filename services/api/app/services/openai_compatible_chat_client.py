@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -33,6 +34,9 @@ class OpenAICompatibleSettings(BaseSettings):
     proxy_url: str = "http://127.0.0.1:7897"
     timeout_seconds: float = 30.0
     temperature: float = 0.2
+    # Request/account-scoped settings set this to false so a server-wide
+    # fallback cannot silently receive another account's model payload.
+    allow_process_fallback: bool = True
 
     @property
     def is_configured(self) -> bool:
@@ -53,6 +57,7 @@ class OpenAICompatibleFallbackSettings(BaseSettings):
     proxy_url: str = ""
     timeout_seconds: float = 30.0
     temperature: float = 0.2
+    allow_cross_provider: bool = False
 
     @property
     def is_configured(self) -> bool:
@@ -101,7 +106,14 @@ class OpenAICompatibleChatClient:
                     provider_label="openai_compatible",
                 )
             except Exception:
-                if not self._fallback_settings.is_configured:
+                if (
+                    not self._settings.allow_process_fallback
+                    or not self._fallback_settings.is_configured
+                    or not _fallback_destination_is_allowed(
+                        self._settings.base_url,
+                        self._fallback_settings,
+                    )
+                ):
                     raise
                 fallback_settings = (
                     self._fallback_settings.to_openai_settings()
@@ -133,11 +145,41 @@ class OpenAICompatibleChatClient:
         response_model: type[ResponseModelT],
         provider_label: str,
     ) -> ResponseModelT:
-        response = self._post_chat_completion(payload, settings=settings, provider_label=provider_label)
-        content = _extract_message_content(response.json())
-        return _validate_response_content(content, response_model=response_model)
+        started_at = time.perf_counter()
+        response: httpx.Response | None = None
+        try:
+            response = self._post_chat_completion(payload, settings=settings)
+            content = _extract_message_content(response.json())
+            result = _validate_response_content(content, response_model=response_model)
+        except Exception as exc:
+            api_call_log_store.record(
+                provider=provider_label,
+                operation="chat.completions",
+                model=str(payload.get("model") or settings.model),
+                endpoint=_chat_completions_url(settings.base_url),
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                status_code=getattr(response, "status_code", None),
+                error=exc,
+            )
+            raise
+        api_call_log_store.record(
+            provider=provider_label,
+            operation="chat.completions",
+            model=str(payload.get("model") or settings.model),
+            endpoint=_chat_completions_url(settings.base_url),
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            status_code=getattr(response, "status_code", None),
+        )
+        return result
 
-    def _post_chat_completion(self, payload: dict[str, Any], *, settings: OpenAICompatibleSettings, provider_label: str) -> httpx.Response:
+    def _post_chat_completion(
+        self,
+        payload: dict[str, Any],
+        *,
+        settings: OpenAICompatibleSettings,
+    ) -> httpx.Response:
         client_options: dict[str, Any] = {
             "timeout": settings.timeout_seconds,
             "follow_redirects": False,
@@ -151,43 +193,21 @@ class OpenAICompatibleChatClient:
             headers["Authorization"] = f"Bearer {settings.api_key}"
 
         endpoint = _chat_completions_url(settings.base_url)
-        started_at = time.perf_counter()
-        try:
-            def send_request() -> httpx.Response:
-                with httpx.Client(**client_options) as client:
-                    response = client.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                    )
-                response.raise_for_status()
-                return response
 
-            response = run_model_provider_call(
-                send_request,
-                timeout_seconds=settings.timeout_seconds,
-            )
-        except Exception as exc:
-            api_call_log_store.record(
-                provider=provider_label,
-                operation="chat.completions",
-                model=str(payload.get("model") or settings.model),
-                endpoint=endpoint,
-                success=False,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-                error=exc,
-            )
-            raise
-        api_call_log_store.record(
-            provider=provider_label,
-            operation="chat.completions",
-            model=str(payload.get("model") or settings.model),
-            endpoint=endpoint,
-            success=True,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            status_code=getattr(response, "status_code", None),
+        def send_request() -> httpx.Response:
+            with httpx.Client(**client_options) as client:
+                response = client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
+            response.raise_for_status()
+            return response
+
+        return run_model_provider_call(
+            send_request,
+            timeout_seconds=settings.timeout_seconds,
         )
-        return response
 
 
 def _chat_completions_url(base_url: str) -> str:
@@ -207,6 +227,30 @@ def _model_name_for_base_url(model: str, base_url: str) -> str:
 def _should_use_proxy(proxy_url: str) -> bool:
     normalized = proxy_url.strip().lower()
     return bool(normalized and normalized not in {"direct", "none", "false", "off", "no"})
+
+
+def _fallback_destination_is_allowed(
+    primary_base_url: str,
+    fallback_settings: OpenAICompatibleFallbackSettings,
+) -> bool:
+    if fallback_settings.allow_cross_provider:
+        return True
+    return _provider_origin(primary_base_url) == _provider_origin(
+        fallback_settings.base_url
+    )
+
+
+def _provider_origin(base_url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(base_url.strip())
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or not hostname:
+        return None
+    scheme = parsed.scheme.lower()
+    return scheme, hostname.casefold(), port or (443 if scheme == "https" else 80)
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:

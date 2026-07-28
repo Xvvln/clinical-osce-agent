@@ -380,6 +380,8 @@ def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_pa
     assert "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD=student" not in env_example_source
     assert "OSCE_OPENAI_MODEL=gemini-3.5-flash" in env_example_source
     assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" in env_example_source
+    assert "OSCE_OPENAI_FALLBACK_ENABLED=false" in env_example_source
+    assert "OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER=false" in env_example_source
     assert "OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001" in env_example_source
     assert "OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5" in env_example_source
     assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source

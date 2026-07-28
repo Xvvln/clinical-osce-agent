@@ -44,6 +44,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_OPENAI_FALLBACK_BASE_URL",
         "OSCE_OPENAI_FALLBACK_MODEL",
         "OSCE_OPENAI_FALLBACK_PROXY_URL",
+        "OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER",
         "OSCE_ANTHROPIC_ENABLED",
         "OSCE_ANTHROPIC_API_KEY",
         "OSCE_ANTHROPIC_BASE_URL",

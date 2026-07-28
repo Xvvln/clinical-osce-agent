@@ -192,9 +192,13 @@ CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS=api.openai.com,api.anthropic.com,gener
 CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=false
 OSCE_OPENAI_MODEL=gemini-3.5-flash
 OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
+OSCE_OPENAI_FALLBACK_ENABLED=false
+OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER=false
 OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
+
+跨服务 fallback 会把同一份病例与训练载荷发送到另一个目标，因此默认关闭。只有在明确审核备用服务的数据边界后，才同时开启 `OSCE_OPENAI_FALLBACK_ENABLED` 和 `OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER`；账号级模型配置始终不会继承进程级 fallback。
 
 仅在本地显式启用账号级模型配置时，后端才会按当前登录账号读取配置，并在单次训练或报告请求的上下文中绑定；读取配置状态不会改写进程级模型状态，后台报告增强也会按 session 所属账号重新绑定。共享模式默认只允许服务端批准清单中的 HTTPS provider 主机，账号级请求必须直连，不接受自定义后端、代理、内网 / 回环地址或服务端 Vertex ADC，也不跟随 HTTP 重定向；实际保存、连通性测试和训练调用共用同一策略。只有单人本机 `local-dev` 可显式设置 `CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=true` 恢复上述开发能力，该开关在 `local-demo` 和生产模式中无效。
 

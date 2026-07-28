@@ -75,6 +75,7 @@ class RuntimeModelConfig:
             model=self.model,
             base_url=self.base_url,
             proxy_url=self.proxy_url,
+            allow_process_fallback=False,
         )
 
     def to_anthropic_settings(self) -> AnthropicSettings:

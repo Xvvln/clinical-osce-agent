@@ -14,6 +14,7 @@ from app.services import openai_compatible_chat_client as module
 from app.services.api_call_log_service import ApiCallLogStore
 from app.services.model_call_policy import ModelProviderTimeoutError
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.runtime_model_config_store import RuntimeModelConfig
 
 
 class DemoJsonResponse(BaseModel):
@@ -151,6 +152,7 @@ def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_BASE_URL", "https://fallback-gateway.example/v1")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER", "true")
 
     client = OpenAICompatibleChatClient(
         OpenAICompatibleSettings(
@@ -179,6 +181,107 @@ def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_
     assert "proxy" not in FakeFallbackHttpxClient.calls[1]["kwargs"]
 
 
+def test_openai_compatible_chat_client_does_not_cross_provider_without_explicit_approval(
+    monkeypatch,
+) -> None:
+    FakeFallbackHttpxClient.calls = []
+    monkeypatch.setattr(module.httpx, "Client", FakeFallbackHttpxClient)
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "mimo-secret-value")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_FALLBACK_BASE_URL",
+        "https://fallback-gateway.example/v1",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER", "false")
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="primary-secret-value",
+            base_url="https://primary.example/v1",
+            model="gemini-primary",
+            proxy_url="direct",
+        )
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.complete_json(
+            system_prompt="只输出 JSON。",
+            payload={"case_id": "must-stay-on-primary"},
+            response_model=DemoJsonResponse,
+        )
+
+    assert [call["url"] for call in FakeFallbackHttpxClient.calls] == [
+        "https://primary.example/v1/chat/completions"
+    ]
+
+
+def test_account_scoped_openai_settings_never_inherit_process_fallback(
+    monkeypatch,
+) -> None:
+    FakeFallbackHttpxClient.calls = []
+    monkeypatch.setattr(module.httpx, "Client", FakeFallbackHttpxClient)
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_API_KEY", "mimo-secret-value")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_FALLBACK_BASE_URL",
+        "https://fallback-gateway.example/v1",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER", "true")
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="account-secret-value",
+            base_url="https://primary.example/v1",
+            model="account-model",
+            proxy_url="direct",
+            allow_process_fallback=False,
+        )
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.complete_json(
+            system_prompt="只输出 JSON。",
+            payload={"case_id": "account-private-case"},
+            response_model=DemoJsonResponse,
+        )
+
+    assert [call["url"] for call in FakeFallbackHttpxClient.calls] == [
+        "https://primary.example/v1/chat/completions"
+    ]
+
+
+def test_runtime_openai_config_disables_process_fallback() -> None:
+    settings = RuntimeModelConfig(
+        provider="openai_compatible",
+        api_key="account-secret",
+        model="account-model",
+        base_url="https://primary.example/v1",
+        proxy_url="direct",
+    ).to_openai_compatible_settings()
+
+    assert settings.allow_process_fallback is False
+
+
+def test_same_origin_fallback_does_not_require_cross_provider_approval() -> None:
+    fallback_settings = module.OpenAICompatibleFallbackSettings(
+        enabled=True,
+        api_key="fallback-secret",
+        base_url="https://primary.example:443/backup/v1",
+        model="fallback-model",
+        allow_cross_provider=False,
+        _env_file=None,
+    )
+
+    assert module._fallback_destination_is_allowed(
+        "https://primary.example/v1",
+        fallback_settings,
+    )
+
+
 def test_openai_compatible_chat_client_records_primary_failure_and_fallback_success(tmp_path, monkeypatch) -> None:
     FakeFallbackHttpxClient.calls = []
     log_store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
@@ -189,6 +292,7 @@ def test_openai_compatible_chat_client_records_primary_failure_and_fallback_succ
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_BASE_URL", "https://fallback-gateway.example/v1")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "mimo-v2.5-pro")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER", "true")
 
     client = OpenAICompatibleChatClient(
         OpenAICompatibleSettings(
@@ -212,6 +316,58 @@ def test_openai_compatible_chat_client_records_primary_failure_and_fallback_succ
         ("openai_compatible_fallback", True, 200),
         ("openai_compatible", False, 503),
     ]
+
+
+def test_openai_compatible_chat_client_logs_invalid_200_response_as_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class InvalidResponse(FakeChatCompletionResponse):
+        def json(self) -> dict[str, object]:
+            return {"choices": []}
+
+    class InvalidResponseClient(FakeHttpxClient):
+        def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> InvalidResponse:
+            self.calls.append({"url": url, "headers": headers, "json": json})
+            return InvalidResponse()
+
+    log_store = ApiCallLogStore(tmp_path / "model_api_calls.jsonl")
+    monkeypatch.setattr(module, "api_call_log_store", log_store)
+    monkeypatch.setattr(module.httpx, "Client", InvalidResponseClient)
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ENABLED", "false")
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="primary-secret-value",
+            base_url="https://primary.example/v1",
+            model="gemini-primary",
+            proxy_url="direct",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="missing choices"):
+        client.complete_json(
+            system_prompt="只输出 JSON。",
+            payload={"case_id": "appendicitis_001"},
+            response_model=DemoJsonResponse,
+        )
+
+    logs = log_store.build_admin_payload(limit=10)["logs"]
+    assert [
+        (
+            item["provider"],
+            item["success"],
+            item["status_code"],
+            item["error_type"],
+        )
+        for item in logs
+    ] == [("openai_compatible", False, 200, "RuntimeError")]
 
 
 def test_openai_compatible_chat_client_normalizes_mimo_model_case_without_provider_specific_url(monkeypatch) -> None:
@@ -416,6 +572,7 @@ def test_openai_primary_and_fallback_share_one_total_deadline(
     )
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_MODEL", "fallback-model")
     monkeypatch.setenv("OSCE_OPENAI_FALLBACK_PROXY_URL", "direct")
+    monkeypatch.setenv("OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER", "true")
     client = OpenAICompatibleChatClient(
         OpenAICompatibleSettings(
             enabled=True,
