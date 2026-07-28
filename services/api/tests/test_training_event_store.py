@@ -2,7 +2,12 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from app.services.training_event_store import TrainingEventStore
+import pytest
+
+from app.services.training_event_store import (
+    TrainingEventStore,
+    TrainingEventStreamDeletedError,
+)
 
 
 def test_training_event_store_appends_and_reads_session_events(tmp_path) -> None:
@@ -97,6 +102,17 @@ def test_training_event_store_migrates_legacy_schema_and_preserves_unkeyed_event
         {"sequence": 1},
         {"sequence": 2},
     ]
+    with sqlite3.connect(database_path) as connection:
+        tombstone_table = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'training_event_stream_tombstones'
+            """
+        ).fetchone()
+        schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+    assert tombstone_table == ("training_event_stream_tombstones",)
+    assert schema_version == 2
 
 
 def test_training_event_store_replays_keyed_event_without_duplicate_insert(tmp_path) -> None:
@@ -196,3 +212,57 @@ def test_training_event_store_two_instances_insert_same_event_key_once(tmp_path)
     assert len(events) == 1
     assert events[0]["event_key"] == "report/session_concurrent/final"
     assert events[0]["payload"] in ({"attempt": 1}, {"attempt": 2})
+
+
+def test_delete_event_streams_is_exact_idempotent_and_rejects_late_appends(tmp_path) -> None:
+    database_path = tmp_path / "training_events.sqlite3"
+    store = TrainingEventStore(database_path)
+    for session_id in ("session_delete", "personal_skill_candidate_session_delete", "session_keep"):
+        assert store.append_event(
+            session_id=session_id,
+            case_id="appendicitis_001",
+            student_id="student_demo",
+            event_type="report_generated",
+            payload={"stream": session_id},
+            event_key=f"event:{session_id}",
+        )
+
+    assert store.delete_event_streams(
+        [
+            "session_delete",
+            "personal_skill_candidate_session_delete",
+            "session_delete",
+        ]
+    ) == 2
+    assert TrainingEventStore(database_path).delete_event_streams(
+        ["session_delete", "personal_skill_candidate_session_delete"]
+    ) == 0
+    assert store.list_session_events("session_delete") == []
+    assert store.list_session_events("personal_skill_candidate_session_delete") == []
+    assert [event["payload"] for event in store.list_session_events("session_keep")] == [
+        {"stream": "session_keep"}
+    ]
+
+    for deleted_stream_id in (
+        "session_delete",
+        "personal_skill_candidate_session_delete",
+    ):
+        with pytest.raises(TrainingEventStreamDeletedError) as exc_info:
+            store.append_event(
+                session_id=deleted_stream_id,
+                case_id="appendicitis_001",
+                student_id="student_demo",
+                event_type="late_event",
+                payload={"late": True},
+            )
+        assert exc_info.value.session_id == deleted_stream_id
+
+    assert store.delete_event_streams(["session_never_written"]) == 0
+    with pytest.raises(TrainingEventStreamDeletedError):
+        store.append_event(
+            session_id="session_never_written",
+            case_id="appendicitis_001",
+            student_id="student_demo",
+            event_type="late_event",
+            payload={"late": True},
+        )

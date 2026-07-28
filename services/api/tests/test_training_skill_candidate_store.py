@@ -1,4 +1,13 @@
-from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
+import json
+import sqlite3
+
+import pytest
+
+from app.services.training_skill_candidate_store import (
+    TrainingSkillCandidateDeletedError,
+    TrainingSkillCandidateOwnershipError,
+    TrainingSkillCandidateStore,
+)
 
 
 def test_training_skill_candidate_store_persists_candidate_with_review_across_instances(tmp_path) -> None:
@@ -328,3 +337,158 @@ def test_training_skill_candidate_store_does_not_approve_blocked_candidate(tmp_p
 
     assert approved is False
     assert TrainingSkillCandidateStore(database_path).get_candidate("skill_candidate_ht_location")["review"]["status"] == "blocked_by_regression"
+
+
+def test_personal_candidate_delete_is_exact_idempotent_and_blocks_late_saves(tmp_path) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    store = TrainingSkillCandidateStore(database_path)
+    target, target_review = _personal_candidate(
+        session_id="session_delete",
+        owner_student_id="student_a",
+    )
+    other, other_review = _personal_candidate(
+        session_id="session_keep",
+        owner_student_id="student_a",
+    )
+    global_candidate = {
+        **target,
+        "candidate_id": "skill_candidate_global_keep",
+        "trigger_item_id": "global_keep",
+        "scope": "global",
+        "owner_student_id": "",
+        "source_session_id": "",
+    }
+    global_review = {**target_review, "candidate_id": "skill_candidate_global_keep"}
+    store.save_candidate(target, target_review)
+    store.save_candidate(other, other_review)
+    store.save_candidate(global_candidate, global_review)
+
+    with pytest.raises(TrainingSkillCandidateOwnershipError):
+        store.delete_personal_candidate(
+            candidate_id="personal_skill_candidate_session_delete",
+            owner_student_id="student_b",
+            source_session_id="session_delete",
+        )
+    assert store.get_candidate("personal_skill_candidate_session_delete") is not None
+
+    assert store.delete_personal_candidate(
+        candidate_id="personal_skill_candidate_session_delete",
+        owner_student_id="student_a",
+        source_session_id="session_delete",
+    ) is True
+    assert TrainingSkillCandidateStore(database_path).delete_personal_candidate(
+        candidate_id="personal_skill_candidate_session_delete",
+        owner_student_id="student_a",
+        source_session_id="session_delete",
+    ) is False
+    assert store.get_candidate("personal_skill_candidate_session_delete") is None
+    assert store.get_candidate("personal_skill_candidate_session_keep") is not None
+    assert store.get_candidate("skill_candidate_global_keep") is not None
+
+    with pytest.raises(TrainingSkillCandidateDeletedError):
+        store.save_candidate(target, target_review)
+    with pytest.raises(TrainingSkillCandidateDeletedError):
+        store.save_candidate_unless_reviewed(target, target_review)
+
+    assert store.delete_personal_candidate(
+        candidate_id="personal_skill_candidate_session_missing",
+        owner_student_id="student_a",
+        source_session_id="session_missing",
+    ) is False
+    missing_candidate, missing_review = _personal_candidate(
+        session_id="session_missing",
+        owner_student_id="student_a",
+    )
+    with pytest.raises(TrainingSkillCandidateDeletedError):
+        store.save_candidate(missing_candidate, missing_review)
+
+
+def test_personal_candidate_delete_migrates_legacy_schema_and_never_deletes_global_record(tmp_path) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    session_id = "session_global_conflict"
+    candidate_id = f"personal_skill_candidate_{session_id}"
+    global_candidate, review = _personal_candidate(
+        session_id=session_id,
+        owner_student_id="student_a",
+    )
+    global_candidate["scope"] = "global"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE training_skill_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id TEXT NOT NULL UNIQUE,
+                candidate_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO training_skill_candidates (candidate_id, candidate_json)
+            VALUES (?, ?)
+            """,
+            (
+                candidate_id,
+                json.dumps({**global_candidate, "review": review}, ensure_ascii=False),
+            ),
+        )
+
+    store = TrainingSkillCandidateStore(database_path)
+    with pytest.raises(TrainingSkillCandidateOwnershipError):
+        store.delete_personal_candidate(
+            candidate_id=candidate_id,
+            owner_student_id="student_a",
+            source_session_id=session_id,
+        )
+
+    assert store.get_candidate(candidate_id) is not None
+    with sqlite3.connect(database_path) as connection:
+        tombstone_table = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'training_skill_candidate_tombstones'
+            """
+        ).fetchone()
+        tombstone_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM training_skill_candidate_tombstones
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()[0]
+    assert tombstone_table == ("training_skill_candidate_tombstones",)
+    assert tombstone_count == 0
+
+
+def _personal_candidate(
+    *,
+    session_id: str,
+    owner_student_id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    candidate_id = f"personal_skill_candidate_{session_id}"
+    candidate: dict[str, object] = {
+        "candidate_id": candidate_id,
+        "trigger_item_id": f"personal_{session_id}",
+        "title": "个人复盘训练 Skill",
+        "description": "根据本次训练生成的个人复盘建议。",
+        "suggested_strategy": "提醒学生复盘证据链，不透露标准答案。",
+        "status": "draft",
+        "scope": "personal",
+        "owner_student_id": owner_student_id,
+        "source_session_id": session_id,
+        "source_report_count": 1,
+        "support_count": 1,
+        "related_recommendations": [],
+    }
+    review: dict[str, object] = {
+        "candidate_id": candidate_id,
+        "status": "ready_for_review",
+        "regression_passed": True,
+        "evaluation_total_cases": 1,
+        "evaluation_passed_cases": 1,
+        "evaluation_failed_cases": 0,
+        "blocking_failures": [],
+    }
+    return candidate, review

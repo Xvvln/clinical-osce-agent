@@ -1,7 +1,13 @@
 import json
 import sqlite3
 
-from app.services.training_skill_store import TrainingSkillStore
+import pytest
+
+from app.services.training_skill_store import (
+    TrainingSkillDeletedError,
+    TrainingSkillOwnershipError,
+    TrainingSkillStore,
+)
 
 
 def _expected_action_plan(stage_scope: list[str], trigger_item_ids: list[str], suggested_strategy: str) -> list[dict[str, object]]:
@@ -418,3 +424,165 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
     assert "治疗方案" not in generated_memory_text
     assert "用药剂量" not in generated_memory_text
     assert "手术方案" not in generated_memory_text
+
+
+def test_personal_skill_delete_is_exact_idempotent_and_blocks_late_enable(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    store = TrainingSkillStore(database_path)
+    target = _personal_skill_candidate(
+        session_id="session_delete",
+        owner_student_id="student_a",
+    )
+    other = _personal_skill_candidate(
+        session_id="session_keep",
+        owner_student_id="student_a",
+    )
+    global_candidate = {
+        **_personal_skill_candidate(
+            session_id="global_keep",
+            owner_student_id="student_a",
+        ),
+        "candidate_id": "skill_candidate_global_keep",
+        "trigger_item_id": "global_keep",
+        "scope": "global",
+        "owner_student_id": "",
+        "source_session_id": "",
+    }
+    assert store.enable_candidate(target)
+    assert store.enable_candidate(other)
+    assert store.enable_candidate(global_candidate)
+
+    with pytest.raises(TrainingSkillOwnershipError):
+        store.delete_personal_skill(
+            skill_id="skill_personal_session_delete",
+            owner_student_id="student_b",
+            source_session_id="session_delete",
+            source_candidate_id="personal_skill_candidate_session_delete",
+        )
+    assert store.get_skill("skill_personal_session_delete") is not None
+
+    assert store.delete_personal_skill(
+        skill_id="skill_personal_session_delete",
+        owner_student_id="student_a",
+        source_session_id="session_delete",
+        source_candidate_id="personal_skill_candidate_session_delete",
+    ) is True
+    assert TrainingSkillStore(database_path).delete_personal_skill(
+        skill_id="skill_personal_session_delete",
+        owner_student_id="student_a",
+        source_session_id="session_delete",
+        source_candidate_id="personal_skill_candidate_session_delete",
+    ) is False
+    assert store.get_skill("skill_personal_session_delete") is None
+    assert store.get_skill("skill_personal_session_keep") is not None
+    assert store.get_skill("skill_global_keep") is not None
+
+    with pytest.raises(TrainingSkillDeletedError):
+        store.enable_candidate(target)
+
+    assert store.delete_personal_skill(
+        skill_id="skill_personal_session_missing",
+        owner_student_id="student_a",
+        source_session_id="session_missing",
+        source_candidate_id="personal_skill_candidate_session_missing",
+    ) is False
+    with pytest.raises(TrainingSkillDeletedError):
+        store.enable_candidate(
+            _personal_skill_candidate(
+                session_id="session_missing",
+                owner_student_id="student_a",
+            )
+        )
+
+
+def test_personal_skill_delete_migrates_legacy_schema_and_never_deletes_global_skill(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    session_id = "session_global_conflict"
+    skill_id = f"skill_personal_{session_id}"
+    global_skill = {
+        "skill_id": skill_id,
+        "source_candidate_id": f"personal_skill_candidate_{session_id}",
+        "scope": "global",
+        "owner_student_id": "student_a",
+        "source_session_id": session_id,
+    }
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE training_skills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_id TEXT NOT NULL UNIQUE,
+                skill_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO training_skills (skill_id, skill_json)
+            VALUES (?, ?)
+            """,
+            (skill_id, json.dumps(global_skill, ensure_ascii=False)),
+        )
+
+    store = TrainingSkillStore(database_path)
+    with pytest.raises(TrainingSkillOwnershipError):
+        store.delete_personal_skill(
+            skill_id=skill_id,
+            owner_student_id="student_a",
+            source_session_id=session_id,
+            source_candidate_id=f"personal_skill_candidate_{session_id}",
+        )
+
+    with sqlite3.connect(database_path) as connection:
+        preserved = connection.execute(
+            "SELECT skill_id FROM training_skills WHERE skill_id = ?",
+            (skill_id,),
+        ).fetchone()
+        tombstone_table = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'training_skill_tombstones'
+            """
+        ).fetchone()
+        tombstone_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM training_skill_tombstones
+            WHERE skill_id = ?
+            """,
+            (skill_id,),
+        ).fetchone()[0]
+    assert preserved == (skill_id,)
+    assert tombstone_table == ("training_skill_tombstones",)
+    assert tombstone_count == 0
+
+
+def _personal_skill_candidate(
+    *,
+    session_id: str,
+    owner_student_id: str,
+) -> dict[str, object]:
+    candidate_id = f"personal_skill_candidate_{session_id}"
+    return {
+        "candidate_id": candidate_id,
+        "trigger_item_id": f"personal_{session_id}",
+        "trigger_item_ids": ["reasoning_core"],
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro"],
+        "title": "个人复盘训练 Skill",
+        "description": "根据本次训练生成的个人复盘建议。",
+        "suggested_strategy": "提醒学生复盘证据链，不透露标准答案。",
+        "scope": "personal",
+        "owner_student_id": owner_student_id,
+        "source_session_id": session_id,
+        "source_session_ids": [session_id],
+        "source_report_count": 1,
+        "support_count": 1,
+        "related_recommendations": [],
+        "review": {
+            "candidate_id": candidate_id,
+            "status": "approved",
+            "regression_passed": True,
+        },
+    }

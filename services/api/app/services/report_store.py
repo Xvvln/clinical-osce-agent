@@ -11,7 +11,7 @@ from uuid import uuid4
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "reports.sqlite3"
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
 DEFAULT_ENRICHMENT_LEASE_SECONDS = 300
 
@@ -29,6 +29,10 @@ class ReportAlreadyExistsError(ReportPersistenceError):
 
 
 class ReportNotFoundError(ReportPersistenceError):
+    pass
+
+
+class ReportDeletedError(ReportPersistenceError):
     pass
 
 
@@ -120,6 +124,7 @@ class ReportStore:
         now = _utc_iso()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._raise_if_deleted(connection, session_id)
             row = self._select_stored_report(connection, session_id)
             if row is not None:
                 stored = _stored_report_from_row(row)
@@ -192,6 +197,7 @@ class ReportStore:
         now = _utc_iso()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._raise_if_deleted(connection, session_id)
             row = self._select_stored_report(connection, session_id)
             if row is None:
                 connection.execute(
@@ -272,6 +278,7 @@ class ReportStore:
         self._initialize()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._raise_if_deleted(connection, session_id)
             row = self._select_stored_report(connection, session_id)
             if row is None:
                 return None
@@ -368,6 +375,7 @@ class ReportStore:
         self._initialize()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._raise_if_deleted(connection, session_id)
             cursor = connection.execute(
                 """
                 UPDATE reports
@@ -447,6 +455,7 @@ class ReportStore:
         self._initialize()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._raise_if_deleted(connection, session_id)
             cursor = connection.execute(
                 """
                 UPDATE reports
@@ -492,6 +501,38 @@ class ReportStore:
             row = self._select_stored_report(connection, session_id)
         assert row is not None
         return _stored_report_from_row(row)
+
+    def delete_session_report(
+        self,
+        session_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Fence a deleted session and remove its report plus outbox atomically."""
+
+        if not session_id:
+            raise ValueError("session_id is required")
+        deleted_at = _utc_iso(now)
+        self._initialize()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO report_tombstones (session_id, deleted_at)
+                VALUES (?, ?)
+                ON CONFLICT(session_id) DO NOTHING
+                """,
+                (session_id, deleted_at),
+            )
+            outbox_cursor = connection.execute(
+                "DELETE FROM report_outbox WHERE session_id = ?",
+                (session_id,),
+            )
+            report_cursor = connection.execute(
+                "DELETE FROM reports WHERE session_id = ?",
+                (session_id,),
+            )
+        return report_cursor.rowcount > 0 or outbox_cursor.rowcount > 0
 
     def list_pending_outbox(self, *, limit: int = 100) -> list[ReportOutboxItem]:
         if limit <= 0:
@@ -656,6 +697,14 @@ class ReportStore:
                 )
                 connection.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS report_tombstones (
+                        session_id TEXT PRIMARY KEY,
+                        deleted_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS report_outbox_pending_idx
                     ON report_outbox (acknowledged_at, id)
                     """
@@ -704,12 +753,25 @@ class ReportStore:
             (session_id,),
         ).fetchone()
         if row is None:
+            ReportStore._raise_if_deleted(connection, session_id)
             raise ReportNotFoundError(session_id)
         raise ReportClaimLostError(
             session_id,
             expected_revision=expected_revision,
             current_revision=int(row[0]),
         )
+
+    @staticmethod
+    def _raise_if_deleted(
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> None:
+        row = connection.execute(
+            "SELECT 1 FROM report_tombstones WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is not None:
+            raise ReportDeletedError(session_id)
 
     @staticmethod
     def _upsert_outbox(

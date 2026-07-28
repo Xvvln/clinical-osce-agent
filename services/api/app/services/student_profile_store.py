@@ -45,6 +45,17 @@ class StudentProfileStore:
         profile["student_id"] = student_id
         return profile
 
+    def delete_profile(self, student_id: str) -> bool:
+        if not student_id:
+            raise ValueError("student_id is required")
+        self._initialize()
+        with sqlite3.connect(self.database_path) as connection:
+            cursor = connection.execute(
+                "DELETE FROM student_profiles WHERE student_id = ?",
+                (student_id,),
+            )
+        return cursor.rowcount == 1
+
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:

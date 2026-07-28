@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,19 @@ from app.services.training_skill_context_safety import candidate_with_context_sa
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skill_candidates.sqlite3"
+DATABASE_SCHEMA_VERSION = 1
+
+
+class TrainingSkillCandidateDeletedError(RuntimeError):
+    def __init__(self, candidate_id: str) -> None:
+        super().__init__(candidate_id)
+        self.candidate_id = candidate_id
+
+
+class TrainingSkillCandidateOwnershipError(RuntimeError):
+    def __init__(self, candidate_id: str) -> None:
+        super().__init__(candidate_id)
+        self.candidate_id = candidate_id
 
 
 class TrainingSkillCandidateStore:
@@ -19,13 +33,17 @@ class TrainingSkillCandidateStore:
         self._initialize()
         payload = {**candidate, "review": review}
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            candidate_id = str(candidate["candidate_id"])
+            if self._is_candidate_deleted(connection, candidate_id):
+                raise TrainingSkillCandidateDeletedError(candidate_id)
             connection.execute(
                 """
                 INSERT INTO training_skill_candidates (candidate_id, candidate_json)
                 VALUES (?, ?)
                 ON CONFLICT(candidate_id) DO UPDATE SET candidate_json = excluded.candidate_json
                 """,
-                (candidate["candidate_id"], json.dumps(payload, ensure_ascii=False)),
+                (candidate_id, json.dumps(payload, ensure_ascii=False)),
             )
 
     def save_candidate_unless_reviewed(self, candidate: dict[str, Any], review: dict[str, Any]) -> bool:
@@ -60,6 +78,81 @@ class TrainingSkillCandidateStore:
     def reject_candidate(self, candidate_id: str, reviewer_id: str) -> bool:
         return self._set_review_status(candidate_id, reviewer_id, "rejected")
 
+    def delete_personal_candidate(
+        self,
+        *,
+        candidate_id: str,
+        owner_student_id: str,
+        source_session_id: str,
+    ) -> bool:
+        """Delete one deterministic personal candidate and persist a write fence."""
+
+        _validate_personal_candidate_delete_identity(
+            candidate_id=candidate_id,
+            owner_student_id=owner_student_id,
+            source_session_id=source_session_id,
+        )
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            tombstone = connection.execute(
+                """
+                SELECT scope, owner_student_id, source_session_id
+                FROM training_skill_candidate_tombstones
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+            if tombstone is not None:
+                if tuple(str(value) for value in tombstone) != (
+                    "personal",
+                    owner_student_id,
+                    source_session_id,
+                ):
+                    raise TrainingSkillCandidateOwnershipError(candidate_id)
+                return False
+
+            row = connection.execute(
+                """
+                SELECT candidate_json
+                FROM training_skill_candidates
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            ).fetchone()
+            if row is not None:
+                candidate = _decode_candidate(row[0], candidate_id=candidate_id)
+                if (
+                    str(candidate.get("candidate_id", "")) != candidate_id
+                    or str(candidate.get("scope", "")) != "personal"
+                    or str(candidate.get("owner_student_id", "")) != owner_student_id
+                    or str(candidate.get("source_session_id", "")) != source_session_id
+                ):
+                    raise TrainingSkillCandidateOwnershipError(candidate_id)
+
+            connection.execute(
+                """
+                INSERT INTO training_skill_candidate_tombstones (
+                    candidate_id,
+                    scope,
+                    owner_student_id,
+                    source_session_id,
+                    deleted_at
+                )
+                VALUES (?, 'personal', ?, ?, ?)
+                """,
+                (candidate_id, owner_student_id, source_session_id, deleted_at),
+            )
+            cursor = connection.execute(
+                """
+                DELETE FROM training_skill_candidates
+                WHERE candidate_id = ?
+                """,
+                (candidate_id,),
+            )
+        return cursor.rowcount == 1
+
     def _set_review_status(self, candidate_id: str, reviewer_id: str, status: str) -> bool:
         candidate = self.get_candidate(candidate_id)
         if candidate is None or candidate["review"]["status"] != "ready_for_review":
@@ -93,6 +186,54 @@ class TrainingSkillCandidateStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS training_skill_candidate_tombstones (
+                    candidate_id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    owner_student_id TEXT NOT NULL,
+                    source_session_id TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _is_candidate_deleted(
+        connection: sqlite3.Connection,
+        candidate_id: str,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM training_skill_candidate_tombstones
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        return row is not None
+
+
+def _validate_personal_candidate_delete_identity(
+    *,
+    candidate_id: str,
+    owner_student_id: str,
+    source_session_id: str,
+) -> None:
+    if (
+        not owner_student_id
+        or not source_session_id
+        or candidate_id != f"personal_skill_candidate_{source_session_id}"
+    ):
+        raise TrainingSkillCandidateOwnershipError(candidate_id)
+
+
+def _decode_candidate(value: str, *, candidate_id: str) -> dict[str, Any]:
+    candidate = json.loads(value)
+    if not isinstance(candidate, dict):
+        raise TrainingSkillCandidateOwnershipError(candidate_id)
+    return candidate
 
 
 def _candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:

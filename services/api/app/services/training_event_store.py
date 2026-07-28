@@ -9,8 +9,14 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_events.sqlite3"
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 DATABASE_BUSY_TIMEOUT_MILLISECONDS = 10_000
+
+
+class TrainingEventStreamDeletedError(RuntimeError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
 
 
 class TrainingEventStore:
@@ -32,6 +38,8 @@ class TrainingEventStore:
         self._initialize()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if self._is_stream_deleted(connection, session_id):
+                raise TrainingEventStreamDeletedError(session_id)
             cursor = connection.execute(
                 """
                 INSERT INTO training_events (
@@ -57,6 +65,42 @@ class TrainingEventStore:
                 ),
             )
         return cursor.rowcount == 1
+
+    def delete_event_streams(self, session_ids: list[str]) -> int:
+        """Fence and delete the exact event streams in one transaction."""
+
+        unique_session_ids = list(
+            dict.fromkeys(
+                str(session_id)
+                for session_id in session_ids
+                if str(session_id)
+            )
+        )
+        if not unique_session_ids:
+            return 0
+
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        deleted_count = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.executemany(
+                """
+                INSERT INTO training_event_stream_tombstones (session_id, deleted_at)
+                VALUES (?, ?)
+                ON CONFLICT(session_id) DO NOTHING
+                """,
+                [(session_id, deleted_at) for session_id in unique_session_ids],
+            )
+            for start in range(0, len(unique_session_ids), 900):
+                chunk = unique_session_ids[start:start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = connection.execute(
+                    f"DELETE FROM training_events WHERE session_id IN ({placeholders})",
+                    chunk,
+                )
+                deleted_count += cursor.rowcount
+        return deleted_count
 
     def list_session_events(self, session_id: str) -> list[dict[str, Any]]:
         self._initialize()
@@ -156,6 +200,14 @@ class TrainingEventStore:
                     WHERE event_key IS NOT NULL
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS training_event_stream_tombstones (
+                        session_id TEXT PRIMARY KEY,
+                        deleted_at TEXT NOT NULL
+                    )
+                    """
+                )
                 connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
             self._initialized = True
 
@@ -166,6 +218,21 @@ class TrainingEventStore:
         )
         connection.execute(f"PRAGMA busy_timeout = {DATABASE_BUSY_TIMEOUT_MILLISECONDS}")
         return connection
+
+    @staticmethod
+    def _is_stream_deleted(
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM training_event_stream_tombstones
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        return row is not None
 
 
 training_event_store = TrainingEventStore()

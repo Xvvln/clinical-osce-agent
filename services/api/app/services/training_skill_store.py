@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.services.training_skill_policy import (
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skills.sqlite3"
+DATABASE_SCHEMA_VERSION = 1
 
 STAGE_SCOPE_LABELS = {
     "case_intro": "训练开始",
@@ -38,6 +40,18 @@ EFFECT_STATUS_LABELS = {
 }
 
 
+class TrainingSkillDeletedError(RuntimeError):
+    def __init__(self, skill_id: str) -> None:
+        super().__init__(skill_id)
+        self.skill_id = skill_id
+
+
+class TrainingSkillOwnershipError(RuntimeError):
+    def __init__(self, skill_id: str) -> None:
+        super().__init__(skill_id)
+        self.skill_id = skill_id
+
+
 class TrainingSkillStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
@@ -50,13 +64,17 @@ class TrainingSkillStore:
         self._initialize()
         skill = _skill_from_candidate(candidate)
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            skill_id = str(skill["skill_id"])
+            if self._is_skill_deleted(connection, skill_id):
+                raise TrainingSkillDeletedError(skill_id)
             connection.execute(
                 """
                 INSERT INTO training_skills (skill_id, skill_json)
                 VALUES (?, ?)
                 ON CONFLICT(skill_id) DO UPDATE SET skill_json = excluded.skill_json
                 """,
-                (skill["skill_id"], json.dumps(skill, ensure_ascii=False)),
+                (skill_id, json.dumps(skill, ensure_ascii=False)),
             )
         return True
 
@@ -95,6 +113,92 @@ class TrainingSkillStore:
                 skills.append(hydrated_skill)
         return skills
 
+    def delete_personal_skill(
+        self,
+        *,
+        skill_id: str,
+        owner_student_id: str,
+        source_session_id: str,
+        source_candidate_id: str,
+    ) -> bool:
+        """Delete one deterministic personal skill and persist a write fence."""
+
+        _validate_personal_skill_delete_identity(
+            skill_id=skill_id,
+            owner_student_id=owner_student_id,
+            source_session_id=source_session_id,
+            source_candidate_id=source_candidate_id,
+        )
+        self._initialize()
+        deleted_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            tombstone = connection.execute(
+                """
+                SELECT scope, owner_student_id, source_session_id, source_candidate_id
+                FROM training_skill_tombstones
+                WHERE skill_id = ?
+                """,
+                (skill_id,),
+            ).fetchone()
+            if tombstone is not None:
+                if tuple(str(value) for value in tombstone) != (
+                    "personal",
+                    owner_student_id,
+                    source_session_id,
+                    source_candidate_id,
+                ):
+                    raise TrainingSkillOwnershipError(skill_id)
+                return False
+
+            row = connection.execute(
+                """
+                SELECT skill_json
+                FROM training_skills
+                WHERE skill_id = ?
+                """,
+                (skill_id,),
+            ).fetchone()
+            if row is not None:
+                skill = _decode_skill(row[0], skill_id=skill_id)
+                if (
+                    str(skill.get("skill_id", "")) != skill_id
+                    or str(skill.get("scope", "")) != "personal"
+                    or str(skill.get("owner_student_id", "")) != owner_student_id
+                    or str(skill.get("source_session_id", "")) != source_session_id
+                    or str(skill.get("source_candidate_id", "")) != source_candidate_id
+                ):
+                    raise TrainingSkillOwnershipError(skill_id)
+
+            connection.execute(
+                """
+                INSERT INTO training_skill_tombstones (
+                    skill_id,
+                    scope,
+                    owner_student_id,
+                    source_session_id,
+                    source_candidate_id,
+                    deleted_at
+                )
+                VALUES (?, 'personal', ?, ?, ?, ?)
+                """,
+                (
+                    skill_id,
+                    owner_student_id,
+                    source_session_id,
+                    source_candidate_id,
+                    deleted_at,
+                ),
+            )
+            cursor = connection.execute(
+                """
+                DELETE FROM training_skills
+                WHERE skill_id = ?
+                """,
+                (skill_id,),
+            )
+        return cursor.rowcount == 1
+
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:
@@ -107,6 +211,57 @@ class TrainingSkillStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS training_skill_tombstones (
+                    skill_id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    owner_student_id TEXT NOT NULL,
+                    source_session_id TEXT NOT NULL,
+                    source_candidate_id TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _is_skill_deleted(
+        connection: sqlite3.Connection,
+        skill_id: str,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM training_skill_tombstones
+            WHERE skill_id = ?
+            """,
+            (skill_id,),
+        ).fetchone()
+        return row is not None
+
+
+def _validate_personal_skill_delete_identity(
+    *,
+    skill_id: str,
+    owner_student_id: str,
+    source_session_id: str,
+    source_candidate_id: str,
+) -> None:
+    if (
+        not owner_student_id
+        or not source_session_id
+        or skill_id != f"skill_personal_{source_session_id}"
+        or source_candidate_id != f"personal_skill_candidate_{source_session_id}"
+    ):
+        raise TrainingSkillOwnershipError(skill_id)
+
+
+def _decode_skill(value: str, *, skill_id: str) -> dict[str, Any]:
+    skill = json.loads(value)
+    if not isinstance(skill, dict):
+        raise TrainingSkillOwnershipError(skill_id)
+    return skill
 
 
 def _skill_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:

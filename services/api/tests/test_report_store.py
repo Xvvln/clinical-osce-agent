@@ -11,6 +11,7 @@ import pytest
 from app.services.report_store import (
     ReportAlreadyExistsError,
     ReportClaimLostError,
+    ReportDeletedError,
     ReportOutboxEvent,
     ReportStore,
 )
@@ -170,9 +171,17 @@ def test_legacy_reports_table_is_migrated_without_changing_business_json(tmp_pat
             row[1]
             for row in connection.execute("PRAGMA table_info(reports)").fetchall()
         }
+        tombstone_table = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'report_tombstones'
+            """
+        ).fetchone()
         schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert {"revision", "enrichment_status", "enrichment_retry_count"} <= columns
-    assert schema_version == 2
+    assert tombstone_table == ("report_tombstones",)
+    assert schema_version == 3
 
 
 def test_only_one_store_claims_enrichment_and_stale_pending_cannot_replace_approved(tmp_path) -> None:
@@ -406,6 +415,131 @@ def test_completed_report_creates_stable_pending_outbox_and_ack_is_idempotent(tm
     assert store.acknowledge_outbox(item.event_key)
     assert not store.acknowledge_outbox(item.event_key)
     assert store.list_pending_outbox() == []
+
+
+def test_delete_session_report_is_idempotent_atomic_and_blocks_all_late_writers(tmp_path) -> None:
+    database_path = tmp_path / "reports.sqlite3"
+    store = ReportStore(database_path)
+    target = _report("session_delete", status="generation_pending")
+    other = _report("session_keep", status="generation_pending")
+    store.create_base_report(
+        target,
+        outbox_event=ReportOutboxEvent(
+            case_id="appendicitis_001",
+            student_id="student_delete",
+            event_type="report_generated",
+            payload={"session_id": "session_delete"},
+        ),
+    )
+    store.create_base_report(other)
+
+    assert store.delete_session_report("session_delete") is True
+    assert ReportStore(database_path).delete_session_report("session_delete") is False
+    assert store.get_report("session_delete") is None
+    assert store.get_report("session_keep") == other
+    assert all(item.session_id != "session_delete" for item in store.list_pending_outbox())
+
+    with pytest.raises(ReportDeletedError):
+        store.create_base_report(target)
+    with pytest.raises(ReportDeletedError):
+        store.save_report(target)
+    with pytest.raises(ReportDeletedError):
+        store.claim_report_enrichment("session_delete")
+
+    complete_report = _report("session_late_complete", status="generation_pending")
+    store.create_base_report(complete_report)
+    complete_claim = store.claim_report_enrichment("session_late_complete")
+    assert complete_claim is not None
+    assert store.delete_session_report("session_late_complete") is True
+    with pytest.raises(ReportDeletedError):
+        store.complete_report_enrichment(
+            "session_late_complete",
+            _report("session_late_complete", status="approved"),
+            expected_revision=complete_claim.expected_revision,
+            claim_token=complete_claim.claim_token,
+            case_id="appendicitis_001",
+            student_id="student_delete",
+            event_type="report_enriched",
+            event_payload={"status": "approved"},
+        )
+
+    failed_report = _report("session_late_fail", status="generation_pending")
+    store.create_base_report(failed_report)
+    failed_claim = store.claim_report_enrichment("session_late_fail")
+    assert failed_claim is not None
+    assert store.delete_session_report("session_late_fail") is True
+    with pytest.raises(ReportDeletedError):
+        store.fail_report_enrichment(
+            "session_late_fail",
+            expected_revision=failed_claim.expected_revision,
+            claim_token=failed_claim.claim_token,
+            error_message="late failure",
+            case_id="appendicitis_001",
+            student_id="student_delete",
+            event_type="report_enrichment_failed",
+            event_payload={"error_type": "late_failure"},
+        )
+
+    assert store.delete_session_report("session_never_written") is False
+    with pytest.raises(ReportDeletedError):
+        store.save_report(_report("session_never_written", status="generation_pending"))
+
+    with sqlite3.connect(database_path) as connection:
+        tombstoned_sessions = {
+            row[0]
+            for row in connection.execute(
+                "SELECT session_id FROM report_tombstones"
+            ).fetchall()
+        }
+    assert {
+        "session_delete",
+        "session_late_complete",
+        "session_late_fail",
+        "session_never_written",
+    } <= tombstoned_sessions
+
+
+def test_delete_session_report_rolls_back_tombstone_and_outbox_when_report_delete_fails(tmp_path) -> None:
+    database_path = tmp_path / "reports.sqlite3"
+    store = ReportStore(database_path)
+    report = _report("session_delete_rollback", status="generation_pending")
+    store.create_base_report(
+        report,
+        outbox_event=ReportOutboxEvent(
+            case_id="appendicitis_001",
+            student_id="student_delete",
+            event_type="report_generated",
+            payload={"session_id": "session_delete_rollback"},
+        ),
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_report_delete
+            BEFORE DELETE ON reports
+            BEGIN
+                SELECT RAISE(ABORT, 'report delete unavailable');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="report delete unavailable"):
+        store.delete_session_report("session_delete_rollback")
+
+    assert store.get_report("session_delete_rollback") == report
+    assert [item.session_id for item in store.list_pending_outbox()] == [
+        "session_delete_rollback"
+    ]
+    with sqlite3.connect(database_path) as connection:
+        tombstone = connection.execute(
+            """
+            SELECT session_id
+            FROM report_tombstones
+            WHERE session_id = ?
+            """,
+            ("session_delete_rollback",),
+        ).fetchone()
+    assert tombstone is None
 
 
 def _report(
