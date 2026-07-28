@@ -12,8 +12,9 @@ from typing import Any, Protocol
 
 DEFAULT_CHROMA_COLLECTION = "clinical_osce_retrieval"
 DEFAULT_CHROMA_PERSIST_DIRECTORY = "./data/processed/chroma"
+DEFAULT_CHROMA_SEARCH_EF = 500
 CHROMA_MANIFEST_FILENAME = "retrieval_index_manifest.json"
-CHROMA_MANIFEST_SCHEMA_VERSION = "1.0"
+CHROMA_MANIFEST_SCHEMA_VERSION = "1.1"
 
 
 class EmbeddingClient(Protocol):
@@ -43,6 +44,11 @@ class ChromaRetrievalSettings:
     persist_directory: Path
     collection_name: str = DEFAULT_CHROMA_COLLECTION
     embedding_model: str = "unknown"
+    search_ef: int = DEFAULT_CHROMA_SEARCH_EF
+
+    def __post_init__(self) -> None:
+        if self.search_ef <= 0:
+            raise ValueError("Chroma search_ef must be a positive integer")
 
 
 class ChromaRetrievalIndex:
@@ -65,7 +71,7 @@ class ChromaRetrievalIndex:
         self._client = chromadb.PersistentClient(path=str(settings.persist_directory))
         self._collection = self._client.get_or_create_collection(
             name=settings.collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata=_collection_metadata(settings),
         )
 
     def search(self, query: str, *, limit: int = 5) -> list[ChromaRetrievalResult]:
@@ -98,28 +104,25 @@ class ChromaRetrievalIndex:
             self.ensure_indexed()
             raw_results = self._query_collection(query_vectors, limit=limit)
 
-        metadatas_by_query = raw_results.get("metadatas", [])
-        distances_by_query = raw_results.get("distances", [])
+        empty_result_indexes: list[int] = []
         for result_index, (original_index, _) in enumerate(active_queries):
-            metadatas = metadatas_by_query[result_index] if result_index < len(metadatas_by_query) else []
-            distances = distances_by_query[result_index] if result_index < len(distances_by_query) else []
-            query_results: list[ChromaRetrievalResult] = []
-            for metadata, distance in zip(metadatas, distances):
-                if not metadata:
-                    continue
-                score = _distance_to_score(float(distance))
-                if score <= 0:
-                    continue
-                query_results.append(
-                    ChromaRetrievalResult(
-                        reference=str(metadata.get("reference", "")),
-                        source_type=str(metadata.get("source_type", "")),
-                        title=str(metadata.get("title", "")),
-                        snippet=str(metadata.get("snippet", "")),
-                        score=score,
-                    )
-                )
-            results_by_query[original_index] = query_results
+            query_results = _parse_query_results(raw_results, result_index=result_index)
+            results_by_query[original_index] = query_results[:limit]
+            if not query_results:
+                empty_result_indexes.append(result_index)
+
+        if empty_result_indexes:
+            exact_query_vectors = [query_vectors[index] for index in empty_result_indexes]
+            exact_raw_results = self._query_collection(
+                exact_query_vectors,
+                limit=len(self._documents),
+            )
+            for retry_index, result_index in enumerate(empty_result_indexes):
+                original_index = active_queries[result_index][0]
+                results_by_query[original_index] = _parse_query_results(
+                    exact_raw_results,
+                    result_index=retry_index,
+                )[:limit]
         return results_by_query
 
     def ensure_indexed(self) -> None:
@@ -177,7 +180,7 @@ class ChromaRetrievalIndex:
             pass
         self._collection = self._client.get_or_create_collection(
             name=self._settings.collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata=_collection_metadata(self._settings),
         )
 
     def _collection_has_expected_count(self) -> bool:
@@ -197,19 +200,30 @@ def build_chroma_retrieval_index_from_environment(
     if not _chroma_enabled_from_environment():
         return None
 
-    persist_directory = _resolve_persist_directory(
-        _env("CHROMA_PERSIST_DIRECTORY", DEFAULT_CHROMA_PERSIST_DIRECTORY),
+    settings = build_chroma_retrieval_settings_from_environment(
         root_dir=root_dir,
+        embedding_model=embedding_model,
     )
-    collection_name = _env("OSCE_CHROMA_COLLECTION", DEFAULT_CHROMA_COLLECTION)
     return ChromaRetrievalIndex(
-        settings=ChromaRetrievalSettings(
-            persist_directory=persist_directory,
-            collection_name=collection_name,
-            embedding_model=embedding_model or _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
-        ),
+        settings=settings,
         embedding_client=embedding_client,
         documents=documents,
+    )
+
+
+def build_chroma_retrieval_settings_from_environment(
+    *,
+    root_dir: Path,
+    embedding_model: str = "",
+) -> ChromaRetrievalSettings:
+    return ChromaRetrievalSettings(
+        persist_directory=_resolve_persist_directory(
+            _env("CHROMA_PERSIST_DIRECTORY", DEFAULT_CHROMA_PERSIST_DIRECTORY),
+            root_dir=root_dir,
+        ),
+        collection_name=_env("OSCE_CHROMA_COLLECTION", DEFAULT_CHROMA_COLLECTION),
+        embedding_model=embedding_model or _env("OSCE_VERTEX_EMBEDDING_MODEL", "gemini-embedding-001"),
+        search_ef=_positive_int_env("OSCE_CHROMA_SEARCH_EF", DEFAULT_CHROMA_SEARCH_EF),
     )
 
 
@@ -225,6 +239,7 @@ def build_chroma_manifest_status(
         "manifest_path": str(manifest_path),
         "collection": expected["collection"],
         "embedding_model": expected["embedding_model"],
+        "index_config": expected["index_config"],
         "source_count": expected["source_count"],
         "case_ids": expected["case_ids"],
         "content_hash": expected["content_hash"],
@@ -232,6 +247,7 @@ def build_chroma_manifest_status(
         "stored_schema_version": "",
         "stored_collection": "",
         "stored_embedding_model": "",
+        "stored_index_config": {},
         "stored_source_count": 0,
         "stored_case_ids": [],
         "stored_content_hash": "",
@@ -248,6 +264,10 @@ def build_chroma_manifest_status(
         stored_schema_version = str(stored.get("schema_version", ""))
         stored_collection = str(stored.get("collection", ""))
         stored_embedding_model = str(stored.get("embedding_model", ""))
+        raw_stored_index_config = stored.get("index_config", {})
+        if not isinstance(raw_stored_index_config, dict):
+            raise TypeError("index_config must be an object")
+        stored_index_config = dict(raw_stored_index_config)
         stored_content_hash = str(stored.get("content_hash", ""))
         stored_source_count = int(stored.get("source_count", 0) or 0)
         stored_case_ids = [str(case_id) for case_id in stored.get("case_ids", []) if str(case_id)]
@@ -257,6 +277,7 @@ def build_chroma_manifest_status(
         stored_schema_version != CHROMA_MANIFEST_SCHEMA_VERSION
         or stored_collection != expected["collection"]
         or stored_embedding_model != expected["embedding_model"]
+        or stored_index_config != expected["index_config"]
         or stored_source_count != expected["source_count"]
         or stored_content_hash != expected["content_hash"]
     )
@@ -268,6 +289,7 @@ def build_chroma_manifest_status(
         "stored_schema_version": stored_schema_version,
         "stored_collection": stored_collection,
         "stored_embedding_model": stored_embedding_model,
+        "stored_index_config": stored_index_config,
         "stored_source_count": stored_source_count,
         "stored_case_ids": stored_case_ids,
         "stored_content_hash": stored_content_hash,
@@ -309,6 +331,34 @@ def _distance_to_score(distance: float) -> float:
     return max(0.0, 1.0 - distance)
 
 
+def _parse_query_results(
+    raw_results: dict[str, Any],
+    *,
+    result_index: int,
+) -> list[ChromaRetrievalResult]:
+    metadatas_by_query = raw_results.get("metadatas", [])
+    distances_by_query = raw_results.get("distances", [])
+    metadatas = metadatas_by_query[result_index] if result_index < len(metadatas_by_query) else []
+    distances = distances_by_query[result_index] if result_index < len(distances_by_query) else []
+    query_results: list[ChromaRetrievalResult] = []
+    for metadata, distance in zip(metadatas, distances):
+        if not metadata:
+            continue
+        score = _distance_to_score(float(distance))
+        if score <= 0:
+            continue
+        query_results.append(
+            ChromaRetrievalResult(
+                reference=str(metadata.get("reference", "")),
+                source_type=str(metadata.get("source_type", "")),
+                title=str(metadata.get("title", "")),
+                snippet=str(metadata.get("snippet", "")),
+                score=score,
+            )
+        )
+    return query_results
+
+
 def _is_embedding_dimension_mismatch_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "dimension" in message and (
@@ -340,6 +390,7 @@ def _build_chroma_manifest_payload(
         "schema_version": CHROMA_MANIFEST_SCHEMA_VERSION,
         "collection": settings.collection_name,
         "embedding_model": settings.embedding_model,
+        "index_config": _collection_metadata(settings),
         "source_count": len(documents_tuple),
         "case_ids": _manifest_case_ids(documents_tuple),
         "content_hash": _manifest_content_hash(settings=settings, documents=documents_tuple),
@@ -356,6 +407,7 @@ def _manifest_content_hash(
         "schema_version": CHROMA_MANIFEST_SCHEMA_VERSION,
         "collection": settings.collection_name,
         "embedding_model": settings.embedding_model,
+        "index_config": _collection_metadata(settings),
         "documents": [
             {
                 "reference": document.reference,
@@ -395,6 +447,24 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = _env(name)
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _collection_metadata(settings: ChromaRetrievalSettings) -> dict[str, str | int]:
+    return {
+        "hnsw:space": "cosine",
+        "hnsw:search_ef": settings.search_ef,
+    }
+
+
 def _chroma_enabled_from_environment() -> bool:
     raw_value = _env("OSCE_CHROMA_ENABLED")
     if not raw_value:
@@ -407,12 +477,14 @@ def _truthy_env(name: str) -> bool:
 
 
 __all__ = [
+    "DEFAULT_CHROMA_SEARCH_EF",
     "ChromaRetrievalIndex",
     "ChromaRetrievalResult",
     "ChromaRetrievalSettings",
     "ChromaSourceDocument",
     "build_chroma_manifest_status",
     "build_chroma_retrieval_index_from_environment",
+    "build_chroma_retrieval_settings_from_environment",
     "resolve_chroma_persist_directory",
     "write_chroma_manifest",
 ]

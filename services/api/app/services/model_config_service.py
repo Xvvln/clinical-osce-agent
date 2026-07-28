@@ -6,7 +6,7 @@ from typing import Any
 from app.services.chroma_retriever import (
     ChromaRetrievalSettings,
     build_chroma_manifest_status,
-    resolve_chroma_persist_directory,
+    build_chroma_retrieval_settings_from_environment,
 )
 from app.services.dashscope_reranker import (
     DEFAULT_DASHSCOPE_RERANK_BASE_URL,
@@ -206,10 +206,11 @@ def _chroma_retrieval_config() -> dict[str, Any]:
     persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
     collection = _env("OSCE_CHROMA_COLLECTION", "clinical_osce_retrieval")
     configured = enabled and embedding_configured and bool(persist_directory) and bool(collection)
-    index_manifest = _chroma_index_manifest_status(
-        persist_directory=persist_directory,
-        collection=collection,
+    settings = build_chroma_retrieval_settings_from_environment(
+        root_dir=ROOT_DIR,
+        embedding_model=_configured_embedding_model_name(),
     )
+    index_manifest = _chroma_index_manifest_status(settings=settings)
     return _provider_config(
         provider_id="chroma_retrieval",
         label="ChromaDB RAG 持久向量库",
@@ -320,12 +321,7 @@ def _chroma_enabled(*, embedding_configured: bool) -> bool:
     return embedding_configured
 
 
-def _chroma_index_manifest_status(*, persist_directory: str, collection: str) -> dict[str, Any]:
-    settings = ChromaRetrievalSettings(
-        persist_directory=resolve_chroma_persist_directory(persist_directory, root_dir=ROOT_DIR),
-        collection_name=collection,
-        embedding_model=_configured_embedding_model_name(),
-    )
+def _chroma_index_manifest_status(*, settings: ChromaRetrievalSettings) -> dict[str, Any]:
     return build_chroma_manifest_status(settings=settings, documents=get_chroma_source_documents())
 
 

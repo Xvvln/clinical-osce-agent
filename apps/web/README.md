@@ -61,6 +61,12 @@ corepack pnpm dev
 
 打开浏览器访问 `http://127.0.0.1:3000`。如果 3000 端口被占用，Next.js 会在终端提示实际端口，例如 `http://127.0.0.1:3001`。
 
+### ChromaDB 召回稳定性配置
+
+API 默认使用 `OSCE_CHROMA_SEARCH_EF=500` 作为 ChromaDB HNSW 查询深度。该值必须是正整数；缺失、非法或小于 1 时回退到 500。增大它会增加单次查询工作量，但能降低小型教学知识库中近似检索偶发漏召回的概率。
+
+索引 manifest 会记录 `hnsw:space` 和 `hnsw:search_ef`。旧版 manifest 或上述配置变化会被标记为 `stale`，下一次真实检索会重建 collection。若首轮 Top-K 结果经过相似度过滤后为空，后端会复用已经生成的 query embedding 拉取当前 collection 的全部文档，再过滤并截断到请求的 `limit`；该补偿只提升本地检索稳定性，不改变 RAG 不参与诊断和评分裁判的边界。
+
 ## 常用命令
 
 ```bash

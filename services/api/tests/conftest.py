@@ -69,6 +69,7 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         "OSCE_CHROMA_ENABLED",
         "CHROMA_PERSIST_DIRECTORY",
         "OSCE_CHROMA_COLLECTION",
+        "OSCE_CHROMA_SEARCH_EF",
         "OSCE_DASHSCOPE_RERANK_ENABLED",
         "OSCE_DASHSCOPE_RERANK_API_KEY",
         "DASHSCOPE_API_KEY",

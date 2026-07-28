@@ -1,14 +1,17 @@
 import hashlib
+import json
 
 import pytest
 
 from app.services import retrieval_index as retrieval_index_module
 from app.services import vertex_embedding_retriever as vertex_embedding_retriever_module
 from app.services.chroma_retriever import (
+    DEFAULT_CHROMA_SEARCH_EF,
     ChromaRetrievalIndex,
     ChromaRetrievalSettings,
     ChromaSourceDocument,
     build_chroma_manifest_status,
+    build_chroma_retrieval_settings_from_environment,
 )
 from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_index import (
@@ -510,6 +513,74 @@ def test_chroma_retrieval_index_batches_query_embeddings_when_manifest_is_curren
     assert not any(task_type == "RETRIEVAL_DOCUMENT" for task_type, _ in counting_client.calls)
 
 
+def test_chroma_retrieval_index_reuses_query_embedding_for_filtered_empty_exact_retry(
+    monkeypatch,
+) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference=f"knowledge:appendicitis_001.rp_{index}",
+            source_type="knowledge",
+            title=f"知识条目 {index}",
+            snippet=f"教学片段 {index}",
+        )
+        for index in range(3)
+    ]
+    embedding_client = CountingFakeEmbeddingClient()
+    index = object.__new__(ChromaRetrievalIndex)
+    index._documents = tuple(documents)
+    index._embedding_client = embedding_client
+    query_calls: list[tuple[list[list[float]], int]] = []
+
+    def fake_query_collection(query_vectors: list[list[float]], *, limit: int) -> dict[str, object]:
+        query_calls.append((query_vectors, limit))
+        if limit == 1:
+            return {
+                "metadatas": [
+                    [
+                        {
+                            "reference": documents[0].reference,
+                            "source_type": documents[0].source_type,
+                            "title": documents[0].title,
+                            "snippet": documents[0].snippet,
+                        }
+                    ],
+                    [
+                        {
+                            "reference": documents[1].reference,
+                            "source_type": documents[1].source_type,
+                            "title": documents[1].title,
+                            "snippet": documents[1].snippet,
+                        }
+                    ],
+                ],
+                "distances": [[0.1], [1.1]],
+            }
+        return {
+            "metadatas": [
+                [
+                    {
+                        "reference": documents[2].reference,
+                        "source_type": documents[2].source_type,
+                        "title": documents[2].title,
+                        "snippet": documents[2].snippet,
+                    }
+                ]
+            ],
+            "distances": [[0.2]],
+        }
+
+    monkeypatch.setattr(index, "ensure_indexed", lambda: None)
+    monkeypatch.setattr(index, "_query_collection", fake_query_collection)
+
+    results_by_query = index.search_batch(["首个问题", "需要精确重查的问题"], limit=1)
+
+    assert embedding_client.calls == [("RETRIEVAL_QUERY", 2)]
+    assert [limit for _, limit in query_calls] == [1, len(documents)]
+    assert query_calls[1][0][0] is query_calls[0][0][1]
+    assert results_by_query[0][0].reference == documents[0].reference
+    assert results_by_query[1][0].reference == documents[2].reference
+
+
 def test_chroma_retrieval_index_recovers_when_embedding_dimension_changes(tmp_path) -> None:
     documents = [
         ChromaSourceDocument(
@@ -623,6 +694,11 @@ def test_chroma_manifest_tracks_built_index_and_rebuild_need(tmp_path) -> None:
     assert built_status["rebuild_required"] is False
     assert built_status["collection"] == "test_retrieval_documents"
     assert built_status["embedding_model"] == "fake-embedding-model"
+    assert built_status["index_config"] == {
+        "hnsw:search_ef": DEFAULT_CHROMA_SEARCH_EF,
+        "hnsw:space": "cosine",
+    }
+    assert built_status["stored_index_config"] == built_status["index_config"]
     assert built_status["source_count"] == 2
     assert built_status["stored_source_count"] == 2
     assert built_status["content_hash"].startswith("sha256:")
@@ -645,6 +721,126 @@ def test_chroma_manifest_tracks_built_index_and_rebuild_need(tmp_path) -> None:
     assert stale_status["source_count"] == 3
     assert stale_status["stored_source_count"] == 2
     assert stale_status["case_ids"] == ["acs_001", "appendicitis_001"]
+
+
+def test_chroma_manifest_marks_legacy_and_changed_index_config_stale(tmp_path) -> None:
+    documents = [
+        ChromaSourceDocument(
+            reference="case:appendicitis_001",
+            source_type="case",
+            title="右下腹痛教学病例",
+            snippet="转移性右下腹痛。",
+        )
+    ]
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+        embedding_model="fake-embedding-model",
+    )
+    index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=documents,
+    )
+    index.ensure_indexed()
+
+    changed_settings = ChromaRetrievalSettings(
+        persist_directory=settings.persist_directory,
+        collection_name=settings.collection_name,
+        embedding_model=settings.embedding_model,
+        search_ef=733,
+    )
+    changed_status = build_chroma_manifest_status(settings=changed_settings, documents=documents)
+
+    assert changed_status["status"] == "stale"
+    assert changed_status["rebuild_required"] is True
+    assert changed_status["stored_index_config"]["hnsw:search_ef"] == DEFAULT_CHROMA_SEARCH_EF
+    assert changed_status["index_config"]["hnsw:search_ef"] == 733
+
+    rebuilding_client = CountingFakeEmbeddingClient()
+    rebuilt_index = ChromaRetrievalIndex(
+        settings=changed_settings,
+        embedding_client=rebuilding_client,
+        documents=documents,
+    )
+    rebuilt_index.ensure_indexed()
+
+    assert ("RETRIEVAL_DOCUMENT", len(documents)) in rebuilding_client.calls
+    assert rebuilt_index._collection.metadata["hnsw:search_ef"] == 733
+    assert build_chroma_manifest_status(
+        settings=changed_settings,
+        documents=documents,
+    )["status"] == "built"
+
+    manifest_path = settings.persist_directory / "retrieval_index_manifest.json"
+    legacy_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy_manifest["schema_version"] = "1.0"
+    legacy_manifest.pop("index_config")
+    manifest_path.write_text(
+        json.dumps(legacy_manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    legacy_status = build_chroma_manifest_status(settings=settings, documents=documents)
+
+    assert legacy_status["status"] == "stale"
+    assert legacy_status["rebuild_required"] is True
+    assert legacy_status["stored_schema_version"] == "1.0"
+    assert legacy_status["stored_index_config"] == {}
+
+
+def test_chroma_index_uses_same_search_metadata_after_reset(tmp_path) -> None:
+    settings = ChromaRetrievalSettings(
+        persist_directory=tmp_path / "chroma",
+        collection_name="test_retrieval_documents",
+        embedding_model="fake-embedding-model",
+    )
+    index = ChromaRetrievalIndex(
+        settings=settings,
+        embedding_client=FakeEmbeddingClient(),
+        documents=[],
+    )
+
+    assert index._collection.metadata == {
+        "hnsw:space": "cosine",
+        "hnsw:search_ef": DEFAULT_CHROMA_SEARCH_EF,
+    }
+    assert index._collection.configuration["hnsw"]["ef_search"] == DEFAULT_CHROMA_SEARCH_EF
+
+    index._reset_collection()
+
+    assert index._collection.metadata == {
+        "hnsw:space": "cosine",
+        "hnsw:search_ef": DEFAULT_CHROMA_SEARCH_EF,
+    }
+    assert index._collection.configuration["hnsw"]["ef_search"] == DEFAULT_CHROMA_SEARCH_EF
+
+
+def test_chroma_settings_read_positive_search_ef_and_fall_back_for_invalid_environment_values(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", "runtime/chroma")
+    monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "test_environment_settings")
+    monkeypatch.setenv("OSCE_CHROMA_SEARCH_EF", "733")
+
+    settings = build_chroma_retrieval_settings_from_environment(
+        root_dir=tmp_path,
+        embedding_model="fake-embedding-model",
+    )
+
+    assert settings.persist_directory == tmp_path / "runtime/chroma"
+    assert settings.collection_name == "test_environment_settings"
+    assert settings.embedding_model == "fake-embedding-model"
+    assert settings.search_ef == 733
+
+    for invalid_value in ["0", "-1", "not-an-integer"]:
+        monkeypatch.setenv("OSCE_CHROMA_SEARCH_EF", invalid_value)
+        invalid_settings = build_chroma_retrieval_settings_from_environment(
+            root_dir=tmp_path,
+            embedding_model="fake-embedding-model",
+        )
+        assert invalid_settings.search_ef == DEFAULT_CHROMA_SEARCH_EF
 
 
 def test_chroma_manifest_status_marks_malformed_manifest_invalid(tmp_path) -> None:
@@ -690,7 +886,7 @@ def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypat
 
     monkeypatch.setattr(
         retrieval_index_module,
-        "search_retrieval_documents_with_embeddings",
+        "search_retrieval_documents_with_embeddings_batch",
         fail_in_memory_embedding_search,
     )
 
@@ -700,6 +896,74 @@ def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypat
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert results[0].source_type == "knowledge"
     assert results[0].score > 0.99
+
+
+def test_search_retrieval_documents_uses_batch_fallback_once_when_chroma_fails(
+    monkeypatch,
+) -> None:
+    embedding_client = FakeEmbeddingClient()
+    fallback_calls: list[dict[str, object]] = []
+
+    class FailingChromaIndex:
+        def search_batch(self, queries: list[str], *, limit: int) -> list[list[object]]:
+            raise RuntimeError(f"chroma unavailable for {queries!r} at limit {limit}")
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: embedding_client,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_chroma_retrieval_index_from_environment",
+        lambda **_: FailingChromaIndex(),
+    )
+
+    def batch_fallback(
+        queries: list[str],
+        *,
+        embedding_client: object,
+        limit: int,
+        reranker: object,
+    ) -> list[list[retrieval_index_module.RetrievalDocument]]:
+        fallback_calls.append(
+            {
+                "queries": queries,
+                "embedding_client": embedding_client,
+                "limit": limit,
+                "reranker": reranker,
+            }
+        )
+        return [
+            [
+                retrieval_index_module.RetrievalDocument(
+                    reference="case:appendicitis_001",
+                    source_type="case",
+                    title="右下腹痛教学病例",
+                    snippet="转移性右下腹痛。",
+                    score=1.0,
+                )
+            ]
+        ]
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "search_retrieval_documents_with_embeddings_batch",
+        batch_fallback,
+    )
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert [result.reference for result in results] == ["case:appendicitis_001"]
+    assert len(fallback_calls) == 1
+    assert fallback_calls[0]["queries"] == ["右下腹痛"]
+    assert fallback_calls[0]["embedding_client"] is embedding_client
+    assert fallback_calls[0]["limit"] == 3
 
 
 def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(monkeypatch) -> None:
@@ -768,7 +1032,7 @@ def test_search_retrieval_documents_uses_chroma_by_default_when_embedding_client
 
     monkeypatch.setattr(
         retrieval_index_module,
-        "search_retrieval_documents_with_embeddings",
+        "search_retrieval_documents_with_embeddings_batch",
         fail_in_memory_embedding_search,
     )
 

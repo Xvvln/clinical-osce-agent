@@ -41,6 +41,8 @@ services:
       OSCE_LOCAL_EMBEDDING_BATCH_SIZE: ${OSCE_LOCAL_EMBEDDING_BATCH_SIZE:-16}
       OSCE_CHROMA_ENABLED: ${OSCE_CHROMA_ENABLED:-true}
       CHROMA_PERSIST_DIRECTORY: ${CHROMA_PERSIST_DIRECTORY:-/app/data/runtime/chroma}
+      OSCE_CHROMA_COLLECTION: ${OSCE_CHROMA_COLLECTION:-clinical_osce_retrieval}
+      OSCE_CHROMA_SEARCH_EF: ${OSCE_CHROMA_SEARCH_EF:-500}
       HF_HOME: ${HF_HOME:-/app/data/runtime/huggingface}
       FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/app/data/runtime/fastembed}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}

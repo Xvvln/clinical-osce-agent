@@ -201,6 +201,11 @@ def test_compose_health_path_remains_valid() -> None:
         api_service["environment"]["CLINICAL_OSCE_DEMO_STUDENT_PASSWORD"]
         == "${CLINICAL_OSCE_DEMO_STUDENT_PASSWORD:-}"
     )
+    assert (
+        api_service["environment"]["OSCE_CHROMA_COLLECTION"]
+        == "${OSCE_CHROMA_COLLECTION:-clinical_osce_retrieval}"
+    )
+    assert api_service["environment"]["OSCE_CHROMA_SEARCH_EF"] == "${OSCE_CHROMA_SEARCH_EF:-500}"
     assert api_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:8000:8000"]
     assert web_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3000:3000"]
     assert admin_service["ports"] == ["${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3001:3000"]

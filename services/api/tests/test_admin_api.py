@@ -926,6 +926,7 @@ def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monke
     monkeypatch.setenv("OSCE_CHROMA_ENABLED", "true")
     monkeypatch.setenv("CHROMA_PERSIST_DIRECTORY", str(tmp_path / "chroma-index"))
     monkeypatch.setenv("OSCE_CHROMA_COLLECTION", "osce_demo_retrieval")
+    monkeypatch.setenv("OSCE_CHROMA_SEARCH_EF", "733")
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_ENABLED", "true")
     monkeypatch.setenv("OSCE_VERTEX_EMBEDDING_PROJECT", "demo-project")
 
@@ -939,6 +940,7 @@ def test_admin_model_config_reports_chroma_index_manifest_status(tmp_path, monke
     assert manifest["rebuild_required"] is True
     assert manifest["collection"] == "osce_demo_retrieval"
     assert manifest["embedding_model"] == "gemini-embedding-001"
+    assert manifest["index_config"] == {"hnsw:space": "cosine", "hnsw:search_ef": 733}
     assert manifest["source_count"] >= 5
     assert "appendicitis_001" in manifest["case_ids"]
     assert manifest["manifest_path"].endswith("retrieval_index_manifest.json")
