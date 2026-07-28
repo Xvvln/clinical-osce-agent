@@ -4,6 +4,7 @@ from app.graph import osce_graph as osce_graph_module
 from app.graph.osce_graph import build_osce_graph, feedback_node
 from app.models.rubric import LlmRubricRequest, LlmRubricResponse
 from app.services import agent_rag_context_service as agent_rag_context_module
+from app.services import gemini_patient_responder as patient_responder_module
 from app.services.agent_rag_context_service import (
     MAX_AGENT_KNOWLEDGE_SNIPPET_CHARS,
 )
@@ -394,6 +395,82 @@ def test_osce_graph_reveals_multiple_history_facts_from_one_student_message() ->
         for item in result["action_timeline"]
     ] == expected_action_timeline
     assert all(isinstance(item.get("message_turn_index"), int) and item["message_turn_index"] >= 1 for item in result["action_timeline"])
+
+
+def test_osce_graph_only_marks_provider_selected_facts_as_revealed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = osce_graph_module._load_case("appendicitis_001").model_copy(deep=True)
+    base_fact = case.history.hidden_facts[0]
+    case.history.hidden_facts = [
+        base_fact.model_copy(
+            update={
+                "fact_id": f"appendicitis_001.hf_bulk_{index:02d}",
+                "canonical_answer": f"本轮可披露事实 {index:02d}😀",
+                "variants": [f"口语事实 {index:02d}🙂"],
+                "trigger_intents": ["ask_location"],
+            }
+        )
+        for index in range(36)
+    ]
+    monkeypatch.setattr(osce_graph_module, "_load_case", lambda case_id: case)
+    captured_patient_requests: list[object] = []
+
+    def fake_patient_responder(request: object) -> str:
+        captured_patient_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=fake_patient_responder,
+        coach_agent=silent_coach_agent,
+        turn_intent_agent=DeterministicTurnIntentAgent(),
+    )
+    result = graph.invoke(
+        {
+            "case_id": "appendicitis_001",
+            "stage": "case_intro",
+            "case_title": case.case_title,
+            "chief_complaint": case.chief_complaint,
+            "student_message": "现在是哪里痛？",
+            "current_intent": "",
+            "reply": "",
+            "messages": [],
+            "asked_questions": [],
+            "intent_history": [],
+            "agent_turn_memory": [],
+            "revealed_facts": [],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "rubric_scores": {},
+            "missed_items": [],
+            "retrieved_sources": [],
+            "feedback_report": None,
+            "safety_flags": [],
+            "evolution_candidates": [],
+        }
+    )
+
+    expected_fact_ids = [
+        f"appendicitis_001.hf_bulk_{index:02d}"
+        for index in range(patient_responder_module.MAX_PATIENT_PROVIDER_FACT_CANDIDATES)
+    ]
+    patient_request = captured_patient_requests[0]
+    request_candidates = getattr(patient_request, "answerable_fact_candidates")
+    provider_payload, provider_fact_id_map = patient_responder_module._build_patient_provider_payload(
+        patient_request
+    )
+    assert [candidate["fact_id"] for candidate in request_candidates] == expected_fact_ids
+    assert result["revealed_facts"] == expected_fact_ids
+    assert getattr(patient_request, "revealed_fact_ids") == expected_fact_ids
+    assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == expected_fact_ids
+    assert getattr(patient_request, "canonical_answer") == "；".join(
+        f"本轮可披露事实 {index:02d}😀"
+        for index in range(patient_responder_module.MAX_PATIENT_PROVIDER_FACT_CANDIDATES)
+    )
+    assert list(provider_fact_id_map.values()) == expected_fact_ids
+    assert "本轮可披露事实 12😀" not in str(provider_payload)
 
 
 def test_osce_graph_reveals_case_specific_multi_intent_history_facts() -> None:

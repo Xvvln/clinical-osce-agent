@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -350,7 +351,11 @@ def test_patient_provider_payload_contains_only_current_answerable_facts() -> No
     provider_payload = fake_client.calls[0]["payload"]
     payload_text = str(provider_payload)
     assert reply.fact_ids_used == ["appendicitis_001.hf_01"]
-    assert provider_payload["canonical_answer"] == "24 小时前开始，最初是上腹部隐痛。"
+    assert provider_payload["canonical_answer"] == ""
+    assert (
+        provider_payload["answerable_fact_candidates"][0]["canonical_answer"]
+        == "24 小时前开始，最初是上腹部隐痛。"
+    )
     assert "patient_private_context" not in provider_payload
     assert "forbidden_terms" not in provider_payload
     assert "forbidden_context" not in provider_payload
@@ -359,6 +364,136 @@ def test_patient_provider_payload_contains_only_current_answerable_facts() -> No
     assert "急性阑尾炎" not in payload_text
     assert hidden_fact not in payload_text
     assert "present_illness_summary" not in payload_text
+
+
+def _large_patient_fact_request() -> module.PatientResponderRequest:
+    facts = [
+        {
+            "fact_id": f"large_case.hf_{index:02d}",
+            "topic": f"同一问诊主题 {index:02d} 🩺",
+            "slot": "same_intent_slot",
+            "canonical_answer": (
+                f"唯一事实标记<{index:02d}>😀："
+                + "这是包含中文与 emoji 的很长病例事实。"
+                * 180
+            ),
+            "variants": [
+                (
+                    f"唯一事实标记<{index:02d}>😀："
+                    + "这是包含中文与 emoji 的很长病例事实。"
+                    * 180
+                ),
+                f"未选事实口语标记<{index:02d}>🧑‍⚕️",
+                f"未选事实口语标记<{index:02d}>🧑‍⚕️",
+                f"备用口语标记<{index:02d}>🙂：" + "还是很长的口语表达。" * 120,
+            ],
+            "trigger_intents": ["ask_same_intent"],
+        }
+        for index in range(36)
+    ]
+    return module.PatientResponderRequest(
+        case_id="large_case",
+        case_title="中文😀超长病例",
+        chief_complaint="反复不适，需要逐项追问。",
+        student_message="这些情况都是什么样的？🙂",
+        current_intents=["ask_same_intent"],
+        canonical_answer="；".join(str(fact["canonical_answer"]) for fact in facts),
+        answerable_fact_candidates=facts,
+        forbidden_terms=["禁止诊断词"],
+    )
+
+
+def test_patient_provider_payload_is_utf8_bounded_deterministic_and_omits_unselected_facts() -> None:
+    request = _large_patient_fact_request()
+
+    first_payload, first_fact_id_map = module._build_patient_provider_payload(request)
+    second_payload, second_fact_id_map = module._build_patient_provider_payload(request)
+
+    serialized = json.dumps(first_payload, ensure_ascii=False)
+    selected_original_ids = set(first_fact_id_map.values())
+    assert len(serialized.encode("utf-8")) <= module.PATIENT_PROVIDER_CONTENT_BUDGET_BYTES
+    assert (
+        module.MAX_PATIENT_PROVIDER_PAYLOAD_BYTES
+        - len(serialized.encode("utf-8"))
+        >= module.PATIENT_PROVIDER_ENVELOPE_RESERVE_BYTES
+    )
+    assert first_payload == second_payload
+    assert first_fact_id_map == second_fact_id_map
+    assert 0 < len(first_fact_id_map) < len(request.answerable_fact_candidates)
+    assert list(first_fact_id_map) == [
+        f"fact_{index}"
+        for index in range(1, len(first_fact_id_map) + 1)
+    ]
+    assert "😀" in serialized
+
+    first_candidate = first_payload["answerable_fact_candidates"][0]
+    assert first_candidate["canonical_answer"] not in first_candidate.get("variants", [])
+    assert len(first_candidate.get("variants", [])) == 2
+
+    for index, candidate in enumerate(request.answerable_fact_candidates):
+        original_fact_id = str(candidate["fact_id"])
+        canonical_marker = f"唯一事实标记<{index:02d}>😀"
+        variant_marker = f"未选事实口语标记<{index:02d}>🧑‍⚕️"
+        if original_fact_id in selected_original_ids:
+            assert canonical_marker in serialized
+        else:
+            assert original_fact_id not in serialized
+            assert canonical_marker not in serialized
+            assert variant_marker not in serialized
+
+
+def test_patient_fact_selection_reserves_a_candidate_for_each_current_intent() -> None:
+    candidates = [
+        {
+            "fact_id": f"case.hf_location_{index:02d}",
+            "canonical_answer": f"部位事实 {index}",
+            "trigger_intents": ["ask_location"],
+        }
+        for index in range(20)
+    ]
+    candidates.append(
+        {
+            "fact_id": "case.hf_severity",
+            "canonical_answer": "疼痛程度事实",
+            "trigger_intents": ["ask_severity"],
+        }
+    )
+
+    selected = module.select_patient_provider_fact_candidates(
+        candidates,
+        ["ask_location", "ask_severity"],
+    )
+
+    assert selected[0]["fact_id"] == "case.hf_location_00"
+    assert selected[-1]["fact_id"] == "case.hf_severity"
+    assert len(selected) == module.MAX_PATIENT_PROVIDER_FACT_CANDIDATES
+
+
+def test_patient_responder_rejects_text_from_fact_omitted_by_provider_budget() -> None:
+    request = _large_patient_fact_request()
+    _, provider_fact_id_map = module._build_patient_provider_payload(request)
+    omitted_index = next(
+        index
+        for index, candidate in enumerate(request.answerable_fact_candidates)
+        if str(candidate["fact_id"]) not in set(provider_fact_id_map.values())
+    )
+    fake_client = FakePatientFactIdClient(
+        module.PatientResponderResponse(
+            reply=f"未选事实口语标记<{omitted_index:02d}>🧑‍⚕️",
+            fact_ids_used=["fact_1"],
+        )
+    )
+    responder = module.OpenAICompatiblePatientResponder(
+        settings=openai_module.OpenAICompatibleSettings(
+            enabled=True,
+            api_key="key",
+            model="model",
+        ),
+        client=fake_client,
+    )
+
+    with pytest.raises(RuntimeError, match="未授权病例事实"):
+        responder(request)
 
 
 def test_patient_responder_rejects_protected_fact_text_when_fact_ids_used_is_empty() -> None:

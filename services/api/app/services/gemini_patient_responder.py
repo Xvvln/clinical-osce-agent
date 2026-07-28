@@ -30,10 +30,22 @@ from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负责把 canonical_answer 改写成自然、简短的 OSCE 训练回复。
+MAX_PATIENT_PROVIDER_PAYLOAD_BYTES = 64 * 1024
+PATIENT_PROVIDER_ENVELOPE_RESERVE_BYTES = 8 * 1024
+PATIENT_PROVIDER_CONTENT_BUDGET_BYTES = (
+    MAX_PATIENT_PROVIDER_PAYLOAD_BYTES - PATIENT_PROVIDER_ENVELOPE_RESERVE_BYTES
+)
+MAX_PATIENT_PROVIDER_FACT_CANDIDATES = 12
+MAX_PATIENT_PROVIDER_CANONICAL_BYTES = 8 * 1024
+MAX_PATIENT_PROVIDER_FACT_CANONICAL_BYTES = 1 * 1024
+MAX_PATIENT_PROVIDER_FACT_VARIANTS = 2
+MAX_PATIENT_PROVIDER_FACT_VARIANT_BYTES = 384
+
+SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负责把 canonical_answer 或 answerable_fact_candidates 改写成自然、简短的 OSCE 训练回复。
 
 硬性规则：
 - answerable_fact_candidates 是本轮允许披露的病例事实；只能表达 canonical_answer 和 answerable_fact_candidates 中已经给出的事实，不得新增症状、检查、诊断、治疗或医学解释。
+- answerable_fact_candidates 非空时，以其中逐条给出的 canonical_answer 为准；顶层 canonical_answer 会留空，以免重复传输同一事实。
 - answerable_fact_candidates 中的 fact_id 是本轮临时令牌，不是病例内部编号；fact_ids_used 只能回传实际使用的临时令牌。
 - dialogue_context 是最近已可见对话、已问问题和本轮意图摘要，只用于保持上下文连贯。
 - dialogue_context.patient_affect_state 和 dialogue_context.student_affect_response 只用于决定患者语气是否焦虑、困惑、痛苦、受挫或稍微安心；它们只能影响语气，不能新增病例事实、诊断、检查结果、治疗承诺或标准答案。
@@ -44,7 +56,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 - 不得输出标准诊断、rubric、治疗、剂量或处置建议。
 - 语气要像真实来就诊的患者，不要像病历摘要、教科书或医生交班。
 - 可以把医学化表达改成生活化表达，但不能改变事实：例如“转移性右下腹痛”可说成“肚子疼，后来右下腹更明显”，“低热”可说成“有点发热”。
-- 不要照抄 chief_complaint 或 case_title 里的医学化表述，优先围绕 canonical_answer 作答。
+- 不要照抄 chief_complaint 或 case_title 里的医学化表述；候选非空时围绕候选中的 canonical_answer 作答，否则围绕顶层 canonical_answer 作答。
 - 如果 canonical_answer 表示病例未提供信息，就只表达“不清楚/没被告知/不太确定”的患者口吻。
 - 不要主动引导学生下一步该问什么，不说“你可以继续问”“建议你”“应该先问”。
 - 如果 turn_policy 是 answer_boundary_redirect 或 safety_boundary_redirect，用教学边界口吻提醒继续按 OSCE 流程训练，不要扮演真实医生给建议。
@@ -168,6 +180,7 @@ class GeminiPatientResponder:
                 provider_fact_id_map,
             ),
             request,
+            provider_answerable_fact_ids=list(provider_fact_id_map.values()),
         )
 
 
@@ -187,6 +200,7 @@ class OpenAICompatiblePatientResponder:
         return _validated_patient_reply(
             _restore_patient_provider_fact_ids(response, provider_fact_id_map),
             request,
+            provider_answerable_fact_ids=list(provider_fact_id_map.values()),
         )
 
 
@@ -206,6 +220,7 @@ class AnthropicPatientResponder:
         return _validated_patient_reply(
             _restore_patient_provider_fact_ids(response, provider_fact_id_map),
             request,
+            provider_answerable_fact_ids=list(provider_fact_id_map.values()),
         )
 
 
@@ -321,92 +336,327 @@ def _build_patient_provider_payload(
     request: PatientResponderRequest,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     protected_terms = [request.case_id, *request.forbidden_terms]
-    provider_fact_id_map: dict[str, str] = {}
-    answerable_fact_candidates: list[dict[str, Any]] = []
-    for index, candidate in enumerate(request.answerable_fact_candidates):
-        if not isinstance(candidate, dict):
-            continue
-        original_fact_id = str(candidate.get("fact_id") or "")
-        if not original_fact_id:
-            continue
-        provider_fact_id = f"fact_{index + 1}"
-        provider_fact_id_map[provider_fact_id] = original_fact_id
-        answerable_fact_candidates.append(
-            {
-                "fact_id": provider_fact_id,
-                "topic": _redact_patient_provider_text(str(candidate.get("topic") or ""), protected_terms),
-                "slot": _redact_patient_provider_text(str(candidate.get("slot") or ""), protected_terms),
-                "canonical_answer": _redact_patient_provider_text(
-                    str(candidate.get("canonical_answer") or ""),
-                    protected_terms,
-                ),
-                "variants": [
-                    _redact_patient_provider_text(str(variant), protected_terms)
-                    for variant in candidate.get("variants", [])
-                    if str(variant).strip()
-                ],
-            }
-        )
-
     dialogue_context = request.dialogue_context if isinstance(request.dialogue_context, dict) else {}
     deterministic_hints = request.deterministic_hints if isinstance(request.deterministic_hints, dict) else {}
+    payload: dict[str, Any] = {
+        "case_title": _bounded_patient_provider_text(
+            request.case_title,
+            protected_terms,
+            max_bytes=1_024,
+        ),
+        "chief_complaint": _bounded_patient_provider_text(
+            request.chief_complaint,
+            protected_terms,
+            max_bytes=1_024,
+        ),
+        "student_message": _bounded_patient_provider_text(
+            request.student_message,
+            protected_terms,
+            max_bytes=4_096,
+        ),
+        "current_intents": _bounded_patient_provider_text_list(
+            request.current_intents,
+            protected_terms,
+            max_items=16,
+            max_item_bytes=128,
+        ),
+        "canonical_answer": "",
+        "answerable_fact_candidates": [],
+        "dialogue_context": {
+            "recent_messages": [],
+            "asked_questions": [],
+            "current_intents": [],
+            "patient_affect_state": {},
+            "student_affect_response": {},
+        },
+        "turn_policy": _bounded_patient_provider_text(
+            request.turn_policy,
+            protected_terms,
+            max_bytes=256,
+        ),
+        "deterministic_hints": {},
+    }
+
+    provider_fact_id_map: dict[str, str] = {}
+    selected_candidates: list[dict[str, Any]] = []
+    provider_candidates = select_patient_provider_fact_candidates(
+        request.answerable_fact_candidates,
+        request.current_intents,
+    )
+    for candidate in provider_candidates:
+        original_fact_id = str(candidate.get("fact_id") or "").strip()
+        provider_fact_id = f"fact_{len(selected_candidates) + 1}"
+        compact_candidate = _compact_patient_provider_fact_candidate(
+            provider_fact_id,
+            candidate,
+            protected_terms,
+        )
+        selected_candidates.append(compact_candidate)
+        payload["answerable_fact_candidates"] = selected_candidates
+        if _patient_provider_payload_size(payload) > PATIENT_PROVIDER_CONTENT_BUDGET_BYTES:
+            raise RuntimeError("标准化病人事实子集超过内部载荷预算。")
+        provider_fact_id_map[provider_fact_id] = original_fact_id
+
+    if not selected_candidates:
+        payload["canonical_answer"] = _bounded_patient_provider_text(
+            request.canonical_answer,
+            protected_terms,
+            max_bytes=MAX_PATIENT_PROVIDER_CANONICAL_BYTES,
+        )
+
     recent_dialogue_messages = _patient_provider_messages(
         dialogue_context.get("recent_messages") or request.prior_messages,
         protected_terms,
     )
-    return (
-        {
-            "case_title": _redact_patient_provider_text(request.case_title, protected_terms),
-            "chief_complaint": _redact_patient_provider_text(request.chief_complaint, protected_terms),
-            "student_message": _redact_patient_provider_text(request.student_message, protected_terms),
-            "current_intents": [
-                _redact_patient_provider_text(str(intent), protected_terms)
-                for intent in request.current_intents
-                if str(intent).strip()
-            ],
-            "canonical_answer": _redact_patient_provider_text(request.canonical_answer, protected_terms),
-            "answerable_fact_candidates": answerable_fact_candidates,
-            "dialogue_context": {
-                "recent_messages": recent_dialogue_messages,
-                "asked_questions": [
-                    _redact_patient_provider_text(str(question), protected_terms)
-                    for question in dialogue_context.get("asked_questions", [])
-                    if str(question).strip()
-                ],
-                "current_intents": [
-                    _redact_patient_provider_text(str(intent), protected_terms)
-                    for intent in dialogue_context.get("current_intents", [])
-                    if str(intent).strip()
-                ],
-                "patient_affect_state": _safe_patient_provider_value(
-                    dialogue_context.get("patient_affect_state", {}),
-                    protected_terms,
-                ),
-                "student_affect_response": _safe_patient_provider_value(
-                    dialogue_context.get("student_affect_response", {}),
-                    protected_terms,
-                ),
-            },
-            "turn_policy": _redact_patient_provider_text(request.turn_policy, protected_terms),
-            "deterministic_hints": {
-                key: _safe_patient_provider_value(deterministic_hints.get(key), protected_terms)
-                for key in (
-                    "keyword_intent",
-                    "keyword_intents",
-                    "current_intents",
-                    "unknown_kind",
-                    "possible_intents",
-                    "turn_policy",
-                    "patient_context_mode",
-                    "stage",
-                    "safety_flags",
-                    "training_progress_next_focus",
-                )
-                if key in deterministic_hints
-            },
-        },
-        provider_fact_id_map,
+    _add_recent_patient_provider_messages(payload, recent_dialogue_messages)
+    _add_patient_provider_value_if_fits(
+        payload,
+        ("dialogue_context", "asked_questions"),
+        _bounded_patient_provider_text_list(
+            dialogue_context.get("asked_questions", []),
+            protected_terms,
+            max_items=8,
+            max_item_bytes=512,
+            newest_first=True,
+        ),
     )
+    _add_patient_provider_value_if_fits(
+        payload,
+        ("dialogue_context", "current_intents"),
+        _bounded_patient_provider_text_list(
+            dialogue_context.get("current_intents", []),
+            protected_terms,
+            max_items=16,
+            max_item_bytes=128,
+        ),
+    )
+    for key in ("patient_affect_state", "student_affect_response"):
+        _add_patient_provider_value_if_fits(
+            payload,
+            ("dialogue_context", key),
+            _safe_patient_provider_value(dialogue_context.get(key, {}), protected_terms),
+        )
+    for key in (
+        "keyword_intent",
+        "keyword_intents",
+        "current_intents",
+        "unknown_kind",
+        "possible_intents",
+        "turn_policy",
+        "patient_context_mode",
+        "stage",
+        "safety_flags",
+        "training_progress_next_focus",
+    ):
+        if key not in deterministic_hints:
+            continue
+        _add_patient_provider_value_if_fits(
+            payload,
+            ("deterministic_hints", key),
+            _safe_patient_provider_value(deterministic_hints.get(key), protected_terms),
+        )
+
+    if _patient_provider_payload_size(payload) > PATIENT_PROVIDER_CONTENT_BUDGET_BYTES:
+        raise RuntimeError("标准化病人模型请求超过内部载荷上限。")
+    return payload, provider_fact_id_map
+
+
+def select_patient_provider_fact_candidates(
+    candidates: list[dict[str, Any]],
+    current_intents: list[str],
+) -> list[dict[str, Any]]:
+    valid_candidates: list[tuple[str, dict[str, Any]]] = []
+    seen_fact_ids: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        fact_id = str(candidate.get("fact_id") or "").strip()
+        if not fact_id or fact_id in seen_fact_ids:
+            continue
+        seen_fact_ids.add(fact_id)
+        valid_candidates.append((fact_id, candidate))
+
+    selected_fact_ids: set[str] = set()
+    for intent in current_intents:
+        if len(selected_fact_ids) >= MAX_PATIENT_PROVIDER_FACT_CANDIDATES:
+            break
+        normalized_intent = str(intent).strip()
+        if not normalized_intent:
+            continue
+        for fact_id, candidate in valid_candidates:
+            if fact_id in selected_fact_ids:
+                continue
+            trigger_intents = candidate.get("trigger_intents", [])
+            if not isinstance(trigger_intents, list):
+                continue
+            if normalized_intent not in {str(item).strip() for item in trigger_intents}:
+                continue
+            selected_fact_ids.add(fact_id)
+            break
+
+    for fact_id, _ in valid_candidates:
+        if len(selected_fact_ids) >= MAX_PATIENT_PROVIDER_FACT_CANDIDATES:
+            break
+        selected_fact_ids.add(fact_id)
+    return [
+        candidate
+        for fact_id, candidate in valid_candidates
+        if fact_id in selected_fact_ids
+    ]
+
+
+def _compact_patient_provider_fact_candidate(
+    provider_fact_id: str,
+    candidate: dict[str, Any],
+    protected_terms: list[str],
+) -> dict[str, Any]:
+    topic = _bounded_patient_provider_text(
+        str(candidate.get("topic") or ""),
+        protected_terms,
+        max_bytes=256,
+    )
+    slot = _bounded_patient_provider_text(
+        str(candidate.get("slot") or ""),
+        protected_terms,
+        max_bytes=128,
+    )
+    canonical_answer = _bounded_patient_provider_text(
+        str(candidate.get("canonical_answer") or ""),
+        protected_terms,
+        max_bytes=MAX_PATIENT_PROVIDER_FACT_CANONICAL_BYTES,
+    )
+    compact_candidate: dict[str, Any] = {"fact_id": provider_fact_id}
+    if topic:
+        compact_candidate["topic"] = topic
+    if slot and _normalized_patient_provider_text(slot) != _normalized_patient_provider_text(topic):
+        compact_candidate["slot"] = slot
+    if canonical_answer:
+        compact_candidate["canonical_answer"] = canonical_answer
+
+    variants = candidate.get("variants", [])
+    if isinstance(variants, list):
+        compact_variants: list[str] = []
+        seen_variants = {_normalized_patient_provider_text(canonical_answer)}
+        canonical_normalized = _normalized_patient_provider_text(canonical_answer)
+        for variant in variants:
+            compact_variant = _bounded_patient_provider_text(
+                str(variant),
+                protected_terms,
+                max_bytes=MAX_PATIENT_PROVIDER_FACT_VARIANT_BYTES,
+            )
+            normalized_variant = _normalized_patient_provider_text(compact_variant)
+            if (
+                not normalized_variant
+                or normalized_variant in seen_variants
+                or (
+                    canonical_normalized
+                    and (
+                        normalized_variant in canonical_normalized
+                        or canonical_normalized in normalized_variant
+                    )
+                )
+            ):
+                continue
+            seen_variants.add(normalized_variant)
+            compact_variants.append(compact_variant)
+            if len(compact_variants) >= MAX_PATIENT_PROVIDER_FACT_VARIANTS:
+                break
+        if compact_variants:
+            compact_candidate["variants"] = compact_variants
+    return compact_candidate
+
+
+def _bounded_patient_provider_text(
+    value: str,
+    protected_terms: list[str],
+    *,
+    max_bytes: int,
+) -> str:
+    return _truncate_utf8_text(
+        _redact_patient_provider_text(str(value), protected_terms).strip(),
+        max_bytes=max_bytes,
+    )
+
+
+def _bounded_patient_provider_text_list(
+    values: Any,
+    protected_terms: list[str],
+    *,
+    max_items: int,
+    max_item_bytes: int,
+    newest_first: bool = False,
+) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    candidates = values[-max_items:] if newest_first else values[:max_items]
+    return [
+        bounded_value
+        for value in candidates
+        if (
+            bounded_value := _bounded_patient_provider_text(
+                str(value),
+                protected_terms,
+                max_bytes=max_item_bytes,
+            )
+        )
+    ]
+
+
+def _truncate_utf8_text(value: str, *, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    marker = "…"
+    marker_bytes = marker.encode("utf-8")
+    if max_bytes < len(marker_bytes):
+        return encoded[:max_bytes].decode("utf-8", errors="ignore")
+    prefix = encoded[: max_bytes - len(marker_bytes)].decode("utf-8", errors="ignore").rstrip()
+    return f"{prefix}{marker}"
+
+
+def _normalized_patient_provider_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def _patient_provider_payload_size(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
+def _add_recent_patient_provider_messages(
+    payload: dict[str, Any],
+    messages: list[dict[str, str]],
+) -> None:
+    selected_messages: list[dict[str, str]] = []
+    for message in reversed(messages):
+        candidate_messages = [message, *selected_messages]
+        if _add_patient_provider_value_if_fits(
+            payload,
+            ("dialogue_context", "recent_messages"),
+            candidate_messages,
+        ):
+            selected_messages = candidate_messages
+
+
+def _add_patient_provider_value_if_fits(
+    payload: dict[str, Any],
+    path: tuple[str, str],
+    value: Any,
+) -> bool:
+    parent = payload.get(path[0])
+    if not isinstance(parent, dict):
+        return False
+    missing = object()
+    previous_value = parent.get(path[1], missing)
+    parent[path[1]] = value
+    if _patient_provider_payload_size(payload) <= PATIENT_PROVIDER_CONTENT_BUDGET_BYTES:
+        return True
+    if previous_value is missing:
+        parent.pop(path[1], None)
+    else:
+        parent[path[1]] = previous_value
+    return False
 
 
 def _patient_provider_messages(messages: Any, protected_terms: list[str]) -> list[dict[str, str]]:
@@ -486,14 +736,83 @@ def _assert_no_forbidden_terms(reply: str, forbidden_terms: list[str]) -> None:
         raise RuntimeError(f"标准化病人回答包含禁止泄露词：{leaked_terms}")
 
 
-def _validated_patient_reply(response: PatientResponderResponse, request: PatientResponderRequest) -> PatientResponderOutput:
+def _validated_patient_reply(
+    response: PatientResponderResponse,
+    request: PatientResponderRequest,
+    *,
+    provider_answerable_fact_ids: list[str] | None = None,
+) -> PatientResponderOutput:
     reply = response.reply.strip()
+    answerable_fact_candidates = _provider_answerable_fact_candidates(
+        request.answerable_fact_candidates,
+        provider_answerable_fact_ids,
+    )
+    protected_fact_texts = [
+        *request.protected_fact_texts,
+        *_omitted_patient_provider_fact_texts(
+            request.answerable_fact_candidates,
+            answerable_fact_candidates,
+        ),
+    ]
     _assert_no_forbidden_terms(reply, request.forbidden_terms)
-    _assert_no_protected_fact_text(reply, request.protected_fact_texts)
-    _assert_used_fact_ids_are_answerable(response.fact_ids_used, request.answerable_fact_candidates)
-    _assert_multi_intent_fact_coverage(response.fact_ids_used, request)
+    _assert_no_protected_fact_text(reply, protected_fact_texts)
+    _assert_used_fact_ids_are_answerable(response.fact_ids_used, answerable_fact_candidates)
+    _assert_multi_intent_fact_coverage(
+        response.fact_ids_used,
+        request,
+        answerable_fact_candidates=answerable_fact_candidates,
+    )
     emotion = normalize_patient_emotion(response.emotion) or infer_patient_emotion(reply)
     return PatientResponderOutput(reply=reply, emotion=emotion, fact_ids_used=list(response.fact_ids_used))
+
+
+def _provider_answerable_fact_candidates(
+    candidates: list[dict[str, Any]],
+    provider_answerable_fact_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    if provider_answerable_fact_ids is None:
+        return candidates
+    allowed_fact_ids = set(provider_answerable_fact_ids)
+    return [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and str(candidate.get("fact_id") or "") in allowed_fact_ids
+    ]
+
+
+def _omitted_patient_provider_fact_texts(
+    all_candidates: list[dict[str, Any]],
+    selected_candidates: list[dict[str, Any]],
+) -> list[str]:
+    selected_fact_ids = {
+        str(candidate.get("fact_id") or "")
+        for candidate in selected_candidates
+        if isinstance(candidate, dict)
+    }
+    selected_texts = {
+        _normalized_patient_provider_text(text)
+        for candidate in selected_candidates
+        if isinstance(candidate, dict)
+        for text in _patient_fact_candidate_texts(candidate)
+        if text
+    }
+    return [
+        text
+        for candidate in all_candidates
+        if isinstance(candidate, dict)
+        and str(candidate.get("fact_id") or "") not in selected_fact_ids
+        for text in _patient_fact_candidate_texts(candidate)
+        if text and _normalized_patient_provider_text(text) not in selected_texts
+    ]
+
+
+def _patient_fact_candidate_texts(candidate: dict[str, Any]) -> list[str]:
+    texts = [str(candidate.get("canonical_answer") or "")]
+    variants = candidate.get("variants", [])
+    if isinstance(variants, list):
+        texts.extend(str(variant) for variant in variants)
+    return texts
 
 
 def _assert_used_fact_ids_are_answerable(
@@ -527,12 +846,21 @@ def _assert_no_protected_fact_text(reply: str, protected_fact_texts: list[str]) 
         raise RuntimeError("标准化病人回答包含未授权病例事实。")
 
 
-def _assert_multi_intent_fact_coverage(fact_ids_used: list[str], request: PatientResponderRequest) -> None:
+def _assert_multi_intent_fact_coverage(
+    fact_ids_used: list[str],
+    request: PatientResponderRequest,
+    *,
+    answerable_fact_candidates: list[dict[str, Any]] | None = None,
+) -> None:
     if len(request.current_intents) <= 1:
         return
     expected_fact_ids = [
         str(candidate.get("fact_id"))
-        for candidate in request.answerable_fact_candidates
+        for candidate in (
+            request.answerable_fact_candidates
+            if answerable_fact_candidates is None
+            else answerable_fact_candidates
+        )
         if isinstance(candidate, dict) and candidate.get("fact_id")
     ]
     if len(expected_fact_ids) <= 1:
@@ -552,4 +880,5 @@ __all__ = [
     "PatientResponderRequest",
     "PatientResponderResponse",
     "create_default_gemini_patient_responder",
+    "select_patient_provider_fact_candidates",
 ]

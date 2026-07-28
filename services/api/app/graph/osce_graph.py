@@ -27,7 +27,11 @@ from app.services.coach_hint_policy_service import (
     resolve_coach_hint_policy,
 )
 from app.services.deep_report_analysis_service import build_deep_report_analysis
-from app.services.gemini_patient_responder import PatientResponderRequest, create_default_gemini_patient_responder
+from app.services.gemini_patient_responder import (
+    PatientResponderRequest,
+    create_default_gemini_patient_responder,
+    select_patient_provider_fact_candidates,
+)
 from app.services.knowledge_recommender import recommend_knowledge_items
 from app.services.patient_language_service import (
     build_patient_context_redirect_utterance,
@@ -313,8 +317,38 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
     processing_trace = list(state.get("processing_trace", []))
     _emit_processing_progress(state, "case_context", status="active")
     case_context_started_at, case_context_started_perf = _start_processing_step()
-    answerable_hidden_facts = _answerable_hidden_facts_for_intents(case, current_intents)
-    answerable_profile_facts = _answerable_patient_profile_facts_for_intents(case, current_intents)
+    all_answerable_hidden_facts = _answerable_hidden_facts_for_intents(case, current_intents)
+    all_answerable_profile_facts = _answerable_patient_profile_facts_for_intents(case, current_intents)
+    all_answerable_fact_candidates = [
+        *[
+            _serialize_answerable_fact_candidate(case.case_id, hidden_fact)
+            for hidden_fact in all_answerable_hidden_facts
+        ],
+        *all_answerable_profile_facts,
+    ]
+    answerable_fact_candidates = select_patient_provider_fact_candidates(
+        all_answerable_fact_candidates,
+        current_intents,
+    )
+    hidden_fact_by_id = {
+        hidden_fact.fact_id: hidden_fact
+        for hidden_fact in all_answerable_hidden_facts
+    }
+    profile_fact_by_id = {
+        str(profile_fact["fact_id"]): profile_fact
+        for profile_fact in all_answerable_profile_facts
+        if profile_fact.get("fact_id")
+    }
+    answerable_hidden_facts = [
+        hidden_fact_by_id[fact_id]
+        for candidate in answerable_fact_candidates
+        if (fact_id := str(candidate.get("fact_id") or "")) in hidden_fact_by_id
+    ]
+    answerable_profile_facts = [
+        profile_fact_by_id[fact_id]
+        for candidate in answerable_fact_candidates
+        if (fact_id := str(candidate.get("fact_id") or "")) in profile_fact_by_id
+    ]
     if answerable_hidden_facts:
         revealed_fact_id = answerable_hidden_facts[0].fact_id
         for hidden_fact in answerable_hidden_facts:
@@ -322,15 +356,12 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
                 revealed_facts.append(hidden_fact.fact_id)
     revealed_fact_ids = [hidden_fact.fact_id for hidden_fact in answerable_hidden_facts]
     answer_parts = [
-        *[hidden_fact.canonical_answer for hidden_fact in answerable_hidden_facts],
-        *[str(profile_fact["canonical_answer"]) for profile_fact in answerable_profile_facts],
+        str(candidate.get("canonical_answer") or "")
+        for candidate in answerable_fact_candidates
+        if str(candidate.get("canonical_answer") or "").strip()
     ]
     if answer_parts:
         canonical_answer = "；".join(answer_parts)
-    answerable_fact_candidates = [
-        *[_serialize_answerable_fact_candidate(case.case_id, hidden_fact) for hidden_fact in answerable_hidden_facts],
-        *answerable_profile_facts,
-    ]
     answerable_fact_ids = [
         str(candidate["fact_id"])
         for candidate in answerable_fact_candidates
