@@ -245,13 +245,20 @@ def test_audio_language_is_rejected_before_provider_execution(
         "build_dashscope_speech_service_from_environment",
         fail_if_called,
     )
-    client = TestClient(main.app)
-
-    response = client.post(
-        "/api/audio/transcriptions",
-        data={"language": "l" * 17},
-        files={"file": ("sample.wav", b"audio", "audio/wav")},
-    )
+    with TestClient(main.app) as client:
+        login_response = client.post(
+            "/api/auth/login",
+            json={
+                "email": "student@osce.test",
+                "password": "student",
+            },
+        )
+        assert login_response.status_code == 200
+        response = client.post(
+            "/api/audio/transcriptions",
+            data={"language": "l" * 17},
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+        )
 
     assert response.status_code == 422
     assert response.json() == {"detail": main.REQUEST_VALIDATION_ERROR_DETAIL}

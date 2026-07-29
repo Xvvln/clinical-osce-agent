@@ -127,6 +127,14 @@ def test_password_rotation_revokes_all_existing_sessions(tmp_path) -> None:
     assert auth_store.get_user_by_session_token(replacement_token)["user_id"] == user["user_id"]
 
 
+def test_has_any_user_does_not_create_a_missing_database(tmp_path) -> None:
+    database_path = tmp_path / "missing-auth.sqlite3"
+    auth_store = AuthStore(database_path)
+
+    assert auth_store.has_any_user({"admin@example.test"}) is False
+    assert database_path.exists() is False
+
+
 def test_concurrent_password_rotations_keep_one_user_and_revoke_old_sessions(tmp_path) -> None:
     auth_store = AuthStore(tmp_path / "auth.sqlite3")
     user = auth_store.upsert_user_password(

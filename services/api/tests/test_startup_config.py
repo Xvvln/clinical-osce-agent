@@ -1,14 +1,20 @@
 import os
+import sqlite3
 from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 import yaml
 
 from app import main
 from app.main import AUTH_COOKIE_NAME
 from app.services.auth_store import AuthStore
 from app.services.runtime_model_config_store import runtime_model_config_store
-from app.services.startup_config_service import build_startup_config_self_check
+from app.services.startup_config_service import (
+    SQLiteReadinessTarget,
+    build_startup_config_self_check,
+)
 
 
 def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> None:
@@ -74,6 +80,38 @@ def test_production_mode_disables_demo_admin_by_default(tmp_path, monkeypatch) -
         )
 
     assert response.status_code == 401
+
+
+def test_production_login_accepts_explicitly_provisioned_persistent_admin(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    admin_email = "provisioned-admin@example.test"
+    admin_password = "provisioned-admin-password"
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "https://osce.example",
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", admin_email)
+    auth_store = AuthStore(tmp_path / "auth.sqlite3")
+    auth_store.create_user(admin_email, admin_password, "生产管理员")
+    monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/auth/login",
+            headers={
+                "Origin": "https://osce.example",
+                "Sec-Fetch-Site": "same-origin",
+            },
+            json={"email": admin_email, "password": admin_password},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == admin_email
+    assert response.json()["user"]["is_admin"] is True
+    assert "secure" in response.headers["set-cookie"].lower()
 
 
 def test_startup_config_accepts_server_managed_openai_gateway_without_unused_gemini_env(monkeypatch) -> None:
@@ -147,6 +185,107 @@ def test_startup_config_rejects_invalid_trusted_browser_origins(monkeypatch) -> 
     assert payload["overall_status"] == "fail"
     assert issues["invalid_trusted_browser_origins"]["severity"] == "error"
     assert issues["invalid_trusted_browser_origins"]["missing_env"] == []
+
+
+def test_production_startup_requires_a_training_model_when_training_requires_one(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "https://osce.example",
+    )
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")
+    monkeypatch.setenv("OSCE_ANTHROPIC_ENABLED", "false")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+
+    payload = build_startup_config_self_check()
+
+    assert payload["overall_status"] == "fail"
+    assert "missing_training_model_provider" in {
+        issue["code"] for issue in payload["issues"]
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "provider_environment", "missing_model_name"),
+    [
+        (
+            "gemini_patient_api",
+            {
+                "OSCE_GEMINI_PATIENT_USE_VERTEX": "false",
+                "OSCE_GEMINI_PATIENT_API_KEY": "configured",
+                "OSCE_GEMINI_PATIENT_MODEL": "",
+            },
+            "OSCE_GEMINI_PATIENT_MODEL",
+        ),
+        (
+            "gemini_patient_vertex",
+            {
+                "OSCE_GEMINI_PATIENT_USE_VERTEX": "true",
+                "OSCE_GEMINI_PATIENT_PROJECT": "configured-project",
+                "OSCE_GEMINI_PATIENT_MODEL": "",
+                "OSCE_VERTEX_MODEL": "",
+            },
+            "OSCE_GEMINI_PATIENT_MODEL 或 OSCE_VERTEX_MODEL",
+        ),
+    ],
+)
+def test_production_startup_rejects_authenticated_provider_without_a_model(
+    provider_id,
+    provider_environment,
+    missing_model_name,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "https://osce.example",
+    )
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+    for name, value in provider_environment.items():
+        monkeypatch.setenv(name, value)
+
+    payload = build_startup_config_self_check()
+    provider = next(
+        item
+        for item in payload["providers"]
+        if item["provider_id"] == provider_id
+    )
+
+    assert provider["configured"] is False
+    assert provider["model"] == ""
+    assert missing_model_name in provider["missing_env"]
+    assert "missing_training_model_provider" in {
+        issue["code"] for issue in payload["issues"]
+    }
+
+
+def test_production_startup_allows_explicit_deterministic_training_mode(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "https://osce.example",
+    )
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "0")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "false")
+    monkeypatch.setenv("OSCE_ANTHROPIC_ENABLED", "false")
+    monkeypatch.setenv("OSCE_GEMINI_PATIENT_USE_VERTEX", "false")
+    monkeypatch.setenv("OSCE_CHROMA_ENABLED", "false")
+
+    payload = build_startup_config_self_check()
+
+    assert payload["overall_status"] == "ok"
+    assert "missing_training_model_provider" not in {
+        issue["code"] for issue in payload["issues"]
+    }
 
 
 def test_startup_config_rejects_demo_student_admin_email_overlap(
@@ -232,6 +371,387 @@ def test_public_health_is_redacted_and_detailed_config_requires_admin(
     assert "providers" in admin_detail_response.json()
 
 
+@pytest.mark.parametrize(
+    ("deployment_mode", "training_model_required"),
+    [
+        ("local-dev", "0"),
+        ("single-node-prod", "1"),
+    ],
+)
+def test_readiness_returns_200_for_valid_local_and_production_configuration(
+    deployment_mode,
+    training_model_required,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "readiness.sqlite3"
+
+    def initialize_database() -> None:
+        with sqlite3.connect(database_path) as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS readiness_probe (id INTEGER PRIMARY KEY)"
+            )
+
+    initialize_database()
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", deployment_mode)
+    monkeypatch.setenv(
+        "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING",
+        training_model_required,
+    )
+    if deployment_mode == "single-node-prod":
+        monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", "admin@example.test")
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+            "https://osce.example",
+        )
+        monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+        monkeypatch.setenv("OSCE_OPENAI_API_KEY", "configured")
+        monkeypatch.setenv("OSCE_OPENAI_MODEL", "configured-model")
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_production_admin_account_is_ready",
+        lambda: True,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "checks": {
+            "configuration": "ok",
+            "admin_account": "ok",
+            "persistence": "ok",
+            "startup_recovery": "ok",
+        },
+        "issues": [],
+    }
+
+
+def test_production_readiness_requires_a_provisioned_admin_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "readiness.sqlite3"
+
+    def initialize_database() -> None:
+        with sqlite3.connect(database_path) as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS readiness_probe (id INTEGER PRIMARY KEY)"
+            )
+
+    initialize_database()
+    auth_store = AuthStore(runtime_dir / "auth.sqlite3")
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+    admin_email = "admin@example.test"
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("CLINICAL_OSCE_ADMIN_EMAILS", admin_email)
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "https://osce.example",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "configured")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "configured-model")
+    monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+
+    with TestClient(main.app) as client:
+        before_provisioning = client.get("/ready")
+        auth_store.create_user(
+            admin_email,
+            "provisioned-admin-password",
+            "生产管理员",
+        )
+        after_provisioning = client.get("/ready")
+
+    assert before_provisioning.status_code == 503
+    assert before_provisioning.json()["checks"]["admin_account"] == "fail"
+    assert {"code": "admin_account_unavailable"} in (
+        before_provisioning.json()["issues"]
+    )
+    assert after_provisioning.status_code == 200
+    assert after_provisioning.json()["checks"]["admin_account"] == "ok"
+
+
+def test_liveness_stays_200_while_readiness_returns_redacted_503(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class _BrokenAuthStore:
+        @staticmethod
+        def get_user_by_session_token(_: str) -> None:
+            raise OSError("should-not-appear-auth-database")
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "broken.sqlite3"
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.delenv("CLINICAL_OSCE_ADMIN_EMAILS", raising=False)
+    monkeypatch.setenv(
+        "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS",
+        "http://private-control-plane.example/secret",
+    )
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "1")
+    monkeypatch.setattr(main, "auth_store", _BrokenAuthStore(), raising=False)
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_production_admin_account_is_ready",
+        lambda: True,
+    )
+
+    with TestClient(main.app) as client:
+        liveness_response = client.get("/health")
+        readiness_response = client.get("/ready")
+
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "ok"}
+    assert readiness_response.status_code == 503
+    assert readiness_response.json() == {
+        "status": "not_ready",
+        "checks": {
+            "configuration": "fail",
+            "admin_account": "ok",
+            "persistence": "fail",
+            "startup_recovery": "ok",
+        },
+        "issues": [
+            {"code": "startup_config_invalid"},
+            {"code": "persistence_unavailable"},
+        ],
+    }
+    assert "private-control-plane" not in readiness_response.text
+    assert "should-not-appear" not in readiness_response.text
+    assert str(tmp_path) not in readiness_response.text
+
+
+def test_readiness_does_not_create_a_missing_sqlite_database(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "missing.sqlite3"
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-dev")
+    monkeypatch.setenv("OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING", "0")
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_production_admin_account_is_ready",
+        lambda: True,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["persistence"] == "fail"
+    assert {"code": "persistence_unavailable"} in response.json()["issues"]
+    assert database_path.exists() is False
+
+
+def test_startup_persistence_initialization_runs_once_before_readiness_checks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "readiness.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE readiness_probe (id INTEGER PRIMARY KEY)"
+        )
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+    initialization_calls = 0
+
+    def initialize_persistence() -> None:
+        nonlocal initialization_calls
+        initialization_calls += 1
+
+    monkeypatch.setattr(
+        main.app.state,
+        "persistence_initialization_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_initialize_readiness_persistence",
+        initialize_persistence,
+    )
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_production_admin_account_is_ready",
+        lambda: True,
+    )
+
+    with TestClient(main.app) as client:
+        first_response = client.get("/ready")
+        second_response = client.get("/ready")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert initialization_calls == 1
+
+
+def test_failed_startup_persistence_initialization_keeps_liveness_available(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    database_path = runtime_dir / "readiness.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE readiness_probe (id INTEGER PRIMARY KEY)"
+        )
+    target = SQLiteReadinessTarget(
+        database_path=database_path,
+        required_tables=("readiness_probe",),
+    )
+
+    def fail_initialization() -> None:
+        raise OSError("private-persistence-path")
+
+    monkeypatch.setattr(
+        main.app.state,
+        "persistence_initialization_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_initialize_readiness_persistence",
+        fail_initialization,
+    )
+    monkeypatch.setattr(
+        main,
+        "_build_readiness_sqlite_targets",
+        lambda: (target,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_readiness_writable_directories",
+        lambda _: (runtime_dir,),
+    )
+    monkeypatch.setattr(
+        main,
+        "_production_admin_account_is_ready",
+        lambda: True,
+    )
+
+    with caplog.at_level("ERROR", logger="app.main"):
+        with TestClient(main.app) as client:
+            liveness_response = client.get("/health")
+            readiness_response = client.get("/ready")
+
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "ok"}
+    assert readiness_response.status_code == 503
+    assert readiness_response.json()["checks"]["persistence"] == "fail"
+    assert main.app.state.startup_persistence_ready is False
+    assert "startup persistence initialization failed (OSError)" in caplog.text
+    assert "private-persistence-path" not in caplog.text
+
+
+def test_failed_startup_recovery_keeps_liveness_available_and_marks_not_ready(
+    caplog,
+) -> None:
+    class _BrokenRecoveryService:
+        @staticmethod
+        def resume_pending_session_deletions() -> None:
+            raise OSError("private-database-path")
+
+    recovery_app = FastAPI(lifespan=main._app_lifespan)
+    recovery_app.state.session_deletion_recovery_service = (
+        _BrokenRecoveryService()
+    )
+    recovery_app.get("/health")(main.health_check)
+
+    with caplog.at_level("ERROR", logger="app.main"):
+        with TestClient(recovery_app) as client:
+            response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert recovery_app.state.startup_recovery_ready is False
+    assert "private-database-path" not in repr(vars(recovery_app.state))
+    assert "startup recovery failed (OSError)" in caplog.text
+    assert "private-database-path" not in caplog.text
+
+
 def test_runtime_model_config_not_exposed_in_production_ui(tmp_path, monkeypatch) -> None:
     runtime_model_config_store.clear()
     monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "vertex-prod")
@@ -276,7 +796,7 @@ def test_compose_health_path_remains_valid() -> None:
     web_healthcheck = web_service["healthcheck"]["test"]
     admin_healthcheck = admin_service["healthcheck"]["test"]
 
-    assert any("http://127.0.0.1:8000/health" in str(part) for part in api_healthcheck)
+    assert any("http://127.0.0.1:8000/ready" in str(part) for part in api_healthcheck)
     assert web_healthcheck[:2] == ["CMD", "node"]
     assert admin_healthcheck[:2] == ["CMD", "node"]
     assert any("http://127.0.0.1:3000/" in str(part) for part in web_healthcheck)

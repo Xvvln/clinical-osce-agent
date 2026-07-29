@@ -20,7 +20,10 @@ from app.services.retrieval_index import ROOT_DIR, get_chroma_source_documents
 from app.services.vertex_embedding_retriever import DEFAULT_VERTEX_EMBEDDING_MODEL
 
 
-def build_admin_model_config() -> dict[str, Any]:
+def build_admin_model_config(
+    *,
+    include_retrieval_manifest: bool = True,
+) -> dict[str, Any]:
     deployment_mode = get_deployment_mode()
     runtime_write_supported = is_runtime_model_config_write_supported(deployment_mode)
     return {
@@ -39,7 +42,9 @@ def build_admin_model_config() -> dict[str, Any]:
             _vertex_skill_candidate_config(),
             _vertex_embedding_retrieval_config(),
             _local_embedding_retrieval_config(),
-            _chroma_retrieval_config(),
+            _chroma_retrieval_config(
+                include_manifest=include_retrieval_manifest,
+            ),
             _dashscope_rerank_config(),
             _openai_compatible_config(),
             _anthropic_config(),
@@ -51,19 +56,33 @@ def _gemini_patient_api_config() -> dict[str, Any]:
     api_key_names = ["OSCE_GEMINI_PATIENT_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"]
     secret_configured = _has_any_env(api_key_names)
     use_vertex = _truthy_env("OSCE_GEMINI_PATIENT_USE_VERTEX")
-    configured = secret_configured and not use_vertex
+    model = _env("OSCE_GEMINI_PATIENT_MODEL", "gemini-3.1-pro-preview")
+    enabled = not use_vertex and secret_configured
+    configured = enabled and bool(model)
     return _provider_config(
         provider_id="gemini_patient_api",
         label="Gemini Developer API",
         capability="标准化病人自然语言改写、TeacherAgent 教学提示生成",
-        enabled=not use_vertex and secret_configured,
+        enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
         auth_mode="api_key",
-        model=_env("OSCE_GEMINI_PATIENT_MODEL", "gemini-3.1-pro-preview"),
+        model=model,
         proxy_url=_env("OSCE_GEMINI_PATIENT_PROXY_URL", "http://127.0.0.1:7897"),
-        required_env=["OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY"],
-        missing_env=[] if configured else ["OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY"],
+        required_env=[
+            "OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY",
+            "OSCE_GEMINI_PATIENT_MODEL",
+        ],
+        missing_env=[] if configured else _missing_when_enabled(
+            not use_vertex,
+            [
+                (
+                    "OSCE_GEMINI_PATIENT_API_KEY 或 GEMINI_API_KEY 或 GOOGLE_API_KEY",
+                    "configured" if secret_configured else "",
+                ),
+                ("OSCE_GEMINI_PATIENT_MODEL", model),
+            ],
+        ),
         integration_status="wired",
         notes="用于学生端问诊时把病例 canonical_answer 改写为标准化病人口吻，并生成受控 TeacherAgent 教学提示；密钥只从环境变量读取。",
     )
@@ -77,7 +96,7 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
     location = _env("OSCE_GEMINI_PATIENT_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = _env("OSCE_GEMINI_PATIENT_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
-    configured = enabled and (bool(project) or secret_configured)
+    configured = enabled and (bool(project) or secret_configured) and bool(model)
     return _provider_config(
         provider_id="gemini_patient_vertex",
         label="Vertex Gemini 标准化病人",
@@ -93,6 +112,7 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
         required_env=[
             "OSCE_GEMINI_PATIENT_USE_VERTEX=true",
             "OSCE_GEMINI_PATIENT_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_GEMINI_PATIENT_API_KEY/OSCE_VERTEX_API_KEY",
+            "OSCE_GEMINI_PATIENT_MODEL 或 OSCE_VERTEX_MODEL",
         ],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
@@ -100,7 +120,11 @@ def _gemini_patient_vertex_config() -> dict[str, Any]:
                 (
                     "OSCE_GEMINI_PATIENT_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_GEMINI_PATIENT_API_KEY/OSCE_VERTEX_API_KEY",
                     project or ("configured" if secret_configured else ""),
-                )
+                ),
+                (
+                    "OSCE_GEMINI_PATIENT_MODEL 或 OSCE_VERTEX_MODEL",
+                    model,
+                ),
             ],
         ),
         integration_status="wired",
@@ -116,7 +140,7 @@ def _vertex_rubric_scorer_config() -> dict[str, Any]:
     location = _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
-    configured = enabled and (bool(project) or secret_configured)
+    configured = enabled and (bool(project) or secret_configured) and bool(model)
     return _provider_config(
         provider_id="vertex_rubric_scorer",
         label="Vertex Gemini LLM 评分",
@@ -129,10 +153,20 @@ def _vertex_rubric_scorer_config() -> dict[str, Any]:
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_ENABLED=true", "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"],
+        required_env=[
+            "OSCE_VERTEX_ENABLED=true",
+            "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY",
+            "OSCE_VERTEX_MODEL",
+        ],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
-            [("OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
+            [
+                (
+                    "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY",
+                    project or ("configured" if secret_configured else ""),
+                ),
+                ("OSCE_VERTEX_MODEL", model),
+            ],
         ),
         integration_status="wired",
         notes="只参与 rubric 中 llm_rubric 项的语义评分；可用 ADC 或 Vertex Express/API Key，规则评分仍由后端确定性执行。",
@@ -147,7 +181,7 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
     location = _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
-    configured = enabled and (bool(project) or secret_configured)
+    configured = enabled and (bool(project) or secret_configured) and bool(model)
     return _provider_config(
         provider_id="vertex_skill_candidate",
         label="Vertex Gemini Skill 候选生成",
@@ -160,10 +194,20 @@ def _vertex_skill_candidate_config() -> dict[str, Any]:
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=true", "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"],
+        required_env=[
+            "OSCE_VERTEX_SKILL_CANDIDATE_ENABLED=true",
+            "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY",
+            "OSCE_VERTEX_SKILL_CANDIDATE_MODEL",
+        ],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
-            [("OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
+            [
+                (
+                    "OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY",
+                    project or ("configured" if secret_configured else ""),
+                ),
+                ("OSCE_VERTEX_SKILL_CANDIDATE_MODEL", model),
+            ],
         ),
         integration_status="wired",
         notes="LLM 只生成标题、说明和教学策略；candidate_id、pattern_id 和漏项聚合仍由后端确定性生成。",
@@ -178,7 +222,7 @@ def _vertex_embedding_retrieval_config() -> dict[str, Any]:
     location = _env("OSCE_VERTEX_EMBEDDING_LOCATION") or _env("OSCE_VERTEX_LOCATION", "global")
     proxy_url = _env("OSCE_VERTEX_EMBEDDING_PROXY_URL") or _env("OSCE_VERTEX_PROXY_URL", "http://127.0.0.1:7897")
     secret_configured = bool(vertex_api_key)
-    configured = enabled and bool(project or secret_configured)
+    configured = enabled and bool(project or secret_configured) and bool(model)
     return _provider_config(
         provider_id="vertex_embedding_retrieval",
         label="Vertex Gemini RAG 向量检索",
@@ -191,17 +235,29 @@ def _vertex_embedding_retrieval_config() -> dict[str, Any]:
         project=project,
         location=location,
         proxy_url=proxy_url,
-        required_env=["OSCE_VERTEX_EMBEDDING_ENABLED=true + OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY"],
+        required_env=[
+            "OSCE_VERTEX_EMBEDDING_ENABLED=true + OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY",
+            "OSCE_VERTEX_EMBEDDING_MODEL",
+        ],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
-            [("OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY", project or ("configured" if secret_configured else ""))],
+            [
+                (
+                    "OSCE_VERTEX_EMBEDDING_PROJECT/OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_EMBEDDING_API_KEY/OSCE_VERTEX_API_KEY",
+                    project or ("configured" if secret_configured else ""),
+                ),
+                ("OSCE_VERTEX_EMBEDDING_MODEL", model),
+            ],
         ),
         integration_status="wired_optional",
         notes="只用于 RAG 来源片段相似度召回；不参与标准诊断、rubric、评分裁判或病例隐藏信息决策。",
     )
 
 
-def _chroma_retrieval_config() -> dict[str, Any]:
+def _chroma_retrieval_config(
+    *,
+    include_manifest: bool,
+) -> dict[str, Any]:
     embedding_configured = _embedding_retrieval_available()
     enabled = _chroma_enabled(embedding_configured=embedding_configured)
     persist_directory = _env("CHROMA_PERSIST_DIRECTORY", "./data/processed/chroma")
@@ -211,7 +267,11 @@ def _chroma_retrieval_config() -> dict[str, Any]:
         root_dir=ROOT_DIR,
         embedding_model=_configured_embedding_model_name(),
     )
-    index_manifest = _chroma_index_manifest_status(settings=settings)
+    index_manifest = (
+        _chroma_index_manifest_status(settings=settings)
+        if include_manifest
+        else {}
+    )
     return _provider_config(
         provider_id="chroma_retrieval",
         label="ChromaDB RAG 持久向量库",
@@ -280,7 +340,17 @@ def _dashscope_rerank_config() -> dict[str, Any]:
 def _vertex_embedding_retrieval_available() -> bool:
     if not _truthy_env("OSCE_VERTEX_EMBEDDING_ENABLED"):
         return False
-    return bool(_env("OSCE_VERTEX_EMBEDDING_PROJECT") or _env("OSCE_VERTEX_PROJECT") or _env("OSCE_VERTEX_EMBEDDING_API_KEY") or _env("OSCE_VERTEX_API_KEY"))
+    has_auth = bool(
+        _env("OSCE_VERTEX_EMBEDDING_PROJECT")
+        or _env("OSCE_VERTEX_PROJECT")
+        or _env("OSCE_VERTEX_EMBEDDING_API_KEY")
+        or _env("OSCE_VERTEX_API_KEY")
+    )
+    model = _env(
+        "OSCE_VERTEX_EMBEDDING_MODEL",
+        DEFAULT_VERTEX_EMBEDDING_MODEL,
+    )
+    return has_auth and bool(model)
 
 
 def _local_embedding_retrieval_config() -> dict[str, Any]:

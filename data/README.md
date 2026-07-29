@@ -185,7 +185,9 @@ API 镜像只复制运行所需的公开静态资产：
 - `rag_knowledge/`
 - `humanistic_anchor_bank.yaml`
 
-`raw/`、`processed/` 和 `runtime/` 不会被烘焙进镜像。本地环境示例仍可把 Chroma 索引写入 `./data/processed/chroma`；Docker Compose 则显式将 Chroma 索引、Hugging Face 缓存和 FastEmbed 缓存改到 `/app/data/runtime/*`，并把宿主机 `./data/runtime` 挂载到该目录。因此在 Compose 部署中，训练记录、账号库、日志、上传文档、向量索引与模型缓存都属于挂载卷中的运行状态，应单独备份和控制访问。
+`raw/`、`processed/` 和 `runtime/` 不会被烘焙进镜像。本地环境示例仍可把 Chroma 索引写入 `./data/processed/chroma`；Docker Compose 则显式将 Chroma 索引、Hugging Face 缓存和 FastEmbed 缓存改到 `/app/data/runtime/*`，并继续把宿主机 `./data/runtime` 绑定挂载到该目录。因此 Compose 升级会直接复用现有训练记录、账号库、日志、上传文档、向量索引与模型缓存，不会把它们静默迁移到空命名卷；该目录应单独备份和控制访问。
+
+Compose 另用 `api_cases` 和 `api_rubrics` 命名卷持久化管理端对病例及评分量表的写入。空卷首次挂载时会复制镜像中对应目录的内置种子，避免卷遮蔽镜像数据后出现空病例库；卷建立后，镜像升级不会自动覆盖教师已修改的内容。`docker compose down -v` 会删除这两个命名卷，但不会删除 bind mount 指向的宿主机 `data/runtime`；该命令仍不应用作普通重启命令。
 
 ## Git 与合规注意事项
 

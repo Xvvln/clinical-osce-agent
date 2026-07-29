@@ -17,9 +17,12 @@ COPY apps/admin/package.json apps/admin/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY apps/admin ./
-RUN pnpm build
+RUN pnpm build \
+    && chown -R node:node /app/apps/admin/.next
 
 ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["pnpm", "start", "--hostname", "0.0.0.0", "--port", "3000"]
+USER node
+
+CMD ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]

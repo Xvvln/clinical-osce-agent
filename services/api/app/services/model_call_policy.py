@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from contextvars import Context, ContextVar, Token, copy_context
@@ -264,6 +265,29 @@ def run_model_provider_call(
     )
 
 
+async def run_async_model_provider_call(
+    call: Callable[[], Awaitable[CallResultT]],
+    *,
+    timeout_seconds: float | None = None,
+) -> CallResultT:
+    """Run one native async provider call within the shared request deadline."""
+
+    timeout = _remaining_model_call_seconds(
+        MODEL_CALL_TIMEOUT_SECONDS
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            return await call()
+    except ModelProviderTimeoutError:
+        raise
+    except TimeoutError as exc:
+        raise ModelProviderTimeoutError(
+            "model provider call exceeded its total time budget"
+        ) from exc
+
+
 def set_model_call_deadline(
     timeout_seconds: float | None = None,
 ) -> Token[float | None]:
@@ -378,6 +402,7 @@ __all__ = [
     "model_call_budget",
     "model_request_admission_gate",
     "reset_model_call_deadline",
+    "run_async_model_provider_call",
     "run_model_provider_call",
     "set_model_call_deadline",
 ]

@@ -17,6 +17,12 @@ def clear_runtime_model_config_store(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         False,
         raising=False,
     )
+    monkeypatch.setattr(
+        main.app.state,
+        "persistence_initialization_enabled",
+        False,
+        raising=False,
+    )
     monkeypatch.setattr(main, "user_model_config_store", test_user_model_config_store)
     monkeypatch.setattr(main, "training_skill_candidate_store", test_skill_candidate_store, raising=False)
     monkeypatch.setattr(osce_session_service, "training_skill_candidate_store", test_skill_candidate_store, raising=False)

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.model_call_policy import (
+    ModelProviderTimeoutError,
+    run_async_model_provider_call,
+)
 
 DEFAULT_DASHSCOPE_ASR_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_DASHSCOPE_TTS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
@@ -18,6 +24,7 @@ DEFAULT_DASHSCOPE_TTS_MODEL = "qwen3-tts-flash"
 DEFAULT_DASHSCOPE_TTS_VOICE = "Serena"
 DEFAULT_DASHSCOPE_SPEECH_TIMEOUT_SECONDS = 60.0
 MAX_DASHSCOPE_TTS_INSTRUCTIONS_LENGTH = 1000
+DASHSCOPE_TRUSTED_AUDIO_HOST_SUFFIX = ".aliyuncs.com"
 
 MIME_FORMAT_MAP = {
     "audio/webm": "webm",
@@ -130,16 +137,63 @@ class DashScopeSpeechService:
         }
 
         started_at = time.perf_counter()
-        try:
-            async with httpx.AsyncClient(**self._client_options()) as client:
-                response = await client.post(self._settings.asr_endpoint, headers=self._headers(), json=payload)
-            response.raise_for_status()
-            result = _parse_transcription_response(response.json(), model=self._settings.asr_model)
-        except Exception as exc:
-            self._record_call("transcribe", self._settings.asr_model, self._settings.asr_endpoint, started_at, False, exc)
-            raise DashScopeSpeechServiceError(f"DashScope ASR 调用失败：{_format_error(exc)}") from exc
 
-        self._record_call("transcribe", self._settings.asr_model, self._settings.asr_endpoint, started_at, True, status_code=response.status_code)
+        async def send_request() -> tuple[Any, SpeechTranscriptionResult]:
+            async with httpx.AsyncClient(**self._client_options()) as client:
+                response = await client.post(
+                    self._settings.asr_endpoint,
+                    headers=self._headers(),
+                    json=payload,
+                )
+            response.raise_for_status()
+            return response, _parse_transcription_response(
+                response.json(),
+                model=self._settings.asr_model,
+            )
+
+        try:
+            response, result = await run_async_model_provider_call(
+                send_request,
+                timeout_seconds=self._settings.timeout_seconds,
+            )
+        except ModelProviderTimeoutError as exc:
+            self._record_failure(
+                "transcribe",
+                self._settings.asr_model,
+                self._settings.asr_endpoint,
+                started_at,
+                exc,
+            )
+            raise
+        except httpx.TimeoutException as exc:
+            self._record_failure(
+                "transcribe",
+                self._settings.asr_model,
+                self._settings.asr_endpoint,
+                started_at,
+                exc,
+            )
+            raise ModelProviderTimeoutError(
+                "DashScope ASR exceeded its total time budget"
+            ) from exc
+        except Exception as exc:
+            self._record_failure(
+                "transcribe",
+                self._settings.asr_model,
+                self._settings.asr_endpoint,
+                started_at,
+                exc,
+            )
+            raise DashScopeSpeechServiceError("DashScope ASR 调用失败。") from exc
+
+        self._record_call(
+            "transcribe",
+            self._settings.asr_model,
+            self._settings.asr_endpoint,
+            started_at,
+            True,
+            status_code=response.status_code,
+        )
         return result
 
     async def synthesize(
@@ -171,17 +225,68 @@ class DashScopeSpeechService:
             payload["input"]["optimize_instructions"] = optimize_instructions
 
         started_at = time.perf_counter()
-        try:
+
+        async def send_request() -> tuple[Any, dict[str, Any], bytes, str]:
             async with httpx.AsyncClient(**self._client_options()) as client:
-                response = await client.post(self._settings.tts_endpoint, headers=self._headers(), json=payload)
+                response = await client.post(
+                    self._settings.tts_endpoint,
+                    headers=self._headers(),
+                    json=payload,
+                )
                 response.raise_for_status()
                 data = response.json()
-                audio_bytes, mime_type = await _resolve_tts_audio(client, data)
-        except Exception as exc:
-            self._record_call("synthesize", selected_model, self._settings.tts_endpoint, started_at, False, exc)
-            raise DashScopeSpeechServiceError(f"DashScope TTS 调用失败：{_format_error(exc)}") from exc
+                audio_bytes, mime_type = await _resolve_tts_audio(
+                    client,
+                    data,
+                    tts_endpoint=self._settings.tts_endpoint,
+                )
+            return response, data, audio_bytes, mime_type
 
-        self._record_call("synthesize", selected_model, self._settings.tts_endpoint, started_at, True, status_code=response.status_code)
+        try:
+            response, data, audio_bytes, mime_type = (
+                await run_async_model_provider_call(
+                    send_request,
+                    timeout_seconds=self._settings.timeout_seconds,
+                )
+            )
+        except ModelProviderTimeoutError as exc:
+            self._record_failure(
+                "synthesize",
+                selected_model,
+                self._settings.tts_endpoint,
+                started_at,
+                exc,
+            )
+            raise
+        except httpx.TimeoutException as exc:
+            self._record_failure(
+                "synthesize",
+                selected_model,
+                self._settings.tts_endpoint,
+                started_at,
+                exc,
+            )
+            raise ModelProviderTimeoutError(
+                "DashScope TTS exceeded its total time budget"
+            ) from exc
+        except Exception as exc:
+            self._record_failure(
+                "synthesize",
+                selected_model,
+                self._settings.tts_endpoint,
+                started_at,
+                exc,
+            )
+            raise DashScopeSpeechServiceError("DashScope TTS 调用失败。") from exc
+
+        self._record_call(
+            "synthesize",
+            selected_model,
+            self._settings.tts_endpoint,
+            started_at,
+            True,
+            status_code=response.status_code,
+        )
         return SpeechSynthesisResult(
             audio_bytes=audio_bytes,
             mime_type=mime_type,
@@ -226,6 +331,38 @@ class DashScopeSpeechService:
             duration_ms=(time.perf_counter() - started_at) * 1000,
             status_code=status_code,
             error=error,
+        )
+
+    def _record_failure(
+        self,
+        operation: str,
+        model: str,
+        endpoint: str,
+        started_at: float,
+        error: Exception,
+    ) -> None:
+        status_code = (
+            error.response.status_code
+            if isinstance(error, httpx.HTTPStatusError)
+            else None
+        )
+        safe_error: Exception
+        if isinstance(error, (ModelProviderTimeoutError, httpx.TimeoutException)):
+            safe_error = ModelProviderTimeoutError(
+                "speech provider call exceeded its time budget"
+            )
+        else:
+            safe_error = DashScopeSpeechServiceError(
+                "speech provider call failed"
+            )
+        self._record_call(
+            operation,
+            model,
+            endpoint,
+            started_at,
+            False,
+            safe_error,
+            status_code=status_code,
         )
 
 
@@ -273,7 +410,12 @@ def _parse_transcription_response(payload: dict[str, Any], *, model: str) -> Spe
     )
 
 
-async def _resolve_tts_audio(client: httpx.AsyncClient, payload: dict[str, Any]) -> tuple[bytes, str]:
+async def _resolve_tts_audio(
+    client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    *,
+    tts_endpoint: str,
+) -> tuple[bytes, str]:
     audio = payload.get("output", {}).get("audio") if isinstance(payload.get("output"), dict) else None
     if not isinstance(audio, dict):
         raise RuntimeError("DashScope TTS response missing output.audio")
@@ -288,13 +430,63 @@ async def _resolve_tts_audio(client: httpx.AsyncClient, payload: dict[str, Any])
     audio_url = audio.get("url")
     if not isinstance(audio_url, str) or not audio_url:
         raise RuntimeError("DashScope TTS response missing audio url")
-    if audio_url.startswith("http://"):
-        audio_url = "https://" + audio_url[len("http://") :]
+    audio_url = _validated_tts_audio_url(
+        audio_url,
+        tts_endpoint=tts_endpoint,
+    )
 
     response = await client.get(audio_url)
     response.raise_for_status()
     mime_type = response.headers.get("content-type", "audio/wav").split(";")[0].strip() or "audio/wav"
     return response.content, mime_type
+
+
+def _validated_tts_audio_url(audio_url: str, *, tts_endpoint: str) -> str:
+    normalized_url = audio_url.strip()
+    try:
+        parsed = urlsplit(normalized_url)
+        endpoint_host = _normalized_url_hostname(urlsplit(tts_endpoint))
+        audio_host = _normalized_url_hostname(parsed)
+    except ValueError as exc:
+        raise RuntimeError("DashScope TTS response contains an invalid audio url") from exc
+
+    if (
+        parsed.scheme.lower() != "https"
+        or not audio_host
+        or parsed.username is not None
+        or parsed.password is not None
+        or _is_unsafe_audio_host(audio_host)
+    ):
+        raise RuntimeError("DashScope TTS response contains an untrusted audio url")
+
+    trusted_host = (
+        audio_host == endpoint_host
+        or audio_host == DASHSCOPE_TRUSTED_AUDIO_HOST_SUFFIX.removeprefix(".")
+        or audio_host.endswith(DASHSCOPE_TRUSTED_AUDIO_HOST_SUFFIX)
+    )
+    if not trusted_host:
+        raise RuntimeError("DashScope TTS response contains an untrusted audio url")
+    return normalized_url
+
+
+def _normalized_url_hostname(parsed_url: SplitResult) -> str:
+    hostname = str(parsed_url.hostname or "").strip().rstrip(".").lower()
+    if not hostname:
+        return ""
+    try:
+        return hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+
+
+def _is_unsafe_audio_host(hostname: str) -> bool:
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return not address.is_global
 
 
 def _audio_format(mime_type: str | None, filename: str | None) -> str:
@@ -309,19 +501,6 @@ def _audio_format(mime_type: str | None, filename: str | None) -> str:
 
 def _audio_mime(audio_format: str) -> str:
     return FORMAT_MIME_MAP.get(audio_format, "audio/webm")
-
-
-def _format_error(error: Exception) -> str:
-    if isinstance(error, httpx.HTTPStatusError):
-        try:
-            payload = error.response.json()
-        except ValueError:
-            return error.response.text
-        detail = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(detail, dict):
-            return str(detail.get("message") or detail)
-        return str(payload)
-    return str(error)
 
 
 def _env(name: str, default: str = "") -> str:

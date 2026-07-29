@@ -1,7 +1,22 @@
 name: clinical-osce-agent
 
+x-runtime-hardening: &runtime-hardening
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   api:
+    <<: *runtime-hardening
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -20,12 +35,34 @@ services:
       CLINICAL_OSCE_DEMO_STUDENT_ENABLED: ${CLINICAL_OSCE_DEMO_STUDENT_ENABLED:-false}
       CLINICAL_OSCE_DEMO_STUDENT_EMAIL: ${CLINICAL_OSCE_DEMO_STUDENT_EMAIL:-}
       CLINICAL_OSCE_DEMO_STUDENT_PASSWORD: ${CLINICAL_OSCE_DEMO_STUDENT_PASSWORD:-}
+      OSCE_ANTHROPIC_ENABLED: ${OSCE_ANTHROPIC_ENABLED:-false}
+      OSCE_ANTHROPIC_API_KEY: ${OSCE_ANTHROPIC_API_KEY:-}
+      OSCE_ANTHROPIC_BASE_URL: ${OSCE_ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      OSCE_ANTHROPIC_MODEL: ${OSCE_ANTHROPIC_MODEL:-}
+      OSCE_ANTHROPIC_PROXY_URL: ${OSCE_ANTHROPIC_PROXY_URL:-direct}
       OSCE_GEMINI_PATIENT_USE_VERTEX: ${OSCE_GEMINI_PATIENT_USE_VERTEX:-false}
       OSCE_GEMINI_PATIENT_API_KEY: ${OSCE_GEMINI_PATIENT_API_KEY:-}
-      OSCE_GEMINI_PATIENT_MODEL: ${OSCE_GEMINI_PATIENT_MODEL:-}
+      OSCE_GEMINI_PATIENT_PROJECT: ${OSCE_GEMINI_PATIENT_PROJECT:-}
+      OSCE_GEMINI_PATIENT_LOCATION: ${OSCE_GEMINI_PATIENT_LOCATION:-global}
+      OSCE_GEMINI_PATIENT_MODEL: ${OSCE_GEMINI_PATIENT_MODEL:-gemini-3.5-flash}
       OSCE_GEMINI_PATIENT_PROXY_URL: ${OSCE_GEMINI_PATIENT_PROXY_URL:-}
       OSCE_VERTEX_ENABLED: ${OSCE_VERTEX_ENABLED:-false}
+      OSCE_VERTEX_API_KEY: ${OSCE_VERTEX_API_KEY:-}
+      OSCE_VERTEX_PROJECT: ${OSCE_VERTEX_PROJECT:-}
+      OSCE_VERTEX_LOCATION: ${OSCE_VERTEX_LOCATION:-global}
+      OSCE_VERTEX_MODEL: ${OSCE_VERTEX_MODEL:-gemini-3.5-flash}
+      OSCE_VERTEX_PROXY_URL: ${OSCE_VERTEX_PROXY_URL:-}
       OSCE_VERTEX_SKILL_CANDIDATE_ENABLED: ${OSCE_VERTEX_SKILL_CANDIDATE_ENABLED:-false}
+      OSCE_VERTEX_SKILL_CANDIDATE_MODEL: ${OSCE_VERTEX_SKILL_CANDIDATE_MODEL:-gemini-3.5-flash}
+      OSCE_VERTEX_EMBEDDING_ENABLED: ${OSCE_VERTEX_EMBEDDING_ENABLED:-false}
+      OSCE_VERTEX_EMBEDDING_API_KEY: ${OSCE_VERTEX_EMBEDDING_API_KEY:-}
+      OSCE_VERTEX_EMBEDDING_PROJECT: ${OSCE_VERTEX_EMBEDDING_PROJECT:-}
+      OSCE_VERTEX_EMBEDDING_LOCATION: ${OSCE_VERTEX_EMBEDDING_LOCATION:-global}
+      OSCE_VERTEX_EMBEDDING_MODEL: ${OSCE_VERTEX_EMBEDDING_MODEL:-gemini-embedding-001}
+      OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY: ${OSCE_VERTEX_EMBEDDING_OUTPUT_DIMENSIONALITY:-3072}
+      OSCE_VERTEX_EMBEDDING_PROXY_URL: ${OSCE_VERTEX_EMBEDDING_PROXY_URL:-}
+      OSCE_VERTEX_EMBEDDING_BATCH_SIZE: ${OSCE_VERTEX_EMBEDDING_BATCH_SIZE:-32}
+      OSCE_VERTEX_EMBEDDING_BATCH_MAX_BYTES: ${OSCE_VERTEX_EMBEDDING_BATCH_MAX_BYTES:-65536}
       OSCE_OPENAI_ENABLED: ${OSCE_OPENAI_ENABLED:-false}
       OSCE_OPENAI_API_KEY: ${OSCE_OPENAI_API_KEY:-}
       OSCE_OPENAI_BASE_URL: ${OSCE_OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -36,30 +73,74 @@ services:
       OSCE_OPENAI_FALLBACK_BASE_URL: ${OSCE_OPENAI_FALLBACK_BASE_URL:-}
       OSCE_OPENAI_FALLBACK_MODEL: ${OSCE_OPENAI_FALLBACK_MODEL:-}
       OSCE_OPENAI_FALLBACK_PROXY_URL: ${OSCE_OPENAI_FALLBACK_PROXY_URL:-}
+      OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER: ${OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER:-false}
+      OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING: ${OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING:-true}
+      OSCE_MODEL_CALL_TIMEOUT_SECONDS: ${OSCE_MODEL_CALL_TIMEOUT_SECONDS:-30}
+      OSCE_MODEL_CALL_MAX_CONCURRENCY: ${OSCE_MODEL_CALL_MAX_CONCURRENCY:-8}
       OSCE_LOCAL_EMBEDDING_ENABLED: ${OSCE_LOCAL_EMBEDDING_ENABLED:-true}
       OSCE_LOCAL_EMBEDDING_MODEL: ${OSCE_LOCAL_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
       OSCE_LOCAL_EMBEDDING_DEVICE: ${OSCE_LOCAL_EMBEDDING_DEVICE:-cpu}
-      OSCE_LOCAL_EMBEDDING_CACHE_FOLDER: ${OSCE_LOCAL_EMBEDDING_CACHE_FOLDER:-/app/data/runtime/fastembed}
+      OSCE_LOCAL_EMBEDDING_CACHE_FOLDER: /app/data/runtime/fastembed
       OSCE_LOCAL_EMBEDDING_BATCH_SIZE: ${OSCE_LOCAL_EMBEDDING_BATCH_SIZE:-16}
+      OSCE_LOCAL_EMBEDDING_TIMEOUT_SECONDS: ${OSCE_LOCAL_EMBEDDING_TIMEOUT_SECONDS:-120}
+      OSCE_LOCAL_EMBEDDING_MAX_CONCURRENCY: ${OSCE_LOCAL_EMBEDDING_MAX_CONCURRENCY:-1}
       OSCE_CHROMA_ENABLED: ${OSCE_CHROMA_ENABLED:-true}
-      CHROMA_PERSIST_DIRECTORY: ${CHROMA_PERSIST_DIRECTORY:-/app/data/runtime/chroma}
+      CHROMA_PERSIST_DIRECTORY: /app/data/runtime/chroma
       OSCE_CHROMA_COLLECTION: ${OSCE_CHROMA_COLLECTION:-clinical_osce_retrieval}
       OSCE_CHROMA_SEARCH_EF: ${OSCE_CHROMA_SEARCH_EF:-500}
-      HF_HOME: ${HF_HOME:-/app/data/runtime/huggingface}
-      FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/app/data/runtime/fastembed}
+      OSCE_DASHSCOPE_RERANK_ENABLED: ${OSCE_DASHSCOPE_RERANK_ENABLED:-false}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      OSCE_DASHSCOPE_RERANK_API_KEY: ${OSCE_DASHSCOPE_RERANK_API_KEY:-}
+      OSCE_DASHSCOPE_RERANK_BASE_URL: ${OSCE_DASHSCOPE_RERANK_BASE_URL:-https://dashscope.aliyuncs.com/compatible-api/v1}
+      OSCE_DASHSCOPE_RERANK_MODEL: ${OSCE_DASHSCOPE_RERANK_MODEL:-qwen3-rerank}
+      OSCE_DASHSCOPE_RERANK_TOP_K: ${OSCE_DASHSCOPE_RERANK_TOP_K:-5}
+      OSCE_DASHSCOPE_RERANK_CANDIDATE_K: ${OSCE_DASHSCOPE_RERANK_CANDIDATE_K:-30}
+      OSCE_DASHSCOPE_RERANK_INSTRUCT: ${OSCE_DASHSCOPE_RERANK_INSTRUCT:-Retrieve semantically similar text.}
+      OSCE_DASHSCOPE_RERANK_PROXY_URL: ${OSCE_DASHSCOPE_RERANK_PROXY_URL:-direct}
+      OSCE_DASHSCOPE_RERANK_TIMEOUT_SECONDS: ${OSCE_DASHSCOPE_RERANK_TIMEOUT_SECONDS:-15}
+      OSCE_DASHSCOPE_SPEECH_API_KEY: ${OSCE_DASHSCOPE_SPEECH_API_KEY:-}
+      OSCE_DASHSCOPE_ASR_ENDPOINT: ${OSCE_DASHSCOPE_ASR_ENDPOINT:-https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
+      OSCE_DASHSCOPE_TTS_ENDPOINT: ${OSCE_DASHSCOPE_TTS_ENDPOINT:-https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation}
+      OSCE_DASHSCOPE_ASR_MODEL: ${OSCE_DASHSCOPE_ASR_MODEL:-qwen3-asr-flash}
+      OSCE_DASHSCOPE_TTS_MODEL: ${OSCE_DASHSCOPE_TTS_MODEL:-qwen3-tts-flash}
+      OSCE_DASHSCOPE_TTS_VOICE: ${OSCE_DASHSCOPE_TTS_VOICE:-Serena}
+      OSCE_DASHSCOPE_SPEECH_PROXY_URL: ${OSCE_DASHSCOPE_SPEECH_PROXY_URL:-direct}
+      OSCE_DASHSCOPE_SPEECH_TIMEOUT_SECONDS: ${OSCE_DASHSCOPE_SPEECH_TIMEOUT_SECONDS:-60}
+      HF_HOME: /app/data/runtime/huggingface
+      FASTEMBED_CACHE_PATH: /app/data/runtime/fastembed
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
     ports:
       - "${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:8000:8000"
     volumes:
-      - ./data/runtime:/app/data/runtime
+      - type: bind
+        source: ./data/runtime
+        target: /app/data/runtime
+        bind:
+          create_host_path: false
+      - type: volume
+        source: api_cases
+        target: /app/data/cases
+        volume:
+          nocopy: false
+      - type: volume
+        source: api_rubrics
+        target: /app/data/rubrics
+        volume:
+          nocopy: false
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cpus: "${CLINICAL_OSCE_API_CPUS:-4.0}"
+    mem_limit: ${CLINICAL_OSCE_API_MEMORY_LIMIT:-4g}
+    pids_limit: ${CLINICAL_OSCE_API_PIDS_LIMIT:-256}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready').read()"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
 
   web:
+    <<: *runtime-hardening
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -72,6 +153,12 @@ services:
       NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: ${NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE:-local-demo}
     ports:
       - "${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3000:3000"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/apps/web/.next/cache:size=64m,uid=1000,gid=1000,mode=0700
+    cpus: "${CLINICAL_OSCE_WEB_CPUS:-1.0}"
+    mem_limit: ${CLINICAL_OSCE_WEB_MEMORY_LIMIT:-768m}
+    pids_limit: ${CLINICAL_OSCE_WEB_PIDS_LIMIT:-128}
     depends_on:
       api:
         condition: service_healthy
@@ -89,6 +176,7 @@ services:
       start_period: 20s
 
   admin:
+    <<: *runtime-hardening
     build:
       context: .
       dockerfile: apps/admin/Dockerfile
@@ -99,6 +187,12 @@ services:
       CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
     ports:
       - "${CLINICAL_OSCE_BIND_HOST:-127.0.0.1}:3001:3000"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/apps/admin/.next/cache:size=64m,uid=1000,gid=1000,mode=0700
+    cpus: "${CLINICAL_OSCE_ADMIN_CPUS:-1.0}"
+    mem_limit: ${CLINICAL_OSCE_ADMIN_MEMORY_LIMIT:-768m}
+    pids_limit: ${CLINICAL_OSCE_ADMIN_PIDS_LIMIT:-128}
     depends_on:
       api:
         condition: service_healthy
@@ -114,3 +208,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+volumes:
+  api_cases:
+  api_rubrics:

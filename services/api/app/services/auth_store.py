@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,40 @@ class AuthStore:
         if not secrets.compare_digest(password_hash, row[3]):
             return None
         return _user_from_row(row)
+
+    def get_user_by_email(self, email: str) -> dict[str, str] | None:
+        self._initialize()
+        with sqlite3.connect(self.database_path) as connection:
+            row = connection.execute(
+                """
+                SELECT user_id, email, display_name, password_hash, password_salt, created_at
+                FROM users
+                WHERE email = ?
+                """,
+                (_normalize_email(email),),
+            ).fetchone()
+        return None if row is None else _user_from_row(row)
+
+    def has_any_user(self, emails: Iterable[str]) -> bool:
+        normalized_emails = {
+            _normalize_email(email)
+            for email in emails
+            if _normalize_email(email)
+        }
+        if not normalized_emails:
+            return False
+        if not self.database_path.is_file():
+            return False
+        database_uri = f"{self.database_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(database_uri, uri=True) as connection:
+            return any(
+                connection.execute(
+                    "SELECT 1 FROM users WHERE email = ?",
+                    (email,),
+                ).fetchone()
+                is not None
+                for email in normalized_emails
+            )
 
     def create_session(self, user_id: str) -> str:
         self._initialize()

@@ -10,7 +10,16 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.services.auth_store import AuthStore
-from app.services.dashscope_speech_service import SpeechSynthesisResult, SpeechTranscriptionResult
+from app.services.dashscope_speech_service import (
+    DashScopeSpeechServiceError,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
+from app.services.model_call_policy import (
+    MODEL_CALL_DEADLINE,
+    ModelProviderTimeoutError,
+    ModelRequestAdmissionGate,
+)
 
 
 @pytest.fixture
@@ -30,6 +39,72 @@ def test_transcription_requires_authenticated_user() -> None:
         )
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/audio/transcriptions", "/api/audio/speech"],
+)
+def test_audio_provider_admission_rejects_before_body_parsing_when_full(
+    path: str,
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = ModelRequestAdmissionGate(max_concurrency=1)
+    assert gate.try_acquire()
+    monkeypatch.setattr(main, "model_request_admission_gate", gate)
+
+    try:
+        response = authenticated_client.post(
+            path,
+            content=b"{invalid request body",
+            headers={"content-type": "application/json"},
+        )
+    finally:
+        gate.release()
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == {"detail": main.MODEL_PROVIDER_BUSY_DETAIL}
+    assert gate.active == 0
+
+
+def test_audio_provider_admission_sets_deadline_and_releases_after_response(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = ModelRequestAdmissionGate(max_concurrency=1)
+    observed: dict[str, object] = {}
+
+    class InspectingSpeechService:
+        async def synthesize(self, *args, **kwargs) -> SpeechSynthesisResult:
+            observed["gate_active"] = gate.active
+            observed["deadline"] = MODEL_CALL_DEADLINE.get()
+            return SpeechSynthesisResult(
+                audio_bytes=b"RIFFdeadline",
+                mime_type="audio/wav",
+                provider="dashscope",
+                model="qwen3-tts-flash",
+                voice="Serena",
+            )
+
+    monkeypatch.setattr(main, "model_request_admission_gate", gate)
+    monkeypatch.setattr(
+        main,
+        "build_dashscope_speech_service_from_environment",
+        lambda: InspectingSpeechService(),
+    )
+
+    response = authenticated_client.post(
+        "/api/audio/speech",
+        json={"input": "检查共享时限。"},
+    )
+
+    assert response.status_code == 200
+    assert observed["gate_active"] == 1
+    assert isinstance(observed["deadline"], float)
+    assert gate.active == 0
+    assert MODEL_CALL_DEADLINE.get() is None
 
 
 def test_transcription_reports_missing_speech_key(authenticated_client: TestClient) -> None:
@@ -114,6 +189,72 @@ def test_oversized_transcription_closes_upload_file(
 
     assert exc_info.value.status_code == 413
     assert upload.file.closed is True
+
+
+def test_speech_timeout_uses_stable_gateway_mapping(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TimingOutSpeechService:
+        async def synthesize(self, *args, **kwargs) -> SpeechSynthesisResult:
+            raise ModelProviderTimeoutError("provider timeout with private detail")
+
+    monkeypatch.setattr(
+        main,
+        "build_dashscope_speech_service_from_environment",
+        lambda: TimingOutSpeechService(),
+    )
+
+    response = authenticated_client.post(
+        "/api/audio/speech",
+        json={"input": "我现在右下腹疼。"},
+    )
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": main.MODEL_PROVIDER_TIMEOUT_DETAIL}
+    assert "private detail" not in response.text
+
+
+def test_speech_provider_errors_never_expose_upstream_detail(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream_secret = "upstream-secret-patient-context"
+
+    class FailingSpeechService:
+        async def transcribe(self, *args, **kwargs) -> SpeechTranscriptionResult:
+            raise DashScopeSpeechServiceError(
+                f"provider response included {upstream_secret}"
+            )
+
+        async def synthesize(self, *args, **kwargs) -> SpeechSynthesisResult:
+            raise DashScopeSpeechServiceError(
+                f"provider response included {upstream_secret}"
+            )
+
+    monkeypatch.setattr(
+        main,
+        "build_dashscope_speech_service_from_environment",
+        lambda: FailingSpeechService(),
+    )
+
+    responses = [
+        authenticated_client.post(
+            "/api/audio/transcriptions",
+            files={"file": ("question.webm", b"audio", "audio/webm")},
+        ),
+        authenticated_client.post(
+            "/api/audio/speech",
+            json={"input": "我现在右下腹疼。"},
+        ),
+    ]
+
+    for response in responses:
+        assert response.status_code == 502
+        assert response.json() == {
+            "detail": main.SPEECH_PROVIDER_FAILURE_DETAIL
+        }
+        assert upstream_secret not in response.text
 
 
 def test_speech_endpoint_streams_audio_bytes(authenticated_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

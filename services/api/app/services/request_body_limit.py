@@ -36,7 +36,7 @@ class RequestBodyLimitMiddleware:
             await self._app(scope, receive, send)
             return
 
-        declared_length = _declared_content_length(scope)
+        declared_length = declared_content_length(scope)
         if declared_length is not None and declared_length > self._max_body_size:
             await _send_payload_too_large(scope, receive, send)
             return
@@ -86,16 +86,28 @@ def _declared_content_length(scope: Scope) -> int | None:
     return max(declared_lengths) if declared_lengths else None
 
 
-async def _send_payload_too_large(scope: Scope, receive: Receive, send: Send) -> None:
-    response = JSONResponse(
+def declared_content_length(scope: Scope) -> int | None:
+    """Return the strictest valid Content-Length declared by a request."""
+
+    return _declared_content_length(scope)
+
+
+def build_request_body_too_large_response() -> JSONResponse:
+    return JSONResponse(
         status_code=413,
         content={"detail": REQUEST_BODY_TOO_LARGE_DETAIL},
         headers={"Connection": "close"},
     )
+
+
+async def _send_payload_too_large(scope: Scope, receive: Receive, send: Send) -> None:
+    response = build_request_body_too_large_response()
     await response(scope, receive, send)
 
 
 __all__ = [
     "REQUEST_BODY_TOO_LARGE_DETAIL",
     "RequestBodyLimitMiddleware",
+    "build_request_body_too_large_response",
+    "declared_content_length",
 ]

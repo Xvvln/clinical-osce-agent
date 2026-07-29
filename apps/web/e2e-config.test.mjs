@@ -39,7 +39,10 @@ test("Playwright critical flow keeps one deterministic Chromium worker and failu
 test("E2E Compose isolates persistence and disables network model dependencies", () => {
   const composeSource = readRepoFile("docker-compose.e2e.yml");
 
-  assert.match(composeSource, /e2e_runtime:\/app\/data\/runtime/);
+  assert.match(
+    composeSource,
+    /-\s+type:\s*volume\s*\n\s+source:\s*e2e_runtime\s*\n\s+target:\s*\/app\/data\/runtime/,
+  );
   assert.doesNotMatch(composeSource, /\.\/data\/runtime:\/app\/data\/runtime/);
   assert.match(composeSource, /OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING:\s*"false"/);
   assert.match(composeSource, /CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS:\s*"false"/);

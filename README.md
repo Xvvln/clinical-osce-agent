@@ -180,7 +180,29 @@ python '.\start-admin.py'
 
 API 会用 `CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS` 精确校验浏览器写请求的来源，阻止同一 hostname 上其他端口借用登录 Cookie。更换学生端或管理端端口时，必须把新的完整 `scheme://host:port` 加入该逗号分隔列表；生产模式必须显式配置 HTTPS Origin，不支持 `*`、路径或域名后缀匹配。
 
+Compose 中三个服务都以非 root 用户运行，启用只读根文件系统、`no-new-privileges`、Linux capability 全部移除、PID / CPU / 内存上限以及 `json-file` 日志轮转。默认资源上限可通过 `.env.example` 列出的 `CLINICAL_OSCE_API_*`、`CLINICAL_OSCE_WEB_*` 和 `CLINICAL_OSCE_ADMIN_*` 环境变量调整；调小 API 内存前应考虑本地 embedding 模型的峰值占用。
+
+Compose 会把 `.env` 中的 Gemini、Vertex、Anthropic、OpenAI、DashScope 和 embedding 配置逐项传入 API 容器。代理地址里的 `127.0.0.1` 在容器内指向容器自身；macOS Docker Desktop 若要复用宿主机 Clash Verge，应把对应 `*_PROXY_URL` 设置为 `http://host.docker.internal:7897`，不需要代理时使用 `direct`。
+
+API 的训练记录、账号库、日志、上传文档、向量索引与模型缓存继续使用 `./data/runtime:/app/data/runtime` bind mount（绑定挂载），升级后会直接复用现有宿主机数据，不做静默迁移。Compose 不会自动创建缺失的 `data/runtime`；首次启动前请执行 `mkdir -p data/runtime`。macOS Docker Desktop 可直接使用当前目录权限；Linux 宿主机还必须让容器 UID/GID `10001:10001` 对该目录可读写，例如在确认目标路径后执行 `sudo chown -R 10001:10001 ./data/runtime`，或用 ACL 授予等价权限。
+
+病例和 Rubric 分别保存于项目级 Docker named volume（命名卷）`api_cases`、`api_rubrics`。这两个卷首次为空时，Docker 会把镜像中的内置种子复制到卷中，之后管理端创建或修改的内容会跨容器重建保留，也不会改写 Git 工作树。`docker compose down` 不会删除命名卷或 `data/runtime`；`docker compose down -v` 会永久删除病例与 Rubric 命名卷，但不会删除宿主机的 `data/runtime`。镜像升级不会覆盖已有卷中的教师修改；需要导入新版内置病例时，应通过管理端审核后导入，或在确认已备份后重建对应卷。
+
+Compose 的 API healthcheck 使用 `/ready` 判断配置与依赖是否已达到可接流量状态，学生端和管理端只会在 API ready 后启动。`/health` 仍作为仅证明进程存活的 liveness（存活探针）端点，反向代理或编排平台不应把 liveness 成功误当成服务已就绪。
+
 Compose 和 API 进程默认都不启用固定演示管理员或固定演示学生，也不提供默认邮箱与密码。受控演示环境必须在不提交到仓库的私有 `.env` 中分别显式设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED/EMAIL/PASSWORD` 与 `CLINICAL_OSCE_DEMO_STUDENT_ENABLED/EMAIL/PASSWORD`；两类账号只在 `local-dev` / `local-demo` 生效，生产模式即使误设 enabled 也会拒绝固定账号登录。演示 seed API 与脚本同样要求两组配置完整，否则会在写入前失败关闭。
+
+生产模式不开放注册，也不会把固定演示账号写入数据库。部署首个持久化账号时，先把管理员邮箱加入私有 `.env` 的 `CLINICAL_OSCE_ADMIN_EMAILS`，再通过交互式命令创建账号；密码只从终端安全提示读取，不放在命令参数、环境变量或日志中：
+
+```bash
+docker compose run --rm api python scripts/provision_user.py \
+  --email admin@example.com \
+  --display-name "生产管理员"
+```
+
+原生 API 环境可在 `services/api` 下执行等价的 `uv run python3 scripts/provision_user.py ...`。已有账号只有显式追加 `--rotate-password` 才会换密，换密同时撤销旧会话；不要使用该参数做普通幂等部署。
+
+生产模式在管理员白名单中至少有一个账号完成持久化开通前，`/ready` 会保持 503，并只公开 `admin_account_unavailable` 状态码；账号创建后下一次探针即可恢复，不需要重启 API。
 
 Session 主记录使用 SQLite revision 的 compare-and-swap（比较并交换）更新和独立删除墓碑：共享同一台机器数据库文件的多个 API worker 不会再静默覆盖彼此写入，旧 worker 也不能把已删除 session 重新插回；版本冲突返回 409，客户端刷新后再重试。该机制仍是单机 SQLite 边界，不支持把数据库文件放到 NFS / SMB 后当作多机一致性存储；升级时应排空并一次性重启旧 worker，正式多机部署应迁移 PostgreSQL。
 

@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -121,7 +122,11 @@ from app.services.report_score_metrics import (
     aggregate_score_metrics,
     dimension_score_metrics,
 )
-from app.services.request_body_limit import RequestBodyLimitMiddleware
+from app.services.request_body_limit import (
+    RequestBodyLimitMiddleware,
+    build_request_body_too_large_response,
+    declared_content_length,
+)
 from app.services.retrieval_eval_service import run_retrieval_eval
 from app.services.runtime_model_config_store import (
     RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS,
@@ -131,7 +136,12 @@ from app.services.runtime_model_config_store import (
 from app.services.session_resource_policy import SessionResourceLimitError
 from app.services.openai_compatible_chat_client import OpenAICompatibleSettings
 from app.services.anthropic_chat_client import AnthropicSettings
-from app.services.startup_config_service import build_startup_config_self_check
+from app.services.startup_config_service import (
+    TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME,
+    SQLiteReadinessTarget,
+    build_readiness_self_check,
+    build_startup_config_self_check,
+)
 from app.services.speech_synthesis_cache_service import speech_synthesis_cache
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.student_model_config_service import test_student_model_config_connectivity
@@ -149,6 +159,8 @@ from app.services.training_skill_effect_service import TrainingSkillEffectServic
 from app.services.training_skill_regression_gate import training_skill_regression_gate
 from app.validators.case_validator import validate_case, validate_case_rubric_pair, validate_rubric
 
+logger = logging.getLogger(__name__)
+
 AUTH_COOKIE_NAME = "clinical_osce_auth"
 AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 AUTH_COOKIE_PATH = "/api"
@@ -156,6 +168,7 @@ API_PRIVATE_CACHE_CONTROL = "private, no-store, max-age=0"
 MODEL_PROVIDER_BUSY_DETAIL = "模型服务正忙，请稍后重试。"
 MODEL_PROVIDER_PAYLOAD_TOO_LARGE_DETAIL = "模型请求内容过大，未发送到服务商。"
 MODEL_PROVIDER_TIMEOUT_DETAIL = "模型服务响应超时，请稍后重试。"
+SPEECH_PROVIDER_FAILURE_DETAIL = "语音服务调用失败，请稍后重试。"
 MAX_MODEL_PROVIDER_RETRY_AFTER_SECONDS = 300
 BASE_HTTP_SECURITY_HEADERS = {
     "Content-Security-Policy": "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
@@ -172,8 +185,11 @@ DEFAULT_DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 FIXED_ACCOUNT_REGISTRATION_DISABLED_MESSAGE = (
     "不允许创建新账号；固定学生和管理员账号仅在本地模式下显式配置后可用。"
 )
-TRAINING_MODEL_CONFIG_REQUIRED_ENV_NAME = "OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING"
 TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。"
+PUBLIC_UNAUTHENTICATED_HEALTH_PATHS = frozenset({"/health", "/ready", "/api/health"})
+AUDIO_PROVIDER_REQUEST_PATHS = frozenset(
+    {"/api/audio/transcriptions", "/api/audio/speech"}
+)
 ADMIN_SKILL_CANDIDATE_REVIEW_EVENT_TYPES = {
     "admin_skill_candidate_approved",
     "admin_skill_candidate_agent_reviewed",
@@ -415,29 +431,55 @@ PROFILE_DIMENSION_LABELS: dict[str, str] = {
 
 @asynccontextmanager
 async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    application.state.startup_persistence_ready = True
+    application.state.startup_recovery_ready = True
+    persistence_initialization_enabled = getattr(
+        application.state,
+        "persistence_initialization_enabled",
+        application is app,
+    )
+    if persistence_initialization_enabled:
+        try:
+            _initialize_readiness_persistence()
+        except Exception as exc:
+            application.state.startup_persistence_ready = False
+            logger.error(
+                "startup persistence initialization failed (%s)",
+                exc.__class__.__name__,
+            )
     recovery_enabled = getattr(
         application.state,
         "pending_session_deletion_recovery_enabled",
         True,
     )
     if recovery_enabled:
-        recovery_service = getattr(
-            application.state,
-            "session_deletion_recovery_service",
-            osce_session_service,
-        )
-        application.state.session_deletion_recovery_stats = (
-            recovery_service.resume_pending_session_deletions()
-        )
-        recovered_events = 0
-        while True:
-            recovered_batch = recovery_service.drain_session_event_outbox(
-                limit=1_000
+        try:
+            recovery_service = getattr(
+                application.state,
+                "session_deletion_recovery_service",
+                osce_session_service,
             )
-            recovered_events += recovered_batch
-            if recovered_batch < 1_000:
-                break
-        application.state.session_event_outbox_recovered = recovered_events
+            application.state.session_deletion_recovery_stats = (
+                recovery_service.resume_pending_session_deletions()
+            )
+            recovered_events = 0
+            while True:
+                recovered_batch = recovery_service.drain_session_event_outbox(
+                    limit=1_000
+                )
+                recovered_events += recovered_batch
+                if recovered_batch < 1_000:
+                    break
+            application.state.session_event_outbox_recovered = recovered_events
+        except Exception as exc:
+            # Keep the process available for liveness diagnostics, but never
+            # advertise readiness after an incomplete recovery.  Raw database
+            # errors are intentionally not retained in public application state.
+            application.state.startup_recovery_ready = False
+            logger.error(
+                "startup recovery failed (%s)",
+                exc.__class__.__name__,
+            )
     yield
 
 
@@ -590,7 +632,11 @@ async def handle_model_provider_timeout_error(
 
 @app.middleware("http")
 async def bind_api_call_log_context(request: Request, call_next: Any) -> Response:
-    user = auth_store.get_user_by_session_token(request.cookies.get(AUTH_COOKIE_NAME, ""))
+    user = None
+    if request.url.path not in PUBLIC_UNAUTHENTICATED_HEALTH_PATHS:
+        user = auth_store.get_user_by_session_token(
+            request.cookies.get(AUTH_COOKIE_NAME, "")
+        )
     token = set_api_call_context(
         caller=str(user.get("email", "")) if user else "",
         user_id=str(user.get("user_id", "")) if user else "",
@@ -600,6 +646,43 @@ async def bind_api_call_log_context(request: Request, call_next: Any) -> Respons
         return await call_next(request)
     finally:
         reset_api_call_context(token)
+
+
+@app.middleware("http")
+async def admit_audio_provider_request_before_body(
+    request: Request,
+    call_next: Any,
+) -> Response:
+    if (
+        request.method.upper() != "POST"
+        or request.url.path not in AUDIO_PROVIDER_REQUEST_PATHS
+    ):
+        return await call_next(request)
+
+    content_length = declared_content_length(request.scope)
+    if (
+        content_length is not None
+        and content_length > API_REQUEST_BODY_MAX_BYTES
+    ):
+        return build_request_body_too_large_response()
+
+    user = auth_store.get_user_by_session_token(
+        request.cookies.get(AUTH_COOKIE_NAME, "")
+    )
+    if user is None:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "not authenticated"},
+        )
+    if not model_request_admission_gate.try_acquire():
+        return _model_provider_busy_response()
+
+    deadline_token = set_model_call_deadline()
+    try:
+        return await call_next(request)
+    finally:
+        reset_model_call_deadline(deadline_token)
+        model_request_admission_gate.release()
 
 
 @app.middleware("http")
@@ -1913,6 +1996,11 @@ def register(request: AuthRegisterRequest, response: Response) -> dict[str, obje
 def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
     _validate_auth_request(request.email, request.password)
     user = _authenticate_fixed_demo_user(request.email, request.password)
+    if user is None and is_production_deployment_mode():
+        # Production never auto-provisions fixed demo accounts.  Administrators
+        # and students explicitly provisioned in the persistent auth database
+        # can still authenticate.
+        user = auth_store.authenticate_user(request.email, request.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     _set_auth_cookie(response, auth_store.create_session(user["user_id"]))
@@ -1952,6 +2040,124 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
+    session_service = osce_session_service
+    session_store = session_service.session_store
+    report_store = session_service.report_store
+    event_store = session_service.training_event_store
+    profile_store = session_service.student_profile_store
+    candidate_store = session_service.training_skill_candidate_store
+    skill_store = session_service.training_skill_store
+    return (
+        SQLiteReadinessTarget(
+            database_path=auth_store.database_path,
+            required_tables=("auth_sessions", "users"),
+        ),
+        SQLiteReadinessTarget(
+            database_path=session_store.database_path,
+            required_tables=("osce_sessions", "osce_session_event_outbox"),
+        ),
+        SQLiteReadinessTarget(
+            database_path=report_store.database_path,
+            required_tables=("reports", "report_outbox"),
+        ),
+        SQLiteReadinessTarget(
+            database_path=event_store.database_path,
+            required_tables=("training_events",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=profile_store.database_path,
+            required_tables=("student_profiles",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=candidate_store.database_path,
+            required_tables=("training_skill_candidates",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=skill_store.database_path,
+            required_tables=("training_skills",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=user_model_config_store.database_path,
+            required_tables=("user_runtime_model_configs",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=rag_knowledge_store.database_path,
+            required_tables=("rag_knowledge_items",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=evaluation_result_store.database_path,
+            required_tables=("evaluation_results",),
+        ),
+        SQLiteReadinessTarget(
+            database_path=training_skill_auto_approval_settings_store.database_path,
+            required_tables=("training_skill_auto_approval_settings",),
+        ),
+    )
+
+
+def _initialize_readiness_persistence() -> None:
+    session_service = osce_session_service
+    auth_store._initialize()
+    session_service.session_store._initialize()
+    session_service.report_store._initialize()
+    session_service.training_event_store._initialize()
+    session_service.student_profile_store._initialize()
+    session_service.training_skill_candidate_store._initialize()
+    session_service.training_skill_store._initialize()
+    user_model_config_store._initialize()
+    rag_knowledge_store._initialize()
+    evaluation_result_store._initialize()
+    training_skill_auto_approval_settings_store._initialize()
+
+
+def _readiness_writable_directories(
+    sqlite_targets: tuple[SQLiteReadinessTarget, ...],
+) -> tuple[Path, ...]:
+    return tuple(
+        dict.fromkeys(
+            [
+                CASES_DIR,
+                RUBRICS_DIR,
+                *(target.database_path.parent for target in sqlite_targets),
+            ]
+        )
+    )
+
+
+def _production_admin_account_is_ready() -> bool:
+    if not is_production_deployment_mode():
+        return True
+    try:
+        return auth_store.has_any_user(get_configured_admin_email_set())
+    except Exception:
+        return False
+
+
+@app.get("/ready")
+def readiness_check() -> JSONResponse:
+    sqlite_targets = _build_readiness_sqlite_targets()
+    payload = build_readiness_self_check(
+        writable_directories=_readiness_writable_directories(sqlite_targets),
+        sqlite_targets=sqlite_targets,
+        admin_account_ready=_production_admin_account_is_ready(),
+        startup_persistence_ready=bool(
+            getattr(app.state, "startup_persistence_ready", True)
+        ),
+        startup_recovery_ready=bool(
+            getattr(app.state, "startup_recovery_ready", True)
+        ),
+    )
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if payload["status"] == "ready"
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        ),
+        content=payload,
+    )
+
+
 @app.get("/api/health")
 def public_api_health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -1988,7 +2194,10 @@ async def transcribe_audio(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except DashScopeSpeechServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=SPEECH_PROVIDER_FAILURE_DETAIL,
+        ) from exc
     finally:
         await file.close()
     return {
@@ -2053,7 +2262,10 @@ async def synthesize_audio(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except DashScopeSpeechServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=SPEECH_PROVIDER_FAILURE_DETAIL,
+        ) from exc
     if cache_key is not None:
         speech_synthesis_cache.set(cache_key, result)
     return _build_speech_streaming_response(

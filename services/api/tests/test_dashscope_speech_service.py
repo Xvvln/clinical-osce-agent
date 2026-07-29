@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from app.services import dashscope_speech_service
+from app.services.api_call_log_service import ApiCallLogStore
+from app.services.model_call_policy import (
+    ModelProviderTimeoutError,
+    model_call_budget,
+)
 
 
 class FakeHttpResponse:
@@ -67,7 +77,14 @@ class FakeAsyncClient:
         return FakeHttpResponse(
             {
                 "request_id": "tts-request-1",
-                "output": {"audio": {"url": "http://dashscope.example/audio.wav"}},
+                "output": {
+                    "audio": {
+                        "url": (
+                            "https://dashscope-result.oss-cn-hangzhou.aliyuncs.com/"
+                            "audio.wav"
+                        )
+                    }
+                },
                 "usage": {"characters": 8},
             }
         )
@@ -75,6 +92,71 @@ class FakeAsyncClient:
     async def get(self, url: str) -> FakeHttpResponse:
         self.gets.append(url)
         return FakeHttpResponse(content=b"RIFFfakewav", headers={"content-type": "audio/wav"})
+
+
+class PrivateAudioUrlAsyncClient(FakeAsyncClient):
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> FakeHttpResponse:
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        return FakeHttpResponse(
+            {
+                "request_id": "tts-private-url",
+                "output": {
+                    "audio": {
+                        "url": "https://169.254.169.254/latest/meta-data/"
+                    }
+                },
+            }
+        )
+
+    async def get(self, url: str) -> FakeHttpResponse:
+        raise AssertionError(f"untrusted audio URL must not be fetched: {url}")
+
+
+class SlowAudioDownloadAsyncClient(FakeAsyncClient):
+    async def get(self, url: str) -> FakeHttpResponse:
+        self.gets.append(url)
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class SlowSpeechPostAsyncClient(FakeAsyncClient):
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> FakeHttpResponse:
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class UpstreamFailureAsyncClient(FakeAsyncClient):
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> httpx.Response:
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            502,
+            request=request,
+            json={
+                "error": {
+                    "message": "upstream-secret-patient-context",
+                }
+            },
+        )
 
 
 class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +216,76 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         encoded_audio = input_audio["data"]
         self.assertGreater(len(encoded_audio.encode("utf-8")), 10 * 1024 * 1024)
 
+    @patch.object(
+        dashscope_speech_service.httpx,
+        "AsyncClient",
+        SlowSpeechPostAsyncClient,
+    )
+    async def test_transcribe_deadline_covers_async_post(self) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(
+                api_key="sk-test",
+                timeout_seconds=60,
+            )
+        )
+
+        with self.assertRaises(ModelProviderTimeoutError):
+            with model_call_budget(0.02):
+                await service.transcribe(
+                    b"voice-bytes",
+                    mime_type="audio/webm",
+                )
+
+        self.assertEqual(len(FakeAsyncClient.posts), 1)
+
+    async def test_transcribe_logs_sanitized_diagnostic_without_response_body(
+        self,
+    ) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(api_key="sk-test")
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "model_api_calls.jsonl"
+            log_store = ApiCallLogStore(log_path)
+            with (
+                patch.object(
+                    dashscope_speech_service,
+                    "api_call_log_store",
+                    log_store,
+                ),
+                patch.object(
+                    dashscope_speech_service.httpx,
+                    "AsyncClient",
+                    UpstreamFailureAsyncClient,
+                ),
+            ):
+                with self.assertRaises(
+                    dashscope_speech_service.DashScopeSpeechServiceError
+                ) as exc_info:
+                    await service.transcribe(
+                        b"voice-bytes",
+                        mime_type="audio/webm",
+                    )
+
+            log = log_store.build_admin_payload(limit=1)["logs"][0]
+            serialized_log = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(str(exc_info.exception), "DashScope ASR 调用失败。")
+        self.assertEqual(log["status_code"], 502)
+        self.assertEqual(
+            log["error_type"],
+            "DashScopeSpeechServiceError",
+        )
+        self.assertEqual(
+            log["error_message"],
+            "speech provider call failed",
+        )
+        self.assertNotIn(
+            "upstream-secret-patient-context",
+            serialized_log,
+        )
+
     @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
     async def test_synthesize_downloads_dashscope_audio_url(self) -> None:
         service = dashscope_speech_service.DashScopeSpeechService(
@@ -150,10 +302,107 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.audio_bytes, b"RIFFfakewav")
         self.assertEqual(result.mime_type, "audio/wav")
         self.assertEqual(result.request_id, "tts-request-1")
-        self.assertEqual(FakeAsyncClient.gets, ["https://dashscope.example/audio.wav"])
+        self.assertEqual(
+            FakeAsyncClient.gets,
+            [
+                "https://dashscope-result.oss-cn-hangzhou.aliyuncs.com/"
+                "audio.wav"
+            ],
+        )
         payload = FakeAsyncClient.posts[0]["json"]
         self.assertEqual(payload["model"], "qwen3-tts-flash")
         self.assertEqual(payload["input"]["voice"], "Serena")  # type: ignore[index]
+
+    @patch.object(
+        dashscope_speech_service.httpx,
+        "AsyncClient",
+        PrivateAudioUrlAsyncClient,
+    )
+    async def test_synthesize_rejects_private_audio_url_before_get(self) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(api_key="sk-test")
+        )
+
+        with self.assertRaises(
+            dashscope_speech_service.DashScopeSpeechServiceError
+        ):
+            await service.synthesize("我现在右下腹疼。")
+
+        self.assertEqual(FakeAsyncClient.gets, [])
+
+    @patch.object(
+        dashscope_speech_service.httpx,
+        "AsyncClient",
+        SlowAudioDownloadAsyncClient,
+    )
+    async def test_synthesize_deadline_covers_audio_download(self) -> None:
+        service = dashscope_speech_service.DashScopeSpeechService(
+            dashscope_speech_service.DashScopeSpeechSettings(
+                api_key="sk-test",
+                timeout_seconds=60,
+            )
+        )
+
+        with self.assertRaises(ModelProviderTimeoutError):
+            with model_call_budget(0.02):
+                await service.synthesize("我现在右下腹疼。")
+
+        self.assertEqual(
+            FakeAsyncClient.gets,
+            [
+                "https://dashscope-result.oss-cn-hangzhou.aliyuncs.com/"
+                "audio.wav"
+            ],
+        )
+
+    def test_tts_audio_url_policy_rejects_untrusted_targets(self) -> None:
+        rejected_urls = [
+            "http://dashscope.aliyuncs.com/audio.wav",
+            "https://user:password@dashscope.aliyuncs.com/audio.wav",
+            "https://localhost/audio.wav",
+            "https://127.0.0.1/audio.wav",
+            "https://10.0.0.1/audio.wav",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://untrusted.example/audio.wav",
+        ]
+
+        for audio_url in rejected_urls:
+            with self.subTest(audio_url=audio_url):
+                with self.assertRaises(RuntimeError):
+                    dashscope_speech_service._validated_tts_audio_url(
+                        audio_url,
+                        tts_endpoint=(
+                            "https://dashscope.aliyuncs.com/api/v1/"
+                            "services/aigc/multimodal-generation/generation"
+                        ),
+                    )
+
+    def test_tts_audio_url_policy_accepts_official_and_same_origin_hosts(
+        self,
+    ) -> None:
+        official_url = (
+            "https://dashscope-result.oss-cn-hangzhou.aliyuncs.com/"
+            "audio.wav?signature=temporary"
+        )
+        same_origin_url = "https://speech-gateway.example/audio.wav"
+
+        self.assertEqual(
+            dashscope_speech_service._validated_tts_audio_url(
+                official_url,
+                tts_endpoint=(
+                    "https://dashscope.aliyuncs.com/api/v1/"
+                    "services/aigc/multimodal-generation/generation"
+                ),
+            ),
+            official_url,
+        )
+        self.assertEqual(
+            dashscope_speech_service._validated_tts_audio_url(
+                same_origin_url,
+                tts_endpoint="https://speech-gateway.example/v1/tts",
+            ),
+            same_origin_url,
+        )
 
     @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
     async def test_synthesize_sends_patient_voice_instructions_to_dashscope(self) -> None:

@@ -1,7 +1,22 @@
 name: clinical-osce-agent-e2e
 
+x-e2e-runtime-hardening: &e2e-runtime-hardening
+  init: true
+  restart: "no"
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "2"
+
 services:
   api:
+    <<: *e2e-runtime-hardening
     build:
       context: .
       dockerfile: services/api/Dockerfile
@@ -20,6 +35,11 @@ services:
       CLINICAL_OSCE_DEMO_STUDENT_ENABLED: "true"
       CLINICAL_OSCE_DEMO_STUDENT_EMAIL: ${E2E_STUDENT_EMAIL:-student@e2e.test}
       CLINICAL_OSCE_DEMO_STUDENT_PASSWORD: ${E2E_STUDENT_PASSWORD:-traceosce-e2e-student-only}
+      OSCE_ANTHROPIC_ENABLED: "false"
+      OSCE_ANTHROPIC_API_KEY: ""
+      OSCE_ANTHROPIC_BASE_URL: https://api.anthropic.com
+      OSCE_ANTHROPIC_MODEL: ""
+      OSCE_ANTHROPIC_PROXY_URL: direct
       OSCE_REQUIRE_RUNTIME_MODEL_CONFIG_FOR_TRAINING: "false"
       OSCE_GEMINI_PATIENT_USE_VERTEX: "false"
       OSCE_GEMINI_PATIENT_API_KEY: ""
@@ -34,21 +54,46 @@ services:
       OSCE_OPENAI_FALLBACK_ENABLED: "false"
       OSCE_OPENAI_FALLBACK_API_KEY: ""
       OSCE_OPENAI_FALLBACK_MODEL: ""
+      OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER: "false"
+      OSCE_MODEL_CALL_TIMEOUT_SECONDS: "30"
+      OSCE_MODEL_CALL_MAX_CONCURRENCY: "8"
       OSCE_LOCAL_EMBEDDING_ENABLED: "false"
+      OSCE_LOCAL_EMBEDDING_TIMEOUT_SECONDS: "120"
+      OSCE_LOCAL_EMBEDDING_MAX_CONCURRENCY: "1"
       OSCE_CHROMA_ENABLED: "false"
       OSCE_DASHSCOPE_RERANK_ENABLED: "false"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - e2e_runtime:/app/data/runtime
+      - type: volume
+        source: e2e_runtime
+        target: /app/data/runtime
+        volume:
+          nocopy: false
+      - type: volume
+        source: e2e_cases
+        target: /app/data/cases
+        volume:
+          nocopy: false
+      - type: volume
+        source: e2e_rubrics
+        target: /app/data/rubrics
+        volume:
+          nocopy: false
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cpus: "4.0"
+    mem_limit: 4g
+    pids_limit: 256
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready').read()"]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 20s
 
   web:
+    <<: *e2e-runtime-hardening
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -61,6 +106,12 @@ services:
       NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE: local-demo
     ports:
       - "127.0.0.1:3000:3000"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/apps/web/.next/cache:size=64m,uid=1000,gid=1000,mode=0700
+    cpus: "1.0"
+    mem_limit: 768m
+    pids_limit: 128
     depends_on:
       api:
         condition: service_healthy
@@ -78,6 +129,7 @@ services:
       start_period: 20s
 
   admin:
+    <<: *e2e-runtime-hardening
     build:
       context: .
       dockerfile: apps/admin/Dockerfile
@@ -88,6 +140,12 @@ services:
       CLINICAL_OSCE_ADMIN_API_URL: http://api:8000
     ports:
       - "127.0.0.1:3001:3000"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/apps/admin/.next/cache:size=64m,uid=1000,gid=1000,mode=0700
+    cpus: "1.0"
+    mem_limit: 768m
+    pids_limit: 128
     depends_on:
       api:
         condition: service_healthy
@@ -106,3 +164,5 @@ services:
 
 volumes:
   e2e_runtime:
+  e2e_cases:
+  e2e_rubrics:
