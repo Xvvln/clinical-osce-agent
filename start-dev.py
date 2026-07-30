@@ -36,15 +36,34 @@ READINESS_REQUEST_TIMEOUT_SECONDS = 1.0
 PROCESS_POLL_INTERVAL_SECONDS = 0.25
 DIRECT_HTTP_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 LOCAL_ADMIN_EMAIL = "admin@example.test"
+LOCAL_ADMIN_PASSWORD = "admin"
+LOCAL_STUDENT_EMAIL = "student@example.test"
+LOCAL_STUDENT_PASSWORD = "student"
 ADMIN_EMAILS_ENV_NAME = "CLINICAL_OSCE_ADMIN_EMAILS"
 ADMIN_API_URL_ENV_NAME = "CLINICAL_OSCE_ADMIN_API_URL"
 WEB_ADMIN_URL_ENV_NAME = "NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL"
+WEB_DEPLOYMENT_MODE_ENV_NAME = "NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"
+WEB_AUTO_LOGIN_EMAIL_ENV_NAME = "NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL"
+WEB_AUTO_LOGIN_PASSWORD_ENV_NAME = "NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD"
+DEPLOYMENT_MODE_ENV_NAME = "CLINICAL_OSCE_DEPLOYMENT_MODE"
+DEMO_ADMIN_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_ENABLED"
+DEMO_ADMIN_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_EMAIL"
+DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
+DEMO_STUDENT_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_ENABLED"
+DEMO_STUDENT_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_EMAIL"
+DEMO_STUDENT_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD"
 
 
 def main() -> int:
     processes: list[subprocess.Popen[bytes]] = []
     exit_code = 0
     try:
+        if _is_healthy_project_dev_stack_running():
+            print("API, Web, and Admin are already running; not opening duplicate browser tabs.")
+            print(f"API: {API_URL}")
+            print(f"Web: {WEB_URL}")
+            print(f"Admin: {ADMIN_URL}")
+            return 0
         _stop_stale_dev_processes()
         processes.append(
             _start_process(
@@ -168,12 +187,31 @@ def _raise_if_process_exited(
 
 def _start_process(name: str, command: list[str], cwd: Path) -> subprocess.Popen[bytes]:
     print(f"Starting {name} in {cwd}")
-    return subprocess.Popen(command, cwd=cwd, env=_process_env())
+    return subprocess.Popen(command, cwd=cwd, env=_process_env(cwd=cwd))
 
 
 def _stop_stale_dev_processes() -> None:
     for host, port in DEV_ENDPOINTS:
         _stop_stale_port_processes(host, port)
+
+
+def _is_healthy_project_dev_stack_running() -> bool:
+    for host, port in DEV_ENDPOINTS:
+        process_id = _get_listening_process_id(host, port)
+        if process_id is None or not _is_project_owned_process(_get_process_command_line(process_id)):
+            return False
+
+    for _, url in READINESS_ENDPOINTS:
+        try:
+            with DIRECT_HTTP_OPENER.open(url, timeout=READINESS_REQUEST_TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                if int(status) >= 400:
+                    return False
+        except Exception:
+            return False
+    return True
 
 
 def _stop_stale_port_processes(host: str, port: int) -> None:
@@ -272,7 +310,7 @@ def _terminate_process_tree(process_id: int) -> None:
     subprocess.run(["kill", str(process_id)], check=False)
 
 
-def _process_env() -> dict[str, str]:
+def _process_env(*, cwd: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     if AGENT_ENV_DIR.exists():
         env["CONDA_PREFIX"] = str(AGENT_ENV_DIR)
@@ -285,9 +323,28 @@ def _process_env() -> dict[str, str]:
                 env.get("PATH", ""),
             ]
         )
-    env[ADMIN_EMAILS_ENV_NAME] = _admin_email_list(env.get(ADMIN_EMAILS_ENV_NAME, ""))
+    # The unified development launcher always runs locally and gives the
+    # student and admin UIs immediately usable demo identities.  Explicit
+    # values exported by the developer still win over these local defaults.
+    env[DEPLOYMENT_MODE_ENV_NAME] = "local-dev"
+    env[DEMO_ADMIN_ENABLED_ENV_NAME] = "true"
+    env.setdefault(DEMO_ADMIN_EMAIL_ENV_NAME, LOCAL_ADMIN_EMAIL)
+    env.setdefault(DEMO_ADMIN_PASSWORD_ENV_NAME, LOCAL_ADMIN_PASSWORD)
+    env[DEMO_STUDENT_ENABLED_ENV_NAME] = "true"
+    env.setdefault(DEMO_STUDENT_EMAIL_ENV_NAME, LOCAL_STUDENT_EMAIL)
+    env.setdefault(DEMO_STUDENT_PASSWORD_ENV_NAME, LOCAL_STUDENT_PASSWORD)
+    env[ADMIN_EMAILS_ENV_NAME] = _admin_email_list(
+        env.get(ADMIN_EMAILS_ENV_NAME, "")
+    )
     env[ADMIN_API_URL_ENV_NAME] = API_URL
     env[WEB_ADMIN_URL_ENV_NAME] = ADMIN_URL
+    env[WEB_DEPLOYMENT_MODE_ENV_NAME] = "local-dev"
+    if cwd == WEB_DIR:
+        env[WEB_AUTO_LOGIN_EMAIL_ENV_NAME] = env[DEMO_STUDENT_EMAIL_ENV_NAME]
+        env[WEB_AUTO_LOGIN_PASSWORD_ENV_NAME] = env[DEMO_STUDENT_PASSWORD_ENV_NAME]
+    elif cwd == ADMIN_DIR:
+        env[WEB_AUTO_LOGIN_EMAIL_ENV_NAME] = env[DEMO_ADMIN_EMAIL_ENV_NAME]
+        env[WEB_AUTO_LOGIN_PASSWORD_ENV_NAME] = env[DEMO_ADMIN_PASSWORD_ENV_NAME]
     return env
 
 

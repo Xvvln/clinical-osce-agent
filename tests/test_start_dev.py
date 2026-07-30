@@ -72,6 +72,59 @@ def test_child_processes_use_shared_api_and_admin_defaults() -> None:
     assert "admin@example.test" in env["CLINICAL_OSCE_ADMIN_EMAILS"].split(",")
 
 
+def test_child_processes_inject_local_demo_login_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in [
+        "CLINICAL_OSCE_DEPLOYMENT_MODE",
+        "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
+        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+        "CLINICAL_OSCE_DEMO_STUDENT_ENABLED",
+        "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
+        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    start_dev = load_start_dev_module()
+
+    env = start_dev._process_env()
+
+    assert env["CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-dev"
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "true"
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_EMAIL"] == "admin@example.test"
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"] == "admin"
+    assert env["CLINICAL_OSCE_DEMO_STUDENT_ENABLED"] == "true"
+    assert env["CLINICAL_OSCE_DEMO_STUDENT_EMAIL"] == "student@example.test"
+    assert env["CLINICAL_OSCE_DEMO_STUDENT_PASSWORD"] == "student"
+
+
+def test_child_processes_allow_explicit_local_demo_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_EMAIL", "teacher@example.test")
+    monkeypatch.setenv("CLINICAL_OSCE_DEMO_ADMIN_PASSWORD", "teacher-password")
+    start_dev = load_start_dev_module()
+
+    env = start_dev._process_env()
+
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_EMAIL"] == "teacher@example.test"
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"] == "teacher-password"
+    assert env["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "true"
+
+
+def test_web_and_admin_processes_receive_their_own_local_auto_login_credentials() -> None:
+    start_dev = load_start_dev_module()
+
+    web_env = start_dev._process_env(cwd=start_dev.WEB_DIR)
+    admin_env = start_dev._process_env(cwd=start_dev.ADMIN_DIR)
+
+    assert web_env["NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE"] == "local-dev"
+    assert web_env["NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL"] == "student@example.test"
+    assert web_env["NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD"] == "student"
+    assert admin_env["NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL"] == "admin@example.test"
+    assert admin_env["NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD"] == "admin"
+
+
 def test_web_command_starts_next_with_default_webpack_and_polling_config() -> None:
     start_dev = load_start_dev_module()
 
@@ -131,6 +184,21 @@ def test_main_stops_project_owned_stale_processes_before_starting_services() -> 
     assert 'name="clinical-osce-api"' in main_source
     assert 'name="clinical-osce-web"' in main_source
     assert 'name="clinical-osce-admin"' in main_source
+
+
+def test_main_reuses_a_healthy_project_stack_without_opening_browser_tabs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_dev = load_start_dev_module()
+    browser_urls: list[str] = []
+
+    monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: True)
+    monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: pytest.fail("healthy stack should be reused"))
+    monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: pytest.fail("healthy stack should be reused"))
+    monkeypatch.setattr(start_dev.webbrowser, "open", browser_urls.append)
+
+    assert start_dev.main() == 0
+    assert browser_urls == []
 
 
 def test_http_readiness_retries_until_every_service_succeeds() -> None:
@@ -228,6 +296,7 @@ def test_main_opens_browsers_only_after_readiness_and_cleans_processes(
     events: list[str] = []
     stopped_processes: list[object] = []
 
+    monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: False)
     monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
     monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
     monkeypatch.setattr(
@@ -260,6 +329,7 @@ def test_main_returns_nonzero_for_runtime_child_failure_and_cleans_processes(
     process_iterator = iter(processes)
     stopped_processes: list[object] = []
 
+    monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: False)
     monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
     monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
     monkeypatch.setattr(start_dev, "_wait_for_http_readiness", lambda processes, endpoints: None)
@@ -288,6 +358,7 @@ def test_main_returns_zero_for_ctrl_c_and_cleans_started_processes(
     process_iterator = iter(processes)
     stopped_processes: list[object] = []
 
+    monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: False)
     monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
     monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
     monkeypatch.setattr(

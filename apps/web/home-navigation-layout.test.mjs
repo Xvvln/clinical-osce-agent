@@ -2159,6 +2159,10 @@ test("home page renders login/register dialog on the existing workspace", () => 
   assert.match(pageSource, /const \[isAuthDialogOpen, setIsAuthDialogOpen\] = useState\(false\);/);
   assert.match(pageSource, /const \[authEmail, setAuthEmail\] = useState\(""\);/);
   assert.match(pageSource, /const \[authPassword, setAuthPassword\] = useState\(""\);/);
+  assert.match(pageSource, /NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL/);
+  assert.match(pageSource, /NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD/);
+  assert.match(pageSource, /DEPLOYMENT_MODE === "local-dev"/);
+  assert.match(pageSource, /loginUser\(LOCAL_AUTO_LOGIN_EMAIL, LOCAL_AUTO_LOGIN_PASSWORD\)/);
   assert.match(pageSource, /setAuthEmail\(""\);/);
   assert.match(pageSource, /setAuthPassword\(""\);/);
   assert.match(pageSource, /placeholder="输入登录邮箱"/);

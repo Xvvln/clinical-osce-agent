@@ -176,6 +176,8 @@ python '.\start-admin.py'
 
 `start-admin.py` 不再启动第二套 API，只会将管理端连接到 `http://127.0.0.1:8000`。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md`、`apps/admin/README.md` 和 `docker-compose.yml` 为准。
 
+`start-dev.py` 会强制使用 `local-dev`，并在其子进程中自动启用本地演示账号：管理员 `admin@example.test` / `admin`，学生 `student@example.test` / `student`。启动后的学生端和管理端会分别使用对应账号自动登录；这些仅用于本机开发启动，不会写入 `.env`、Compose 或生产环境。若需替换，可在启动前从终端导出相应的 `CLINICAL_OSCE_DEMO_*_EMAIL/PASSWORD` 环境变量。
+
 本地脚本与 Docker Compose 使用不同的管理端端口：`start-dev.py` 使用 `3100`，Compose 使用 `3001`。Compose 默认只绑定回环地址，浏览器入口分别为 API `127.0.0.1:8000`、学生端 `localhost:3000`、管理端 `127.0.0.1:3001`；请保留学生端的 `localhost` 与管理端的 `127.0.0.1` 两种 hostname 写法，让同一浏览器中的 host-only 登录 Cookie 相互隔离。如需对外提供服务，应在反向代理、独立子域名和访问控制就绪后再显式调整 `CLINICAL_OSCE_BIND_HOST`。
 
 API 会用 `CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS` 精确校验浏览器写请求的来源，阻止同一 hostname 上其他端口借用登录 Cookie。更换学生端或管理端端口时，必须把新的完整 `scheme://host:port` 加入该逗号分隔列表；生产模式必须显式配置 HTTPS Origin，不支持 `*`、路径或域名后缀匹配。

@@ -51,6 +51,10 @@ test("admin v2 exposes the core management modules with clean Chinese labels", (
   }
 
   assert.match(dashboardSource, /管理员登录/);
+  assert.match(dashboardSource, /NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL/);
+  assert.match(dashboardSource, /NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD/);
+  assert.match(dashboardSource, /DEPLOYMENT_MODE === "local-dev"/);
+  assert.match(dashboardSource, /body: JSON\.stringify\(\{ email: LOCAL_AUTO_LOGIN_EMAIL, password: LOCAL_AUTO_LOGIN_PASSWORD \}\)/);
   assert.doesNotMatch(dashboardSource, /Dashboard Blocks Adaptation/);
   assert.doesNotMatch(dashboardSource, /shadcn\/ui Dashboard Blocks 布局模式的新工作台/);
   assert.doesNotMatch(dashboardSource, /把训练、资源、Skill、评测和模型日志重组为表格化管理视图/);

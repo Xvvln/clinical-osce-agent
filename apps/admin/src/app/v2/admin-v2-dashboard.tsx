@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BookOpen,
@@ -42,6 +42,11 @@ import { cn } from "@/lib/utils";
 
 const AUTH_EMAIL_MAX_CHARS = 254;
 const AUTH_PASSWORD_MAX_CHARS = 256;
+const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
+const LOCAL_AUTO_LOGIN_EMAIL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL ?? "";
+const LOCAL_AUTO_LOGIN_PASSWORD = process.env.NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD ?? "";
+const isLocalAutoLoginConfigured =
+  DEPLOYMENT_MODE === "local-dev" && Boolean(LOCAL_AUTO_LOGIN_EMAIL && LOCAL_AUTO_LOGIN_PASSWORD);
 const ADMIN_CASE_REQUEST_MAX_BYTES = 256 * 1024;
 const RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
 const RAG_FILE_NAME_MAX_CHARS = 255;
@@ -1037,6 +1042,7 @@ export function AdminV2Dashboard() {
   const [errorText, setErrorText] = useState("");
   const [statusText, setStatusText] = useState("");
   const [loginErrorText, setLoginErrorText] = useState("");
+  const hasAttemptedLocalAutoLoginRef = useRef(false);
 
   const selectedSession = useMemo(
     () => data.sessions.find((session) => session.session_id === selectedSessionId) ?? data.sessions[0] ?? null,
@@ -1045,26 +1051,45 @@ export function AdminV2Dashboard() {
 
   useEffect(() => {
     let isMounted = true;
-    fetchJson<{ user: AuthUser }>("/api/auth/me")
-      .then((payload) => {
-        if (!isMounted) {
-          return;
+
+    async function loadAuthUser(): Promise<void> {
+      let currentUser: AuthUser | null = null;
+      try {
+        currentUser = (await fetchJson<{ user: AuthUser }>("/api/auth/me")).user;
+      } catch {
+        currentUser = null;
+      }
+
+      if (currentUser === null && isLocalAutoLoginConfigured && !hasAttemptedLocalAutoLoginRef.current) {
+        hasAttemptedLocalAutoLoginRef.current = true;
+        setEmail(LOCAL_AUTO_LOGIN_EMAIL);
+        setPassword(LOCAL_AUTO_LOGIN_PASSWORD);
+        try {
+          currentUser = (
+            await fetchJson<{ user: AuthUser }>("/api/auth/login", {
+              body: JSON.stringify({ email: LOCAL_AUTO_LOGIN_EMAIL, password: LOCAL_AUTO_LOGIN_PASSWORD }),
+              method: "POST",
+            })
+          ).user;
+        } catch (error) {
+          if (isMounted) {
+            setLoginErrorText(error instanceof Error ? error.message : "本地演示账号自动登录失败");
+          }
         }
-        setAuthUser(payload.user);
-        if (payload.user.is_admin) {
-          void refreshDashboard();
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setAuthUser(null);
-        }
-      })
-      .finally(() => {
-        if (isMounted) {
-          setIsAuthLoading(false);
-        }
-      });
+      }
+
+      if (!isMounted) {
+        return;
+      }
+      setAuthUser(currentUser);
+      if (currentUser?.is_admin) {
+        void refreshDashboard();
+        setPassword("");
+      }
+      setIsAuthLoading(false);
+    }
+
+    void loadAuthUser();
     return () => {
       isMounted = false;
     };

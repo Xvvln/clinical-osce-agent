@@ -631,6 +631,10 @@ const STUDENT_ID = "web_demo";
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_ADMIN_URL ?? "http://127.0.0.1:3001";
 const ADMIN_MODEL_CONFIG_URL = `${ADMIN_APP_URL}#model-config`;
 const DEPLOYMENT_MODE = process.env.NEXT_PUBLIC_CLINICAL_OSCE_DEPLOYMENT_MODE ?? "local-dev";
+const LOCAL_AUTO_LOGIN_EMAIL = process.env.NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_EMAIL ?? "";
+const LOCAL_AUTO_LOGIN_PASSWORD = process.env.NEXT_PUBLIC_CLINICAL_OSCE_AUTO_LOGIN_PASSWORD ?? "";
+const isLocalAutoLoginConfigured =
+  DEPLOYMENT_MODE === "local-dev" && Boolean(LOCAL_AUTO_LOGIN_EMAIL && LOCAL_AUTO_LOGIN_PASSWORD);
 const PRODUCTION_DEPLOYMENT_MODES = new Set(["single-node-prod", "vertex-prod"]);
 const isStudentRuntimeApiConfigEnabled = !PRODUCTION_DEPLOYMENT_MODES.has(DEPLOYMENT_MODE);
 const isStudentApiConfigEditable = false;
@@ -2509,6 +2513,7 @@ function HomeContent() {
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const questionInputRef = useRef<HTMLInputElement | null>(null);
   const latestEvidenceItemRef = useRef<HTMLDivElement | null>(null);
+  const hasAttemptedLocalAutoLoginRef = useRef(false);
   const previousRevealedFactIdsRef = useRef<readonly string[] | null>(null);
   const previousRevealedFactsSessionIdRef = useRef<string | null>(null);
   const clientChatMessageSequenceRef = useRef(0);
@@ -2827,13 +2832,23 @@ function HomeContent() {
 
     async function loadAuthUser() {
       try {
-        const currentUser = await getCurrentUser();
+        let currentUser = await getCurrentUser();
+        if (currentUser === null && isLocalAutoLoginConfigured && !hasAttemptedLocalAutoLoginRef.current) {
+          hasAttemptedLocalAutoLoginRef.current = true;
+          setAuthEmail(LOCAL_AUTO_LOGIN_EMAIL);
+          setAuthPassword(LOCAL_AUTO_LOGIN_PASSWORD);
+          currentUser = await loginUser(LOCAL_AUTO_LOGIN_EMAIL, LOCAL_AUTO_LOGIN_PASSWORD);
+        }
         if (!isMounted) {
           return;
         }
 
         setAuthUser(currentUser);
         setIsAuthDialogOpen(currentUser === null);
+        if (currentUser !== null) {
+          setAuthEmail("");
+          setAuthPassword("");
+        }
       } catch (error) {
         if (!isMounted) {
           return;
