@@ -1000,6 +1000,30 @@ test("report page notifies when a pending personal skill finishes in the backgro
   assert.match(reportSource, /\{personalSkillNoticeText\}/);
 });
 
+test("report teacher details show only a compact longitudinal change summary", () => {
+  const teacherContextSource = reportSource.slice(
+    reportSource.indexOf("function TeacherAnalysisContextSection"),
+    reportSource.indexOf("function TeacherReasoningTraceSummarySection"),
+  );
+
+  assert.match(reportModelSource, /export type TeacherLongitudinalGapStatusCounts = Readonly<\{/);
+  assert.match(reportModelSource, /export type TeacherLongitudinalContext = Readonly<\{/);
+  assert.match(reportModelSource, /longitudinal_context: TeacherLongitudinalContext;/);
+  assert.match(reportModelSource, /first_seen_current_window: normalizeNonNegativeCount/);
+  assert.match(reportModelSource, /applied_personal_skills: longitudinalContext\?\.applied_personal_skills \?\? \[\]/);
+  assert.match(teacherContextSource, /近期训练变化/);
+  for (const label of ["首次", "连续", "改善后再次出现", "本轮暂未再现"]) {
+    assert.match(teacherContextSource, new RegExp(`label: "${label}"`));
+  }
+  assert.match(teacherContextSource, /近期记录到个人 Skill 调用/);
+  assert.match(teacherContextSource, /不等于已证明有效/);
+  assert.match(teacherContextSource, /hasLongitudinalSummary \? \(/);
+  assert.doesNotMatch(teacherContextSource, /current_gap_statuses/);
+  assert.doesNotMatch(teacherContextSource, /recovered_gaps/);
+  assert.doesNotMatch(teacherContextSource, /score_trend/);
+  assert.doesNotMatch(teacherContextSource, /session_id/);
+});
+
 test("report page keeps long AI evidence source lists collapsed with clear expand affordances", () => {
   assert.match(reportSource, /<details className="mt-3 rounded-xl border border-border bg-muted\/20 p-3">/);
   assert.match(reportSource, /<summary className="flex cursor-pointer list-none items-start justify-between gap-3">/);

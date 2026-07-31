@@ -96,6 +96,18 @@ export type TeacherReasoningTraceSummary = Readonly<{
   evidence_chain_focus: readonly Readonly<Record<string, unknown>>[];
 }>;
 
+export type TeacherLongitudinalGapStatusCounts = Readonly<{
+  first_seen_current_window: number;
+  repeated: number;
+  reactivated_after_improvement: number;
+  recovered_since_previous_report: number;
+}>;
+
+export type TeacherLongitudinalContext = Readonly<{
+  gap_status_counts: TeacherLongitudinalGapStatusCounts;
+  applied_personal_skills: readonly Readonly<Record<string, unknown>>[];
+}>;
+
 export type TeacherAnalysisContext = Readonly<{
   agent_id: string;
   analysis_mode: string;
@@ -105,6 +117,7 @@ export type TeacherAnalysisContext = Readonly<{
   major_issue_titles: readonly string[];
   skill_memory_focus: Readonly<Record<string, unknown>>;
   source_anchor_labels: readonly string[];
+  longitudinal_context: TeacherLongitudinalContext;
   teaching_prompt_version?: string;
 }>;
 
@@ -175,6 +188,15 @@ export const DEFAULT_TEACHER_ANALYSIS_CONTEXT: TeacherAnalysisContext = {
   major_issue_titles: [],
   skill_memory_focus: {},
   source_anchor_labels: [],
+  longitudinal_context: {
+    gap_status_counts: {
+      first_seen_current_window: 0,
+      repeated: 0,
+      reactivated_after_improvement: 0,
+      recovered_since_previous_report: 0,
+    },
+    applied_personal_skills: [],
+  },
 };
 
 export const DEFAULT_REASONING_TRACE_SUMMARY: TeacherReasoningTraceSummary = {
@@ -753,6 +775,8 @@ function normalizeAiReflectionReview(review?: Partial<AiReflectionReview>): AiRe
 }
 
 function normalizeTeacherAnalysisContext(context?: Partial<TeacherAnalysisContext>): TeacherAnalysisContext {
+  const longitudinalContext = context?.longitudinal_context;
+  const gapStatusCounts = longitudinalContext?.gap_status_counts;
   return {
     ...DEFAULT_TEACHER_ANALYSIS_CONTEXT,
     ...context,
@@ -760,7 +784,20 @@ function normalizeTeacherAnalysisContext(context?: Partial<TeacherAnalysisContex
     major_issue_titles: context?.major_issue_titles ?? [],
     skill_memory_focus: context?.skill_memory_focus ?? {},
     source_anchor_labels: context?.source_anchor_labels ?? [],
+    longitudinal_context: {
+      gap_status_counts: {
+        first_seen_current_window: normalizeNonNegativeCount(gapStatusCounts?.first_seen_current_window),
+        repeated: normalizeNonNegativeCount(gapStatusCounts?.repeated),
+        reactivated_after_improvement: normalizeNonNegativeCount(gapStatusCounts?.reactivated_after_improvement),
+        recovered_since_previous_report: normalizeNonNegativeCount(gapStatusCounts?.recovered_since_previous_report),
+      },
+      applied_personal_skills: longitudinalContext?.applied_personal_skills ?? [],
+    },
   };
+}
+
+function normalizeNonNegativeCount(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function normalizeTeacherReasoningTraceSummary(summary?: Partial<TeacherReasoningTraceSummary>): TeacherReasoningTraceSummary {

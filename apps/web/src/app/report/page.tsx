@@ -1737,8 +1737,14 @@ function hasTeacherAnalysisContext(context: TeacherAnalysisContext): boolean {
     || context.student_thinking_hypothesis
     || Object.keys(context.clinical_thinking_profile).length > 0
     || Object.keys(context.skill_memory_focus).length > 0
-    || context.source_anchor_labels.length > 0,
+    || context.source_anchor_labels.length > 0
+    || hasTeacherLongitudinalContext(context),
   );
+}
+
+function hasTeacherLongitudinalContext(context: TeacherAnalysisContext): boolean {
+  return Object.values(context.longitudinal_context.gap_status_counts).some((count) => count > 0)
+    || context.longitudinal_context.applied_personal_skills.length > 0;
 }
 
 function stringifyTeacherAnalysisValue(value: unknown): string {
@@ -2457,6 +2463,23 @@ function TeacherAnalysisContextSection({
   const skillMemoryFocusEntries = Object.entries(context.skill_memory_focus)
     .map(([key, value]) => [key, stringifyTeacherAnalysisValue(value)] as const)
     .filter(([, value]) => value);
+  const longitudinalGapStatusItems = [
+    { key: "first_seen_current_window", label: "首次", count: context.longitudinal_context.gap_status_counts.first_seen_current_window },
+    { key: "repeated", label: "连续", count: context.longitudinal_context.gap_status_counts.repeated },
+    {
+      key: "reactivated_after_improvement",
+      label: "改善后再次出现",
+      count: context.longitudinal_context.gap_status_counts.reactivated_after_improvement,
+    },
+    {
+      key: "recovered_since_previous_report",
+      label: "本轮暂未再现",
+      count: context.longitudinal_context.gap_status_counts.recovered_since_previous_report,
+    },
+  ] as const;
+  const hasLongitudinalGapChanges = longitudinalGapStatusItems.some((item) => item.count > 0);
+  const appliedPersonalSkillCount = context.longitudinal_context.applied_personal_skills.length;
+  const hasLongitudinalSummary = hasLongitudinalGapChanges || appliedPersonalSkillCount > 0;
 
   return (
     <section className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-4">
@@ -2479,6 +2502,28 @@ function TeacherAnalysisContextSection({
         <div className="mt-3 rounded-lg border border-border bg-background p-3">
           <p className="text-xs font-semibold text-foreground">学生思维假设</p>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{context.student_thinking_hypothesis}</p>
+        </div>
+      ) : null}
+
+      {hasLongitudinalSummary ? (
+        <div className="mt-3 rounded-lg border border-border bg-background p-3">
+          <p className="text-xs font-semibold text-foreground">近期训练变化</p>
+          {hasLongitudinalGapChanges ? (
+            <dl className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {longitudinalGapStatusItems.map((item) => (
+                <div className="rounded-lg bg-muted/30 px-3 py-2" key={item.key}>
+                  <dt className="text-[11px] leading-4 text-muted-foreground">{item.label}</dt>
+                  <dd className="mt-1 text-base font-semibold text-foreground">{item.count}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {appliedPersonalSkillCount > 0 ? (
+            <div className="mt-2 rounded-lg bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              <p>近期记录到个人 Skill 调用 {appliedPersonalSkillCount} 次。</p>
+              <p>调用记录只说明训练中使用过该 Skill，不等于已证明有效。</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

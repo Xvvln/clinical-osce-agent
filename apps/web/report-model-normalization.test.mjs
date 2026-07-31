@@ -57,6 +57,16 @@ test("report model normalizes partial not-ready AI reflection and personal skill
   assert.equal(report.ai_reflection_review.teacher_analysis_context.analysis_summary, "");
   assert.equal(report.ai_reflection_review.teacher_analysis_context.student_thinking_hypothesis, "");
   assert.equal(Object.keys(report.ai_reflection_review.teacher_analysis_context.clinical_thinking_profile).length, 0);
+  assert.deepEqual(
+    { ...report.ai_reflection_review.teacher_analysis_context.longitudinal_context.gap_status_counts },
+    {
+      first_seen_current_window: 0,
+      repeated: 0,
+      reactivated_after_improvement: 0,
+      recovered_since_previous_report: 0,
+    },
+  );
+  assert.equal(report.ai_reflection_review.teacher_analysis_context.longitudinal_context.applied_personal_skills.length, 0);
   assert.equal(report.personal_skill_candidate.teacher_analysis_context.analysis_summary, "");
   assert.equal(report.personal_skill_candidate.teacher_analysis_context.student_thinking_hypothesis, "");
   assert.equal(Object.keys(report.personal_skill_candidate.teacher_analysis_context.clinical_thinking_profile).length, 0);
@@ -65,6 +75,57 @@ test("report model normalizes partial not-ready AI reflection and personal skill
   assert.equal(Array.isArray(report.personal_skill_candidate.external_evidence_checks), true);
   assert.equal(report.personal_skill_candidate.external_evidence_checks.length, 0);
   assert.equal(report.personal_skill_candidate.web_check_status, "not_configured");
+});
+
+test("report model retains only the compact longitudinal teaching summary", () => {
+  const { normalizeFeedbackReport } = loadReportModel();
+  const report = normalizeFeedbackReport({
+    session_id: "longitudinal_context_session",
+    case_id: "appendicitis_001",
+    total_score: 63,
+    dimension_scores: {},
+    rubric_scores: {},
+    missed_items: [],
+    strengths: [],
+    reasoning_errors: [],
+    next_recommendations: [],
+    source_references: [],
+    feedback_summary: "纵向复盘报告。",
+    ai_reflection_review: {
+      status: "ready",
+      summary: "教师复盘已生成。",
+      teacher_analysis_context: {
+        longitudinal_context: {
+          report_window_size: 3,
+          gap_status_counts: {
+            first_seen_current_window: 2,
+            repeated: 1,
+            reactivated_after_improvement: 1,
+            recovered_since_previous_report: 3,
+          },
+          applied_personal_skills: [
+            { skill_id: "skill-personal-1", title: "证据链补强" },
+            { skill_id: "skill-personal-2", title: "鉴别诊断拓展" },
+          ],
+          recent_report_session_ids: ["must-not-render-1", "must-not-render-2"],
+        },
+      },
+    },
+  });
+
+  const longitudinalContext = report.ai_reflection_review.teacher_analysis_context.longitudinal_context;
+  assert.deepEqual(
+    { ...longitudinalContext.gap_status_counts },
+    {
+      first_seen_current_window: 2,
+      repeated: 1,
+      reactivated_after_improvement: 1,
+      recovered_since_previous_report: 3,
+    },
+  );
+  assert.equal(longitudinalContext.applied_personal_skills.length, 2);
+  assert.equal("recent_report_session_ids" in longitudinalContext, false);
+  assert.equal("report_window_size" in longitudinalContext, false);
 });
 
 test("report model preserves TeacherAgent thinking profile for reflection and personal skill", () => {
