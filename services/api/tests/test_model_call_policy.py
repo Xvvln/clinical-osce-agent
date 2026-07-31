@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from contextvars import ContextVar
 from threading import Event
 
 import pytest
 import httpx
+from fastapi import Request, Response
 from fastapi.testclient import TestClient
 
 from app import main
+from app.services.api_call_log_service import API_CALL_CONTEXT
 from app.services.model_call_policy import (
     BoundedModelCallExecutor,
     MODEL_CALL_DEADLINE,
@@ -104,6 +107,92 @@ def test_model_call_executor_propagates_request_context() -> None:
         ) == "student-a"
     finally:
         request_marker.reset(token)
+
+
+def _capture_api_call_context(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    path: str,
+    user: dict[str, str] | None,
+) -> dict[str, str]:
+    monkeypatch.setattr(
+        main.auth_store,
+        "get_user_by_session_token",
+        lambda _: user,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+    )
+    observed: dict[str, str] = {}
+
+    async def call_next(_: Request) -> Response:
+        observed.update(API_CALL_CONTEXT.get())
+        return Response(status_code=204)
+
+    asyncio.run(main.bind_api_call_log_context(request, call_next))
+    return observed
+
+
+def test_api_call_context_binds_safe_session_path_without_leaking_to_other_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = {"user_id": "student-a", "email": "student@example.test"}
+    session_id = "8bc85268-6a0b-4c2b-b86f-a8ddf6044332"
+
+    session_context = _capture_api_call_context(
+        monkeypatch,
+        path=f"/api/sessions/{session_id}/report/generate",
+        user=user,
+    )
+    non_session_context = _capture_api_call_context(
+        monkeypatch,
+        path="/api/model-config/runtime",
+        user=user,
+    )
+
+    assert session_context["session_id"] == session_id
+    assert non_session_context["session_id"] == ""
+    assert API_CALL_CONTEXT.get() == {}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions//message",
+        "/api/sessions/session.with.dot/message",
+        "/api/sessions/%2Fforged/message",
+        "/api/sessions/会话/message",
+    ],
+)
+def test_api_call_context_rejects_malformed_or_unauthenticated_session_ids(
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authenticated_context = _capture_api_call_context(
+        monkeypatch,
+        path=path,
+        user={"user_id": "student-a", "email": "student@example.test"},
+    )
+    unauthenticated_context = _capture_api_call_context(
+        monkeypatch,
+        path="/api/sessions/session-forged/message",
+        user=None,
+    )
+
+    assert authenticated_context["session_id"] == ""
+    assert unauthenticated_context["session_id"] == ""
 
 
 def test_nested_model_calls_share_one_monotonic_budget() -> None:
@@ -230,6 +319,7 @@ def test_model_request_dependency_holds_lease_through_background_task(
         observed["user_id"] = user_id
         observed["gate_active"] = gate.active
         observed["deadline"] = MODEL_CALL_DEADLINE.get()
+        observed["audit_session_id"] = API_CALL_CONTEXT.get().get("session_id")
 
     monkeypatch.setattr(
         main,
@@ -250,6 +340,7 @@ def test_model_request_dependency_holds_lease_through_background_task(
         "user_id": "student-a",
         "gate_active": 1,
         "deadline": observed["deadline"],
+        "audit_session_id": "session-a",
     }
     assert isinstance(observed["deadline"], float)
     assert MODEL_CALL_DEADLINE.get() is None

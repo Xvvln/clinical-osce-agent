@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
@@ -45,7 +46,13 @@ from app.services.admin_display_resolver import (
     reference_labels,
     rubric_item_labels,
 )
-from app.services.api_call_log_service import api_call_log_store, reset_api_call_context, set_api_call_context
+from app.services.api_call_log_service import (
+    api_call_log_store,
+    normalize_api_call_session_id,
+    reset_api_call_context,
+    set_api_call_context,
+    use_api_call_session_context,
+)
 from app.services.auth_store import auth_store
 from app.services.browser_origin_policy import browser_state_change_request_rejection_reason
 from app.services.derived_teaching_focus_service import (
@@ -648,11 +655,22 @@ async def bind_api_call_log_context(request: Request, call_next: Any) -> Respons
         caller=str(user.get("email", "")) if user else "",
         user_id=str(user.get("user_id", "")) if user else "",
         student_id=str(user.get("user_id", "")) if user else "",
+        session_id=_api_call_session_id_from_path(request.url.path) if user else "",
     )
     try:
         return await call_next(request)
     finally:
         reset_api_call_context(token)
+
+
+API_CALL_SESSION_PATH_PATTERN = re.compile(r"^/api/sessions/([^/]+)(?:/|$)")
+
+
+def _api_call_session_id_from_path(path: str) -> str:
+    match = API_CALL_SESSION_PATH_PATTERN.match(str(path or ""))
+    if match is None:
+        return ""
+    return normalize_api_call_session_id(match.group(1))
 
 
 @app.middleware("http")
@@ -1122,6 +1140,11 @@ def _enrich_report_optional_agents_for_user(session_id: str, user_id: str) -> di
             return osce_session_service.enrich_report_optional_agents(session_id)
     except SessionPersistenceError:
         return None
+
+
+def _run_report_enrichment_background_task(session_id: str, user_id: str) -> dict[str, Any] | None:
+    with use_api_call_session_context(session_id):
+        return _enrich_report_optional_agents_for_user(session_id, user_id)
 
 
 async def _admit_authenticated_model_request(
@@ -3669,7 +3692,7 @@ def enrich_session_report(
     if _report_has_pending_optional_agent_enrichment(report):
         response.status_code = status.HTTP_202_ACCEPTED
         background_tasks.add_task(
-            _enrich_report_optional_agents_for_user,
+            _run_report_enrichment_background_task,
             session_id,
             str(session_payload["student_id"]),
         )

@@ -5,11 +5,12 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar, overload
+from typing import Any, Callable, Iterator, TypeVar, overload
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -25,6 +26,7 @@ MAX_LOG_ENTRIES_READ = 2000
 DEFAULT_API_CALL_LOG_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_API_CALL_LOG_BACKUP_COUNT = 3
 API_CALL_CONTEXT: ContextVar[dict[str, str]] = ContextVar("api_call_context", default={})
+API_CALL_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 SECRET_PATTERNS = [
     re.compile(r"(?i)((?:x-goog-api-key|api[_-]?key|key)\s*[=:]\s*)[\"']?[^\s,;&#\"']+"),
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
@@ -231,13 +233,35 @@ def set_api_call_context(*, user_id: str = "", caller: str = "", student_id: str
             "caller": caller.strip(),
             "user_id": user_id.strip(),
             "student_id": student_id.strip(),
-            "session_id": session_id.strip(),
+            "session_id": normalize_api_call_session_id(session_id),
         }
     )
 
 
 def reset_api_call_context(token: Token[dict[str, str]]) -> None:
     API_CALL_CONTEXT.reset(token)
+
+
+def normalize_api_call_session_id(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not API_CALL_SESSION_ID_PATTERN.fullmatch(normalized):
+        return ""
+    return normalized
+
+
+@contextmanager
+def use_api_call_session_context(session_id: object) -> Iterator[None]:
+    current_context = API_CALL_CONTEXT.get()
+    token = API_CALL_CONTEXT.set(
+        {
+            **current_context,
+            "session_id": normalize_api_call_session_id(session_id),
+        }
+    )
+    try:
+        yield
+    finally:
+        API_CALL_CONTEXT.reset(token)
 
 
 @overload
@@ -316,4 +340,12 @@ def call_with_api_logging(
     return result
 
 
-__all__ = ["ApiCallLogStore", "api_call_log_store", "call_with_api_logging", "reset_api_call_context", "set_api_call_context"]
+__all__ = [
+    "ApiCallLogStore",
+    "api_call_log_store",
+    "call_with_api_logging",
+    "normalize_api_call_session_id",
+    "reset_api_call_context",
+    "set_api_call_context",
+    "use_api_call_session_context",
+]
