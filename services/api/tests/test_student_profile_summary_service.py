@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.coach_hint_policy_service import active_training_goals_from_state
 from app.services.student_profile_summary_service import build_skill_profile_summary
 from app.services.student_profile_store import StudentProfileStore
 from app.services.training_skill_orchestrator_service import build_active_skill_context
+
+
+def _history_training_gap(item_id: str, label: str) -> dict[str, object]:
+    return {
+        "gap_type": f"{item_id}_missing",
+        "rubric_item_id": item_id,
+        "label": label,
+        "dimension_id": "history_taking",
+        "missing_score": 2,
+        "severity": "medium",
+        "stage": "history_taking",
+        "next_training_action": f"下一轮先完成：{label}。",
+        "gap_source": "score_trace",
+    }
 
 
 def test_student_profile_store_persists_latest_profile_snapshot(tmp_path) -> None:
@@ -22,6 +38,113 @@ def test_student_profile_store_persists_latest_profile_snapshot(tmp_path) -> Non
         "recent_error_item_ids": ["ht_migration"],
         "skill_states": {"skill_ht_migration": {"state": "active", "priority": 8}},
     }
+
+
+def test_current_focus_excludes_old_error_after_latest_correct_report() -> None:
+    gap = _history_training_gap("ht_migration", "追问疼痛部位及转移特征")
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_latest_correct",
+                "missed_items": [],
+                "training_gaps": [],
+            },
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_old_wrong",
+                "missed_items": ["ht_migration"],
+                "training_gaps": [gap],
+            },
+        ],
+        enabled_skills=[
+            {
+                "skill_id": "skill_ht_migration",
+                "case_ids": ["appendicitis_001"],
+                "trigger_item_ids": ["ht_migration"],
+            }
+        ],
+    )
+
+    recovered_gap = summary["recent_training_gaps"][0]
+    assert summary["recent_error_item_ids"] == ["ht_migration"]
+    assert recovered_gap["status"] == "recovered"
+    assert recovered_gap["latest_present"] is False
+    assert summary["current_training_gaps"] == []
+    assert summary["current_focus_item_ids"] == []
+    assert summary["current_focus_items"] == []
+    assert summary["skill_states"]["skill_ht_migration"]["state"] == "cooldown"
+
+
+def test_current_focus_includes_only_latest_current_and_persistent_gaps() -> None:
+    migration_gap = _history_training_gap("ht_migration", "追问疼痛部位及转移特征")
+    character_gap = _history_training_gap("ht_character", "追问疼痛性质")
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_latest_wrong",
+                "missed_items": ["ht_migration", "ht_character"],
+                "training_gaps": [migration_gap, character_gap],
+            },
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_previous_wrong",
+                "missed_items": ["ht_migration"],
+                "training_gaps": [migration_gap],
+            },
+        ],
+        enabled_skills=[],
+    )
+
+    gaps_by_item = {gap["rubric_item_id"]: gap for gap in summary["current_training_gaps"]}
+    assert gaps_by_item["ht_migration"]["status"] == "persistent"
+    assert gaps_by_item["ht_migration"]["repeat_count"] == 2
+    assert gaps_by_item["ht_migration"]["latest_present"] is True
+    assert gaps_by_item["ht_character"]["status"] == "current"
+    assert gaps_by_item["ht_character"]["repeat_count"] == 1
+    assert gaps_by_item["ht_character"]["latest_present"] is True
+    assert summary["current_focus_item_ids"] == ["ht_migration", "ht_character"]
+    assert [item["item_id"] for item in summary["current_focus_items"]] == ["ht_migration", "ht_character"]
+
+
+@pytest.mark.parametrize(("clean_report_count", "expected_skill_state"), [(1, "cooldown"), (3, "retired")])
+def test_recovered_gap_never_returns_to_current_focus_during_skill_recovery(
+    clean_report_count: int,
+    expected_skill_state: str,
+) -> None:
+    gap = _history_training_gap("ht_migration", "追问疼痛部位及转移特征")
+    clean_reports = [
+        {
+            "case_id": "appendicitis_001",
+            "report_id": f"report_clean_{index}",
+            "missed_items": [],
+            "training_gaps": [],
+        }
+        for index in range(clean_report_count)
+    ]
+    summary = build_skill_profile_summary(
+        reports=[
+            *clean_reports,
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_old_wrong",
+                "missed_items": ["ht_migration"],
+                "training_gaps": [gap],
+            },
+        ],
+        enabled_skills=[
+            {
+                "skill_id": "skill_ht_migration",
+                "case_ids": ["appendicitis_001"],
+                "trigger_item_ids": ["ht_migration"],
+            }
+        ],
+    )
+
+    assert summary["recent_training_gaps"][0]["status"] == "recovered"
+    assert summary["current_focus_items"] == []
+    assert summary["skill_states"]["skill_ht_migration"]["state"] == expected_skill_state
 
 
 def test_skill_profile_marks_unmatched_skill_as_available_not_active() -> None:
