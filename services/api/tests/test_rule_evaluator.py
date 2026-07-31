@@ -7,12 +7,15 @@ from app.models.rubric import LlmRubricRequest, LlmRubricResponse, ScoreTrace
 from app.services.humanistic_evaluator import (
     HumanisticSemanticReviewResponse,
     OpenAICompatibleHumanisticSemanticReviewer,
+    ScoringLedger,
+    SemanticAnchorMatcher,
     SemanticReviewRequest,
+    TrainingEvent,
     load_anchor_bank,
     semantic_anchor_match,
 )
 from app.services.osce_session_service import OsceSession
-from app.services.rule_evaluator import evaluate_session_rules, score_rubric_item
+from app.services.rule_evaluator import evaluate_rubric_item, evaluate_session_rules, score_rubric_item
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +34,18 @@ class FakeHumanisticEmbeddingClient:
 class FlatHumanisticEmbeddingClient:
     def embed_texts(self, texts, *, task_type: str):  # type: ignore[no-untyped-def]
         return [[1.0, 0.0] for _ in texts]
+
+
+class BoundaryHumanisticEmbeddingClient:
+    def embed_texts(self, texts, *, task_type: str):  # type: ignore[no-untyped-def]
+        if task_type == "RETRIEVAL_QUERY":
+            return [[0.29, 0.0, 0.957] for _ in texts]
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+class FailingHumanisticEmbeddingClient:
+    def embed_texts(self, texts, *, task_type: str):  # type: ignore[no-untyped-def]
+        raise RuntimeError("local embedding unavailable")
 
 
 class BoundaryAcceptingReviewer:
@@ -58,6 +73,36 @@ class FakeHumanisticReviewClient:
     def complete_json(self, **kwargs: object) -> HumanisticSemanticReviewResponse:
         self.calls.append(dict(kwargs))
         return HumanisticSemanticReviewResponse(status="accepted", rationale="语义覆盖患者视角。")
+
+
+BOUNDARY_ANCHOR_BANK = {
+    "version": "test_boundary_anchor_bank",
+    "anchors": {
+        "test_boundary_anchor": {
+            "positive": ["边界复核正向锚点"],
+            "negative": [],
+            "threshold": 0.28,
+        }
+    },
+}
+
+
+def _humanistic_test_item(kind: str, **spec: object) -> dict[str, object]:
+    return {
+        "item_id": f"test_{kind}",
+        "description": "人文语义评分测试项",
+        "max_score": 3,
+        "match_rule": {
+            "kind": kind,
+            "spec": {
+                "anchor_id": "test_boundary_anchor",
+                **spec,
+            },
+        },
+        "stage": "history_taking",
+        "gap_type": f"test_{kind}_missing",
+        "next_training_action": "下一轮继续练习。",
+    }
 
 
 def _fake_embedding_vector(text: str) -> list[float]:
@@ -448,6 +493,158 @@ def test_humanistic_semantic_boundary_calls_reviewer_and_records_status() -> Non
     assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
     assert trace["llm_review_status"] == "accepted"
     assert len(reviewer.requests) == 1
+
+
+def test_humanistic_semantic_boundary_reviews_only_best_candidate_per_item() -> None:
+    reviewer = BoundaryAcceptingReviewer()
+    matcher = SemanticAnchorMatcher(
+        BOUNDARY_ANCHOR_BANK,
+        embedding_client=BoundaryHumanisticEmbeddingClient(),
+        reviewer=reviewer,
+    )
+    event_stream = [
+        TrainingEvent(
+            turn_index=index,
+            event_type="student_utterance",
+            role="student",
+            content=f"第 {index} 条边界候选表达",
+        )
+        for index in range(1, 25)
+    ]
+
+    result = evaluate_rubric_item(
+        OsceSession(
+            session_id="semantic_review_bound",
+            student_id="student_demo",
+            case_id="appendicitis_001",
+            stage="history_taking",
+        ),
+        _humanistic_test_item("semantic_anchor"),
+        event_stream=event_stream,
+        semantic_matcher=matcher,
+        scoring_ledger=ScoringLedger(),
+    )
+
+    assert result["trace"].awarded_score == 3
+    assert result["trace"].matched_evidence == ["第 1 条边界候选表达"]
+    assert len(reviewer.requests) == 1
+
+
+def test_humanistic_sequence_reviews_only_best_candidate_before_action() -> None:
+    reviewer = BoundaryAcceptingReviewer()
+    matcher = SemanticAnchorMatcher(
+        BOUNDARY_ANCHOR_BANK,
+        embedding_client=BoundaryHumanisticEmbeddingClient(),
+        reviewer=reviewer,
+    )
+    event_stream = [
+        TrainingEvent(
+            turn_index=index,
+            event_type="student_utterance",
+            role="student",
+            content=f"查体前的第 {index} 条边界候选",
+        )
+        for index in range(1, 21)
+    ]
+    event_stream.append(
+        TrainingEvent(
+            turn_index=21,
+            event_type="physical_exam_requested",
+            role="system",
+            content="腹部查体",
+        )
+    )
+
+    result = evaluate_rubric_item(
+        OsceSession(
+            session_id="sequence_review_bound",
+            student_id="student_demo",
+            case_id="appendicitis_001",
+            stage="history_taking",
+        ),
+        _humanistic_test_item(
+            "sequence_check",
+            action_types=["physical_exam_requested"],
+            window_student_turns=20,
+        ),
+        event_stream=event_stream,
+        semantic_matcher=matcher,
+        scoring_ledger=ScoringLedger(),
+    )
+
+    assert result["trace"].awarded_score == 3
+    assert result["trace"].timing_status == "before_action"
+    assert len(reviewer.requests) == 1
+
+
+def test_humanistic_triggered_response_reviews_only_one_best_candidate() -> None:
+    reviewer = BoundaryRejectingReviewer()
+    matcher = SemanticAnchorMatcher(
+        BOUNDARY_ANCHOR_BANK,
+        embedding_client=BoundaryHumanisticEmbeddingClient(),
+        reviewer=reviewer,
+    )
+    event_stream: list[TrainingEvent] = []
+    for index in range(1, 11):
+        patient_turn = index * 2 - 1
+        event_stream.extend(
+            [
+                TrainingEvent(
+                    turn_index=patient_turn,
+                    event_type="patient_utterance",
+                    role="patient",
+                    content=f"第 {index} 次表达担心",
+                ),
+                TrainingEvent(
+                    turn_index=patient_turn + 1,
+                    event_type="student_utterance",
+                    role="student",
+                    content=f"第 {index} 次边界回应",
+                ),
+            ]
+        )
+
+    result = evaluate_rubric_item(
+        OsceSession(
+            session_id="triggered_review_bound",
+            student_id="student_demo",
+            case_id="appendicitis_001",
+            stage="history_taking",
+        ),
+        _humanistic_test_item(
+            "triggered_response",
+            trigger_keywords=["担心"],
+            response_window_turns=1,
+        ),
+        event_stream=event_stream,
+        semantic_matcher=matcher,
+        scoring_ledger=ScoringLedger(),
+    )
+
+    assert result["trace"].awarded_score == 0
+    assert len(reviewer.requests) == 1
+
+
+def test_humanistic_embedding_failure_still_uses_lexical_fallback() -> None:
+    session = OsceSession(
+        session_id="session_humanistic_embedding_failure",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "student", "content": "你现在最担心的是什么？"},
+        ],
+    )
+
+    report = evaluate_session_rules(
+        session,
+        humanistic_embedding_client=FailingHumanisticEmbeddingClient(),
+    )
+
+    trace = report["rubric_scores"]["nm_patient_concern"]["trace"]
+    assert report["rubric_scores"]["nm_patient_concern"]["score"] == 3
+    assert trace["match_method"] == "semantic_anchor"
+    assert trace["matched_evidence"] == ["你现在最担心的是什么？"]
 
 
 def test_humanistic_semantic_boundary_uses_default_reviewer(monkeypatch) -> None:

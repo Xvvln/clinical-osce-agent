@@ -128,10 +128,20 @@ class SemanticAnchorMatcher:
         self._anchor_vector_cache: dict[tuple[str, str, tuple[str, ...]], list[list[float]]] = {}
         self._query_vector_cache: dict[str, list[float]] = {}
 
-    def match(self, text: str, anchor_id: str) -> dict[str, Any]:
+    def match(
+        self,
+        text: str,
+        anchor_id: str,
+        *,
+        review_boundary: bool = True,
+    ) -> dict[str, Any]:
         if self._embedding_client is not None:
             try:
-                embedding_result = self._embedding_anchor_match(text, anchor_id)
+                embedding_result = self._embedding_anchor_match(
+                    text,
+                    anchor_id,
+                    review_boundary=review_boundary,
+                )
             except Exception as exc:
                 LOGGER.warning("Humanistic embedding anchor match failed; falling back to lexical anchors: %s", exc)
             else:
@@ -141,7 +151,7 @@ class SemanticAnchorMatcher:
                     text,
                     anchor_id,
                     self._anchor_bank,
-                    reviewer=self._reviewer,
+                    reviewer=self._reviewer if review_boundary else None,
                     review_margin=self._review_margin,
                 )
                 if lexical_result.get("matched"):
@@ -153,11 +163,37 @@ class SemanticAnchorMatcher:
             text,
             anchor_id,
             self._anchor_bank,
+            reviewer=self._reviewer if review_boundary else None,
+            review_margin=self._review_margin,
+        )
+
+    def review_match(
+        self,
+        text: str,
+        anchor_id: str,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        reviewed_result = dict(result)
+        if self._reviewer is None:
+            return reviewed_result
+        anchor = _anchor_payload(anchor_id, self._anchor_bank)
+        threshold = float(anchor.get("threshold", 0.28) or 0.28)
+        return _apply_boundary_review(
+            reviewed_result,
+            text=text,
+            anchor_id=anchor_id,
+            threshold=threshold,
             reviewer=self._reviewer,
             review_margin=self._review_margin,
         )
 
-    def _embedding_anchor_match(self, text: str, anchor_id: str) -> dict[str, Any]:
+    def _embedding_anchor_match(
+        self,
+        text: str,
+        anchor_id: str,
+        *,
+        review_boundary: bool,
+    ) -> dict[str, Any]:
         anchor = _anchor_payload(anchor_id, self._anchor_bank)
         positive_anchors = [str(item) for item in anchor.get("positive", []) if str(item)]
         negative_anchors = [str(item) for item in anchor.get("negative", []) if str(item)]
@@ -179,7 +215,7 @@ class SemanticAnchorMatcher:
             text=text,
             anchor_id=anchor_id,
             threshold=threshold,
-            reviewer=self._reviewer,
+            reviewer=self._reviewer if review_boundary else None,
             review_margin=self._review_margin,
         )
 

@@ -307,12 +307,21 @@ def _evaluate_semantic_anchor(
     anchor_id = str(spec["anchor_id"])
     best: tuple[TrainingEvent, dict[str, Any]] | None = None
     for event in _student_events(event_stream):
-        result = semantic_matcher.match(event.content, anchor_id)
+        result = semantic_matcher.match(
+            event.content,
+            anchor_id,
+            review_boundary=False,
+        )
         if best is None or float(result["semantic_score"]) > float(best[1]["semantic_score"]):
             best = (event, result)
     if best is None:
         return {"trace": _build_score_trace(item, 0, [], match_method="semantic_anchor")}
-    event, result = best
+    event, unreviewed_result = best
+    result = semantic_matcher.review_match(
+        event.content,
+        anchor_id,
+        unreviewed_result,
+    )
     score = int(item["max_score"]) if result["matched"] else 0
     key = event_key(event)
     if score and scoring_ledger and not scoring_ledger.can_award(str(item["item_id"]), key):
@@ -428,6 +437,8 @@ def _evaluate_triggered_response(
 ) -> dict[str, Any]:
     triggers = [str(keyword) for keyword in spec.get("trigger_keywords", []) if str(keyword)]
     window = int(spec.get("response_window_turns", 2))
+    anchor_id = str(spec["anchor_id"])
+    best: tuple[TrainingEvent, TrainingEvent, dict[str, Any]] | None = None
     for trigger_event in event_stream:
         if trigger_event.role != "patient" or not any(keyword in trigger_event.content for keyword in triggers):
             continue
@@ -435,45 +446,78 @@ def _evaluate_triggered_response(
             event for event in _student_events(event_stream)
             if trigger_event.turn_index < event.turn_index <= trigger_event.turn_index + window
         ]
-        match = _best_semantic_event(candidate_events, str(spec["anchor_id"]), semantic_matcher)
-        if not match or not match[1]["matched"]:
+        match = _best_semantic_event(
+            candidate_events,
+            anchor_id,
+            semantic_matcher,
+            review_boundary=False,
+        )
+        if not match:
             continue
         event, result = match
-        key = f"{trigger_event.turn_index}->{event_key(event)}"
-        if scoring_ledger and not scoring_ledger.can_award(str(item["item_id"]), key):
-            continue
-        if scoring_ledger:
-            scoring_ledger.award(str(item["item_id"]), key)
-        return {
-            "trace": _build_score_trace(
-                item,
-                int(item["max_score"]),
-                [event.content],
-                match_method="triggered_response",
-                semantic_score=float(result["semantic_score"]),
-                anchor_id=str(spec["anchor_id"]),
-                positive_anchor=result.get("positive_anchor"),
-                negative_anchor=result.get("negative_anchor"),
-                candidate_evidence=event.content,
-                anchor_bank_version=str(result.get("anchor_bank_version") or ""),
-                llm_review_status=result.get("llm_review_status"),
-                matched_turn_index=event.turn_index,
-            )
-        }
-    return {"trace": _build_score_trace(item, 0, [], match_method="triggered_response")}
+        if best is None or float(result["semantic_score"]) > float(best[2]["semantic_score"]):
+            best = (trigger_event, event, result)
+    if best is None:
+        return {"trace": _build_score_trace(item, 0, [], match_method="triggered_response")}
+
+    trigger_event, event, unreviewed_result = best
+    result = semantic_matcher.review_match(
+        event.content,
+        anchor_id,
+        unreviewed_result,
+    )
+    if not result["matched"]:
+        return {"trace": _build_score_trace(item, 0, [], match_method="triggered_response")}
+    key = f"{trigger_event.turn_index}->{event_key(event)}"
+    if scoring_ledger and not scoring_ledger.can_award(str(item["item_id"]), key):
+        return {"trace": _build_score_trace(item, 0, [], match_method="triggered_response")}
+    if scoring_ledger:
+        scoring_ledger.award(str(item["item_id"]), key)
+    return {
+        "trace": _build_score_trace(
+            item,
+            int(item["max_score"]),
+            [event.content],
+            match_method="triggered_response",
+            semantic_score=float(result["semantic_score"]),
+            anchor_id=anchor_id,
+            positive_anchor=result.get("positive_anchor"),
+            negative_anchor=result.get("negative_anchor"),
+            candidate_evidence=event.content,
+            anchor_bank_version=str(result.get("anchor_bank_version") or ""),
+            llm_review_status=result.get("llm_review_status"),
+            matched_turn_index=event.turn_index,
+        )
+    }
 
 
 def _best_semantic_event(
     events: list[TrainingEvent],
     anchor_id: str,
     semantic_matcher: SemanticAnchorMatcher,
+    *,
+    review_boundary: bool = True,
 ) -> tuple[TrainingEvent, dict[str, Any]] | None:
     best: tuple[TrainingEvent, dict[str, Any]] | None = None
     for event in events:
-        result = semantic_matcher.match(event.content, anchor_id)
+        result = semantic_matcher.match(
+            event.content,
+            anchor_id,
+            review_boundary=False,
+        )
         if best is None or float(result["semantic_score"]) > float(best[1]["semantic_score"]):
             best = (event, result)
-    return best
+    if best is None or not review_boundary:
+        return best
+    event, unreviewed_result = best
+    return (
+        event,
+        semantic_matcher.review_match(
+            event.content,
+            anchor_id,
+            unreviewed_result,
+        ),
+    )
 
 
 def _student_events(event_stream: list[TrainingEvent]) -> list[TrainingEvent]:
