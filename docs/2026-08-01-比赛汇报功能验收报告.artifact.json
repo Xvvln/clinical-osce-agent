@@ -1,0 +1,429 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "TraceOSCE 比赛功能验收报告",
+    "description": "基于复赛汇报材料、受控学生多轮模拟、模型调用审计与全量自动化回归形成的脱敏验收结论。",
+    "generatedAt": "2026-08-01T02:56:50+08:00",
+    "sources": [
+      {
+        "id": "competition-brief",
+        "label": "TraceOSCE 复赛答辩 PPT 与教师审阅提纲"
+      },
+      {
+        "id": "live-simulation",
+        "label": "2026-08-01 受控学生多轮模拟脱敏汇总"
+      },
+      {
+        "id": "model-audit",
+        "label": "2026-08-01 模型调用与训练事件脱敏审计"
+      },
+      {
+        "id": "api-regression",
+        "label": "后端全量自动化回归",
+        "path": "services/api/tests"
+      },
+      {
+        "id": "student-web-regression",
+        "label": "学生端自动化回归与生产构建",
+        "path": "apps/web"
+      },
+      {
+        "id": "admin-web-regression",
+        "label": "教师管理端自动化回归与生产构建",
+        "path": "apps/admin"
+      },
+      {
+        "id": "alibaba-config",
+        "label": "阿里云模型与统一凭据配置说明",
+        "path": "docs/阿里云模型与统一凭据配置.md"
+      },
+      {
+        "id": "acceptance-evidence-sql",
+        "label": "验收报告脱敏证据数据集",
+        "path": "docs/2026-08-01-比赛汇报功能验收证据.sql"
+      }
+    ],
+    "charts": [
+      {
+        "id": "appendicitis-score-comparison",
+        "title": "阑尾炎各训练轮次得分",
+        "subtitle": "7 个离散的受控模拟轮次，满分 100；用于验收系统反馈联动，不代表真人学习疗效",
+        "showDescription": true,
+        "intent": "comparison",
+        "question": "同一受控学生在连续训练中的评分是否会随实际覆盖变化，而不是被系统强制单调上升？",
+        "rationale": "轮次数量有限且每轮行为不同，使用离散柱状比较而不是连续学习曲线，保留回退并避免因果暗示。",
+        "type": "bar",
+        "dataset": "appendicitis_score_comparison",
+        "sourceId": "acceptance-evidence-sql",
+        "encodings": {
+          "x": {"field": "round_label", "type": "ordinal", "label": "训练轮次"},
+          "y": {"field": "score", "type": "quantitative", "label": "得分", "format": "number"}
+        },
+        "yAxisTitle": "得分（满分 100）",
+        "valueFormat": "number",
+        "unit": "分",
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "acceptance-matrix",
+        "title": "汇报承诺验收矩阵",
+        "subtitle": "按汇报材料逐项对照真实实现、运行证据与边界",
+        "showDescription": true,
+        "dataset": "acceptance_matrix",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "order", "label": "序号", "type": "number"},
+          {"field": "claim", "label": "汇报承诺", "type": "text"},
+          {"field": "result", "label": "结论", "type": "text"},
+          {"field": "evidence", "label": "可核验证据", "type": "text"},
+          {"field": "boundary", "label": "边界", "type": "text"}
+        ]
+      },
+      {
+        "id": "appendicitis-rounds",
+        "title": "阑尾炎连续训练结果",
+        "subtitle": "同一受控学生前 5 轮；分数满分 100，漏项按当前量表训练点计数",
+        "showDescription": true,
+        "dataset": "appendicitis_rounds",
+        "defaultSort": {
+          "field": "round",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "round", "label": "轮次", "type": "number"},
+          {"field": "score", "label": "得分", "type": "number"},
+          {"field": "missed", "label": "漏项", "type": "number"},
+          {"field": "hints", "label": "学生主动求助", "type": "number"},
+          {"field": "observable_change", "label": "本轮可观察变化", "type": "text"}
+        ]
+      },
+      {
+        "id": "longitudinal-labels",
+        "title": "教师纵向识别结果",
+        "subtitle": "第 6—7 轮以最近报告为依据区分首次、持续、复现和恢复",
+        "showDescription": true,
+        "dataset": "longitudinal_labels",
+        "defaultSort": {
+          "field": "round",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "round", "label": "轮次", "type": "number"},
+          {"field": "score", "label": "得分", "type": "number"},
+          {"field": "first", "label": "首次", "type": "number"},
+          {"field": "repeated", "label": "持续", "type": "number"},
+          {"field": "reactivated", "label": "复现", "type": "number"},
+          {"field": "recovered", "label": "恢复", "type": "number"},
+          {"field": "teacher_result", "label": "教师智能体结果", "type": "text"}
+        ]
+      },
+      {
+        "id": "case-transfer",
+        "title": "跨病例迁移验收",
+        "subtitle": "4 个病例共 44 个学生交互回合；均生成完整报告、教师分析和经审批的个人 Skill",
+        "showDescription": true,
+        "dataset": "case_transfer",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "order", "label": "序号", "type": "number"},
+          {"field": "case", "label": "病例", "type": "text"},
+          {"field": "score", "label": "得分", "type": "number"},
+          {"field": "adaptive_behavior", "label": "自适应表现", "type": "text"},
+          {"field": "contamination", "label": "跨病例可见字段串扰", "type": "number"}
+        ]
+      },
+      {
+        "id": "regression-summary",
+        "title": "最终自动化回归",
+        "subtitle": "2026 年 8 月 1 日最终代码状态；测试通过数不含类型检查和生产构建",
+        "showDescription": true,
+        "dataset": "regression_summary",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "order", "label": "序号", "type": "number"},
+          {"field": "surface", "label": "范围", "type": "text"},
+          {"field": "passed", "label": "通过", "type": "number"},
+          {"field": "failed", "label": "失败", "type": "number"},
+          {"field": "additional_checks", "label": "额外检查", "type": "text"},
+          {"field": "result", "label": "结论", "type": "text"}
+        ]
+      },
+      {
+        "id": "issues-fixed",
+        "title": "真实流程中发现并闭环的问题",
+        "subtitle": "每项均经过复现、修复与相关回归；不是仅记录待办",
+        "showDescription": true,
+        "dataset": "issues_fixed",
+        "defaultSort": {
+          "field": "order",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "sourceId": "acceptance-evidence-sql",
+        "columns": [
+          {"field": "order", "label": "序号", "type": "number"},
+          {"field": "problem", "label": "真实问题", "type": "text"},
+          {"field": "impact", "label": "对学生或教师的影响", "type": "text"},
+          {"field": "resolution", "label": "已完成的修复", "type": "text"},
+          {"field": "verification", "label": "复验结果", "type": "text"}
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "id": "report-title",
+        "type": "markdown",
+        "layout": "full",
+        "body": "# TraceOSCE 比赛功能验收报告"
+      },
+      {
+        "id": "executive-summary",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Executive Summary\n\n- **汇报材料中的核心功能已经形成可运行闭环。** 过程评分、人文沟通证据、自适应提示、教师复盘、个人训练 Skill、审批边界、纵向恢复/复现识别和报告反哺下一轮均有真实运行证据。\n- **受控学生测试足够长，且不是问两句就结束。** 核心验收覆盖 11 个完整 session、120 个学生交互回合；另追加 11 回合专门复验教师报告是否准确引用学生最终提交。\n- **模型链路已统一到国内服务。** 文本、语音和可选重排共用阿里云 DashScope 凭据边界；最终审计中 599 次模型调用全部为 `qwen-plus` 或 `qwen3-rerank`，境外模型调用为 0；向量召回使用本地 BAAI 模型。\n- **最终代码回归通过。** 后端、学生端和管理端共 1278 项自动化测试全部通过，两端类型检查和生产构建也通过。浏览器肉眼验收因遵守“不新开标签页”的要求而跳过，本报告不把它伪装成已完成。"
+      },
+      {
+        "id": "scope-definition",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 这次验收测的是什么\n\n验收基线来自复赛答辩 PPT 和教师审阅提纲。`学生交互回合` 指学生完成一次问诊、查体、辅助检查、阶段性假设或最终提交动作；`完整 session` 指从病例开始到提交诊断并生成报告。测试学生按同一学习者连续进步、回退、复现旧问题和跨病例迁移来设计，而不是每轮都用理想答案。\n\n量化结果用于验证**系统行为是否符合承诺**，不用于宣称真人学生已经获得某种统计显著的学习提升。"
+      },
+      {
+        "id": "acceptance-finding",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 汇报承诺已经落到可观察行为\n\n关键能力不是以“接口返回 200”判定，而是检查学生做了什么、系统依据什么评分、教师如何解释、下一轮提示是否真的变化，以及模型和报告是否保留来源与边界。下表给出逐项结论。"
+      },
+      {
+        "id": "acceptance-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "acceptance-matrix"
+      },
+      {
+        "id": "progression-finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live-simulation",
+        "body": "## 连续训练能呈现进步，也允许真实回退\n\n阑尾炎前 5 轮分数为 56、91、91、93、83，漏项从 18 降到 2 后又回升到 7。这个结果比单调上涨更可信：学生在前几轮吸收了训练目标，第 5 轮仍会因注意力转移而丢失部分关键步骤。系统没有为了制造漂亮曲线而锁住高分；提示也从第 1 轮的 3 次逐步减少，并在第 5 轮出现新缺口时重新出现。"
+      },
+      {
+        "id": "appendicitis-score-chart-block",
+        "type": "chart",
+        "layout": "full",
+        "chartId": "appendicitis-score-comparison"
+      },
+      {
+        "id": "appendicitis-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "appendicitis-rounds"
+      },
+      {
+        "id": "longitudinal-finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live-simulation",
+        "body": "## 教师智能体能区分“没学会”和“学会后又犯”\n\n第 6 轮识别出 5 个恢复项；第 7 轮同一学习者出现 4 个复现项和 1 个新恢复项。报告因此能把“持续薄弱”“重新出现”“已经恢复”分开，而不是每轮重复一份通用建议。个人 Skill 的调用次数只作为过程证据展示，报告明确写明“调用不等于有效”，效果必须结合后续覆盖变化判断。"
+      },
+      {
+        "id": "longitudinal-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "longitudinal-labels"
+      },
+      {
+        "id": "transfer-finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live-simulation",
+        "body": "## 跨病例迁移没有把上一例答案带进下一例\n\n急性冠脉综合征、心衰、甲亢和肺炎 4 个病例共完成 44 个学生交互回合。每例都有两次阶段性假设、真实查体和检查动作，并生成完整报告、Qwen 教师分析和经审批的个人 Skill。对学生可见字段做串扰检查，发现跨病例内容污染为 0。"
+      },
+      {
+        "id": "transfer-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "case-transfer"
+      },
+      {
+        "id": "report-quality-finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "live-simulation",
+        "body": "## 报告首屏回答“多少分、最该补什么、下一轮怎么练”\n\n最终报告先显示总分，再给出最重要的薄弱点和不超过 3 条下一轮动作；证据链、量表细项和教师深度复盘默认折叠。教师分析现在直接读取学生真实的最终诊断和推理，不再误写“学生推理为空”。一轮追加的 11 回合急性冠脉综合征复验中，教师智能体准确指出锚定过早和排除性验证不足，没有出现空提交误判；报告给出 1 个主要问题、2 个教师动作和 1 条学生建议。"
+      },
+      {
+        "id": "model-finding",
+        "type": "markdown",
+        "layout": "full",
+        "sourceId": "model-audit",
+        "body": "## 模型统一不仅是配置名，而是有真实调用审计\n\n最终执行窗口记录 599 次模型调用：`qwen-plus` 546 次、`qwen3-rerank` 53 次，境外模型调用 0。核心 11 个 session 共记录 447 个训练事件；484 次最终调用可绑定到对应训练 session。执行窗口中曾有 32 次失败调用，包含修复前超时、结构化输出重试和可选重排失败；这些没有被隐藏，修复后的完整业务流程与最终回归均已通过。\n\n主文本、语音和可选重排采用同一 DashScope 凭据数据流；本地 `BAAI/bge-small-zh-v1.5` 负责向量召回，病例内容不需要发往境外嵌入服务。"
+      },
+      {
+        "id": "issues-finding",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 测试发现的问题已经闭环，而不是留在报告里\n\n真实长流程暴露了短单测不容易看到的问题：教师分析超时后缺字段、后台任务长期停在 pending、可选重排拖垮报告主链路、教师没有拿到学生最终推理、报告建议过长，以及模型策略错误被宽泛异常吞掉。修复后都补了针对性回归，并最终进入全量测试。"
+      },
+      {
+        "id": "issues-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "issues-fixed"
+      },
+      {
+        "id": "regression-finding",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 最终自动化回归没有业务失败\n\n后端 1121 项、学生端 131 项、教师管理端 26 项，共 1278 项自动化测试全部通过。学生端和管理端的 TypeScript 类型检查、Next.js 生产构建也均通过。仅保留 2 条后端第三方依赖弃用预告和 1 条前端 Node 弃用提示，不影响当前业务行为。"
+      },
+      {
+        "id": "regression-table-block",
+        "type": "table",
+        "layout": "full",
+        "tableId": "regression-summary"
+      },
+      {
+        "id": "recommended-next-steps",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 下一步应把重点从“还能加什么功能”转到真人验证\n\n1. **做一轮小规模真人盲测。** 建议 6—10 名医学生，统一病例前测与后测，由不看系统分数的教师独立评分，记录完成时长、关键动作覆盖率和不安全行为。\n2. **把报告有用性单独评价。** 让学生在训练后标记“最有帮助的一条建议”和“无法执行的一条建议”，教师只检查前 3 条动作是否具体、准确、可在下一轮完成。\n3. **答辩现场展示一条完整证据链。** 选择“第一次漏问—下一轮 Skill 生效—覆盖恢复—后来复现—教师调整建议”的连续记录，比堆叠功能列表更能说明系统价值。\n4. **继续监控降级比例。** 区分 Qwen 正常生成、确定性回退和可选重排回退；只要回退率升高，就优先查模型预算与网络，不把模板报告当成正常智能分析。"
+      },
+      {
+        "id": "further-questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 还需要真人数据回答的问题\n\n- 学生在没有系统提示时，能否把恢复的关键动作迁移到未见过的新病例？\n- 教师独立评分与系统过程评分的一致性有多高，哪些量表项最容易分歧？\n- 报告压缩到 3 条动作后，学生是否更愿意执行，还是会觉得证据不够？"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## 边界与假设\n\n- 本次是受控模拟学生的系统验收，不是随机对照研究，也不等同于真实医学生学习效果。\n- 分数用于验证当前量表、流程和反馈联动；不同病例分数不能直接比较难度。\n- 为避免把少量离散轮次包装成连续趋势，本报告使用离散柱状比较和精确表格，不绘制连续学习曲线。\n- 遵守“不新开浏览器窗口或标签页”的要求；因当时没有可复用的项目页，本轮没有进行肉眼浏览器验收。前端结论来自类型检查、组件测试和生产构建。\n- 报告只保留脱敏汇总，不包含账号、凭据、原始 session 标识或完整学生对话。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-01T02:56:50+08:00",
+    "status": "ready",
+    "datasets": {
+      "acceptance_matrix": [
+        {"order": 1, "claim": "过程评分，不只看最终诊断", "result": "通过", "evidence": "问诊、查体、检查、假设与最终提交分别进入量表和证据链；存在诊断正确但过程分较低的受控轮次。", "boundary": "分数反映当前量表覆盖，不等于临床执业能力。"},
+        {"order": 2, "claim": "人文沟通有证据", "result": "通过", "evidence": "人文沟通先由本地信号筛选，再至多调用一次模型复核，并把命中语句保留到报告。", "boundary": "识别的是训练对话表现，不做人格判断。"},
+        {"order": 3, "claim": "学生越熟练，提示越少", "result": "通过", "evidence": "首轮出现 3 级不同提示；中间高覆盖轮次无需提示；出现新缺口时提示重新激活。", "boundary": "提示数量受学生主动求助和当前缺口共同影响。"},
+        {"order": 4, "claim": "Patient、Teacher、Approval 边界清楚", "result": "通过", "evidence": "标准化病人负责受限病例回应；教师负责训练解释；Skill 必须经过回归门与审批后才可生效。", "boundary": "个人 Skill 不能修改病例事实、标准答案或安全规则。"},
+        {"order": 5, "claim": "报告反哺下一轮", "result": "通过", "evidence": "第 2 轮实际使用了上一轮 3 个反馈目标；纵向报告区分持续、复现与恢复。", "boundary": "调用 Skill 不自动等于学习有效。"},
+        {"order": 6, "claim": "来源与模型可追溯", "result": "通过", "evidence": "报告保留训练点和检索来源；最终调用审计中无境外模型，主要调用可绑定到训练 session。", "boundary": "对用户展示脱敏来源，不暴露密钥和内部标识。"},
+        {"order": 7, "claim": "至少五病例可运行", "result": "通过", "evidence": "阑尾炎连续 7 轮；急性冠脉综合征、心衰、甲亢和肺炎完成跨病例验收。", "boundary": "病例通过不代表所有输入组合都已穷举。"}
+      ],
+      "appendicitis_rounds": [
+        {"round": 1, "score": 56, "missed": 18, "hints": 3, "observable_change": "基础问诊不完整；连续使用三级提示。"},
+        {"round": 2, "score": 91, "missed": 3, "hints": 1, "observable_change": "主动使用上一轮 3 个反馈目标，提示明显减少。"},
+        {"round": 3, "score": 91, "missed": 3, "hints": 0, "observable_change": "无需提示完成主要路径，仍保留少量稳定缺口。"},
+        {"round": 4, "score": 93, "missed": 2, "hints": 0, "observable_change": "被观察的旧缺口恢复。"},
+        {"round": 5, "score": 83, "missed": 7, "hints": 1, "observable_change": "出现真实回退，新缺口触发提示。"}
+      ],
+      "appendicitis_score_comparison": [
+        {"round_label": "第1轮", "score": 56},
+        {"round_label": "第2轮", "score": 91},
+        {"round_label": "第3轮", "score": 91},
+        {"round_label": "第4轮", "score": 93},
+        {"round_label": "第5轮", "score": 83},
+        {"round_label": "第6轮", "score": 91},
+        {"round_label": "第7轮", "score": 85}
+      ],
+      "longitudinal_labels": [
+        {"round": 6, "score": 91, "first": 1, "repeated": 2, "reactivated": 0, "recovered": 5, "teacher_result": "Qwen 教师分析生成成功，无警告，给出 3 条动作。"},
+        {"round": 7, "score": 85, "first": 0, "repeated": 2, "reactivated": 4, "recovered": 1, "teacher_result": "Qwen 教师分析生成成功，无警告，明确识别旧问题复现。"}
+      ],
+      "case_transfer": [
+        {"order": 1, "case": "急性冠脉综合征", "score": 75, "adaptive_behavior": "真实问诊、查体、检查和两次阶段性假设；追加复验确认教师准确读取最终推理。", "contamination": 0},
+        {"order": 2, "case": "心力衰竭", "score": 80, "adaptive_behavior": "修复可选重排阻塞后，在同一已完成轨迹上恢复生成报告；记录 8 次自适应跟进。", "contamination": 0},
+        {"order": 3, "case": "甲状腺功能亢进", "score": 70, "adaptive_behavior": "完成两阶段假设与针对性检查，报告和个人 Skill 正常生成。", "contamination": 0},
+        {"order": 4, "case": "肺炎", "score": 75, "adaptive_behavior": "完成两阶段假设与针对性检查，报告和个人 Skill 正常生成。", "contamination": 0}
+      ],
+      "regression_summary": [
+        {"order": 1, "surface": "后端 API", "passed": 1121, "failed": 0, "additional_checks": "全量 pytest；2 条第三方依赖弃用预告。", "result": "通过"},
+        {"order": 2, "surface": "学生端", "passed": 131, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 10 个路由。", "result": "通过"},
+        {"order": 3, "surface": "教师管理端", "passed": 26, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 5 个页面。", "result": "通过"}
+      ],
+      "issues_fixed": [
+        {"order": 1, "problem": "教师模型超时后报告核心字段为空", "impact": "学生看到空泛或残缺结论。", "resolution": "只回填空字段，保留已成功生成的 Qwen 内容；超时使用有证据的确定性分析。", "verification": "第 6、7 轮 Qwen 正常生成；超时路径有持久化回退测试。"},
+        {"order": 2, "problem": "报告增强任务可能长期停在 pending", "impact": "教师端看不到最终 Skill 或失败原因。", "resolution": "超时采用受控模板；深层失败写入明确 failed 状态。", "verification": "后台流程不再永久 pending，相关 51 项测试通过。"},
+        {"order": 3, "problem": "可选 rerank 超时导致主报告 504", "impact": "已经完成训练的学生拿不到报告。", "resolution": "超时或过载退回本地向量顺序；请求策略错误仍显式抛出。", "verification": "同一心衰轨迹恢复生成，检索相关 48 项测试通过。"},
+        {"order": 4, "problem": "教师分析没有收到学生最终推理", "impact": "Qwen 误写“学生推理为空”。", "resolution": "教师请求和失败回退都使用真实最终诊断与推理，但不扩张对外报告接口。", "verification": "追加 11 回合急性冠脉综合征复验未再出现空提交误判。"},
+        {"order": 5, "problem": "报告建议过长且事实可能互相冲突", "impact": "学生不知道下一轮先练什么。", "resolution": "首屏固定为分数、首要薄弱点和最多 3 条动作；深层证据默认折叠并做事实一致性保护。", "verification": "连续训练每轮建议保持 2—3 条，前端测试和生产构建通过。"},
+        {"order": 6, "problem": "硬性模型策略错误可能被宽泛异常吞掉", "impact": "请求体过大等配置问题被伪装成正常降级。", "resolution": "只允许超时和过载走业务回退，其他策略错误优先重新抛出。", "verification": "针对性 122 项与最终后端 1121 项回归全部通过。"}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "competition-brief",
+      "label": "TraceOSCE 复赛答辩 PPT 与教师审阅提纲"
+    },
+    {
+      "id": "live-simulation",
+      "label": "2026-08-01 受控学生多轮模拟脱敏汇总"
+    },
+    {
+      "id": "model-audit",
+      "label": "2026-08-01 模型调用与训练事件脱敏审计"
+    },
+    {
+      "id": "api-regression",
+      "label": "后端全量自动化回归",
+      "path": "services/api/tests"
+    },
+    {
+      "id": "student-web-regression",
+      "label": "学生端自动化回归与生产构建",
+      "path": "apps/web"
+    },
+    {
+      "id": "admin-web-regression",
+      "label": "教师管理端自动化回归与生产构建",
+      "path": "apps/admin"
+    },
+    {
+      "id": "alibaba-config",
+      "label": "阿里云模型与统一凭据配置说明",
+      "path": "docs/阿里云模型与统一凭据配置.md"
+    },
+    {
+      "id": "acceptance-evidence-sql",
+      "label": "验收报告脱敏证据数据集",
+      "path": "docs/2026-08-01-比赛汇报功能验收证据.sql"
+    }
+  ]
+}
