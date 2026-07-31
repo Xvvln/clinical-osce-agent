@@ -45,12 +45,14 @@ def build_skill_profile_summary(
 ) -> dict[str, Any]:
     report_list = list(reports)
     recent_error_items = _recent_error_items(report_list, limit=recent_error_limit)
-    recent_training_gaps = _recent_training_gaps(report_list, limit=recent_error_limit)
-    current_training_gaps = [
+    all_training_gaps = _recent_training_gaps(report_list, limit=None)
+    recent_training_gaps = all_training_gaps[:recent_error_limit]
+    active_training_gaps = [
         gap
-        for gap in recent_training_gaps
+        for gap in all_training_gaps
         if gap["latest_present"] and gap["status"] in {"current", "persistent"}
-    ][:current_focus_limit]
+    ]
+    current_training_gaps = active_training_gaps[:current_focus_limit]
     current_humanistic_gaps = [
         gap for gap in current_training_gaps if gap["is_humanistic"]
     ][:current_focus_limit]
@@ -59,7 +61,11 @@ def build_skill_profile_summary(
         [gap["skill_type"] for gap in recent_training_gaps if gap["skill_type"]]
     )
     recent_error_item_ids = [item["item_id"] for item in recent_error_items]
-    current_focus_items = _current_focus_items(current_training_gaps, limit=current_focus_limit)
+    current_focus_items = _current_focus_items(
+        recent_error_items,
+        active_training_gaps,
+        limit=current_focus_limit,
+    )
     current_focus_item_ids = [item["item_id"] for item in current_focus_items]
     recent_error_set = set(recent_error_item_ids)
     recent_error_item_by_id = {item["item_id"]: item for item in recent_error_items}
@@ -457,23 +463,27 @@ def _recent_error_items(reports: Iterable[Mapping[str, Any]], *, limit: int) -> 
 
 
 def _current_focus_items(
-    current_training_gaps: Iterable[Mapping[str, Any]],
+    recent_error_items: Iterable[Mapping[str, Any]],
+    active_training_gaps: Iterable[Mapping[str, Any]],
     *,
     limit: int,
 ) -> list[dict[str, str]]:
+    active_item_ids = {
+        str(gap.get("rubric_item_id") or "").strip()
+        for gap in active_training_gaps
+        if bool(gap.get("latest_present")) and str(gap.get("status") or "") in {"current", "persistent"}
+    }
     current_items: list[dict[str, str]] = []
     seen: set[str] = set()
-    for gap in current_training_gaps:
-        if not bool(gap.get("latest_present")) or str(gap.get("status") or "") not in {"current", "persistent"}:
-            continue
-        item_id = str(gap.get("rubric_item_id") or "").strip()
-        if not item_id or item_id in seen:
+    for item in recent_error_items:
+        item_id = str(item.get("item_id") or "").strip()
+        if not item_id or item_id not in active_item_ids or item_id in seen:
             continue
         seen.add(item_id)
         current_items.append(
             {
                 "item_id": item_id,
-                "label": str(gap.get("label") or "").strip() or rubric_item_label(item_id, ()),
+                "label": str(item.get("label") or "").strip() or rubric_item_label(item_id, ()),
             }
         )
         if len(current_items) >= limit:
@@ -481,7 +491,11 @@ def _current_focus_items(
     return current_items
 
 
-def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+def _recent_training_gaps(
+    reports: Iterable[Mapping[str, Any]],
+    *,
+    limit: int | None,
+) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     report_list = list(reports)
     for report_index, report in enumerate(report_list):
@@ -532,7 +546,7 @@ def _recent_training_gaps(reports: Iterable[Mapping[str, Any]], *, limit: int) -
 
     gaps = [_finalize_training_gap(entry) for entry in grouped.values()]
     gaps.sort(key=lambda item: (-int(item["priority"]), int(item["latest_report_index"]), item["label"]))
-    return gaps[:limit]
+    return gaps if limit is None else gaps[:limit]
 
 
 def _report_training_gaps(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:

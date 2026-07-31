@@ -108,6 +108,45 @@ def test_current_focus_includes_only_latest_current_and_persistent_gaps() -> Non
     assert [item["item_id"] for item in summary["current_focus_items"]] == ["ht_migration", "ht_character"]
 
 
+def test_current_focus_preserves_report_order_when_humanistic_gap_has_higher_priority() -> None:
+    clinical_gaps = [
+        _history_training_gap("ht_migration", "追问疼痛部位及转移特征"),
+        _history_training_gap("ht_character", "追问疼痛性质"),
+        _history_training_gap("ht_severity", "追问疼痛程度"),
+    ]
+    ethics_gap = {
+        "gap_type": "ethics_consent_missing",
+        "rubric_item_id": "eth_exam_consent",
+        "label": "查体或检查前说明目的并征得同意",
+        "dimension_id": "medical_ethics",
+        "missing_score": 8,
+        "severity": "high",
+        "stage": "physical_exam",
+        "next_training_action": "下一轮查体前先说明目的并征得同意。",
+        "skill_type": "ethics_consent",
+        "gap_source": "score_trace",
+    }
+    summary = build_skill_profile_summary(
+        reports=[
+            {
+                "case_id": "appendicitis_001",
+                "report_id": "report_with_mixed_gaps",
+                "missed_items": ["ht_migration", "ht_character", "ht_severity", "eth_exam_consent"],
+                "training_gaps": [*clinical_gaps, ethics_gap],
+            }
+        ],
+        enabled_skills=[],
+    )
+
+    assert summary["current_training_gaps"][0]["rubric_item_id"] == "eth_exam_consent"
+    assert summary["current_focus_item_ids"] == ["ht_migration", "ht_character", "ht_severity"]
+    assert [item["label"] for item in summary["current_focus_items"]] == [
+        "追问疼痛部位及转移特征",
+        "追问疼痛性质",
+        "追问疼痛程度",
+    ]
+
+
 @pytest.mark.parametrize(("clean_report_count", "expected_skill_state"), [(1, "cooldown"), (3, "retired")])
 def test_recovered_gap_never_returns_to_current_focus_during_skill_recovery(
     clean_report_count: int,
