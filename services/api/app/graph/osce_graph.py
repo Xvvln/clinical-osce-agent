@@ -1135,12 +1135,12 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
     session_id = report.get("session_id", state.get("session_id", ""))
 
     strengths = [
-        f"{item_score['description']}：已完成。"
+        _rubric_progress_text(item_score)
         for item_score in rubric_scores.values()
         if item_score["score"] > 0
     ]
     reasoning_errors = [
-        f"{item_score['description']}：评分轨迹未找到足够证据。"
+        _reasoning_gap_text(item_score)
         for item_score in rubric_scores.values()
         if item_score["dimension_id"] in {"differential_diagnosis", "reasoning"}
         and item_score["score"] < item_score["max_score"]
@@ -1203,9 +1203,27 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "source_references": source_references,
         "source_reference_items": [_serialize_feedback_source_item(item) for item in source_items],
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
-        "created_at": "2026-04-24T00:00:00Z",
+        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     return {"stage": "feedback", "retrieved_sources": source_references, "feedback_report": feedback_report}
+
+
+def _rubric_progress_text(item_score: dict[str, Any]) -> str:
+    description = item_score["description"]
+    score = item_score["score"]
+    max_score = item_score["max_score"]
+    if score == max_score:
+        return f"{description}：已完成。"
+    return f"{description}：已部分覆盖（{score}/{max_score}）。"
+
+
+def _reasoning_gap_text(item_score: dict[str, Any]) -> str:
+    description = item_score["description"]
+    score = item_score["score"]
+    max_score = item_score["max_score"]
+    if score <= 0:
+        return f"{description}：评分轨迹未找到足够证据。"
+    return f"{description}：已部分覆盖（{score}/{max_score}），仍需补充未覆盖要点。"
 
 
 def _serialize_feedback_source_item(item: FeedbackSourceItem) -> dict[str, Any]:
@@ -1348,7 +1366,7 @@ def _build_explanation_source_items(
                 _build_explanation_source_item(
                     case_id=case_id,
                     kind="strength",
-                    text=f"{item_score['description']}：已完成。",
+                    text=_rubric_progress_text(item_score),
                     rubric_item_id=item_id,
                     evidence_references=evidence_references,
                 )
@@ -1361,7 +1379,7 @@ def _build_explanation_source_items(
                 _build_explanation_source_item(
                     case_id=case_id,
                     kind="reasoning_error",
-                    text=f"{item_score['description']}：评分轨迹未找到足够证据。",
+                    text=_reasoning_gap_text(item_score),
                     rubric_item_id=item_id,
                     evidence_references=evidence_references,
                 )

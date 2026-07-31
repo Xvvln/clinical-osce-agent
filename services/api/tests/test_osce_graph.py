@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.graph import osce_graph as osce_graph_module
@@ -1779,6 +1781,7 @@ def test_osce_graph_records_final_diagnosis_submission() -> None:
 
 def test_osce_graph_generates_rule_evaluation_report() -> None:
     graph = build_osce_graph()
+    report_generation_started_at = datetime.now(UTC)
 
     result = graph.invoke(
         {
@@ -1807,6 +1810,7 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
             "evolution_candidates": [],
         }
     )
+    report_generation_finished_at = datetime.now(UTC)
 
     feedback_report = result["feedback_report"]
 
@@ -1842,6 +1846,13 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
         "申请血常规：已完成。",
         "主要诊断命中急性阑尾炎：已完成。",
     ]
+    assert feedback_report["strengths"][4] == (
+        "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）：已部分覆盖（3/8）。"
+    )
+    assert (
+        "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）："
+        "已部分覆盖（3/8），仍需补充未覆盖要点。"
+    ) in feedback_report["reasoning_errors"]
     assert feedback_report["next_recommendations"][:3] == [
         "下一轮训练重点：追问疼痛部位及转移特征。",
         "下一轮训练重点：追问疼痛性质。",
@@ -1913,8 +1924,23 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
         "rubric_item_id": "dxd_urolith",
         "source_references": ["rubric:appendicitis_001_rubric.item.dxd_urolith"],
     } in feedback_report["explanation_source_items"]
+    assert {
+        "kind": "strength",
+        "text": (
+            "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）："
+            "已部分覆盖（3/8）。"
+        ),
+        "rubric_item_id": "rs_support",
+        "source_references": [
+            "rubric:appendicitis_001_rubric.item.rs_support",
+            "evidence:abd.palpation.rebound",
+            "evidence:lab.cbc",
+        ],
+    } in feedback_report["explanation_source_items"]
     assert feedback_report["feedback_summary"] == "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。"
-    assert "created_at" in feedback_report
+    created_at = datetime.fromisoformat(feedback_report["created_at"].replace("Z", "+00:00"))
+    assert created_at.utcoffset() == UTC.utcoffset(created_at)
+    assert report_generation_started_at <= created_at <= report_generation_finished_at
     report_text = str(feedback_report)
     for forbidden_term in ["用药剂量", "治疗方案", "手术方案", "处置建议"]:
         assert forbidden_term not in report_text

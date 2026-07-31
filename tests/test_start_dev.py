@@ -44,6 +44,19 @@ def load_start_dev_module() -> ModuleType:
     return module
 
 
+def clear_local_demo_login_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in [
+        "CLINICAL_OSCE_DEPLOYMENT_MODE",
+        "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
+        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
+        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
+        "CLINICAL_OSCE_DEMO_STUDENT_ENABLED",
+        "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
+        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_api_command_uses_project_uv_environment() -> None:
     start_dev = load_start_dev_module()
 
@@ -75,16 +88,7 @@ def test_child_processes_use_shared_api_and_admin_defaults() -> None:
 def test_child_processes_inject_local_demo_login_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in [
-        "CLINICAL_OSCE_DEPLOYMENT_MODE",
-        "CLINICAL_OSCE_DEMO_ADMIN_ENABLED",
-        "CLINICAL_OSCE_DEMO_ADMIN_EMAIL",
-        "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD",
-        "CLINICAL_OSCE_DEMO_STUDENT_ENABLED",
-        "CLINICAL_OSCE_DEMO_STUDENT_EMAIL",
-        "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD",
-    ]:
-        monkeypatch.delenv(name, raising=False)
+    clear_local_demo_login_environment(monkeypatch)
     start_dev = load_start_dev_module()
 
     env = start_dev._process_env()
@@ -112,7 +116,10 @@ def test_child_processes_allow_explicit_local_demo_credentials(
     assert env["CLINICAL_OSCE_DEMO_ADMIN_ENABLED"] == "true"
 
 
-def test_web_and_admin_processes_receive_their_own_local_auto_login_credentials() -> None:
+def test_web_and_admin_processes_receive_their_own_local_auto_login_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_local_demo_login_environment(monkeypatch)
     start_dev = load_start_dev_module()
 
     web_env = start_dev._process_env(cwd=start_dev.WEB_DIR)
