@@ -86,6 +86,40 @@ def test_agent_strategy_node_builds_teaching_plan_checkpoint_and_lifecycle_trace
     assert "阑尾炎" not in agent_text
 
 
+def test_agent_strategy_node_advances_and_caps_explicit_hint_ladder() -> None:
+    strategies: list[str] = []
+    levels: list[int] = []
+
+    for request_count in [0, 1, 2, 5]:
+        result = training_strategy_node(
+            {
+                "case_id": "appendicitis_001",
+                "session_id": "session-hint-ladder",
+                "stage": "history_taking",
+                "revealed_facts": ["appendicitis_001.hf_01"],
+                "requested_exams": [],
+                "requested_tests": [],
+                "student_hypotheses": [],
+                "final_submission": None,
+                "missed_items": ["ht_migration"],
+                "evolution_candidates": [],
+                "agent_decision_trace": [],
+                "hint_request_count": request_count,
+            }
+        )
+        teaching_plan = result["pedagogy_state"]["teaching_plan"]
+        strategies.append(teaching_plan["selected_strategy"])
+        levels.append(teaching_plan["selected_hint_level"])
+
+    assert strategies == [
+        "hint_ladder_level_1",
+        "hint_ladder_level_2",
+        "hint_ladder_level_3",
+        "hint_ladder_level_3",
+    ]
+    assert levels == [1, 2, 3, 3]
+
+
 def test_agent_strategy_node_tracks_auxiliary_test_before_physical_exam_as_reasoning_gap() -> None:
     result = training_strategy_node(
         {

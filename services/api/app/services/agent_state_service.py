@@ -11,6 +11,7 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
     clinical_reasoning_state = build_clinical_reasoning_state(state)
     if clinical_reasoning_state.get("sequence_flags"):
         next_best_action = str(clinical_reasoning_state.get("next_best_action", {}).get("message") or next_best_action)
+    selected_hint_level = _selected_hint_ladder_level(state)
     teaching_plan = _build_teaching_plan(
         state=state,
         stage=stage,
@@ -19,6 +20,7 @@ def build_pedagogy_state(state: dict[str, Any]) -> dict[str, Any]:
         active_goal=active_goal,
         next_best_action=next_best_action,
         evidence_gap=evidence_gap,
+        selected_hint_level=selected_hint_level,
     )
     stage_checkpoint = _build_stage_checkpoint(state=state, stage=stage)
     hint_ladder = _build_hint_ladder(
@@ -196,6 +198,7 @@ def _build_teaching_plan(
     active_goal: str,
     next_best_action: str,
     evidence_gap: str,
+    selected_hint_level: int,
 ) -> dict[str, Any]:
     case_id = str(state.get("case_id") or "unknown")
     session_ref = str(state.get("session_id") or case_id)
@@ -206,7 +209,8 @@ def _build_teaching_plan(
         "stage": stage,
         "observed_gap_ids": list(missed_items),
         "active_focus_ids": [f"focus:{stage}"],
-        "selected_strategy": "hint_ladder_level_1",
+        "selected_strategy": f"hint_ladder_level_{selected_hint_level}",
+        "selected_hint_level": selected_hint_level,
         "strategy_reason": evidence_gap,
         "learning_goal": active_goal,
         "next_best_action": next_best_action,
@@ -226,6 +230,20 @@ def _build_teaching_plan(
         "skill_ids": list(skill_context_ids),
         "safety_boundary": "教学计划只决定训练引导方式，不修改病例事实、标准诊断、rubric 或评分规则。",
     }
+
+
+def _selected_hint_ladder_level(state: dict[str, Any]) -> int:
+    raw_count = state.get("hint_request_count", 0)
+    if isinstance(raw_count, bool):
+        request_count = int(raw_count)
+    elif isinstance(raw_count, int):
+        request_count = raw_count
+    else:
+        try:
+            request_count = int(str(raw_count).strip() or "0")
+        except ValueError:
+            request_count = 0
+    return min(max(request_count + 1, 1), 3)
 
 
 def _build_stage_checkpoint(*, state: dict[str, Any], stage: str) -> dict[str, Any]:

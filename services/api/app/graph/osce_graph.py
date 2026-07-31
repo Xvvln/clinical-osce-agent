@@ -124,6 +124,7 @@ class OsceGraphState(TypedDict, total=False):
     reply: str
     report_requested: bool
     hint_requested: bool
+    hint_request_count: int
     hint: str
     training_progress: dict[str, Any]
     training_progress_next_focus: str
@@ -831,7 +832,9 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
     if router_turn_analysis:
         turn_analysis = {**turn_analysis, **router_turn_analysis}
     skill_base_hint = _build_enabled_skill_hint(selected_skill_context)
-    coach_base_hint = _compose_coach_base_hint(
+    selected_hint_level = _selected_hint_ladder_level(pedagogy_state)
+    coach_base_hint = _compose_progressive_coach_base_hint(
+        hint_level=selected_hint_level,
         skill_hint=skill_base_hint,
         training_goal_hint=training_goal_hint,
         fallback=base_hint,
@@ -1578,7 +1581,16 @@ def _build_socratic_hint(state: OsceGraphState, pedagogy_state: dict[str, Any] |
         return "你已经提交诊断，建议到报告中复盘哪些证据支持或削弱你的判断。"
     if not _has_student_training_action(state):
         return EMPTY_SESSION_SOCRATIC_HINT
-    clinical_reasoning_state = (pedagogy_state or {}).get("clinical_reasoning_state", {})
+    normalized_pedagogy_state = pedagogy_state or {}
+    clinical_reasoning_state = normalized_pedagogy_state.get("clinical_reasoning_state", {})
+    hint_level = _selected_hint_ladder_level(normalized_pedagogy_state)
+    if hint_level > 1 and isinstance(state.get("training_progress"), dict):
+        progressive_hint = _build_progress_sensitive_socratic_hint(
+            clinical_reasoning_state,
+            hint_level=hint_level,
+        )
+        if progressive_hint:
+            return progressive_hint
     if isinstance(clinical_reasoning_state, dict) and clinical_reasoning_state.get("sequence_flags"):
         next_best_action = clinical_reasoning_state.get("next_best_action", {})
         message = str(next_best_action.get("message") or "").strip() if isinstance(next_best_action, dict) else ""
@@ -1589,7 +1601,10 @@ def _build_socratic_hint(state: OsceGraphState, pedagogy_state: dict[str, Any] |
         if message:
             return message
     if isinstance(state.get("training_progress"), dict):
-        progress_sensitive_hint = _build_progress_sensitive_socratic_hint(clinical_reasoning_state)
+        progress_sensitive_hint = _build_progress_sensitive_socratic_hint(
+            clinical_reasoning_state,
+            hint_level=hint_level,
+        )
         if progress_sensitive_hint:
             return progress_sensitive_hint
     training_progress_hint = state.get("training_progress_next_focus", "")
@@ -1703,7 +1718,11 @@ def _forbidden_term_variants(value: str) -> list[str]:
     return variants
 
 
-def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> str:
+def _build_progress_sensitive_socratic_hint(
+    clinical_reasoning_state: Any,
+    *,
+    hint_level: int = 1,
+) -> str:
     if not isinstance(clinical_reasoning_state, dict):
         return ""
     phase = str(clinical_reasoning_state.get("pedagogical_phase") or "")
@@ -1715,6 +1734,18 @@ def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> st
             raw_pending_count = history_points.get("pending_count", 0)
             history_pending = raw_pending_count if isinstance(raw_pending_count, int) else 0
     if phase == "needs_history":
+        if hint_level >= 3:
+            return (
+                "把已有病史先压缩成一句问题表征，再各写出一个支持当前假设和需要排除的线索；"
+                "随后只追问最能区分两者的病史类别。"
+            )
+        if hint_level == 2:
+            if history_pending >= 3:
+                return (
+                    "先别急着进入查体。把病史按起病经过、症状特点、伴随或阴性症状、背景风险分组，"
+                    "找出尚未覆盖的一组，再问一个针对性问题。"
+                )
+            return "病史只剩少量缺口。先说明哪个缺口最可能改变判断，再用一个聚焦问题确认。"
         if history_pending >= 3:
             return "病史线索还偏少，先继续补齐起病、部位变化、性质、程度和伴随症状，再决定查体。"
         if history_pending >= 2:
@@ -1722,14 +1753,30 @@ def _build_progress_sensitive_socratic_hint(clinical_reasoning_state: Any) -> st
         if history_pending == 1:
             return "病史只剩少量缺口，可以用一个聚焦追问确认后，再选择关键查体验证当前线索。"
     if phase == "needs_physical_exam":
+        if hint_level >= 3:
+            return "先写出“查体阳性会支持什么、阴性会削弱什么”，再选择一项生命体征或目标系统查体来验证。"
+        if hint_level == 2:
+            return "不要罗列查体项目；先说当前假设最需要哪类体征验证，再选一项最关键查体。"
         if history_pending == 1:
             return "病史只剩少量缺口，可以用一个聚焦追问确认后，再选择关键查体验证当前线索。"
         return "已有较完整病史线索，下一步选择关键查体来验证当前线索，再决定是否需要辅助检查。"
     if phase == "needs_auxiliary_test":
+        if hint_level >= 3:
+            return "为主假设和高风险鉴别各写一个待验证点，再选能同时提供支持或排除证据的检查。"
+        if hint_level == 2:
+            return "先说明一项检查结果将怎样改变当前判断，再申请最有判别价值的基础检查。"
         return "已有病史和查体证据，下一步选择能验证当前假设的辅助检查，并说明检查目的。"
     if phase == "needs_reasoning":
+        if hint_level >= 3:
+            return "按“主假设、支持证据、反对证据、高风险鉴别”四栏整理，再判断还缺哪一类证据。"
+        if hint_level == 2:
+            return "把病史、查体和检查各选一条关键证据串起来，形成一个可被继续验证的诊断假设。"
         return "先进行证据整理，把已获得的病史、查体和检查信息写成诊断假设，再继续查漏补缺。"
     if phase == "ready_for_submission":
+        if hint_level >= 3:
+            return "提交前用一句话说明主诊断为什么最可能，再点出一个危险鉴别及其排除依据。"
+        if hint_level == 2:
+            return "提交前分别列出最强支持证据和最需要排除的替代解释，再检查推理是否闭合。"
         return "提交前先梳理支持证据和排除依据，再提交最终诊断与推理过程。"
     return ""
 
@@ -1742,6 +1789,47 @@ def _compose_coach_base_hint(*, skill_hint: str, training_goal_hint: str, fallba
             return normalized_skill_hint
         return f"{normalized_training_goal_hint}\n\n{normalized_skill_hint}"
     return normalized_skill_hint or normalized_training_goal_hint or fallback
+
+
+def _compose_progressive_coach_base_hint(
+    *,
+    hint_level: int,
+    skill_hint: str,
+    training_goal_hint: str,
+    fallback: str,
+) -> str:
+    if hint_level <= 1:
+        return _compose_coach_base_hint(
+            skill_hint=skill_hint,
+            training_goal_hint=training_goal_hint,
+            fallback=fallback,
+        )
+    focus_hint = training_goal_hint.strip()
+    normalized_skill_hint = skill_hint.strip()
+    if hint_level == 2 and normalized_skill_hint:
+        focus_hint = normalized_skill_hint.split("。", 1)[0].strip() + "。"
+    elif hint_level >= 3 and normalized_skill_hint:
+        focus_hint = normalized_skill_hint
+    if focus_hint and focus_hint not in fallback:
+        return f"{fallback}\n\n{focus_hint}"
+    return fallback
+
+
+def _selected_hint_ladder_level(pedagogy_state: dict[str, Any]) -> int:
+    teaching_plan = pedagogy_state.get("teaching_plan", {})
+    if not isinstance(teaching_plan, dict):
+        return 1
+    raw_level = teaching_plan.get("selected_hint_level", 1)
+    if isinstance(raw_level, bool):
+        level = int(raw_level)
+    elif isinstance(raw_level, int):
+        level = raw_level
+    else:
+        try:
+            level = int(str(raw_level).strip() or "1")
+        except ValueError:
+            level = 1
+    return min(max(level, 1), 3)
 
 
 def _build_enabled_skill_hint(evolution_candidates: list[str]) -> str:

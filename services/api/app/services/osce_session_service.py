@@ -2376,6 +2376,7 @@ def _graph_state_from_session(
         "reply": "",
         "report_requested": report_requested,
         "hint_requested": hint_requested,
+        "hint_request_count": _effective_hint_request_count(session),
         "hint": "",
         "training_progress": training_progress,
         "training_progress_next_focus": training_progress["next_focus"],
@@ -2753,6 +2754,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "pedagogy_state": {},
         "agent_decision_trace": [],
         "reflection_summary": None,
+        "hint_request_count": 0,
     }
 
 

@@ -2832,6 +2832,44 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
     assert hint_event_payload["agent_turn"]["agent_path"] == ["socratic_hint_node", "coach_agent"]
 
 
+def test_osce_session_repeated_hint_requests_progress_without_revealing_answer(tmp_path) -> None:
+    database_path = tmp_path / "training_events.sqlite3"
+    osce_session_service.training_event_store = TrainingEventStore(database_path)
+    osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "student_id": "student_demo"},
+    )
+    session_id = create_response.json()["session_id"]
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
+
+    hints = [
+        client.post(f"/api/sessions/{session_id}/hint").json()["hint"]
+        for _ in range(3)
+    ]
+
+    assert hints[0] == "病史线索还偏少，先继续补齐起病、部位变化、性质、程度和伴随症状，再决定查体。"
+    assert "按起病经过、症状特点、伴随或阴性症状、背景风险分组" in hints[1]
+    assert "压缩成一句问题表征" in hints[2]
+    assert len(set(hints)) == 3
+    for hint in hints:
+        for forbidden_term in ["急性阑尾炎", "阑尾炎", "标准答案", "治疗方案"]:
+            assert forbidden_term not in hint
+
+    internal_session = osce_session_service._get_session(session_id)
+    assert internal_session is not None
+    assert internal_session.hint_request_count == 3
+    assert internal_session.pedagogy_state["teaching_plan"]["selected_strategy"] == "hint_ladder_level_3"
+    events = TrainingEventStore(database_path).list_session_events(session_id)
+    assert [event["event_type"] for event in business_events(events)] == [
+        "session_created",
+        "history_message",
+        "hint_requested",
+        "hint_requested",
+        "hint_requested",
+    ]
+
+
 def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(tmp_path) -> None:
     database_path = tmp_path / "training_events.sqlite3"
     osce_session_service.training_event_store = TrainingEventStore(database_path)
