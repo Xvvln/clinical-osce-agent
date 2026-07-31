@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any
 
+from app.services.admin_display_resolver import rubric_item_label
 from app.services.osce_session_store import OsceSessionStore, osce_session_store
 from app.services.report_score_metrics import aggregate_score_metrics, score_group_metric
 from app.services.report_store import ReportStore, report_store
@@ -100,6 +101,7 @@ def session_payload_report(session: dict[str, Any], reports_by_session_id: dict[
 def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
     reports = _reports_from_sessions(sessions)
     affect_signals = _affect_signal_summary(sessions)
+    frequent_missed_items = _frequent_missed_items(reports)
     frequent_humanistic_gaps = _frequent_humanistic_gaps(reports)
     frequent_missed_opportunities = _frequent_missed_opportunities(reports)
     return {
@@ -111,7 +113,7 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "student_count": len({str(session.get("student_id") or "") for session in sessions if session.get("student_id")}),
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
         **_score_analytics_fields(reports),
-        "frequent_missed_items": _frequent_missed_items(reports),
+        "frequent_missed_items": frequent_missed_items,
         "frequent_humanistic_gaps": frequent_humanistic_gaps,
         "frequent_missed_opportunities": frequent_missed_opportunities,
         "affect_signals": affect_signals,
@@ -119,6 +121,7 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "training_drills": _build_training_drills(
             scope="all_users",
             scope_id="",
+            clinical_missed_items=_clinical_missed_items_for_drills(reports, frequent_missed_items),
             gaps=frequent_humanistic_gaps,
             missed_opportunities=frequent_missed_opportunities,
             affect_signals=affect_signals,
@@ -129,6 +132,7 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
 def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[str, Any]:
     reports = _reports_from_sessions(sessions)
     affect_signals = _affect_signal_summary(sessions)
+    frequent_missed_items = _frequent_missed_items(reports)
     frequent_humanistic_gaps = _frequent_humanistic_gaps(reports)
     frequent_missed_opportunities = _frequent_missed_opportunities(reports)
     return {
@@ -138,7 +142,7 @@ def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[
         "report_count": len(reports),
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
         **_score_analytics_fields(reports),
-        "frequent_missed_items": _frequent_missed_items(reports),
+        "frequent_missed_items": frequent_missed_items,
         "frequent_humanistic_gaps": frequent_humanistic_gaps,
         "frequent_missed_opportunities": frequent_missed_opportunities,
         "affect_signals": affect_signals,
@@ -146,6 +150,7 @@ def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[
         "training_drills": _build_training_drills(
             scope="case",
             scope_id=case_id,
+            clinical_missed_items=_clinical_missed_items_for_drills(reports, frequent_missed_items),
             gaps=frequent_humanistic_gaps,
             missed_opportunities=frequent_missed_opportunities,
             affect_signals=affect_signals,
@@ -155,7 +160,9 @@ def _build_case_analytics(case_id: str, sessions: list[dict[str, Any]]) -> dict[
 
 def _build_student_analytics(student_id: str, sessions: list[dict[str, Any]]) -> dict[str, Any]:
     reports = _reports_from_sessions(sessions)
+    frequent_missed_items = _frequent_missed_items(reports)
     frequent_humanistic_gaps = _frequent_humanistic_gaps(reports)
+    persistent_humanistic_gaps = _persistent_humanistic_gaps(frequent_humanistic_gaps)
     current_humanistic_gaps = _humanistic_gaps_from_report(reports[0]) if reports else []
     affect_response = _affect_signal_summary(sessions)
     case_titles = sorted({str(session.get("case_title") or session.get("case_id") or "") for session in sessions if session.get("case_id")})
@@ -166,14 +173,19 @@ def _build_student_analytics(student_id: str, sessions: list[dict[str, Any]]) ->
         "average_total_score": _average([_float_value(report.get("total_score")) for report in reports]),
         **_score_analytics_fields(reports),
         "case_titles": case_titles,
-        "persistent_gaps": frequent_humanistic_gaps,
+        "persistent_gaps": persistent_humanistic_gaps,
         "current_humanistic_gaps": current_humanistic_gaps,
         "affect_response": affect_response,
-        "recommended_next_actions": _student_next_actions(current_humanistic_gaps, frequent_humanistic_gaps, affect_response),
+        "recommended_next_actions": _student_next_actions(
+            current_humanistic_gaps,
+            persistent_humanistic_gaps,
+            affect_response,
+        ),
         "training_drills": _build_training_drills(
             scope="student",
             scope_id=student_id,
-            gaps=[*current_humanistic_gaps, *frequent_humanistic_gaps],
+            clinical_missed_items=_clinical_missed_items_for_drills(reports, frequent_missed_items),
+            gaps=[*current_humanistic_gaps, *persistent_humanistic_gaps],
             missed_opportunities=[],
             affect_signals=affect_response,
         ),
@@ -188,11 +200,33 @@ def _reports_from_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any
 def _frequent_missed_items(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     for report in reports:
-        for item_id in _string_list(report.get("missed_items")):
+        for item_id in set(_string_list(report.get("missed_items"))):
             counts[item_id] += 1
     return [
         {"item_id": item_id, "count": count}
         for item_id, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _clinical_missed_items_for_drills(
+    reports: list[dict[str, Any]],
+    frequent_missed_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    case_ids_by_item: dict[str, set[str]] = defaultdict(set)
+    for report in reports:
+        case_id = str(report.get("case_id") or "").strip()
+        for item_id in set(_string_list(report.get("missed_items"))):
+            if case_id:
+                case_ids_by_item[item_id].add(case_id)
+    return [
+        {
+            **item,
+            "item_label": rubric_item_label(
+                str(item.get("item_id") or ""),
+                sorted(case_ids_by_item.get(str(item.get("item_id") or ""), set())),
+            ),
+        }
+        for item in frequent_missed_items
     ]
 
 
@@ -202,6 +236,7 @@ def _frequent_humanistic_gaps(reports: list[dict[str, Any]]) -> list[dict[str, A
     labels: dict[str, str] = {}
     next_actions: dict[str, str] = {}
     latest_rank: dict[str, int] = {}
+    explicitly_persistent: set[str] = set()
     for rank, report in enumerate(reports):
         seen_in_report: set[str] = set()
         for gap in _humanistic_gaps_from_report(report):
@@ -214,6 +249,8 @@ def _frequent_humanistic_gaps(reports: list[dict[str, Any]]) -> list[dict[str, A
             labels.setdefault(gap_type, str(gap.get("label") or gap_type))
             if gap.get("next_training_action"):
                 next_actions.setdefault(gap_type, str(gap.get("next_training_action")))
+            if str(gap.get("status") or "").strip().lower() == "persistent":
+                explicitly_persistent.add(gap_type)
             latest_rank.setdefault(gap_type, rank)
     return [
         {
@@ -222,12 +259,30 @@ def _frequent_humanistic_gaps(reports: list[dict[str, Any]]) -> list[dict[str, A
             "count": count,
             "missing_score_total": missing_score_totals[gap_type],
             "next_training_action": next_actions.get(gap_type, ""),
+            **({"status": "persistent"} if gap_type in explicitly_persistent else {}),
         }
         for gap_type, count in sorted(
             counts.items(),
             key=lambda item: (-item[1], latest_rank.get(item[0], 999), item[0]),
         )
     ]
+
+
+def _persistent_humanistic_gaps(frequent_gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    persistent_gaps: list[dict[str, Any]] = []
+    for gap in frequent_gaps:
+        report_count = int(_float_value(gap.get("count")))
+        has_explicit_status = str(gap.get("status") or "").strip().lower() == "persistent"
+        if report_count < 2 and not has_explicit_status:
+            continue
+        persistent_gaps.append(
+            {
+                **gap,
+                "status": "persistent",
+                "persistence_evidence": "repeated_reports" if report_count >= 2 else "explicit_status",
+            }
+        )
+    return persistent_gaps
 
 
 def _humanistic_gaps_from_report(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -240,13 +295,22 @@ def _humanistic_gaps_from_report(report: dict[str, Any]) -> list[dict[str, Any]]
         if _is_humanistic_gap(goal):
             gaps.append(dict(goal))
     deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    gap_index_by_key: dict[str, int] = {}
     for gap in gaps:
         key = str(gap.get("gap_type") or gap.get("rubric_item_id") or gap.get("label") or "")
-        if not key or key in seen:
+        if not key:
             continue
-        seen.add(key)
-        deduped.append(gap)
+        existing_index = gap_index_by_key.get(key)
+        if existing_index is None:
+            gap_index_by_key[key] = len(deduped)
+            deduped.append(gap)
+            continue
+        existing = deduped[existing_index]
+        for field, value in gap.items():
+            if value not in (None, "", [], {}) and existing.get(field) in (None, "", [], {}):
+                existing[field] = value
+        if str(gap.get("status") or "").strip().lower() == "persistent":
+            existing["status"] = "persistent"
     return deduped
 
 
@@ -373,12 +437,24 @@ def _build_training_drills(
     *,
     scope: str,
     scope_id: str,
+    clinical_missed_items: list[dict[str, Any]],
     gaps: list[dict[str, Any]],
     missed_opportunities: list[dict[str, Any]],
     affect_signals: dict[str, int],
 ) -> list[dict[str, Any]]:
     drills: list[dict[str, Any]] = []
     seen_targets: set[tuple[str, str]] = set()
+
+    for missed_item in clinical_missed_items[:2]:
+        _append_unique_drill(
+            drills,
+            seen_targets,
+            _clinical_missed_item_training_drill(
+                scope=scope,
+                scope_id=scope_id,
+                missed_item=missed_item,
+            ),
+        )
 
     for gap in gaps:
         drill = _gap_training_drill(scope=scope, scope_id=scope_id, gap=gap)
@@ -402,6 +478,76 @@ def _build_training_drills(
 
     drills.sort(key=lambda item: (-int(item.get("priority") or 0), str(item.get("drill_id") or "")))
     return drills[:4]
+
+
+def _clinical_missed_item_training_drill(
+    *,
+    scope: str,
+    scope_id: str,
+    missed_item: dict[str, Any],
+) -> dict[str, Any]:
+    item_id = str(missed_item.get("item_id") or "clinical_training_gap")
+    label = str(missed_item.get("item_label") or item_id)
+    contract = _clinical_training_drill_contract(item_id, label)
+    source_count = int(_float_value(missed_item.get("count") or 1))
+    return {
+        "drill_id": _training_drill_id(scope, scope_id, "clinical", item_id),
+        "scope": scope,
+        "scope_id": scope_id,
+        "source": "clinical_missed_item",
+        "priority": source_count * 3 + contract["priority_bonus"],
+        "title": f"{label}训练",
+        "target_gap_type": item_id,
+        "target_label": label,
+        "trigger_stage": contract["trigger_stage"],
+        "trigger_signal": contract["trigger_signal"],
+        "student_action": contract["student_action"],
+        "success_signal": contract["success_signal"],
+        "source_count": source_count,
+    }
+
+
+def _clinical_training_drill_contract(item_id: str, label: str) -> dict[str, Any]:
+    normalized_item_id = item_id.lower()
+    if normalized_item_id.startswith(("ht_", "hx_", "history_")):
+        return {
+            "trigger_stage": "病史采集阶段",
+            "trigger_signal": f"进入与「{label}」相关的问诊时",
+            "student_action": f"围绕「{label}」完成有目的的追问，并说明答案如何改变下一步判断。",
+            "success_signal": "学生获得对应病史证据，并能把证据连到鉴别诊断或后续动作。",
+            "priority_bonus": 1,
+        }
+    if normalized_item_id.startswith("pe_"):
+        return {
+            "trigger_stage": "查体阶段",
+            "trigger_signal": f"根据病史需要查找「{label}」对应体征时",
+            "student_action": f"选择并执行与「{label}」对应的重点查体，再说明结果支持或削弱哪个假设。",
+            "success_signal": "学生完成目标查体，并把体征结果用于鉴别诊断。",
+            "priority_bonus": 2,
+        }
+    if normalized_item_id.startswith(("at_", "ax_", "lab_", "img_", "test_")):
+        return {
+            "trigger_stage": "辅助检查阶段",
+            "trigger_signal": f"需要用「{label}」回答已明确的临床问题时",
+            "student_action": f"申请与「{label}」对应的检查，先说明检查目的和预期影响的判断。",
+            "success_signal": "学生能说出检查目的，并根据结果更新主要诊断或鉴别路径。",
+            "priority_bonus": 2,
+        }
+    if normalized_item_id.startswith(("dx_", "dxd_", "diagnosis_")):
+        return {
+            "trigger_stage": "诊断提交前",
+            "trigger_signal": f"整理「{label}」对应的主诊断或鉴别诊断时",
+            "student_action": f"补齐「{label}」，并用本轮病史、查体和检查证据说明支持与排除依据。",
+            "success_signal": "学生提交的诊断包含关键依据和至少一条有意义的排除路径。",
+            "priority_bonus": 3,
+        }
+    return {
+        "trigger_stage": "诊断提交前",
+        "trigger_signal": f"需要用已收集证据完成「{label}」时",
+        "student_action": f"围绕「{label}」按“结论—支持证据—排除证据—下一步”表达。",
+        "success_signal": "学生的结论有本轮真实证据支撑，并表达了排除路径或下一步。",
+        "priority_bonus": 4,
+    }
 
 
 def _append_unique_drill(

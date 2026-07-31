@@ -156,6 +156,13 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert any("全用户" in action for action in cohort_analytics["teaching_actions"])
     assert any(
         drill["scope"] == "all_users"
+        and drill["source"] == "clinical_missed_item"
+        and drill["target_gap_type"] == "reasoning_core"
+        and drill["source_count"] == 2
+        for drill in cohort_analytics["training_drills"]
+    )
+    assert any(
+        drill["scope"] == "all_users"
         and drill["source"] == "humanistic_gap"
         and drill["target_gap_type"] == "ethics_consent_missing"
         and "查体前说明目的" in drill["student_action"]
@@ -193,7 +200,7 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
     assert student_analytics["report_count"] == 2
     assert student_analytics["clinical_score"]["average_percentage"] == 66.43
     assert student_analytics["humanistic_score"]["average_percentage"] == 61.67
-    assert student_analytics["persistent_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert student_analytics["persistent_gaps"] == []
     assert student_analytics["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert student_analytics["affect_response"] == {"signal_count": 2, "repaired_count": 1, "ignored_count": 1}
     assert any("查体前说明目的" in action for action in student_analytics["recommended_next_actions"])
@@ -204,6 +211,114 @@ def test_admin_learning_analytics_aggregates_case_and_student_dimensions(tmp_pat
         and "查体前说明目的" in drill["student_action"]
         for drill in student_analytics["training_drills"]
     )
+    assert any(
+        drill["scope"] == "student"
+        and drill["source"] == "clinical_missed_item"
+        and drill["target_gap_type"] == "reasoning_core"
+        and "证据" in drill["student_action"]
+        for drill in student_analytics["training_drills"]
+    )
+    assert len(student_analytics["training_drills"]) <= 4
+
+
+def test_student_persistent_gap_requires_repeated_or_explicit_evidence(tmp_path) -> None:
+    session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    for session_id, student_id in [
+        ("repeat_old", "repeat_student"),
+        ("repeat_latest", "repeat_student"),
+        ("single_gap", "single_student"),
+        ("explicit_gap", "explicit_student"),
+    ]:
+        session_store.create_session(
+            OsceSession(
+                session_id=session_id,
+                student_id=student_id,
+                case_id="appendicitis_001",
+                stage="feedback",
+            )
+        )
+
+    repeated_gap = {
+        "gap_type": "ethics_consent_missing",
+        "dimension_id": "medical_ethics",
+        "label": "查体前缺少同意",
+        "missing_score": 2,
+        "next_training_action": "查体前说明目的并征得同意。",
+    }
+    for session_id in ["repeat_old", "repeat_latest"]:
+        report_store.save_report(
+            _report(
+                session_id,
+                student_id="repeat_student",
+                total_score=70,
+                clinical_score=50,
+                humanistic_score=20,
+                missed_items=[],
+                training_gaps=[repeated_gap],
+                missed_opportunities=[],
+            )
+        )
+    report_store.save_report(
+        _report(
+            "single_gap",
+            student_id="single_student",
+            total_score=70,
+            clinical_score=50,
+            humanistic_score=20,
+            missed_items=[],
+            training_gaps=[
+                {
+                    "gap_type": "relationship_empathy_missing",
+                    "dimension_id": "relationship_building",
+                    "label": "未回应患者担忧",
+                    "missing_score": 3,
+                }
+            ],
+            missed_opportunities=[],
+        )
+    )
+    report_store.save_report(
+        _report(
+            "explicit_gap",
+            student_id="explicit_student",
+            total_score=70,
+            clinical_score=50,
+            humanistic_score=20,
+            missed_items=[],
+            training_gaps=[
+                {
+                    "gap_type": "communication_summary_missing",
+                    "dimension_id": "communication_skill",
+                    "label": "缺少阶段性总结",
+                    "missing_score": 2,
+                    "status": "persistent",
+                }
+            ],
+            missed_opportunities=[],
+        )
+    )
+
+    analytics = AdminLearningAnalyticsService(
+        session_store=session_store,
+        report_store=report_store,
+    ).summarize()
+    students = {item["student_id"]: item for item in analytics["student_analytics"]}
+
+    assert students["single_student"]["current_humanistic_gaps"][0]["gap_type"] == "relationship_empathy_missing"
+    assert students["single_student"]["persistent_gaps"] == []
+    assert students["repeat_student"]["persistent_gaps"] == [
+        {
+            "gap_type": "ethics_consent_missing",
+            "label": "查体前缺少同意",
+            "count": 2,
+            "missing_score_total": 4,
+            "next_training_action": "查体前说明目的并征得同意。",
+            "status": "persistent",
+            "persistence_evidence": "repeated_reports",
+        }
+    ]
+    assert students["explicit_student"]["persistent_gaps"][0]["persistence_evidence"] == "explicit_status"
 
 
 def test_admin_learning_analytics_filters_by_case_and_student(tmp_path) -> None:

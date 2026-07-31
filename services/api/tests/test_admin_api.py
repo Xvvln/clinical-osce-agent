@@ -2247,7 +2247,14 @@ def test_admin_can_read_case_and_student_learning_analytics(tmp_path, monkeypatc
     assert analytics["case_analytics"][0]["training_drills"][0]["scope"] == "case"
     assert analytics["student_analytics"][0]["student_id"] == "student_a"
     assert analytics["student_analytics"][0]["current_humanistic_gaps"][0]["gap_type"] == "ethics_consent_missing"
+    assert analytics["student_analytics"][0]["persistent_gaps"] == []
     assert any("查体前说明目的" in action for action in analytics["student_analytics"][0]["recommended_next_actions"])
+    assert any(
+        drill["source"] == "clinical_missed_item"
+        and drill["target_gap_type"] == "reasoning_core"
+        and drill["source_count"] == 2
+        for drill in analytics["student_analytics"][0]["training_drills"]
+    )
     assert analytics["student_analytics"][0]["training_drills"][0]["scope"] == "student"
 
 
