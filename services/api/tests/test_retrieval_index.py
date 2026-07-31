@@ -228,8 +228,18 @@ def test_search_retrieval_documents_does_not_hide_provider_timeout(
         search_retrieval_documents("右下腹痛", limit=3)
 
 
-def test_dashscope_rerank_does_not_hide_provider_overload() -> None:
-    class OverloadedReranker:
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        ModelProviderOverloadedError("provider busy"),
+        ModelProviderTimeoutError("provider exceeded its optional budget"),
+    ],
+    ids=["overload", "timeout"],
+)
+def test_dashscope_rerank_falls_back_to_vector_order_on_transient_provider_error(
+    provider_error: Exception,
+) -> None:
+    class UnavailableReranker:
         def rerank(
             self,
             query: str,
@@ -237,7 +247,7 @@ def test_dashscope_rerank_does_not_hide_provider_overload() -> None:
             *,
             top_k: int,
         ) -> list[object]:
-            raise ModelProviderOverloadedError("provider busy")
+            raise provider_error
 
         def top_limit(self, result_limit: int, document_count: int) -> int:
             return min(result_limit, document_count)
@@ -253,13 +263,14 @@ def test_dashscope_rerank_does_not_hide_provider_overload() -> None:
         for index in range(2)
     ]
 
-    with pytest.raises(ModelProviderOverloadedError):
-        retrieval_index_module._apply_dashscope_rerank(
-            "右下腹痛",
-            documents,
-            limit=2,
-            reranker=OverloadedReranker(),  # type: ignore[arg-type]
-        )
+    results = retrieval_index_module._apply_dashscope_rerank(
+        "右下腹痛",
+        documents,
+        limit=2,
+        reranker=UnavailableReranker(),  # type: ignore[arg-type]
+    )
+
+    assert [result.reference for result in results] == ["case:0", "case:1"]
 
 
 def test_search_retrieval_documents_skips_same_vertex_in_memory_fallback_after_quota_error(

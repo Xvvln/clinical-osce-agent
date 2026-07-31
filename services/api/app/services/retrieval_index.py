@@ -18,7 +18,11 @@ from app.services.local_embedding_retriever import (
     build_local_embedding_client_from_environment,
     get_local_embedding_model_name_from_environment,
 )
-from app.services.model_call_policy import ModelProviderPolicyError
+from app.services.model_call_policy import (
+    ModelProviderOverloadedError,
+    ModelProviderPolicyError,
+    ModelProviderTimeoutError,
+)
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.vertex_embedding_retriever import (
     DEFAULT_VERTEX_EMBEDDING_MODEL,
@@ -435,6 +439,12 @@ def _apply_dashscope_rerank(
             [_document_embedding_text(document) for document in vector_results],
             top_k=reranker.top_limit(limit, len(vector_results)),
         )
+    except (ModelProviderTimeoutError, ModelProviderOverloadedError) as exc:
+        LOGGER.warning(
+            "DashScope rerank was unavailable within its optional budget; using vector order: %s",
+            exc,
+        )
+        return vector_results[:limit]
     except ModelProviderPolicyError:
         raise
     except Exception as exc:
