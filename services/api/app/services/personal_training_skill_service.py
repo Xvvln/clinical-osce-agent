@@ -13,7 +13,11 @@ from app.services.clinical_reasoning_trace_service import (
     evidence_chain_breakpoints_from_report,
     sequence_flags_from_report,
 )
-from app.services.model_call_policy import ModelProviderPolicyError
+from app.services.model_call_policy import (
+    ModelProviderOverloadedError,
+    ModelProviderPolicyError,
+    ModelProviderTimeoutError,
+)
 from app.services.training_event_store import TrainingEventStore
 from app.services.training_skill_auto_approval_service import AUTO_APPROVAL_AGENT_ID, TrainingSkillApprovalAgent
 from app.services.training_skill_candidate_service import (
@@ -739,6 +743,29 @@ def _apply_teacher_agent_analysis(
     )
     try:
         analysis = normalize_teacher_analysis_response(teacher_agent(request))
+    except (ModelProviderTimeoutError, ModelProviderOverloadedError) as exc:
+        warnings = list(review.get("generation_warnings", []))
+        warnings.append(
+            {
+                "module": "teacher_agent_analysis",
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:240],
+            }
+        )
+        fallback_analysis = DeterministicTeacherAgent()(request)
+        fallback_payload = fallback_analysis.model_dump()
+        fallback_context = _teacher_analysis_context_from_response(
+            fallback_payload,
+            teacher_longitudinal_context=teacher_longitudinal_context,
+        )
+        return {
+            **review,
+            "generated_by": fallback_analysis.agent_id,
+            "teacher_analysis_context": fallback_context,
+            "generation_warnings": warnings,
+        }
+    except ModelProviderPolicyError:
+        raise
     except Exception as exc:
         warnings = list(review.get("generation_warnings", []))
         warnings.append(

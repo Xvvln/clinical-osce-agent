@@ -37,7 +37,11 @@ from app.services.procedure_request_router import (
     create_default_procedure_request_router,
 )
 from app.services.deep_report_analysis_service import build_legacy_deep_report_analysis
-from app.services.model_call_policy import ModelProviderPolicyError
+from app.services.model_call_policy import (
+    ModelProviderOverloadedError,
+    ModelProviderPolicyError,
+    ModelProviderTimeoutError,
+)
 from app.services.report_store import (
     ReportClaimLostError,
     ReportOutboxEvent,
@@ -2479,6 +2483,25 @@ def _personal_skill_payload_for_report(
             event_store=service.training_event_store,
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
+    except (ModelProviderTimeoutError, ModelProviderOverloadedError) as exc:
+        failure_report = {
+            **session.feedback_report,
+            "final_submission": deepcopy(session.final_submission),
+        }
+        payload = build_generation_failed_personal_skill_payload(
+            report=failure_report,
+            case=case,
+            teacher_agent=DeterministicTeacherAgent(),
+            teacher_longitudinal_context=teacher_longitudinal_context,
+        )
+        payload["generation_warnings"] = _append_report_generation_warning(
+            session.feedback_report,
+            module="personal_skill_generation",
+            exc=exc,
+        )
+        return payload
+    except ModelProviderPolicyError:
+        raise
     except TrainingSkillCandidateGenerationError:
         failure_report = {
             **session.feedback_report,
