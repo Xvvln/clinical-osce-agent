@@ -29,6 +29,7 @@ from app.services.training_skill_candidate_store import TrainingSkillCandidateSt
 from app.services.training_skill_regression_gate import TrainingSkillRegressionGate
 from app.services.training_skill_store import TrainingSkillStore
 from app.services.teacher_agent import (
+    DeterministicTeacherAgent,
     TeacherAnalysisRequest,
     create_default_teacher_agent,
     normalize_teacher_analysis_response,
@@ -735,7 +736,18 @@ def _apply_teacher_agent_analysis(
                 "message": str(exc)[:240],
             }
         )
-        return {**review, "generation_warnings": warnings}
+        fallback_analysis = DeterministicTeacherAgent()(request)
+        fallback_payload = fallback_analysis.model_dump()
+        fallback_context = _teacher_analysis_context_from_response(
+            fallback_payload,
+            teacher_longitudinal_context=teacher_longitudinal_context,
+        )
+        return {
+            **review,
+            "generated_by": fallback_analysis.agent_id,
+            "teacher_analysis_context": fallback_context,
+            "generation_warnings": warnings,
+        }
     analysis_payload = analysis.model_dump()
     analysis_context = _teacher_analysis_context_from_response(
         analysis_payload,

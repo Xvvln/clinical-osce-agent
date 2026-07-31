@@ -23,6 +23,8 @@ from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
 
 MAX_TEACHER_PROVIDER_PAYLOAD_BYTES = 48 * 1024
+TEACHER_OPENAI_MIN_ATTEMPT_TIMEOUT_SECONDS = 20.0
+TEACHER_OPENAI_MIN_TOTAL_TIMEOUT_SECONDS = 45.0
 _MAX_TEACHER_TRACE_BYTES = 14 * 1024
 _MAX_TEACHER_REASONING_SUMMARY_BYTES = 7 * 1024
 _MAX_TEACHER_SUBMISSION_BYTES = 7 * 1024
@@ -160,8 +162,8 @@ class DeterministicTeacherAgent:
 
 class OpenAICompatibleTeacherAgent:
     def __init__(self, settings: OpenAICompatibleSettings, client: OpenAICompatibleChatClient | None = None) -> None:
-        self._settings = settings
-        self._client = client or OpenAICompatibleChatClient(settings)
+        self._settings = _teacher_openai_compatible_settings(settings)
+        self._client = client or OpenAICompatibleChatClient(self._settings)
 
     def __call__(self, request: TeacherAnalysisRequest) -> TeacherAnalysisResponse:
         return self._client.complete_json(
@@ -170,6 +172,23 @@ class OpenAICompatibleTeacherAgent:
             response_model=TeacherAnalysisResponse,
             temperature=0.2,
         )
+
+
+def _teacher_openai_compatible_settings(
+    settings: OpenAICompatibleSettings,
+) -> OpenAICompatibleSettings:
+    return settings.model_copy(
+        update={
+            "attempt_timeout_seconds": max(
+                settings.attempt_timeout_seconds,
+                TEACHER_OPENAI_MIN_ATTEMPT_TIMEOUT_SECONDS,
+            ),
+            "timeout_seconds": max(
+                settings.timeout_seconds,
+                TEACHER_OPENAI_MIN_TOTAL_TIMEOUT_SECONDS,
+            ),
+        }
+    )
 
 
 class AnthropicTeacherAgent:

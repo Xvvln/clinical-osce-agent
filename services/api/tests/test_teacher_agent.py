@@ -343,6 +343,47 @@ def test_teacher_providers_share_the_same_bounded_projection() -> None:
     ) <= module.MAX_TEACHER_PROVIDER_PAYLOAD_BYTES
 
 
+def test_openai_compatible_teacher_uses_an_isolated_extended_timeout_budget(
+    monkeypatch: Any,
+) -> None:
+    configured_settings: list[OpenAICompatibleSettings] = []
+
+    class RecordingConfiguredClient:
+        def __init__(self, settings: OpenAICompatibleSettings) -> None:
+            configured_settings.append(settings)
+
+    monkeypatch.setattr(module, "OpenAICompatibleChatClient", RecordingConfiguredClient)
+    original = OpenAICompatibleSettings(
+        enabled=True,
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=30.0,
+        attempt_timeout_seconds=12.0,
+    )
+
+    agent = module.OpenAICompatibleTeacherAgent(original)
+
+    assert original.timeout_seconds == 30.0
+    assert original.attempt_timeout_seconds == 12.0
+    assert agent._settings is not original
+    assert agent._settings.timeout_seconds == module.TEACHER_OPENAI_MIN_TOTAL_TIMEOUT_SECONDS
+    assert agent._settings.attempt_timeout_seconds == module.TEACHER_OPENAI_MIN_ATTEMPT_TIMEOUT_SECONDS
+    assert configured_settings == [agent._settings]
+
+    already_extended = OpenAICompatibleSettings(
+        enabled=True,
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=70.0,
+        attempt_timeout_seconds=27.0,
+    )
+    extended_agent = module.OpenAICompatibleTeacherAgent(already_extended)
+
+    assert extended_agent._settings.timeout_seconds == 70.0
+    assert extended_agent._settings.attempt_timeout_seconds == 27.0
+    assert configured_settings[-1] == extended_agent._settings
+
+
 def test_teacher_text_budget_counts_serialized_utf8_bytes() -> None:
     source = ('临床🩺\n"证据"\\' * 200)
 

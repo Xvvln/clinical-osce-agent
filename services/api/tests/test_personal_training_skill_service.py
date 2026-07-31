@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from app.services import personal_training_skill_service as personal_skill_module
@@ -100,6 +101,13 @@ class CapturingGenerator:
         }
 
 
+class ContextPersistingCapturingGenerator(CapturingGenerator):
+    def generate_candidate(self, context: Any) -> dict[str, Any]:
+        candidate = super().generate_candidate(context)
+        candidate["teacher_analysis_context"] = dict(context.teacher_analysis_context)
+        return candidate
+
+
 class FailingGenerator:
     def generate_candidate(self, context: Any) -> dict[str, Any]:
         raise TrainingSkillCandidateGenerationError("configured provider unavailable")
@@ -108,6 +116,18 @@ class FailingGenerator:
 class FailingTeacherAgent:
     def __call__(self, request: Any) -> dict[str, Any]:
         raise RuntimeError("teacher reflection should be reused from the saved candidate")
+
+
+class TimeoutTeacherAgent:
+    def __call__(self, request: Any) -> dict[str, Any]:
+        del request
+        raise httpx.ReadTimeout(
+            "teacher analysis timed out",
+            request=httpx.Request(
+                "POST",
+                "https://example.invalid/v1/chat/completions",
+            ),
+        )
 
 
 class FakeTeacherAgent:
@@ -610,6 +630,101 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
     assert reflection["teacher_analysis_context"]["skill_memory_focus"]["recommended_intervention"].startswith("Coach 后续用反问")
     assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["verification_strategy"] == "查体和检查没有围绕假设形成支持与排除证据。"
     assert reflection["teacher_analysis_context"]["longitudinal_context"] == longitudinal_context
+
+
+def test_teacher_timeout_persists_deterministic_context_without_copying_longitudinal_to_skill(tmp_path) -> None:
+    case = _load_case()
+    generator = ContextPersistingCapturingGenerator()
+    service = PersonalTrainingSkillService(
+        generator=generator,
+        approval_agent=ApprovingAgent(),
+        regression_gate=PassingGate(),
+        teacher_agent=TimeoutTeacherAgent(),
+    )
+    session = SimpleNamespace(
+        session_id="personal-teacher-timeout-session",
+        case_id=case.case_id,
+        student_id="student-a",
+    )
+    report = {
+        "report_id": "personal-teacher-timeout-report",
+        "case_id": case.case_id,
+        "total_score": 21,
+        "max_score": 60,
+        "missed_items": ["ht_migration", "pe_tenderness", "rs_exclude"],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_hypothesis_testing",
+                    "label": "假设验证不足",
+                    "category": "hypothesis_testing",
+                    "severity": "high",
+                    "source_signal_ids": ["ht_migration", "pe_tenderness", "rs_exclude"],
+                }
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+    longitudinal_context = {
+        "schema_version": "teacher_longitudinal_context_v1",
+        "report_window_size": 3,
+        "score_trend": {"direction": "stable", "points": []},
+        "current_gap_statuses": [
+            {
+                "gap_id": "ht_migration",
+                "gap_type": "rubric_item",
+                "label": "追问疼痛部位及转移特征",
+                "status": "repeated",
+            }
+        ],
+        "recovered_gaps": [],
+        "gap_status_counts": {
+            "first_seen_current_window": 0,
+            "repeated": 1,
+            "reactivated_after_improvement": 0,
+            "recovered_since_previous_report": 0,
+        },
+        "applied_personal_skills": [],
+        "evidence_boundary": "仅基于最近三份报告。",
+    }
+    skill_store = TrainingSkillStore(tmp_path / "skills.sqlite3")
+
+    payload = service.generate_for_completed_session(
+        session=session,
+        case=case,
+        report=report,
+        candidate_store=TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3"),
+        skill_store=skill_store,
+        event_store=TrainingEventStore(tmp_path / "events.sqlite3"),
+        teacher_longitudinal_context=longitudinal_context,
+    )
+
+    reflection = payload["ai_reflection_review"]
+    reflection_context = reflection["teacher_analysis_context"]
+    assert reflection["generated_by"] == "teacher_agent_deterministic"
+    assert reflection["generation_warnings"] == [
+        {
+            "module": "teacher_agent_analysis",
+            "error_type": "ReadTimeout",
+            "message": "teacher analysis timed out",
+        }
+    ]
+    assert reflection_context["longitudinal_context"] == longitudinal_context
+    assert reflection_context["student_thinking_hypothesis"]
+    assert reflection_context["clinical_thinking_profile"]
+
+    generator_context = generator.contexts[0].teacher_analysis_context
+    candidate_context = payload["personal_skill_candidate"]["teacher_analysis_context"]
+    persisted_skill = skill_store.get_skill(payload["personal_skill_candidate"]["skill_id"])
+    assert generator_context
+    assert candidate_context == generator_context
+    assert persisted_skill is not None
+    assert persisted_skill["teacher_analysis_context"] == generator_context
+    assert "longitudinal_context" not in generator_context
+    assert "longitudinal_context" not in candidate_context
+    assert "longitudinal_context" not in persisted_skill["teacher_analysis_context"]
 
 
 def test_personal_skill_generator_failure_falls_back_to_template_candidate(tmp_path) -> None:
