@@ -2568,32 +2568,17 @@ def test_osce_session_minimal_training_loop(authenticated_user: dict[str, str]) 
         "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）：已部分覆盖（3/8），仍需补充未覆盖要点。",
         "推理表达覆盖关键排除依据：评分轨迹未找到足够证据。",
     ]
-    expected_recommendations = [
-        "下一轮训练重点：追问疼痛部位及转移特征。",
-        "下一轮训练重点：追问疼痛性质。",
-        "下一轮训练重点：追问疼痛程度。",
-        "下一轮训练重点：追问恶心呕吐腹泻。",
-        "下一轮训练重点：追问发热。",
-        "下一轮训练重点：追问既往病史。",
-        "下一轮训练重点：追问过敏史。",
-        "下一轮训练重点：询问患者想法担忧与期望（ICE）。",
-        "下一轮训练重点：测量体温。",
-        "下一轮训练重点：腹部视诊。",
-        "下一轮训练重点：检查腹部压痛。",
-        "下一轮训练重点：申请 CRP。",
-        "下一轮训练重点：申请腹部超声。",
-        "下一轮训练重点：合理申请尿常规排除输尿管结石。",
-        "下一轮训练重点：提出输尿管结石并说明排除依据。",
-        "下一轮训练重点：提出克罗恩病并说明排除依据。",
-        "下一轮训练重点：提出急性胃肠炎并说明排除依据。",
-        "下一轮训练重点：推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）。",
-        "下一轮训练重点：推理表达覆盖关键排除依据。",
+    assert len(report_payload["next_recommendations"]) == 3
+    assert [
+        recommendation.split("】", 1)[0]
+        for recommendation in report_payload["next_recommendations"]
+    ] == [
+        "下一轮优先训练【人文沟通",
+        "下一轮优先训练【信息采集",
+        "下一轮优先训练【诊断与推理",
     ]
-    for expected_recommendation in expected_recommendations:
-        assert expected_recommendation in report_payload["next_recommendations"]
-    assert "下一轮训练重点：自我介绍并说明问诊目的。" in report_payload["next_recommendations"]
-    assert "下一轮训练重点：查体或检查前说明目的并征得同意。" in report_payload["next_recommendations"]
-    assert "下一轮训练重点：患者表达担忧后给予共情回应。" in report_payload["next_recommendations"]
+    assert all("本轮尚有" in recommendation for recommendation in report_payload["next_recommendations"])
+    assert all("已完成" not in recommendation for recommendation in report_payload["next_recommendations"])
     assert {
         "case:appendicitis_001",
         "source:fareez_osce_2022",

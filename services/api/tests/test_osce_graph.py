@@ -137,6 +137,77 @@ def test_feedback_node_attaches_deep_diagnostic_contrast_analysis() -> None:
     assert any("明显腹泻" in item["label"] for item in diagnostic_contrast["evidence_against_submitted"])
 
 
+def test_next_recommendations_are_ranked_grouped_and_limited() -> None:
+    recommendations = osce_graph_module._build_next_recommendations(
+        {
+            "missed_items": [
+                "history_partial",
+                "exam_missing",
+                "diagnosis_partial",
+                "reasoning_missing",
+                "humanistic_missing",
+                "other_missing",
+                "stale_full_score_item",
+            ]
+        },
+        {
+            "history_partial": {
+                "score": 2,
+                "max_score": 8,
+                "dimension_id": "history_taking",
+                "description": "补齐病史主线",
+            },
+            "exam_missing": {
+                "score": 0,
+                "max_score": 3,
+                "dimension_id": "physical_exam",
+                "description": "完成关键查体",
+            },
+            "diagnosis_partial": {
+                "score": 7,
+                "max_score": 10,
+                "dimension_id": "main_diagnosis",
+                "description": "校验主诊断",
+            },
+            "reasoning_missing": {
+                "score": 0,
+                "max_score": 7,
+                "dimension_id": "reasoning",
+                "description": "表达支持与排除依据",
+            },
+            "humanistic_missing": {
+                "score": 0,
+                "max_score": 4,
+                "dimension_id": "relationship_building",
+                "description": "回应患者担忧",
+            },
+            "other_missing": {
+                "score": 0,
+                "max_score": 12,
+                "dimension_id": "custom_dimension",
+                "description": "综合判断",
+            },
+            "stale_full_score_item": {
+                "score": 5,
+                "max_score": 5,
+                "dimension_id": "reasoning",
+                "description": "已经满分的项目",
+            },
+        },
+    )
+
+    assert recommendations == [
+        "下一轮优先训练【综合能力】：“综合判断”（本轮尚有12分未获得）；"
+        "下一轮完成后对照评分证据检查是否真正覆盖。",
+        "下一轮优先训练【诊断与推理】：“表达支持与排除依据”、“校验主诊断”"
+        "（本轮尚有10分未获得）；用“主诊断—支持证据—鉴别诊断及排除依据”完整表达。",
+        "下一轮优先训练【信息采集】：“补齐病史主线”、“完成关键查体”（本轮尚有9分未获得）；"
+        "围绕当前假设，按“问诊—关键查体—必要检查”补齐证据链。",
+    ]
+    assert all("已经满分的项目" not in item for item in recommendations)
+    assert all("已完成" not in item for item in recommendations)
+
+
 def base_hint_state(**overrides: object) -> dict[str, object]:
     state: dict[str, object] = {
         "session_id": "session_demo",
@@ -1853,11 +1924,20 @@ def test_osce_graph_generates_rule_evaluation_report() -> None:
         "推理表达覆盖典型阑尾炎支持证据（转移性痛、压痛反跳痛、WBC/CRP 升高、超声）："
         "已部分覆盖（3/8），仍需补充未覆盖要点。"
     ) in feedback_report["reasoning_errors"]
-    assert feedback_report["next_recommendations"][:3] == [
-        "下一轮训练重点：追问疼痛部位及转移特征。",
-        "下一轮训练重点：追问疼痛性质。",
-        "下一轮训练重点：追问疼痛程度。",
-    ]
+    assert len(feedback_report["next_recommendations"]) == 3
+    assert feedback_report["next_recommendations"][0].startswith(
+        "下一轮优先训练【人文沟通】："
+    )
+    assert "本轮尚有30分未获得" in feedback_report["next_recommendations"][0]
+    assert feedback_report["next_recommendations"][1].startswith(
+        "下一轮优先训练【信息采集】："
+    )
+    assert "本轮尚有29分未获得" in feedback_report["next_recommendations"][1]
+    assert feedback_report["next_recommendations"][2].startswith(
+        "下一轮优先训练【诊断与推理】："
+    )
+    assert "本轮尚有19分未获得" in feedback_report["next_recommendations"][2]
+    assert all("已完成" not in item for item in feedback_report["next_recommendations"])
     assert feedback_report["knowledge_recommendations"][:3] == [
         {
             "reference": "rubric:appendicitis_001_rubric.item.ht_migration",

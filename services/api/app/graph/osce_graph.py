@@ -79,6 +79,33 @@ PROCESSING_STEP_LABELS = {
     "response": "生成可见回复",
 }
 
+NEXT_RECOMMENDATION_LIMIT = 3
+_NEXT_RECOMMENDATION_GROUPS: dict[str, dict[str, Any]] = {
+    "clinical_information": {
+        "label": "信息采集",
+        "dimension_ids": {"history_taking", "physical_exam", "auxiliary_test"},
+        "action": "围绕当前假设，按“问诊—关键查体—必要检查”补齐证据链。",
+        "tie_break_priority": 1,
+    },
+    "diagnostic_reasoning": {
+        "label": "诊断与推理",
+        "dimension_ids": {"main_diagnosis", "differential_diagnosis", "reasoning"},
+        "action": "用“主诊断—支持证据—鉴别诊断及排除依据”完整表达。",
+        "tie_break_priority": 0,
+    },
+    "humanistic_communication": {
+        "label": "人文沟通",
+        "dimension_ids": {
+            "narrative_medicine",
+            "communication_skill",
+            "medical_ethics",
+            "relationship_building",
+        },
+        "action": "在问诊、查体和解释环节加入对患者担忧的回应、必要告知与同意。",
+        "tie_break_priority": 2,
+    },
+}
+
 EMPTY_SESSION_SOCRATIC_HINT = "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
 
 
@@ -1145,11 +1172,7 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         if item_score["dimension_id"] in {"differential_diagnosis", "reasoning"}
         and item_score["score"] < item_score["max_score"]
     ]
-    next_recommendations = [
-        f"下一轮训练重点：{rubric_scores[item_id]['description']}。"
-        for item_id in report.get("missed_items", [])
-        if item_id in rubric_scores
-    ]
+    next_recommendations = _build_next_recommendations(report, rubric_scores)
     knowledge_recommendations = recommend_knowledge_items(report)
     source_items = retrieve_feedback_source_items(report, state.get("revealed_facts", []))
     source_references = [item.reference for item in source_items]
@@ -1215,6 +1238,104 @@ def _rubric_progress_text(item_score: dict[str, Any]) -> str:
     if score == max_score:
         return f"{description}：已完成。"
     return f"{description}：已部分覆盖（{score}/{max_score}）。"
+
+
+def _build_next_recommendations(
+    report: dict[str, Any],
+    rubric_scores: dict[str, dict[str, Any]],
+) -> list[str]:
+    """将漏项收敛为少量、可执行的下一轮训练任务。
+
+    排序依据是各训练域未获得的分数，同分时优先诊断推理。过期的
+    ``missed_items`` 即使误含已满分项，也不会被写入建议。
+    """
+
+    grouped_items: dict[str, dict[str, Any]] = {}
+    for order, item_id in enumerate(report.get("missed_items", [])):
+        item_score = rubric_scores.get(str(item_id))
+        if not isinstance(item_score, dict):
+            continue
+        score = _recommendation_numeric_score(item_score.get("score"))
+        max_score = _recommendation_numeric_score(item_score.get("max_score"))
+        missing_score = max(0.0, max_score - score)
+        if missing_score <= 0:
+            continue
+        group_id, group_definition = _next_recommendation_group(
+            str(item_score.get("dimension_id") or "")
+        )
+        group = grouped_items.setdefault(
+            group_id,
+            {
+                "label": group_definition["label"],
+                "action": group_definition["action"],
+                "tie_break_priority": group_definition["tie_break_priority"],
+                "first_order": order,
+                "missing_score": 0.0,
+                "items": [],
+            },
+        )
+        group["missing_score"] += missing_score
+        group["items"].append(
+            {
+                "description": str(item_score.get("description") or item_id),
+                "missing_score": missing_score,
+                "order": order,
+            }
+        )
+
+    ranked_groups = sorted(
+        grouped_items.values(),
+        key=lambda group: (
+            -group["missing_score"],
+            group["tie_break_priority"],
+            group["first_order"],
+        ),
+    )
+    recommendations: list[str] = []
+    for group in ranked_groups[:NEXT_RECOMMENDATION_LIMIT]:
+        ranked_items = sorted(
+            group["items"],
+            key=lambda item: (-item["missing_score"], item["order"]),
+        )
+        highlighted_items = "、".join(
+            f"“{item['description']}”" for item in ranked_items[:2]
+        )
+        if len(ranked_items) > 2:
+            highlighted_items += f"等{len(ranked_items)}项"
+        missing_score_text = _format_recommendation_score(group["missing_score"])
+        recommendations.append(
+            f"下一轮优先训练【{group['label']}】：{highlighted_items}"
+            f"（本轮尚有{missing_score_text}分未获得）；{group['action']}"
+        )
+    return recommendations
+
+
+def _next_recommendation_group(dimension_id: str) -> tuple[str, dict[str, Any]]:
+    for group_id, definition in _NEXT_RECOMMENDATION_GROUPS.items():
+        if dimension_id in definition["dimension_ids"]:
+            return group_id, definition
+    return (
+        "other",
+        {
+            "label": "综合能力",
+            "action": "下一轮完成后对照评分证据检查是否真正覆盖。",
+            "tie_break_priority": 3,
+        },
+    )
+
+
+def _recommendation_numeric_score(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
+def _format_recommendation_score(value: float) -> str:
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.1f}".rstrip("0").rstrip(".")
 
 
 def _reasoning_gap_text(item_score: dict[str, Any]) -> str:
