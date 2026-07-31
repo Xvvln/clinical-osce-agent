@@ -749,6 +749,14 @@ def _apply_teacher_agent_analysis(
             "generation_warnings": warnings,
         }
     analysis_payload = analysis.model_dump()
+    if (
+        analysis.agent_id != "teacher_agent_deterministic"
+        and analysis.analysis_mode != "deterministic_baseline"
+    ):
+        analysis_payload = _backfill_teacher_analysis_payload(
+            analysis_payload,
+            request=request,
+        )
     analysis_context = _teacher_analysis_context_from_response(
         analysis_payload,
         teacher_longitudinal_context=teacher_longitudinal_context,
@@ -764,6 +772,43 @@ def _apply_teacher_agent_analysis(
         analysis_payload,
         teacher_analysis_context=analysis_context,
     )
+
+
+def _backfill_teacher_analysis_payload(
+    analysis: dict[str, Any],
+    *,
+    request: TeacherAnalysisRequest,
+) -> dict[str, Any]:
+    enriched = deepcopy(analysis)
+    deterministic = DeterministicTeacherAgent()(request).model_dump()
+    for field_name in (
+        "analysis_summary",
+        "student_thinking_hypothesis",
+        "clinical_thinking_profile",
+        "skill_memory_focus",
+    ):
+        if not _has_meaningful_teacher_value(enriched.get(field_name)):
+            enriched[field_name] = deepcopy(deterministic.get(field_name))
+
+    profile = deepcopy(_dict(enriched.get("clinical_thinking_profile")))
+    existing_longitudinal_assessment = profile.get("longitudinal_gap_assessment")
+    if (
+        not isinstance(existing_longitudinal_assessment, str)
+        or not existing_longitudinal_assessment.strip()
+    ):
+        deterministic_profile = _dict(deterministic.get("clinical_thinking_profile"))
+        longitudinal_assessment = str(
+            deterministic_profile.get("longitudinal_gap_assessment") or ""
+        ).strip()
+        if not longitudinal_assessment:
+            longitudinal_assessment = (
+                "最近训练窗口内未识别到连续出现、改善后再现或上轮暂未再现的问题。"
+                if request.longitudinal_context
+                else "当前缺少可比较的历史报告，暂不能判断问题是否恢复或复发。"
+            )
+        profile["longitudinal_gap_assessment"] = longitudinal_assessment
+    enriched["clinical_thinking_profile"] = profile
+    return enriched
 
 
 def _teacher_agent_base_reflection(review: dict[str, Any]) -> dict[str, Any]:

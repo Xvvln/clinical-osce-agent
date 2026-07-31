@@ -65,6 +65,8 @@ clinical_thinking_profile 建议包含这些键：
 - 不得泄露标准答案或把未披露病例事实直接讲给学生；
 - 可以分析学生为什么漏、推理哪里断、下一步该如何训练；
 - 每条分析应尽量锚定输入材料中的 trace、rubric 中文训练点、已覆盖/未覆盖线索或学生提交内容；
+- analysis_summary、student_thinking_hypothesis 必须是非空中文字符串，clinical_thinking_profile、skill_memory_focus 必须是非空对象；
+- 有 longitudinal_context 时，clinical_thinking_profile 必须包含 longitudinal_gap_assessment，准确说明持续、复发或暂未再现；
 - 输出中文 JSON。
 """
 

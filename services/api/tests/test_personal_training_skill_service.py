@@ -130,6 +130,22 @@ class TimeoutTeacherAgent:
         )
 
 
+class EmptyCoreFieldsTeacherAgent:
+    def __call__(self, request: Any) -> dict[str, Any]:
+        del request
+        return {
+            "agent_id": "teacher_agent_qwen",
+            "analysis_mode": "post_session_teacher_analysis",
+            "analysis_summary": "",
+            "overall_comment": "Qwen 的本轮总评应继续保留。",
+            "student_thinking_hypothesis": "",
+            "clinical_thinking_profile": {
+                "problem_representation": "Qwen 认为学生已形成初步问题表征。",
+            },
+            "skill_memory_focus": {},
+        }
+
+
 class FakeTeacherAgent:
     def __init__(self) -> None:
         self.requests: list[Any] = []
@@ -629,7 +645,83 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
     assert reflection["major_issues"][0]["title"] == "假设验证链断裂"
     assert reflection["teacher_analysis_context"]["skill_memory_focus"]["recommended_intervention"].startswith("Coach 后续用反问")
     assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["verification_strategy"] == "查体和检查没有围绕假设形成支持与排除证据。"
+    assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["longitudinal_gap_assessment"] == "1 个问题改善后再现"
     assert reflection["teacher_analysis_context"]["longitudinal_context"] == longitudinal_context
+
+
+def test_teacher_success_backfills_only_empty_core_fields_from_deterministic_analysis() -> None:
+    case = _load_case()
+    report = {
+        "report_id": "teacher-empty-core-fields-report",
+        "case_id": case.case_id,
+        "total_score": 21,
+        "max_score": 60,
+        "missed_items": ["ht_migration", "pe_tenderness"],
+        "clinical_reasoning_trace": {
+            "trace_version": "clinical_reasoning_trace_v1",
+            "cognitive_patterns": [
+                {
+                    "pattern_id": "weak_hypothesis_testing",
+                    "label": "假设验证不足",
+                    "category": "hypothesis_testing",
+                    "severity": "high",
+                    "source_signal_ids": ["ht_migration", "pe_tenderness"],
+                }
+            ],
+        },
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+    longitudinal_context = {
+        "schema_version": "teacher_longitudinal_context_v1",
+        "report_window_size": 3,
+        "score_trend": {"direction": "stable", "points": []},
+        "current_gap_statuses": [
+            {
+                "gap_id": "ht_migration",
+                "gap_type": "rubric_item",
+                "label": "追问疼痛部位及转移特征",
+                "status": "reactivated_after_improvement",
+            }
+        ],
+        "recovered_gaps": [
+            {
+                "gap_id": "pe_rebound",
+                "gap_type": "rubric_item",
+                "label": "检查反跳痛",
+                "status": "recovered_since_previous_report",
+            }
+        ],
+        "gap_status_counts": {
+            "first_seen_current_window": 0,
+            "repeated": 0,
+            "reactivated_after_improvement": 1,
+            "recovered_since_previous_report": 1,
+        },
+        "applied_personal_skills": [],
+        "evidence_boundary": "仅基于最近三份报告。",
+    }
+
+    reflection = build_teacher_reflection_review_payload(
+        report,
+        case,
+        teacher_agent=EmptyCoreFieldsTeacherAgent(),
+        teacher_longitudinal_context=longitudinal_context,
+    )
+
+    context = reflection["teacher_analysis_context"]
+    expected_longitudinal = "1 个问题改善后再现，1 个上轮问题本轮暂未再现"
+    assert reflection["generated_by"] == "teacher_agent_qwen"
+    assert reflection["overall_comment"] == "Qwen 的本轮总评应继续保留。"
+    assert "generation_warnings" not in reflection
+    assert context["analysis_summary"]
+    assert expected_longitudinal in context["student_thinking_hypothesis"]
+    assert context["skill_memory_focus"]["problem_pattern_summary"]
+    assert context["skill_memory_focus"]["recommended_intervention"]
+    assert context["skill_memory_focus"]["longitudinal_status"] == expected_longitudinal
+    assert context["clinical_thinking_profile"]["problem_representation"] == "Qwen 认为学生已形成初步问题表征。"
+    assert context["clinical_thinking_profile"]["longitudinal_gap_assessment"] == expected_longitudinal
+    assert context["longitudinal_context"] == longitudinal_context
 
 
 def test_teacher_timeout_persists_deterministic_context_without_copying_longitudinal_to_skill(tmp_path) -> None:
