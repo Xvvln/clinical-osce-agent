@@ -7,7 +7,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import call_with_api_logging
@@ -28,6 +28,7 @@ _MAX_TEACHER_REASONING_SUMMARY_BYTES = 7 * 1024
 _MAX_TEACHER_SUBMISSION_BYTES = 7 * 1024
 _MAX_TEACHER_BASE_REFLECTION_BYTES = 10 * 1024
 _MAX_TEACHER_SOURCE_REFERENCES_BYTES = 2 * 1024
+_MAX_TEACHER_LONGITUDINAL_CONTEXT_BYTES = 4 * 1024
 
 TEACHER_ANALYSIS_SYSTEM_PROMPT = """你是 OSCE 训练系统中的 TeacherAgent，负责训练后的临床教学分析。
 
@@ -38,6 +39,14 @@ TEACHER_ANALYSIS_SYSTEM_PROMPT = """你是 OSCE 训练系统中的 TeacherAgent�
 - 鉴别诊断是否足够展开；
 - 证据链在哪一步断裂；
 - 下一轮应该如何具体练习。
+
+若输入包含 longitudinal_context，它只是最近 3 份已完成训练报告的压缩教学摘要。你必须区分：
+- first_seen_current_window：本轮窗口内首次出现，不得写成“长期反复”；
+- repeated：本轮和上一份报告都出现；
+- reactivated_after_improvement：更早出现、上一份暂时未出现、本轮再次出现；
+- recovered_since_previous_report：上一份出现但本轮未出现，只能表述为“本轮暂未再现”，不得宣称已永久掌握。
+training_skill_applied 只证明某个人 Skill 在训练中被调用，不证明它已产生效果。你应先处理反复或改善后再犯的问题，再处理本轮首次问题；下一步动作最多 3 条。
+不同病例或不同难度的分数只能作描述性参考；当 direction= mixed_context_not_directly_comparable 时，不得据此宣称能力提升或下降。
 
 不要只复述 missed_items。你需要提出一个“学生临床思维假设”：从本轮对话、动作顺序、诊断提交和 trace 推断学生的内在思维问题，例如结论先行、只收集阳性证据、缺少排除路径、查体/检查和假设脱节等。该假设必须是教学分析，不得改变事实或评分。
 
@@ -71,6 +80,7 @@ class TeacherAnalysisRequest(BaseModel):
     reasoning_trace_summary: dict[str, Any] = Field(default_factory=dict)
     base_reflection: dict[str, Any] = Field(default_factory=dict)
     source_reference_items: list[dict[str, Any]] = Field(default_factory=list)
+    longitudinal_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class TeacherAnalysisResponse(BaseModel):
@@ -81,12 +91,17 @@ class TeacherAnalysisResponse(BaseModel):
     major_issues: list[dict[str, Any]] = Field(default_factory=list)
     teacher_coaching_review: list[dict[str, Any]] = Field(default_factory=list)
     reasoning_chain_review: str = ""
-    next_practice_plan: list[str] = Field(default_factory=list)
+    next_practice_plan: list[str] = Field(default_factory=list, max_length=3)
     teacher_note: str = ""
     student_thinking_hypothesis: str = ""
     clinical_thinking_profile: dict[str, Any] = Field(default_factory=dict)
     skill_memory_focus: dict[str, Any] = Field(default_factory=dict)
     source_anchor_labels: list[str] = Field(default_factory=list)
+
+    @field_validator("next_practice_plan", mode="before")
+    @classmethod
+    def _limit_next_practice_plan(cls, value: Any) -> Any:
+        return list(value)[:3] if isinstance(value, list | tuple) else value
 
 
 class DeterministicTeacherAgent:
@@ -110,6 +125,11 @@ class DeterministicTeacherAgent:
             if dominant_patterns
             else ("、".join(issue_titles[:2]) if issue_titles else "本轮仍需把临床线索组织成可验证的推理链")
         )
+        longitudinal_assessment = _deterministic_longitudinal_assessment(
+            request.longitudinal_context,
+        )
+        if longitudinal_assessment:
+            thinking_hypothesis = f"{thinking_hypothesis}；{longitudinal_assessment}"
         return TeacherAnalysisResponse(
             agent_id=self.agent_id,
             analysis_mode="deterministic_baseline",
@@ -118,7 +138,7 @@ class DeterministicTeacherAgent:
             major_issues=list(base_reflection.get("major_issues") or []),
             teacher_coaching_review=list(base_reflection.get("teacher_coaching_review") or []),
             reasoning_chain_review=str(base_reflection.get("reasoning_chain_review") or ""),
-            next_practice_plan=[str(item) for item in base_reflection.get("next_practice_plan", [])],
+            next_practice_plan=[str(item) for item in base_reflection.get("next_practice_plan", [])][:3],
             teacher_note=str(base_reflection.get("teacher_note") or ""),
             student_thinking_hypothesis=thinking_hypothesis,
             clinical_thinking_profile={
@@ -127,10 +147,12 @@ class DeterministicTeacherAgent:
                 "verification_strategy": "根据已覆盖和未覆盖线索判断查体、检查是否服务于验证。",
                 "differential_reasoning": "根据证据链断点判断是否形成支持与排除依据。",
                 "metacognitive_next_move": str(base_reflection.get("next_focus") or ""),
+                "longitudinal_gap_assessment": longitudinal_assessment,
             },
             skill_memory_focus={
                 "problem_pattern_summary": "、".join(issue_titles[:3]) or "本轮临床思维训练问题",
                 "recommended_intervention": str(base_reflection.get("next_focus") or ""),
+                "longitudinal_status": longitudinal_assessment,
             },
             source_anchor_labels=[*request.missed_labels[:4], *request.pending_labels[:4]],
         )
@@ -356,6 +378,9 @@ def _build_teacher_provider_payload(request: TeacherAnalysisRequest) -> dict[str
         "source_reference_items": _teacher_source_reference_projection(
             request.source_reference_items,
         ),
+        "longitudinal_context": _teacher_longitudinal_context_projection(
+            request.longitudinal_context,
+        ),
     }
     if _teacher_provider_json_size(payload) <= MAX_TEACHER_PROVIDER_PAYLOAD_BYTES:
         return payload
@@ -374,6 +399,157 @@ def _build_teacher_provider_payload(request: TeacherAnalysisRequest) -> dict[str
         if _teacher_provider_json_size(payload) <= MAX_TEACHER_PROVIDER_PAYLOAD_BYTES:
             return payload
     raise RuntimeError("TeacherAgent 模型请求超过内部载荷上限。")
+
+
+def _deterministic_longitudinal_assessment(value: Any) -> str:
+    context = _teacher_mapping(value)
+    counts = _teacher_mapping(context.get("gap_status_counts"))
+    reactivated = _bounded_non_negative_int(counts.get("reactivated_after_improvement"), maximum=12)
+    repeated = _bounded_non_negative_int(counts.get("repeated"), maximum=12)
+    first_seen = _bounded_non_negative_int(counts.get("first_seen_current_window"), maximum=12)
+    recovered = _bounded_non_negative_int(counts.get("recovered_since_previous_report"), maximum=8)
+    parts: list[str] = []
+    if reactivated:
+        parts.append(f"{reactivated} 个问题改善后再现")
+    if repeated:
+        parts.append(f"{repeated} 个问题连续出现")
+    if first_seen:
+        parts.append(f"{first_seen} 个问题为本窗口首次出现")
+    if recovered:
+        parts.append(f"{recovered} 个上轮问题本轮暂未再现")
+    return "，".join(parts)
+
+
+def _teacher_longitudinal_context_projection(value: Any) -> dict[str, Any]:
+    context = _teacher_mapping(value)
+    score_trend = _teacher_mapping(context.get("score_trend"))
+    score_points = _bounded_teacher_provider_object_list(
+        score_trend.get("points", []),
+        projector=_teacher_longitudinal_score_point_projection,
+        max_items=3,
+        max_json_bytes=1_024,
+    )
+    current_gaps = _bounded_teacher_provider_object_list(
+        context.get("current_gap_statuses", []),
+        projector=_teacher_longitudinal_gap_projection,
+        max_items=12,
+        max_json_bytes=1_536,
+    )
+    recovered_gaps = _bounded_teacher_provider_object_list(
+        context.get("recovered_gaps", []),
+        projector=_teacher_longitudinal_gap_projection,
+        max_items=8,
+        max_json_bytes=1_024,
+    )
+    applied_skills = _bounded_teacher_provider_object_list(
+        context.get("applied_personal_skills", []),
+        projector=_teacher_longitudinal_skill_projection,
+        max_items=6,
+        max_json_bytes=1_024,
+    )
+    raw_counts = _teacher_mapping(context.get("gap_status_counts"))
+    counts = {
+        status: _bounded_non_negative_int(raw_counts.get(status), maximum=12)
+        for status in (
+            "first_seen_current_window",
+            "repeated",
+            "reactivated_after_improvement",
+            "recovered_since_previous_report",
+        )
+    }
+    projection = {
+        "schema_version": _bounded_teacher_provider_text(
+            context.get("schema_version", ""),
+            max_json_bytes=128,
+        ),
+        "report_window_size": _bounded_non_negative_int(
+            context.get("report_window_size"),
+            maximum=3,
+        ),
+        "score_trend": {
+            "order": _bounded_teacher_provider_text(
+                score_trend.get("order", "oldest_to_newest"),
+                max_json_bytes=64,
+            ),
+            "direction": _bounded_teacher_provider_text(
+                score_trend.get("direction", "insufficient_history"),
+                max_json_bytes=64,
+            ),
+            "points": score_points,
+        },
+        "current_gap_statuses": current_gaps,
+        "recovered_gaps": recovered_gaps,
+        "gap_status_counts": counts,
+        "applied_personal_skills": applied_skills,
+        "evidence_boundary": _bounded_teacher_provider_text(
+            context.get("evidence_boundary", ""),
+            max_json_bytes=512,
+        ),
+    }
+    if _teacher_provider_json_size(projection) > _MAX_TEACHER_LONGITUDINAL_CONTEXT_BYTES:
+        raise RuntimeError("TeacherAgent 纵向上下文投影超过内部载荷上限。")
+    return projection
+
+
+def _teacher_longitudinal_score_point_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    projection: dict[str, Any] = {
+        "report_offset": _bounded_non_negative_int(value.get("report_offset"), maximum=2),
+        "case_id": _bounded_teacher_provider_text(value.get("case_id", ""), max_json_bytes=128),
+    }
+    training_difficulty = _bounded_teacher_provider_text(
+        value.get("training_difficulty", ""),
+        max_json_bytes=64,
+    )
+    if training_difficulty:
+        projection["training_difficulty"] = training_difficulty
+    for field_name in ("total_score", "max_score", "score_percent"):
+        number = _bounded_teacher_number(value.get(field_name))
+        if number is not None:
+            projection[field_name] = number
+    return projection
+
+
+def _teacher_longitudinal_gap_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _compact_teacher_text_mapping(
+        value,
+        {
+            "gap_id": 160,
+            "gap_type": 96,
+            "label": 256,
+            "status": 128,
+        },
+    )
+
+
+def _teacher_longitudinal_skill_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    projection = _compact_teacher_text_mapping(
+        value,
+        {
+            "title": 256,
+            "skill_type": 128,
+            "effect_status": 128,
+            "evidence": 128,
+        },
+    )
+    projection["report_offset"] = _bounded_non_negative_int(
+        value.get("report_offset"),
+        maximum=2,
+    )
+    return projection
+
+
+def _bounded_teacher_number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if value != value or value in {float("inf"), float("-inf")}:
+        return None
+    return round(float(value), 2)
+
+
+def _bounded_non_negative_int(value: Any, *, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return 0
+    return min(max(int(value), 0), maximum)
 
 
 def _teacher_trace_projection(trace_value: Any) -> dict[str, Any]:
@@ -620,7 +796,7 @@ def _teacher_base_reflection_projection(value: Any) -> dict[str, Any]:
         ),
         "next_practice_plan": _bounded_teacher_provider_text_list(
             reflection.get("next_practice_plan", []),
-            max_items=5,
+            max_items=3,
             max_item_json_bytes=384,
             max_json_bytes=640,
         ),

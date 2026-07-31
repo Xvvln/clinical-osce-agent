@@ -2464,6 +2464,10 @@ def _personal_skill_payload_for_report(
     if session.feedback_report is None:
         return build_not_ready_personal_skill_payload()
     active_personal_skill_service = service.personal_skill_service or personal_training_skill_service
+    teacher_longitudinal_context = _teacher_longitudinal_context_for_report(
+        service,
+        session,
+    )
     try:
         return active_personal_skill_service.generate_for_completed_session(
             session=session,
@@ -2472,6 +2476,7 @@ def _personal_skill_payload_for_report(
             candidate_store=service.training_skill_candidate_store,
             skill_store=service.training_skill_store,
             event_store=service.training_event_store,
+            teacher_longitudinal_context=teacher_longitudinal_context,
         )
     except ModelProviderPolicyError:
         raise
@@ -2480,12 +2485,14 @@ def _personal_skill_payload_for_report(
             report=session.feedback_report,
             case=case,
             teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+            teacher_longitudinal_context=teacher_longitudinal_context,
         )
     except Exception as exc:
         payload = build_generation_failed_personal_skill_payload(
             report=session.feedback_report,
             case=case,
             teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+            teacher_longitudinal_context=teacher_longitudinal_context,
         )
         payload["generation_warnings"] = _append_report_generation_warning(
             session.feedback_report,
@@ -2493,6 +2500,69 @@ def _personal_skill_payload_for_report(
             exc=exc,
         )
         return payload
+
+
+def _teacher_longitudinal_context_for_report(
+    service: OsceSessionService,
+    session: OsceSession,
+) -> dict[str, Any]:
+    from app.services.teacher_longitudinal_context_service import (
+        MAX_LONGITUDINAL_REPORTS,
+        build_teacher_longitudinal_context,
+    )
+
+    current_report = session.feedback_report
+    if not isinstance(current_report, dict):
+        return build_teacher_longitudinal_context([])
+
+    report_entries: list[dict[str, Any]] = [
+        {
+            "session_id": session.session_id,
+            "case_id": session.case_id,
+            "training_difficulty": session.training_difficulty,
+            "report": current_report,
+        }
+    ]
+    try:
+        session_summaries = service.session_store.list_user_session_summaries(
+            session.student_id,
+        )
+        for summary in session_summaries:
+            if len(report_entries) >= MAX_LONGITUDINAL_REPORTS:
+                break
+            session_id = str(summary.get("session_id") or "").strip()
+            if (
+                not session_id
+                or session_id == session.session_id
+                or not bool(summary.get("has_report"))
+            ):
+                continue
+            report = service.report_store.get_report(session_id)
+            if not isinstance(report, dict):
+                continue
+            report_entries.append(
+                {
+                    "session_id": session_id,
+                    "case_id": str(summary.get("case_id") or report.get("case_id") or ""),
+                    "training_difficulty": str(summary.get("training_difficulty") or ""),
+                    "report": report,
+                }
+            )
+        recent_session_ids = [
+            str(entry["session_id"])
+            for entry in report_entries
+        ]
+        events_by_session = service.training_event_store.list_events_for_sessions(
+            recent_session_ids,
+        )
+    except Exception:
+        # Longitudinal analysis is optional teaching context. A temporary history
+        # store problem must not block the deterministic report or personal Skill.
+        return build_teacher_longitudinal_context(report_entries[:1])
+    return build_teacher_longitudinal_context(
+        report_entries,
+        events_by_session=events_by_session,
+    )
 
 
 def _deferred_optional_agent_payload(report: dict[str, Any], case: Case) -> dict[str, Any]:

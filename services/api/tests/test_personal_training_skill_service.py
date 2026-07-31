@@ -561,6 +561,28 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
         "source_reference_items": [],
     }
 
+    longitudinal_context = {
+        "schema_version": "teacher_longitudinal_context_v1",
+        "report_window_size": 3,
+        "score_trend": {"direction": "stable", "points": []},
+        "current_gap_statuses": [
+            {
+                "gap_id": "ht_migration",
+                "gap_type": "rubric_item",
+                "label": "追问疼痛部位及转移特征",
+                "status": "reactivated_after_improvement",
+            }
+        ],
+        "recovered_gaps": [],
+        "gap_status_counts": {
+            "first_seen_current_window": 0,
+            "repeated": 0,
+            "reactivated_after_improvement": 1,
+            "recovered_since_previous_report": 0,
+        },
+        "applied_personal_skills": [],
+        "evidence_boundary": "仅基于最近三份报告。",
+    }
     payload = service.generate_for_completed_session(
         session=session,
         case=case,
@@ -568,12 +590,15 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
         candidate_store=TrainingSkillCandidateStore(tmp_path / "candidates.sqlite3"),
         skill_store=TrainingSkillStore(tmp_path / "skills.sqlite3"),
         event_store=TrainingEventStore(tmp_path / "events.sqlite3"),
+        teacher_longitudinal_context=longitudinal_context,
     )
 
     assert teacher_agent.requests
     assert teacher_agent.requests[0].case_id == case.case_id
     assert teacher_agent.requests[0].clinical_reasoning_trace["trace_version"] == "clinical_reasoning_trace_v1"
+    assert teacher_agent.requests[0].longitudinal_context == longitudinal_context
     context = generator.contexts[0]
+    assert "longitudinal_context" not in context.teacher_analysis_context
     assert context.teacher_analysis_context["analysis_summary"] == "学生没有把疼痛迁移、关键查体和鉴别排除连成验证链。"
     assert context.teacher_analysis_context["skill_memory_focus"]["problem_pattern_summary"] == "假设形成后缺少验证路径"
     assert context.teacher_analysis_context["student_thinking_hypothesis"] == "学生过早进入结论，尚未把病史、查体和排除依据组织成验证链。"
@@ -584,6 +609,7 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
     assert reflection["major_issues"][0]["title"] == "假设验证链断裂"
     assert reflection["teacher_analysis_context"]["skill_memory_focus"]["recommended_intervention"].startswith("Coach 后续用反问")
     assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["verification_strategy"] == "查体和检查没有围绕假设形成支持与排除证据。"
+    assert reflection["teacher_analysis_context"]["longitudinal_context"] == longitudinal_context
 
 
 def test_personal_skill_generator_failure_falls_back_to_template_candidate(tmp_path) -> None:

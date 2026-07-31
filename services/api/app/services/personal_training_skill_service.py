@@ -138,6 +138,7 @@ def build_generation_failed_personal_skill_payload(
     report: dict[str, Any],
     case: Case,
     teacher_agent: Any | None = None,
+    teacher_longitudinal_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "personal_skill_candidate": {
@@ -150,7 +151,12 @@ def build_generation_failed_personal_skill_payload(
             "external_evidence_checks": [],
             "summary": "个人训练 Skill 暂未生成；请检查当前账号的模型服务配置后重试打开报告。",
         },
-        "ai_reflection_review": _build_ai_reflection_review(report, case, teacher_agent=teacher_agent),
+        "ai_reflection_review": _build_ai_reflection_review(
+            report,
+            case,
+            teacher_agent=teacher_agent,
+            teacher_longitudinal_context=teacher_longitudinal_context,
+        ),
     }
 
 
@@ -177,6 +183,7 @@ class PersonalTrainingSkillService:
         candidate_store: TrainingSkillCandidateStore,
         skill_store: TrainingSkillStore,
         event_store: TrainingEventStore,
+        teacher_longitudinal_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         candidate_id = _personal_candidate_id(str(session.session_id))
         existing_candidate = candidate_store.get_candidate(candidate_id)
@@ -185,6 +192,7 @@ class PersonalTrainingSkillService:
                 report,
                 case,
                 teacher_agent=self._teacher_agent,
+                teacher_longitudinal_context=teacher_longitudinal_context,
             )
             candidate = self._generate_candidate(
                 session=session,
@@ -213,6 +221,7 @@ class PersonalTrainingSkillService:
                     report,
                     case,
                     teacher_agent=self._teacher_agent,
+                    teacher_longitudinal_context=teacher_longitudinal_context,
                 )
             )
 
@@ -556,8 +565,14 @@ def build_teacher_reflection_review_payload(
     case: Case | None = None,
     *,
     teacher_agent: Any | None = None,
+    teacher_longitudinal_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _build_ai_reflection_review(report, case, teacher_agent=teacher_agent)
+    return _build_ai_reflection_review(
+        report,
+        case,
+        teacher_agent=teacher_agent,
+        teacher_longitudinal_context=teacher_longitudinal_context,
+    )
 
 
 def _build_ai_reflection_review(
@@ -565,6 +580,7 @@ def _build_ai_reflection_review(
     case: Case | None = None,
     *,
     teacher_agent: Any | None = None,
+    teacher_longitudinal_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     missed_items = [str(item_id) for item_id in report.get("missed_items", [])]
     case_id = str(report.get("case_id") or getattr(case, "case_id", "") or "")
@@ -671,6 +687,7 @@ def _build_ai_reflection_review(
         pending_labels=pending_labels,
         reasoning_trace_summary=reasoning_trace_summary,
         source_reference_items=source_reference_items,
+        teacher_longitudinal_context=teacher_longitudinal_context or {},
     )
 
 
@@ -688,6 +705,7 @@ def _apply_teacher_agent_analysis(
     pending_labels: list[str],
     reasoning_trace_summary: dict[str, Any],
     source_reference_items: list[dict[str, Any]],
+    teacher_longitudinal_context: dict[str, Any],
 ) -> dict[str, Any]:
     request = TeacherAnalysisRequest(
         case_id=case_id,
@@ -702,6 +720,7 @@ def _apply_teacher_agent_analysis(
         reasoning_trace_summary=reasoning_trace_summary,
         base_reflection=_teacher_agent_base_reflection(review),
         source_reference_items=source_reference_items,
+        longitudinal_context=teacher_longitudinal_context,
     )
     try:
         analysis = normalize_teacher_analysis_response(teacher_agent(request))
@@ -718,13 +737,21 @@ def _apply_teacher_agent_analysis(
         )
         return {**review, "generation_warnings": warnings}
     analysis_payload = analysis.model_dump()
+    analysis_context = _teacher_analysis_context_from_response(
+        analysis_payload,
+        teacher_longitudinal_context=teacher_longitudinal_context,
+    )
     if analysis.agent_id == "teacher_agent_deterministic" or analysis.analysis_mode == "deterministic_baseline":
         return {
             **review,
             "generated_by": analysis.agent_id,
-            "teacher_analysis_context": _teacher_analysis_context_from_response(analysis_payload),
+            "teacher_analysis_context": analysis_context,
         }
-    return _merge_teacher_agent_analysis(review, analysis_payload)
+    return _merge_teacher_agent_analysis(
+        review,
+        analysis_payload,
+        teacher_analysis_context=analysis_context,
+    )
 
 
 def _teacher_agent_base_reflection(review: dict[str, Any]) -> dict[str, Any]:
@@ -741,7 +768,12 @@ def _teacher_agent_base_reflection(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _merge_teacher_agent_analysis(review: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+def _merge_teacher_agent_analysis(
+    review: dict[str, Any],
+    analysis: dict[str, Any],
+    *,
+    teacher_analysis_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     merged = dict(review)
     for field in [
         "overall_comment",
@@ -761,18 +793,26 @@ def _merge_teacher_agent_analysis(review: dict[str, Any], analysis: dict[str, An
     if isinstance(next_plan, list) and next_plan:
         merged["next_focus"] = str(next_plan[0])
     merged["generated_by"] = str(analysis.get("agent_id") or "teacher_agent")
-    merged["teacher_analysis_context"] = _teacher_analysis_context_from_response(analysis)
+    merged["teacher_analysis_context"] = (
+        teacher_analysis_context
+        if teacher_analysis_context is not None
+        else _teacher_analysis_context_from_response(analysis)
+    )
     return merged
 
 
-def _teacher_analysis_context_from_response(analysis: dict[str, Any]) -> dict[str, Any]:
+def _teacher_analysis_context_from_response(
+    analysis: dict[str, Any],
+    *,
+    teacher_longitudinal_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     major_issues = analysis.get("major_issues")
     major_issue_titles = [
         str(issue.get("title"))
         for issue in major_issues
         if isinstance(issue, dict) and str(issue.get("title") or "").strip()
     ] if isinstance(major_issues, list) else []
-    return {
+    context = {
         "agent_id": str(analysis.get("agent_id") or "teacher_agent"),
         "analysis_mode": str(analysis.get("analysis_mode") or "post_session_teacher_analysis"),
         "analysis_summary": str(analysis.get("analysis_summary") or "").strip(),
@@ -783,11 +823,23 @@ def _teacher_analysis_context_from_response(analysis: dict[str, Any]) -> dict[st
         "source_anchor_labels": _normalized_string_list(analysis.get("source_anchor_labels"))[:8],
         "teaching_prompt_version": TEACHER_REFLECTION_PROMPT_VERSION,
     }
+    if teacher_longitudinal_context:
+        context["longitudinal_context"] = deepcopy(teacher_longitudinal_context)
+    return context
 
 
 def _teacher_analysis_context_for_skill(reflection: dict[str, Any]) -> dict[str, Any]:
     context = reflection.get("teacher_analysis_context")
-    return dict(context) if isinstance(context, dict) else {}
+    if not isinstance(context, dict):
+        return {}
+    # The three-report teaching window helps TeacherAgent interpret this review,
+    # but it is not source material for a new persistent Skill. Keeping it out of
+    # the candidate avoids copying historical report summaries into later skills.
+    return {
+        key: deepcopy(value)
+        for key, value in context.items()
+        if key != "longitudinal_context"
+    }
 
 
 def _has_meaningful_teacher_value(value: Any) -> bool:
@@ -1077,7 +1129,7 @@ def _build_next_practice_plan(major_issues: list[dict[str, Any]], pending_labels
         plan.insert(0, f"先补齐{_compact_list_text(pending_labels, limit=3, fallback='未覆盖关键线索')}。")
     if not plan:
         plan = ["下一轮先整理支持依据、排除依据和仍需验证的问题，再提交诊断。"]
-    return plan[:5]
+    return plan[:3]
 
 
 def _build_teacher_coaching_review(

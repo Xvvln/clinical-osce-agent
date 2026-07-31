@@ -211,6 +211,46 @@ def _request(*, oversized: bool = False) -> module.TeacherAnalysisRequest:
             }
             for _ in range(8)
         ],
+        longitudinal_context={
+            "schema_version": "teacher_longitudinal_context_v1",
+            "report_window_size": 3,
+            "score_trend": {
+                "order": "oldest_to_newest",
+                "direction": "improving",
+                "points": [
+                    {"report_offset": 2, "case_id": "case_001", "score_percent": 55.0},
+                    {"report_offset": 1, "case_id": "case_001", "score_percent": 70.0},
+                    {"report_offset": 0, "case_id": "case_001", "score_percent": 76.0},
+                ],
+            },
+            "current_gap_statuses": [
+                {
+                    "gap_id": "weak_hypothesis_testing",
+                    "gap_type": "reasoning_pattern",
+                    "label": "假设验证不足",
+                    "status": "repeated",
+                    "raw_dialogue": detail,
+                }
+            ],
+            "recovered_gaps": [],
+            "gap_status_counts": {
+                "first_seen_current_window": 0,
+                "repeated": 1,
+                "reactivated_after_improvement": 0,
+                "recovered_since_previous_report": 0,
+            },
+            "applied_personal_skills": [
+                {
+                    "report_offset": 0,
+                    "title": "先形成假设再检查",
+                    "skill_type": "reasoning_bridge",
+                    "effect_status": "insufficient_samples",
+                    "evidence": "training_skill_applied_event",
+                    "hidden_fact": detail,
+                }
+            ],
+            "evidence_boundary": "仅基于最近三份已完成训练报告。",
+        },
     )
 
 
@@ -253,6 +293,9 @@ def test_teacher_provider_projection_bounds_large_multibyte_payload_without_muta
     assert first_payload["base_reflection"]["major_issues"]
     assert "reasoning_trace_summary" not in first_payload["base_reflection"]
     assert "metadata" not in first_payload["source_reference_items"][0]
+    assert first_payload["longitudinal_context"]["current_gap_statuses"][0]["status"] == "repeated"
+    assert "raw_dialogue" not in first_payload["longitudinal_context"]["current_gap_statuses"][0]
+    assert "hidden_fact" not in first_payload["longitudinal_context"]["applied_personal_skills"][0]
     assert request.clinical_reasoning_trace == original_trace
     assert len(
         json.dumps(request.model_dump(), ensure_ascii=False).encode("utf-8")
@@ -336,3 +379,20 @@ def test_deterministic_teacher_keeps_the_full_local_request(
     assert response.agent_id == "teacher_agent_deterministic"
     assert request.clinical_reasoning_trace == original_trace
     assert request.clinical_reasoning_trace["action_timeline"]
+    assert response.clinical_thinking_profile["longitudinal_gap_assessment"] == "1 个问题连续出现"
+
+
+def test_teacher_response_limits_next_practice_plan_to_three_actions() -> None:
+    response = module.TeacherAnalysisResponse.model_validate(
+        {
+            "next_practice_plan": [
+                "动作一",
+                "动作二",
+                "动作三",
+                "动作四",
+                "动作五",
+            ]
+        }
+    )
+
+    assert response.next_practice_plan == ["动作一", "动作二", "动作三"]
