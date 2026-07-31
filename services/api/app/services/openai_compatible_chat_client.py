@@ -106,10 +106,11 @@ class OpenAICompatibleChatClient:
         response_model: type[ResponseModelT],
         temperature: float | None = None,
     ) -> ResponseModelT:
+        normalized_system_prompt = _ensure_json_object_instruction(system_prompt)
         request_payload = {
             "model": _model_name_for_base_url(self._settings.model, self._settings.base_url),
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": normalized_system_prompt},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             "temperature": self._settings.temperature if temperature is None else temperature,
@@ -229,6 +230,14 @@ class OpenAICompatibleChatClient:
             send_request,
             timeout_seconds=settings.timeout_seconds,
         )
+
+
+def _ensure_json_object_instruction(system_prompt: str) -> str:
+    normalized = str(system_prompt).strip()
+    if "json" in normalized.casefold():
+        return normalized
+    instruction = "请只输出一个有效的 JSON 对象。"
+    return f"{normalized}\n\n{instruction}" if normalized else instruction
 
 
 def _chat_completions_url(base_url: str) -> str:

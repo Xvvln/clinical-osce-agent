@@ -144,6 +144,31 @@ def test_openai_compatible_chat_client_posts_chat_completion_with_proxy_and_auth
     assert request_body["response_format"] == {"type": "json_object"}
 
 
+def test_openai_compatible_chat_client_adds_json_instruction_when_prompt_omits_it(monkeypatch) -> None:
+    FakeHttpxClient.instances = []
+    monkeypatch.setattr(module.httpx, "Client", FakeHttpxClient)
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="openai-secret-value",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="qwen-plus",
+            proxy_url="direct",
+        )
+    )
+
+    client.complete_json(
+        system_prompt="请返回结构化的临床评分结果。",
+        payload={"case_id": "appendicitis_001"},
+        response_model=DemoJsonResponse,
+    )
+
+    request_body = FakeHttpxClient.instances[0].calls[0]["json"]
+    system_content = request_body["messages"][0]["content"]
+    assert system_content == "请返回结构化的临床评分结果。\n\n请只输出一个有效的 JSON 对象。"
+    assert "json" in system_content.casefold()
+
+
 def test_openai_compatible_settings_reuses_dashscope_key_for_trusted_endpoint(
     monkeypatch,
 ) -> None:
