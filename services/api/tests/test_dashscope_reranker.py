@@ -171,7 +171,7 @@ class DashScopeRerankerTests(unittest.TestCase):
 
         self.assertEqual([result.index for result in results], [1, 0])
         self.assertEqual(results[0].relevance_score, 0.91)
-        self.assertEqual(FakeHttpClient.created_options, [{"timeout": 15.0, "trust_env": False}])
+        self.assertEqual(FakeHttpClient.created_options, [{"timeout": 5.0, "trust_env": False}])
         self.assertEqual(FakeHttpClient.posts[0]["url"], "https://dashscope.aliyuncs.com/compatible-api/v1/reranks")
         self.assertEqual(
             FakeHttpClient.posts[0]["json"],
