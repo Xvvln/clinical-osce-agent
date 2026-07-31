@@ -294,7 +294,7 @@ def test_http_readiness_fails_when_child_exits_before_all_targets_are_ready() ->
     assert requested_urls == []
 
 
-def test_main_opens_browsers_only_after_readiness_and_cleans_processes(
+def test_main_does_not_open_browsers_by_default_and_cleans_processes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start_dev = load_start_dev_module()
@@ -304,6 +304,7 @@ def test_main_opens_browsers_only_after_readiness_and_cleans_processes(
     stopped_processes: list[object] = []
 
     monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: False)
+    monkeypatch.delenv(start_dev.OPEN_BROWSER_ENV_NAME, raising=False)
     monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
     monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
     monkeypatch.setattr(
@@ -316,12 +317,37 @@ def test_main_opens_browsers_only_after_readiness_and_cleans_processes(
     monkeypatch.setattr(start_dev, "_stop_process", stopped_processes.append)
 
     assert start_dev.main() == 0
+    assert events == ["ready"]
+    assert stopped_processes == processes
+
+
+def test_main_opens_browsers_after_readiness_only_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_dev = load_start_dev_module()
+    processes = [SimpleNamespace(), SimpleNamespace(), SimpleNamespace()]
+    process_iterator = iter(processes)
+    events: list[str] = []
+
+    monkeypatch.setenv(start_dev.OPEN_BROWSER_ENV_NAME, "1")
+    monkeypatch.setattr(start_dev, "_is_healthy_project_dev_stack_running", lambda: False)
+    monkeypatch.setattr(start_dev, "_stop_stale_dev_processes", lambda: None)
+    monkeypatch.setattr(start_dev, "_start_process", lambda **kwargs: next(process_iterator))
+    monkeypatch.setattr(
+        start_dev,
+        "_wait_for_http_readiness",
+        lambda actual_processes, endpoints: events.append("ready"),
+    )
+    monkeypatch.setattr(start_dev.webbrowser, "open", lambda url: events.append(f"open:{url}"))
+    monkeypatch.setattr(start_dev, "_wait_for_process_exit", lambda actual_processes: 0)
+    monkeypatch.setattr(start_dev, "_stop_process", lambda process: None)
+
+    assert start_dev.main() == 0
     assert events == [
         "ready",
         f"open:{start_dev.WEB_URL}",
         f"open:{start_dev.ADMIN_URL}",
     ]
-    assert stopped_processes == processes
 
 
 def test_main_returns_nonzero_for_runtime_child_failure_and_cleans_processes(

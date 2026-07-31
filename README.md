@@ -168,6 +168,8 @@ python '.\start-dev.py'
 - 学生端：`http://localhost:3000`
 - 管理端：`http://127.0.0.1:3100`
 
+启动器默认只在终端打印入口，不自动打开浏览器，避免重复调试时堆积标签页。确实需要就绪后自动打开学生端和管理端时，可在启动前显式设置 `CLINICAL_OSCE_OPEN_BROWSER=1`。
+
 如需在 API 已经运行时单独调试管理端，可参考：
 
 ```powershell

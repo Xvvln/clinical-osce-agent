@@ -52,6 +52,7 @@ DEMO_ADMIN_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_ADMIN_PASSWORD"
 DEMO_STUDENT_ENABLED_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_ENABLED"
 DEMO_STUDENT_EMAIL_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_EMAIL"
 DEMO_STUDENT_PASSWORD_ENV_NAME = "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD"
+OPEN_BROWSER_ENV_NAME = "CLINICAL_OSCE_OPEN_BROWSER"
 
 
 def main() -> int:
@@ -92,8 +93,14 @@ def main() -> int:
         print("Development hot reload is enabled for API, Web, and Admin.")
         print("Waiting for API, Web, and Admin to become ready...")
         _wait_for_http_readiness(processes, READINESS_ENDPOINTS)
-        webbrowser.open(WEB_URL)
-        webbrowser.open(ADMIN_URL)
+        if _should_open_browser():
+            webbrowser.open(WEB_URL)
+            webbrowser.open(ADMIN_URL)
+        else:
+            print(
+                f"Browser auto-open is disabled; set {OPEN_BROWSER_ENV_NAME}=1 "
+                "to open both pages after readiness."
+            )
         print("Press Ctrl+C here to stop all services.")
         exit_code = _wait_for_process_exit(processes)
     except KeyboardInterrupt:
@@ -106,6 +113,15 @@ def main() -> int:
         for process in processes:
             _stop_process(process)
     return exit_code
+
+
+def _should_open_browser() -> bool:
+    return os.environ.get(OPEN_BROWSER_ENV_NAME, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _wait_for_http_readiness(
