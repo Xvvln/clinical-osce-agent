@@ -8,11 +8,24 @@ from app.services.chroma_retriever import (
     build_chroma_manifest_status,
     build_chroma_retrieval_settings_from_environment,
 )
+from app.services.dashscope_credential_service import (
+    DASHSCOPE_SHARED_API_KEY_ENV_NAME,
+    DASHSCOPE_SPEECH_API_KEY_ENV_NAME,
+    is_trusted_dashscope_endpoint,
+    resolve_dashscope_feature_api_key,
+    resolve_openai_compatible_api_key,
+)
 from app.services.dashscope_reranker import (
     DEFAULT_DASHSCOPE_RERANK_BASE_URL,
     DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K,
     DEFAULT_DASHSCOPE_RERANK_MODEL,
     DEFAULT_DASHSCOPE_RERANK_TOP_K,
+)
+from app.services.dashscope_speech_service import (
+    DEFAULT_DASHSCOPE_ASR_ENDPOINT,
+    DEFAULT_DASHSCOPE_ASR_MODEL,
+    DEFAULT_DASHSCOPE_TTS_ENDPOINT,
+    DEFAULT_DASHSCOPE_TTS_MODEL,
 )
 from app.services.deployment_config import get_deployment_mode, is_runtime_model_config_write_supported
 from app.services.local_embedding_retriever import DEFAULT_LOCAL_EMBEDDING_MODEL
@@ -45,8 +58,9 @@ def build_admin_model_config(
             _chroma_retrieval_config(
                 include_manifest=include_retrieval_manifest,
             ),
-            _dashscope_rerank_config(),
             _openai_compatible_config(),
+            _dashscope_speech_config(),
+            _dashscope_rerank_config(),
             _anthropic_config(),
         ],
     }
@@ -299,8 +313,16 @@ def _chroma_retrieval_config(
 
 def _dashscope_rerank_config() -> dict[str, Any]:
     enabled = _truthy_env("OSCE_DASHSCOPE_RERANK_ENABLED")
-    api_key = _env("OSCE_DASHSCOPE_RERANK_API_KEY") or _env("DASHSCOPE_API_KEY")
     base_url = _env("OSCE_DASHSCOPE_RERANK_BASE_URL", DEFAULT_DASHSCOPE_RERANK_BASE_URL)
+    explicit_api_key = _env("OSCE_DASHSCOPE_RERANK_API_KEY")
+    api_key = resolve_dashscope_feature_api_key(
+        explicit_api_key,
+        target_urls=(base_url,),
+        fallback_env_names=(
+            DASHSCOPE_SHARED_API_KEY_ENV_NAME,
+            DASHSCOPE_SPEECH_API_KEY_ENV_NAME,
+        ),
+    )
     model = _env("OSCE_DASHSCOPE_RERANK_MODEL", DEFAULT_DASHSCOPE_RERANK_MODEL)
     top_k = _env("OSCE_DASHSCOPE_RERANK_TOP_K", str(DEFAULT_DASHSCOPE_RERANK_TOP_K))
     candidate_k = _env("OSCE_DASHSCOPE_RERANK_CANDIDATE_K", str(DEFAULT_DASHSCOPE_RERANK_CANDIDATE_K))
@@ -314,20 +336,23 @@ def _dashscope_rerank_config() -> dict[str, Any]:
         enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
-        auth_mode="api_key",
+        auth_mode="api_key" if explicit_api_key else "dashscope_shared_api_key",
         model=model,
         base_url=base_url,
         proxy_url=proxy_url,
         required_env=[
             "OSCE_DASHSCOPE_RERANK_ENABLED=true",
-            "OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY",
+            "OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY 或 OSCE_DASHSCOPE_SPEECH_API_KEY",
             "OSCE_DASHSCOPE_RERANK_BASE_URL",
             "OSCE_DASHSCOPE_RERANK_MODEL",
         ],
         missing_env=[] if configured else _missing_when_enabled(
             enabled,
             [
-                ("OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY", "configured" if secret_configured else ""),
+                (
+                    "OSCE_DASHSCOPE_RERANK_API_KEY 或 DASHSCOPE_API_KEY 或 OSCE_DASHSCOPE_SPEECH_API_KEY",
+                    "configured" if secret_configured else "",
+                ),
                 ("OSCE_DASHSCOPE_RERANK_BASE_URL", base_url),
                 ("OSCE_DASHSCOPE_RERANK_MODEL", model),
             ],
@@ -406,24 +431,124 @@ def _configured_embedding_model_name() -> str:
 
 def _openai_compatible_config() -> dict[str, Any]:
     enabled = _truthy_env("OSCE_OPENAI_ENABLED")
-    secret_configured = bool(_env("OSCE_OPENAI_API_KEY"))
+    base_url = _env("OSCE_OPENAI_BASE_URL", "https://api.openai.com/v1")
+    explicit_api_key = _env("OSCE_OPENAI_API_KEY")
+    api_key = resolve_openai_compatible_api_key(
+        explicit_api_key,
+        base_url=base_url,
+    )
+    secret_configured = bool(api_key)
     model = _env("OSCE_OPENAI_MODEL")
     configured = enabled and secret_configured and bool(model)
+    dashscope_destination = is_trusted_dashscope_endpoint(base_url)
+    key_requirement = (
+        "OSCE_OPENAI_API_KEY 或 DASHSCOPE_API_KEY 或 "
+        "OSCE_DASHSCOPE_SPEECH_API_KEY"
+    )
     return _provider_config(
         provider_id="openai_compatible",
-        label="OpenAI 兼容模型",
+        label=(
+            "阿里云百炼 Qwen（OpenAI 兼容）"
+            if dashscope_destination
+            else "OpenAI 兼容模型"
+        ),
         capability="标准化病人、Turn Intent 意图识别、TeacherAgent 教学提示、llm_rubric 语义评分、训练模式级候选 Skill 文案生成",
         enabled=enabled,
         configured=configured,
         secret_configured=secret_configured,
-        auth_mode="api_key",
+        auth_mode=(
+            "dashscope_shared_api_key"
+            if not explicit_api_key and secret_configured
+            else "api_key"
+        ),
         model=model,
         base_url="",
         proxy_url="",
-        required_env=["OSCE_OPENAI_ENABLED=true", "OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"],
-        missing_env=[] if configured else _missing_when_enabled(enabled, [("OSCE_OPENAI_API_KEY", "configured" if secret_configured else ""), ("OSCE_OPENAI_MODEL", model)]),
+        required_env=[
+            "OSCE_OPENAI_ENABLED=true",
+            key_requirement,
+            "OSCE_OPENAI_MODEL",
+        ],
+        missing_env=[]
+        if configured
+        else _missing_when_enabled(
+            enabled,
+            [
+                (key_requirement, "configured" if secret_configured else ""),
+                ("OSCE_OPENAI_MODEL", model),
+            ],
+        ),
         integration_status="wired",
-        notes="这里只展示服务端环境变量默认能力和配置状态；私有网关地址、代理地址和密钥不通过管理端回显。",
+        notes=(
+            "阿里云 DashScope/MaaS 受信 HTTPS 地址可安全复用统一 "
+            "DASHSCOPE_API_KEY；自定义兼容地址必须单独配置 "
+            "OSCE_OPENAI_API_KEY。密钥、私有网关和代理地址不回显。"
+        ),
+    )
+
+
+def _dashscope_speech_config() -> dict[str, Any]:
+    asr_endpoint = _env("OSCE_DASHSCOPE_ASR_ENDPOINT", DEFAULT_DASHSCOPE_ASR_ENDPOINT)
+    tts_endpoint = _env("OSCE_DASHSCOPE_TTS_ENDPOINT", DEFAULT_DASHSCOPE_TTS_ENDPOINT)
+    asr_model = _env("OSCE_DASHSCOPE_ASR_MODEL", DEFAULT_DASHSCOPE_ASR_MODEL)
+    tts_model = _env("OSCE_DASHSCOPE_TTS_MODEL", DEFAULT_DASHSCOPE_TTS_MODEL)
+    explicit_api_key = _env("OSCE_DASHSCOPE_SPEECH_API_KEY")
+    shared_api_key = _env(DASHSCOPE_SHARED_API_KEY_ENV_NAME)
+    enabled = bool(explicit_api_key or shared_api_key)
+    api_key = resolve_dashscope_feature_api_key(
+        explicit_api_key,
+        target_urls=(asr_endpoint, tts_endpoint),
+        fallback_env_names=(DASHSCOPE_SHARED_API_KEY_ENV_NAME,),
+    )
+    secret_configured = bool(api_key)
+    configured = (
+        enabled
+        and secret_configured
+        and bool(asr_endpoint)
+        and bool(tts_endpoint)
+        and bool(asr_model)
+        and bool(tts_model)
+    )
+    key_requirement = "OSCE_DASHSCOPE_SPEECH_API_KEY 或 DASHSCOPE_API_KEY"
+    return _provider_config(
+        provider_id="dashscope_speech",
+        label="阿里云 DashScope 语音",
+        capability="学生语音输入 ASR 与标准化病人回复 TTS",
+        enabled=enabled,
+        configured=configured,
+        secret_configured=secret_configured,
+        auth_mode=(
+            "api_key" if explicit_api_key else "dashscope_shared_api_key"
+        ),
+        model=f"ASR {asr_model} / TTS {tts_model}",
+        base_url="",
+        proxy_url=_env("OSCE_DASHSCOPE_SPEECH_PROXY_URL", "direct"),
+        required_env=[
+            key_requirement,
+            "OSCE_DASHSCOPE_ASR_ENDPOINT / OSCE_DASHSCOPE_TTS_ENDPOINT",
+            "OSCE_DASHSCOPE_ASR_MODEL / OSCE_DASHSCOPE_TTS_MODEL",
+        ],
+        missing_env=[]
+        if configured
+        else _missing_when_enabled(
+            enabled,
+            [
+                (key_requirement, "configured" if secret_configured else ""),
+                (
+                    "OSCE_DASHSCOPE_ASR_ENDPOINT / OSCE_DASHSCOPE_TTS_ENDPOINT",
+                    asr_endpoint if asr_endpoint and tts_endpoint else "",
+                ),
+                (
+                    "OSCE_DASHSCOPE_ASR_MODEL / OSCE_DASHSCOPE_TTS_MODEL",
+                    asr_model if asr_model and tts_model else "",
+                ),
+            ],
+        ),
+        integration_status="wired_optional",
+        notes=(
+            "DASHSCOPE_API_KEY 只在 ASR/TTS 均指向受信的阿里云 HTTPS "
+            "地址时复用；自定义语音网关需单独设置语音 Key。"
+        ),
     )
 
 

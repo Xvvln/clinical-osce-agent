@@ -80,6 +80,38 @@ class DashScopeRerankerTests(unittest.TestCase):
     def test_dashscope_reranker_is_disabled_by_default(self) -> None:
         self.assertIsNone(dashscope_reranker.build_dashscope_reranker_from_environment())
 
+    @patch.dict(
+        "os.environ",
+        {
+            "OSCE_DASHSCOPE_RERANK_ENABLED": "true",
+            "DASHSCOPE_API_KEY": "shared-dashscope-test-key",
+        },
+        clear=True,
+    )
+    def test_environment_builder_reuses_shared_dashscope_key(self) -> None:
+        reranker = dashscope_reranker.build_dashscope_reranker_from_environment()
+
+        self.assertIsNotNone(reranker)
+        assert reranker is not None
+        self.assertEqual(
+            reranker._settings.api_key,
+            "shared-dashscope-test-key",
+        )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OSCE_DASHSCOPE_RERANK_ENABLED": "true",
+            "DASHSCOPE_API_KEY": "must-not-be-used",
+            "OSCE_DASHSCOPE_RERANK_BASE_URL": "https://rerank.example/v1",
+        },
+        clear=True,
+    )
+    def test_shared_key_is_not_reused_for_custom_rerank_gateway(self) -> None:
+        self.assertIsNone(
+            dashscope_reranker.build_dashscope_reranker_from_environment()
+        )
+
     def test_candidate_and_top_limits_have_hard_caps(self) -> None:
         default_reranker = dashscope_reranker.DashScopeReranker(
             dashscope_reranker.DashScopeRerankSettings(api_key="sk-test")

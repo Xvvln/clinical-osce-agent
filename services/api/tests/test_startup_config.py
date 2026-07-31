@@ -56,7 +56,10 @@ def test_startup_config_self_check_reports_missing_required_env(monkeypatch) -> 
     providers = {provider["provider_id"]: provider for provider in payload["providers"]}
     assert providers["openai_compatible"]["enabled"] is True
     assert providers["openai_compatible"]["configured"] is False
-    assert providers["openai_compatible"]["missing_env"] == ["OSCE_OPENAI_API_KEY", "OSCE_OPENAI_MODEL"]
+    assert providers["openai_compatible"]["missing_env"] == [
+        "OSCE_OPENAI_API_KEY 或 DASHSCOPE_API_KEY 或 OSCE_DASHSCOPE_SPEECH_API_KEY",
+        "OSCE_OPENAI_MODEL",
+    ]
     assert providers["vertex_rubric_scorer"]["missing_env"] == ["OSCE_VERTEX_PROJECT 或 OSCE_VERTEX_API_KEY"]
     assert providers["chroma_retrieval"]["missing_env"] == [
         "向量模型配置",
@@ -898,11 +901,18 @@ def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_pa
     assert "CLINICAL_OSCE_DEMO_STUDENT_EMAIL=" in env_example_lines
     assert "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD=" in env_example_lines
     assert "CLINICAL_OSCE_DEMO_STUDENT_PASSWORD=student" not in env_example_source
-    assert "OSCE_OPENAI_MODEL=gemini-3.5-flash" in env_example_source
-    assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" in env_example_source
+    assert "DASHSCOPE_API_KEY=" in env_example_lines
+    assert (
+        "OSCE_OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1"
+        in env_example_source
+    )
+    assert "OSCE_OPENAI_MODEL=qwen-plus" in env_example_source
+    assert "OSCE_OPENAI_FALLBACK_MODEL=" in env_example_lines
+    assert "OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro" not in env_example_source
     assert "OSCE_OPENAI_FALLBACK_ENABLED=false" in env_example_source
     assert "OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER=false" in env_example_source
     assert "OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001" in env_example_source
+    assert "OSCE_VERTEX_EMBEDDING_ENABLED=false" in env_example_source
     assert "OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5" in env_example_source
     assert "OSCE_GEMINI_PATIENT_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source
     assert "OSCE_VERTEX_MODEL=gemini-3.1-flash-lite-preview" not in env_example_source

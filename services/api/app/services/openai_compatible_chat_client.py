@@ -11,6 +11,9 @@ from pydantic import BaseModel, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.dashscope_credential_service import (
+    resolve_openai_compatible_api_key,
+)
 from app.services.model_call_policy import (
     ModelProviderPolicyError,
     enforce_text_model_json_envelope,
@@ -39,6 +42,19 @@ class OpenAICompatibleSettings(BaseSettings):
     # Request/account-scoped settings set this to false so a server-wide
     # fallback cannot silently receive another account's model payload.
     allow_process_fallback: bool = True
+
+    def model_post_init(self, __context: Any) -> None:
+        del __context
+        if self.api_key:
+            return
+        object.__setattr__(
+            self,
+            "api_key",
+            resolve_openai_compatible_api_key(
+                self.api_key,
+                base_url=self.base_url,
+            ),
+        )
 
     @property
     def is_configured(self) -> bool:

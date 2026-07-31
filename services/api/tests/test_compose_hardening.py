@@ -104,6 +104,11 @@ def test_main_compose_passes_supported_provider_configuration() -> None:
         environment["OSCE_VERTEX_SKILL_CANDIDATE_MODEL"]
         == "${OSCE_VERTEX_SKILL_CANDIDATE_MODEL:-gemini-3.5-flash}"
     )
+    assert (
+        environment["OSCE_OPENAI_BASE_URL"]
+        == "${OSCE_OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+    )
+    assert environment["OSCE_OPENAI_MODEL"] == "${OSCE_OPENAI_MODEL:-qwen-plus}"
 
 
 def test_e2e_compose_uses_disposable_writable_volumes_under_same_hardening() -> None:

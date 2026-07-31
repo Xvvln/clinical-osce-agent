@@ -34,6 +34,57 @@ def test_admin_model_config_reports_anthropic_environment(monkeypatch) -> None:
     assert "private-proxy.example" not in str(anthropic)
 
 
+def test_admin_model_config_recognizes_one_shared_dashscope_key(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shared-dashscope-test-key")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "qwen-plus")
+    monkeypatch.setenv("OSCE_DASHSCOPE_RERANK_ENABLED", "true")
+
+    providers = {
+        provider["provider_id"]: provider
+        for provider in build_admin_model_config(
+            include_retrieval_manifest=False,
+        )["providers"]
+    }
+
+    text_model = providers["openai_compatible"]
+    assert text_model["label"] == "阿里云百炼 Qwen（OpenAI 兼容）"
+    assert text_model["configured"] is True
+    assert text_model["auth_mode"] == "dashscope_shared_api_key"
+    assert providers["dashscope_speech"]["configured"] is True
+    assert providers["dashscope_speech"]["auth_mode"] == "dashscope_shared_api_key"
+    assert providers["dashscope_rerank"]["configured"] is True
+    assert providers["dashscope_rerank"]["auth_mode"] == "dashscope_shared_api_key"
+    assert "shared-dashscope-test-key" not in str(providers)
+
+
+def test_admin_model_config_rejects_shared_key_for_custom_text_gateway(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "must-not-be-used")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "custom-model")
+
+    providers = {
+        provider["provider_id"]: provider
+        for provider in build_admin_model_config(
+            include_retrieval_manifest=False,
+        )["providers"]
+    }
+
+    text_model = providers["openai_compatible"]
+    assert text_model["configured"] is False
+    assert text_model["secret_configured"] is False
+    assert text_model["label"] == "OpenAI 兼容模型"
+
+
 def test_model_config_can_skip_retrieval_manifest_io(monkeypatch) -> None:
     def reject_manifest_access(**_kwargs) -> dict[str, object]:
         raise AssertionError("readiness must not inspect the retrieval manifest")

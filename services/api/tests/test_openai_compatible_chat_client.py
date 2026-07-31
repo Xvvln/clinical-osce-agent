@@ -144,6 +144,40 @@ def test_openai_compatible_chat_client_posts_chat_completion_with_proxy_and_auth
     assert request_body["response_format"] == {"type": "json_object"}
 
 
+def test_openai_compatible_settings_reuses_dashscope_key_for_trusted_endpoint(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shared-dashscope-test-key")
+
+    settings = OpenAICompatibleSettings(
+        _env_file=None,
+        enabled=True,
+        api_key="",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model="qwen-plus",
+    )
+
+    assert settings.is_configured is True
+    assert settings.api_key == "shared-dashscope-test-key"
+
+
+def test_openai_compatible_settings_never_sends_dashscope_key_to_custom_gateway(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shared-dashscope-test-key")
+
+    settings = OpenAICompatibleSettings(
+        _env_file=None,
+        enabled=True,
+        api_key="",
+        base_url="https://custom-gateway.example/v1",
+        model="custom-model",
+    )
+
+    assert settings.is_configured is False
+    assert settings.api_key == ""
+
+
 def test_openai_compatible_chat_client_falls_back_to_mimo_when_primary_provider_fails(monkeypatch) -> None:
     FakeFallbackHttpxClient.calls = []
     monkeypatch.setattr(module.httpx, "Client", FakeFallbackHttpxClient)

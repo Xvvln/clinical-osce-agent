@@ -9,6 +9,11 @@ from typing import Any
 import httpx
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.dashscope_credential_service import (
+    DASHSCOPE_SHARED_API_KEY_ENV_NAME,
+    DASHSCOPE_SPEECH_API_KEY_ENV_NAME,
+    resolve_dashscope_feature_api_key,
+)
 from app.services.model_call_policy import (
     TEXT_MODEL_ENVELOPE_MAX_BYTES,
     enforce_text_model_json_envelope,
@@ -161,12 +166,23 @@ class DashScopeReranker:
 def build_dashscope_reranker_from_environment() -> DashScopeReranker | None:
     if not _truthy_env("OSCE_DASHSCOPE_RERANK_ENABLED"):
         return None
-    api_key = _env("OSCE_DASHSCOPE_RERANK_API_KEY") or _env("DASHSCOPE_API_KEY")
+    base_url = _env(
+        "OSCE_DASHSCOPE_RERANK_BASE_URL",
+        DEFAULT_DASHSCOPE_RERANK_BASE_URL,
+    )
+    api_key = resolve_dashscope_feature_api_key(
+        _env("OSCE_DASHSCOPE_RERANK_API_KEY"),
+        target_urls=(base_url,),
+        fallback_env_names=(
+            DASHSCOPE_SHARED_API_KEY_ENV_NAME,
+            DASHSCOPE_SPEECH_API_KEY_ENV_NAME,
+        ),
+    )
     if not api_key:
         return None
     settings = DashScopeRerankSettings(
         api_key=api_key,
-        base_url=_env("OSCE_DASHSCOPE_RERANK_BASE_URL", DEFAULT_DASHSCOPE_RERANK_BASE_URL),
+        base_url=base_url,
         model=_env("OSCE_DASHSCOPE_RERANK_MODEL", DEFAULT_DASHSCOPE_RERANK_MODEL),
         top_k=min(
             _int_env(

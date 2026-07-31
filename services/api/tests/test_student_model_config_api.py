@@ -834,11 +834,44 @@ def test_production_runtime_config_status_exposes_environment_default_without_us
         "proxy_url": "",
         "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
         "api_key_saved": False,
-        "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
+        "message": "服务端已统一配置：OpenAI 兼容模型；前端不可修改 API Key。",
         "runtime_write_supported": False,
         "deployment_mode": "single-node-prod",
     }
     assert "server-gemini-secret" not in status_response.text
+
+
+def test_server_managed_dashscope_status_reuses_shared_key_without_exposing_it(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "single-node-prod")
+    monkeypatch.setenv("OSCE_OPENAI_ENABLED", "true")
+    monkeypatch.setenv("OSCE_OPENAI_API_KEY", "")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "shared-dashscope-test-key")
+    monkeypatch.setenv("OSCE_OPENAI_MODEL", "qwen-plus")
+    monkeypatch.setenv(
+        "OSCE_OPENAI_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setenv("OSCE_OPENAI_PROXY_URL", "direct")
+    client = _authenticated_client(
+        tmp_path,
+        monkeypatch,
+        "student-dashscope@example.test",
+    )
+
+    status_response = client.get("/api/model-config/runtime")
+
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["active"] is True
+    assert payload["provider"] == "openai_compatible"
+    assert payload["model"] == "qwen-plus"
+    assert payload["message"] == (
+        "服务端已统一配置：阿里云百炼 Qwen；前端不可修改 API Key。"
+    )
+    assert "shared-dashscope-test-key" not in status_response.text
 
 
 def test_server_managed_model_config_disables_runtime_writes_in_demo_mode(tmp_path, monkeypatch) -> None:

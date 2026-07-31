@@ -78,6 +78,9 @@ from app.services.dashscope_speech_service import (
     SpeechSynthesisResult,
     build_dashscope_speech_service_from_environment,
 )
+from app.services.dashscope_credential_service import (
+    is_trusted_dashscope_endpoint,
+)
 from app.services.demo_seed_service import DEMO_SEED_CONFIG_ERROR_MESSAGE, seed_demo_data
 from app.services.model_config_service import build_admin_model_config
 from app.services.model_call_policy import (
@@ -1001,6 +1004,11 @@ def _runtime_model_config_public_payload_for_user(user_id: str) -> dict[str, obj
 def _environment_runtime_model_config_public_payload() -> dict[str, object] | None:
     openai_settings = OpenAICompatibleSettings()
     if openai_settings.is_configured:
+        provider_label = (
+            "阿里云百炼 Qwen"
+            if is_trusted_dashscope_endpoint(openai_settings.base_url)
+            else "OpenAI 兼容模型"
+        )
         return {
             "active": True,
             "provider": "openai_compatible",
@@ -1009,7 +1017,7 @@ def _environment_runtime_model_config_public_payload() -> dict[str, object] | No
             "proxy_url": "",
             "integration_targets": list(RUNTIME_MODEL_CONFIG_INTEGRATION_TARGETS),
             "api_key_saved": False,
-            "message": "服务端已统一配置 Gemini 模型；前端不可修改 API Key。",
+            "message": f"服务端已统一配置：{provider_label}；前端不可修改 API Key。",
         }
 
     anthropic_settings = AnthropicSettings()

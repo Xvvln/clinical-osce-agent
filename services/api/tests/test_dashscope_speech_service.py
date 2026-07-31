@@ -171,6 +171,21 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
                 dashscope_speech_service.DashScopeSpeechSettings(api_key="")
             )
 
+    @patch.dict(
+        "os.environ",
+        {"DASHSCOPE_API_KEY": "shared-dashscope-test-key"},
+        clear=True,
+    )
+    def test_environment_builder_reuses_shared_dashscope_key(self) -> None:
+        service = (
+            dashscope_speech_service.build_dashscope_speech_service_from_environment()
+        )
+
+        self.assertEqual(
+            service._settings.api_key,
+            "shared-dashscope-test-key",
+        )
+
     @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
     async def test_transcribe_posts_base64_audio_to_dashscope_asr(self) -> None:
         service = dashscope_speech_service.DashScopeSpeechService(

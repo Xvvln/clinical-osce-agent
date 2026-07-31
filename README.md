@@ -214,13 +214,25 @@ Session 主记录使用 SQLite revision 的 compare-and-swap（比较并交换�
 CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
 CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS=api.openai.com,api.anthropic.com,generativelanguage.googleapis.com
 CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=false
-OSCE_OPENAI_MODEL=gemini-3.5-flash
-OSCE_OPENAI_FALLBACK_MODEL=mimo-v2.5-pro
+DASHSCOPE_API_KEY=
+OSCE_OPENAI_ENABLED=true
+OSCE_OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+OSCE_OPENAI_MODEL=qwen-plus
 OSCE_OPENAI_FALLBACK_ENABLED=false
 OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER=false
-OSCE_VERTEX_EMBEDDING_MODEL=gemini-embedding-001
+OSCE_VERTEX_EMBEDDING_ENABLED=false
+OSCE_LOCAL_EMBEDDING_ENABLED=true
 OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
+
+文本模型、语音 ASR/TTS 和可选 RAG rerank 默认共用服务端
+`DASHSCOPE_API_KEY`，前端不保存也不回显密钥。主文本模型使用阿里云百炼
+北京地域 OpenAI-compatible（OpenAI 兼容）地址与 `qwen-plus`；区域 Key
+和地址必须匹配。统一 Key 只会继承给 HTTPS 的阿里云
+`*.dashscope.aliyuncs.com` / `*.maas.aliyuncs.com` 受信地址；如果
+`OSCE_OPENAI_BASE_URL` 改为自定义网关，必须单独配置
+`OSCE_OPENAI_API_KEY`，后端不会把 DashScope Key 静默发往该地址。地域地址
+与 Key 规则参见[Alibaba Cloud Model Studio 官方 Base URL 说明](https://www.alibabacloud.com/help/en/model-studio/base-url)。
 
 跨服务 fallback 会把同一份病例与训练载荷发送到另一个目标，因此默认关闭。只有在明确审核备用服务的数据边界后，才同时开启 `OSCE_OPENAI_FALLBACK_ENABLED` 和 `OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER`；账号级模型配置始终不会继承进程级 fallback。
 
@@ -229,11 +241,14 @@ OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 语音输入与患者回复播放通过后端 `/api/audio/*` 统一接入 DashScope。浏览器不保存阿里云 key；如需启用，在 API 服务端环境配置：
 
 ```env
-OSCE_DASHSCOPE_SPEECH_API_KEY=
+DASHSCOPE_API_KEY=
 OSCE_DASHSCOPE_ASR_MODEL=qwen3-asr-flash
 OSCE_DASHSCOPE_TTS_MODEL=qwen3-tts-flash
 OSCE_DASHSCOPE_TTS_VOICE=Serena
 ```
+
+`OSCE_DASHSCOPE_SPEECH_API_KEY` 与 `OSCE_DASHSCOPE_RERANK_API_KEY` 仅作为
+特定能力需要独立权限时的覆盖项；通常保持为空即可。
 
 ## 常用验证
 

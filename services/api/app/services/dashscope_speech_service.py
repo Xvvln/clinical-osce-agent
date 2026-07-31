@@ -12,6 +12,10 @@ from urllib.parse import SplitResult, urlsplit
 import httpx
 
 from app.services.api_call_log_service import api_call_log_store
+from app.services.dashscope_credential_service import (
+    DASHSCOPE_SHARED_API_KEY_ENV_NAME,
+    resolve_dashscope_feature_api_key,
+)
 from app.services.model_call_policy import (
     ModelProviderTimeoutError,
     run_async_model_provider_call,
@@ -367,11 +371,23 @@ class DashScopeSpeechService:
 
 
 def build_dashscope_speech_service_from_environment() -> DashScopeSpeechService:
-    api_key = _env("OSCE_DASHSCOPE_SPEECH_API_KEY") or _env("DASHSCOPE_API_KEY")
+    asr_endpoint = _env(
+        "OSCE_DASHSCOPE_ASR_ENDPOINT",
+        DEFAULT_DASHSCOPE_ASR_ENDPOINT,
+    )
+    tts_endpoint = _env(
+        "OSCE_DASHSCOPE_TTS_ENDPOINT",
+        DEFAULT_DASHSCOPE_TTS_ENDPOINT,
+    )
+    api_key = resolve_dashscope_feature_api_key(
+        _env("OSCE_DASHSCOPE_SPEECH_API_KEY"),
+        target_urls=(asr_endpoint, tts_endpoint),
+        fallback_env_names=(DASHSCOPE_SHARED_API_KEY_ENV_NAME,),
+    )
     settings = DashScopeSpeechSettings(
         api_key=api_key,
-        asr_endpoint=_env("OSCE_DASHSCOPE_ASR_ENDPOINT", DEFAULT_DASHSCOPE_ASR_ENDPOINT),
-        tts_endpoint=_env("OSCE_DASHSCOPE_TTS_ENDPOINT", DEFAULT_DASHSCOPE_TTS_ENDPOINT),
+        asr_endpoint=asr_endpoint,
+        tts_endpoint=tts_endpoint,
         asr_model=_env("OSCE_DASHSCOPE_ASR_MODEL", DEFAULT_DASHSCOPE_ASR_MODEL),
         tts_model=_env("OSCE_DASHSCOPE_TTS_MODEL", DEFAULT_DASHSCOPE_TTS_MODEL),
         tts_voice=_env("OSCE_DASHSCOPE_TTS_VOICE", DEFAULT_DASHSCOPE_TTS_VOICE),
