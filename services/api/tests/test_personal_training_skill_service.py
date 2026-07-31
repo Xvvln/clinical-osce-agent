@@ -584,6 +584,10 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
         session_id="personal-teacher-agent-session",
         case_id=case.case_id,
         student_id="student-a",
+        final_submission={
+            "diagnosis": "急性阑尾炎",
+            "reasoning": "转移性右下腹痛、反跳痛和炎症指标升高支持诊断；无血尿，不支持输尿管结石。",
+        },
     )
     report = {
         "report_id": "personal-teacher-agent-report",
@@ -646,6 +650,7 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
     assert teacher_agent.requests[0].case_id == case.case_id
     assert teacher_agent.requests[0].clinical_reasoning_trace["trace_version"] == "clinical_reasoning_trace_v1"
     assert teacher_agent.requests[0].longitudinal_context == longitudinal_context
+    assert teacher_agent.requests[0].student_submission == session.final_submission
     context = generator.contexts[0]
     assert "longitudinal_context" not in context.teacher_analysis_context
     assert context.teacher_analysis_context["analysis_summary"] == "学生没有把疼痛迁移、关键查体和鉴别排除连成验证链。"
@@ -660,6 +665,19 @@ def test_personal_skill_and_teacher_reflection_use_teacher_agent_analysis_contex
     assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["verification_strategy"] == "查体和检查没有围绕假设形成支持与排除证据。"
     assert reflection["teacher_analysis_context"]["clinical_thinking_profile"]["longitudinal_gap_assessment"] == "1 个问题改善后再现"
     assert reflection["teacher_analysis_context"]["longitudinal_context"] == longitudinal_context
+
+
+def test_reasoning_next_action_separates_focus_from_the_training_instruction() -> None:
+    definition = personal_skill_module._teacher_issue_definition(
+        "reasoning",
+        ["推理表达覆盖关键排除依据", "腹部 CT"],
+    )
+
+    assert definition["next"] == (
+        "下一轮提交诊断前，围绕推理表达覆盖关键排除依据、腹部 CT，"
+        "整理至少两条支持依据和一条排除依据。"
+    )
+    assert "腹部 CT整理" not in definition["next"]
 
 
 def test_teacher_success_backfills_only_empty_core_fields_from_deterministic_analysis() -> None:

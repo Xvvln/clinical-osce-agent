@@ -2480,15 +2480,23 @@ def _personal_skill_payload_for_report(
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
     except TrainingSkillCandidateGenerationError:
+        failure_report = {
+            **session.feedback_report,
+            "final_submission": deepcopy(session.final_submission),
+        }
         return build_generation_failed_personal_skill_payload(
-            report=session.feedback_report,
+            report=failure_report,
             case=case,
             teacher_agent=DeterministicTeacherAgent(),
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
     except Exception as exc:
+        failure_report = {
+            **session.feedback_report,
+            "final_submission": deepcopy(session.final_submission),
+        }
         payload = build_generation_failed_personal_skill_payload(
-            report=session.feedback_report,
+            report=failure_report,
             case=case,
             teacher_agent=DeterministicTeacherAgent(),
             teacher_longitudinal_context=teacher_longitudinal_context,

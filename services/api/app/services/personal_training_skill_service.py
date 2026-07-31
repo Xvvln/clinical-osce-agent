@@ -134,6 +134,19 @@ def build_not_ready_personal_skill_payload() -> dict[str, Any]:
     }
 
 
+def _report_with_session_submission(
+    report: dict[str, Any],
+    session: Any,
+) -> dict[str, Any]:
+    submission = getattr(session, "final_submission", None)
+    if not isinstance(submission, dict) or not submission:
+        return report
+    return {
+        **report,
+        "final_submission": deepcopy(submission),
+    }
+
+
 def build_generation_failed_personal_skill_payload(
     *,
     report: dict[str, Any],
@@ -187,10 +200,11 @@ class PersonalTrainingSkillService:
         teacher_longitudinal_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         candidate_id = _personal_candidate_id(str(session.session_id))
+        teacher_report = _report_with_session_submission(report, session)
         existing_candidate = candidate_store.get_candidate(candidate_id)
         if existing_candidate is None:
             teacher_reflection = _build_ai_reflection_review(
-                report,
+                teacher_report,
                 case,
                 teacher_agent=self._teacher_agent,
                 teacher_longitudinal_context=teacher_longitudinal_context,
@@ -219,7 +233,7 @@ class PersonalTrainingSkillService:
                 deepcopy(stored_reflection)
                 if isinstance(stored_reflection, dict)
                 else _build_ai_reflection_review(
-                    report,
+                    teacher_report,
                     case,
                     teacher_agent=self._teacher_agent,
                     teacher_longitudinal_context=teacher_longitudinal_context,
@@ -1034,7 +1048,7 @@ def _teacher_issue_definition(group: str, linked_items: list[str]) -> dict[str, 
         definition["next"] = f"下一轮选择以下辅助检查：{focus}；每项都补一句它支持或排除哪个假设。"
     elif linked_items:
         definition["correct"] = f"围绕{focus}，按“支持依据、反证/排除依据、仍需验证的问题”组织诊断推理。"
-        definition["next"] = f"下一轮提交诊断前，先用{focus}整理至少两条支持依据和一条排除依据。"
+        definition["next"] = f"下一轮提交诊断前，围绕{focus}，整理至少两条支持依据和一条排除依据。"
     return definition
 
 
