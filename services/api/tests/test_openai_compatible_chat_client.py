@@ -169,6 +169,37 @@ def test_openai_compatible_chat_client_adds_json_instruction_when_prompt_omits_i
     assert "json" in system_content.casefold()
 
 
+def test_openai_compatible_chat_client_retries_one_transient_timeout(monkeypatch) -> None:
+    client = OpenAICompatibleChatClient(
+        OpenAICompatibleSettings(
+            enabled=True,
+            api_key="openai-secret-value",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="qwen-plus",
+            proxy_url="direct",
+        )
+    )
+    calls = 0
+
+    def timeout_then_succeed(*_: object, **__: object) -> FakeChatCompletionResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.ModelProviderTimeoutError("transient timeout")
+        return FakeChatCompletionResponse()
+
+    monkeypatch.setattr(client, "_post_chat_completion", timeout_then_succeed)
+
+    result = client.complete_json(
+        system_prompt="只输出 JSON。",
+        payload={"case_id": "appendicitis_001"},
+        response_model=DemoJsonResponse,
+    )
+
+    assert calls == 2
+    assert result == DemoJsonResponse(message="真实调用路径返回的结构化内容")
+
+
 def test_openai_compatible_settings_reuses_dashscope_key_for_trusted_endpoint(
     monkeypatch,
 ) -> None:

@@ -16,6 +16,7 @@ from app.services.dashscope_credential_service import (
 )
 from app.services.model_call_policy import (
     ModelProviderPolicyError,
+    ModelProviderTimeoutError,
     enforce_text_model_json_envelope,
     model_call_budget,
     run_model_provider_call,
@@ -23,6 +24,8 @@ from app.services.model_call_policy import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
+DEFAULT_OPENAI_COMPATIBLE_ATTEMPT_TIMEOUT_SECONDS = 12.0
+OPENAI_COMPATIBLE_MAX_ATTEMPTS = 2
 
 
 class OpenAICompatibleSettings(BaseSettings):
@@ -38,6 +41,7 @@ class OpenAICompatibleSettings(BaseSettings):
     model: str = ""
     proxy_url: str = "http://127.0.0.1:7897"
     timeout_seconds: float = 30.0
+    attempt_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_ATTEMPT_TIMEOUT_SECONDS
     temperature: float = 0.2
     # Request/account-scoped settings set this to false so a server-wide
     # fallback cannot silently receive another account's model payload.
@@ -166,34 +170,41 @@ class OpenAICompatibleChatClient:
         response_model: type[ResponseModelT],
         provider_label: str,
     ) -> ResponseModelT:
-        started_at = time.perf_counter()
-        response: httpx.Response | None = None
-        try:
-            response = self._post_chat_completion(payload, settings=settings)
-            content = _extract_message_content(response.json())
-            result = _validate_response_content(content, response_model=response_model)
-        except Exception as exc:
+        for attempt in range(1, OPENAI_COMPATIBLE_MAX_ATTEMPTS + 1):
+            started_at = time.perf_counter()
+            response: httpx.Response | None = None
+            try:
+                response = self._post_chat_completion(payload, settings=settings)
+                content = _extract_message_content(response.json())
+                result = _validate_response_content(content, response_model=response_model)
+            except Exception as exc:
+                api_call_log_store.record(
+                    provider=provider_label,
+                    operation="chat.completions",
+                    model=str(payload.get("model") or settings.model),
+                    endpoint=_chat_completions_url(settings.base_url),
+                    success=False,
+                    duration_ms=(time.perf_counter() - started_at) * 1000,
+                    status_code=getattr(response, "status_code", None),
+                    error=exc,
+                )
+                if attempt < OPENAI_COMPATIBLE_MAX_ATTEMPTS and isinstance(
+                    exc,
+                    (ModelProviderTimeoutError, httpx.TimeoutException),
+                ):
+                    continue
+                raise
             api_call_log_store.record(
                 provider=provider_label,
                 operation="chat.completions",
                 model=str(payload.get("model") or settings.model),
                 endpoint=_chat_completions_url(settings.base_url),
-                success=False,
+                success=True,
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 status_code=getattr(response, "status_code", None),
-                error=exc,
             )
-            raise
-        api_call_log_store.record(
-            provider=provider_label,
-            operation="chat.completions",
-            model=str(payload.get("model") or settings.model),
-            endpoint=_chat_completions_url(settings.base_url),
-            success=True,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            status_code=getattr(response, "status_code", None),
-        )
-        return result
+            return result
+        raise AssertionError("unreachable OpenAI-compatible retry loop")
 
     def _post_chat_completion(
         self,
@@ -202,8 +213,16 @@ class OpenAICompatibleChatClient:
         settings: OpenAICompatibleSettings,
     ) -> httpx.Response:
         enforce_text_model_json_envelope(payload)
+        transport_timeout_seconds = max(
+            1.0,
+            min(settings.attempt_timeout_seconds, settings.timeout_seconds),
+        )
+        executor_timeout_seconds = min(
+            settings.timeout_seconds,
+            transport_timeout_seconds + 2.0,
+        )
         client_options: dict[str, Any] = {
-            "timeout": settings.timeout_seconds,
+            "timeout": transport_timeout_seconds,
             "follow_redirects": False,
             "trust_env": False,
         }
@@ -228,7 +247,7 @@ class OpenAICompatibleChatClient:
 
         return run_model_provider_call(
             send_request,
-            timeout_seconds=settings.timeout_seconds,
+            timeout_seconds=executor_timeout_seconds,
         )
 
 
