@@ -59,11 +59,11 @@ UNION ALL SELECT 4, '肺炎', 75,
 
 CREATE TEMP VIEW regression_summary AS
 SELECT 1 AS "order", '后端 API' AS surface, 1121 AS passed, 0 AS failed,
-       '全量 pytest；2 条第三方依赖弃用预告。' AS additional_checks, '通过' AS result
+       '全量 pytest；重启后 /health 与 /ready 正常；2 条第三方依赖弃用预告。' AS additional_checks, '通过' AS result
 UNION ALL SELECT 2, '学生端', 131, 0,
-       'TypeScript 类型检查通过；Next.js 生产构建通过，共 10 个路由。', '通过'
+       'TypeScript 类型检查通过；Next.js 生产构建通过，共 10 个路由；重启后入口 200。', '通过'
 UNION ALL SELECT 3, '教师管理端', 26, 0,
-       'TypeScript 类型检查通过；Next.js 生产构建通过，共 5 个页面。', '通过';
+       'TypeScript 类型检查通过；Next.js 生产构建通过，共 5 个页面；重启后入口 200。', '通过';
 
 CREATE TEMP VIEW issues_fixed AS
 SELECT 1 AS "order", '教师模型超时后报告核心字段为空' AS problem,

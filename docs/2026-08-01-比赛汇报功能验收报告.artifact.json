@@ -209,7 +209,7 @@
         "id": "executive-summary",
         "type": "markdown",
         "layout": "full",
-        "body": "## Executive Summary\n\n- **汇报材料中的核心功能已经形成可运行闭环。** 过程评分、人文沟通证据、自适应提示、教师复盘、个人训练 Skill、审批边界、纵向恢复/复现识别和报告反哺下一轮均有真实运行证据。\n- **受控学生测试足够长，且不是问两句就结束。** 核心验收覆盖 11 个完整 session、120 个学生交互回合；另追加 11 回合专门复验教师报告是否准确引用学生最终提交。\n- **模型链路已统一到国内服务。** 文本、语音和可选重排共用阿里云 DashScope 凭据边界；最终审计中 599 次模型调用全部为 `qwen-plus` 或 `qwen3-rerank`，境外模型调用为 0；向量召回使用本地 BAAI 模型。\n- **最终代码回归通过。** 后端、学生端和管理端共 1278 项自动化测试全部通过，两端类型检查和生产构建也通过。浏览器肉眼验收因遵守“不新开标签页”的要求而跳过，本报告不把它伪装成已完成。"
+        "body": "## Executive Summary\n\n- **汇报材料中的核心功能已经形成可运行闭环。** 过程评分、人文沟通证据、自适应提示、教师复盘、个人训练 Skill、审批边界、纵向恢复/复现识别和报告反哺下一轮均有真实运行证据。\n- **受控学生测试足够长，且不是问两句就结束。** 核心验收覆盖 11 个完整 session、120 个学生交互回合；另追加 11 回合专门复验教师报告是否准确引用学生最终提交。\n- **模型链路已统一到国内服务。** 文本、语音和可选重排共用阿里云 DashScope 凭据边界；最终审计中 599 次模型调用全部为 `qwen-plus` 或 `qwen3-rerank`，境外模型调用为 0；向量召回使用本地 BAAI 模型。\n- **最终代码与运行态均通过。** 后端、学生端和管理端共 1278 项自动化测试全部通过，两端类型检查和生产构建也通过；重启后 API 健康/就绪检查、学生端和管理端入口均正常。浏览器肉眼验收因遵守“不新开标签页”的要求而跳过，本报告不把它伪装成已完成。"
       },
       {
         "id": "scope-definition",
@@ -304,7 +304,7 @@
         "id": "regression-finding",
         "type": "markdown",
         "layout": "full",
-        "body": "## 最终自动化回归没有业务失败\n\n后端 1121 项、学生端 131 项、教师管理端 26 项，共 1278 项自动化测试全部通过。学生端和管理端的 TypeScript 类型检查、Next.js 生产构建也均通过。仅保留 2 条后端第三方依赖弃用预告和 1 条前端 Node 弃用提示，不影响当前业务行为。"
+        "body": "## 最终自动化回归没有业务失败\n\n后端 1121 项、学生端 131 项、教师管理端 26 项，共 1278 项自动化测试全部通过。学生端和管理端的 TypeScript 类型检查、Next.js 生产构建也均通过。完成构建后重启开发栈，API `/health` 与 `/ready` 正常，学生端和管理端入口均返回 200，且没有自动打开浏览器。仅保留 2 条后端第三方依赖弃用预告和 1 条前端 Node 弃用提示，不影响当前业务行为。"
       },
       {
         "id": "regression-table-block",
@@ -373,9 +373,9 @@
         {"order": 4, "case": "肺炎", "score": 75, "adaptive_behavior": "完成两阶段假设与针对性检查，报告和个人 Skill 正常生成。", "contamination": 0}
       ],
       "regression_summary": [
-        {"order": 1, "surface": "后端 API", "passed": 1121, "failed": 0, "additional_checks": "全量 pytest；2 条第三方依赖弃用预告。", "result": "通过"},
-        {"order": 2, "surface": "学生端", "passed": 131, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 10 个路由。", "result": "通过"},
-        {"order": 3, "surface": "教师管理端", "passed": 26, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 5 个页面。", "result": "通过"}
+        {"order": 1, "surface": "后端 API", "passed": 1121, "failed": 0, "additional_checks": "全量 pytest；重启后 /health 与 /ready 正常；2 条第三方依赖弃用预告。", "result": "通过"},
+        {"order": 2, "surface": "学生端", "passed": 131, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 10 个路由；重启后入口 200。", "result": "通过"},
+        {"order": 3, "surface": "教师管理端", "passed": 26, "failed": 0, "additional_checks": "TypeScript 类型检查通过；Next.js 生产构建通过，共 5 个页面；重启后入口 200。", "result": "通过"}
       ],
       "issues_fixed": [
         {"order": 1, "problem": "教师模型超时后报告核心字段为空", "impact": "学生看到空泛或残缺结论。", "resolution": "只回填空字段，保留已成功生成的 Qwen 内容；超时使用有证据的确定性分析。", "verification": "第 6、7 轮 Qwen 正常生成；超时路径有持久化回退测试。"},
