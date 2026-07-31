@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.clinical_reasoning_trace_service import build_clinical_reasoning_trace
 from app.validators.case_validator import validate_case
 
@@ -13,6 +15,57 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 
 def _load_case(case_id: str = "appendicitis_001"):
     return validate_case(json.loads((ROOT_DIR / "data" / "cases" / f"{case_id}.json").read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_focus"),
+    [
+        ("appendicitis_001", "追问疼痛部位及转移特征"),
+        ("acs_001", "追问胸痛起病时间与诱因"),
+        ("heart_failure_001", "追问气短进展情况"),
+        ("hyperthyroid_001", "追问怕热多汗与多食消瘦"),
+        ("pneumonia_001", "追问痰液性质"),
+    ],
+)
+def test_problem_representation_guidance_uses_each_case_rubric_labels(
+    case_id: str,
+    expected_focus: str,
+) -> None:
+    case = _load_case(case_id)
+    session = SimpleNamespace(
+        session_id=f"{case_id}-semantic-regression",
+        case_id=case_id,
+        revealed_facts=[],
+        requested_exams=[],
+        requested_tests=[],
+        student_hypotheses=[],
+        final_submission={"diagnosis": "待完善", "reasoning": ""},
+    )
+    report = {
+        "report_id": f"{case_id}-semantic-regression_report",
+        "case_id": case_id,
+        "missed_items": [],
+        "dimension_scores": {},
+    }
+
+    trace = build_clinical_reasoning_trace(session=session, case=case, report=report)
+
+    weak_pattern = next(
+        pattern
+        for pattern in trace["cognitive_patterns"]
+        if pattern["pattern_id"] == "weak_problem_representation"
+    )
+    guidance_text = json.dumps(
+        {
+            "pattern": weak_pattern,
+            "questions": trace["teacher_focus_questions"],
+        },
+        ensure_ascii=False,
+    )
+    assert expected_focus in guidance_text
+    if case_id != "appendicitis_001":
+        for irrelevant_phrase in ["腹痛六问", "急腹症", "部位变化", "腹膜刺激征"]:
+            assert irrelevant_phrase not in guidance_text
 
 
 def test_trace_extracts_general_reasoning_patterns_from_case_schema() -> None:

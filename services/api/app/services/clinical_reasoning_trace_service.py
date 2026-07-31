@@ -30,8 +30,8 @@ PATTERN_DEFINITIONS: dict[str, dict[str, str]] = {
     "weak_problem_representation": {
         "label": "问题表征薄弱",
         "category": "problem_representation",
-        "why": "临床推理需要先把主诉转化为结构化问题表征；如果起病、部位、性质、程度和伴随症状不清，后续诊断假设会缺少支点。",
-        "remediation": "下一轮先用开放式问题确认病程，再按时间线补齐部位变化、疼痛性质、程度、伴随症状和相关阴性症状。",
+        "why": "临床推理需要先把主诉转化为结构化问题表征；如果起病与进展、核心症状特征、伴随信息和相关阴性信息不清，后续诊断假设会缺少支点。",
+        "remediation": "下一轮先用开放式问题确认主诉和病程，再根据当前病例的关键训练点补齐症状特征、伴随信息和相关阴性信息。",
     },
     "premature_testing_before_exam": {
         "label": "检查申请早于关键查体",
@@ -488,13 +488,21 @@ def _build_cognitive_patterns(
     if problem_representation.get("status") in {"weak", "developing"}:
         missing = problem_representation.get("missing_semantic_qualifiers", [])
         source_signals = _source_signals_from_qualifiers(missing)
-        labels = _labels_from_items(missing)
+        labels = _dedupe(_labels_from_items(missing))[:4]
+        remediation = PATTERN_DEFINITIONS["weak_problem_representation"]["remediation"]
+        if labels:
+            remediation = (
+                "下一轮先用开放式问题确认主诉和病程，再依次完成："
+                f"{_compact(labels, fallback='本病例的关键病史训练点')}；用一句话概括后再进入查体和检查。"
+            )
         patterns.append(
             _pattern(
                 "weak_problem_representation",
                 severity="high" if final_submission and problem_representation.get("status") == "weak" else "medium",
                 evidence=f"问题表征缺少{_compact(labels, fallback='关键病史语义要素')}。",
                 source_signal_ids=source_signals,
+                remediation=remediation,
+                focus_labels=labels,
             )
         )
     flag_ids = {str(flag.get("flag_id")) for flag in hypothesis_testing.get("sequence_flags", []) if isinstance(flag, dict)}
@@ -556,19 +564,30 @@ def _build_cognitive_patterns(
     return patterns
 
 
-def _pattern(pattern_id: str, *, severity: str, evidence: str, source_signal_ids: list[str]) -> dict[str, Any]:
+def _pattern(
+    pattern_id: str,
+    *,
+    severity: str,
+    evidence: str,
+    source_signal_ids: list[str],
+    remediation: str | None = None,
+    focus_labels: list[str] | None = None,
+) -> dict[str, Any]:
     definition = PATTERN_DEFINITIONS[pattern_id]
-    return {
+    pattern = {
         "pattern_id": pattern_id,
         "label": definition["label"],
         "category": definition["category"],
         "severity": severity,
         "evidence": evidence,
         "why_it_matters": definition["why"],
-        "remediation": definition["remediation"],
+        "remediation": remediation or definition["remediation"],
         "source_signal_ids": _dedupe(source_signal_ids),
         "trigger_item_ids": [item for item in _dedupe(source_signal_ids) if _is_training_item_id(item)],
     }
+    if focus_labels:
+        pattern["focus_labels"] = _dedupe(focus_labels)[:4]
+    return pattern
 
 
 def _teacher_focus_questions(patterns: list[dict[str, Any]]) -> list[str]:
@@ -576,7 +595,11 @@ def _teacher_focus_questions(patterns: list[dict[str, Any]]) -> list[str]:
     for pattern in patterns[:4]:
         pattern_id = str(pattern.get("pattern_id") or "")
         if pattern_id == "weak_problem_representation":
-            questions.append("你现在能用一句话概括患者的起病、部位变化、主要伴随症状和危险线索吗？")
+            focus = _compact(
+                _string_list(pattern.get("focus_labels")),
+                fallback="起病与进展、核心症状、伴随信息和相关阴性信息",
+            )
+            questions.append(f"你现在能围绕以下关键点用一句话概括患者吗：{focus}？")
         elif pattern_id == "premature_testing_before_exam":
             questions.append("在申请检查前，哪一个查体结果会最直接改变你的判断？")
         elif pattern_id == "thin_differential_reasoning":

@@ -62,24 +62,24 @@ ISSUE_GROUP_PRIORITY = ["history", "physical_exam", "auxiliary_test", "reasoning
 
 ISSUE_GROUP_DEFINITIONS: dict[str, dict[str, str]] = {
     "history": {
-        "title": "病史时间线与症状结构不完整",
-        "observed": "本轮病史采集还没有把起病、部位变化、疼痛性质、程度和伴随症状完整串起来。",
-        "why": "急腹症判断首先依赖疼痛演变和伴随表现；缺少这条时间线，即使最终诊断方向接近，证据链也不够稳。",
-        "correct": "先围绕起病时间、最初部位、是否转移、性质、程度、恶心呕吐发热腹泻尿痛等问题建立完整病史框架。",
-        "next": "下一轮先完成腹痛六问，再进入查体或检查申请。",
+        "title": "病史时间线与关键症状结构不完整",
+        "observed": "本轮病史采集还没有把主诉、病程演变和关键伴随信息串成稳定的问题表征。",
+        "why": "问诊要先形成清晰的时间线和症状结构；关键病史不完整时，后续查体、检查和诊断假设都会缺少依据。",
+        "correct": "先用开放式问题确认主诉和病程，再根据当前病例的关键训练点补齐症状特征、伴随信息和相关阴性信息。",
+        "next": "下一轮先完成本病例的关键病史训练点，用一句话概括后再进入查体或检查申请。",
     },
     "physical_exam": {
         "title": "查体没有围绕诊断假设补足关键体征",
-        "observed": "本轮查体选择没有充分覆盖能验证腹部局部体征和腹膜刺激征的关键环节。",
+        "observed": "本轮查体选择没有充分覆盖能验证或反驳当前诊断假设的关键体征。",
         "why": "查体是把主诉和诊断假设连接起来的中间证据；缺少关键体征会让后续检查和诊断表达显得跳跃。",
-        "correct": "在完成基本病史后，按一般状态、腹部视诊、局部压痛、反跳痛、肌紧张和相关诱发体征逐步验证。",
-        "next": "下一轮在申请检查前，先补足与当前假设直接相关的腹部查体。",
+        "correct": "在完成基本病史后，选择与当前假设直接相关的查体，并说明每项结果支持或反驳什么。",
+        "next": "下一轮在申请辅助检查前，先完成与当前假设直接相关的关键查体。",
     },
     "auxiliary_test": {
         "title": "辅助检查没有形成支持与排除证据",
-        "observed": "本轮辅助检查申请还没有完整覆盖基础炎症指标、尿路相关排除或必要影像证据。",
+        "observed": "本轮辅助检查申请还没有完整覆盖能支持主要假设或排除相近诊断的关键证据。",
         "why": "辅助检查不是为了堆项目，而是为了支持主要诊断、修正风险判断，并排除容易混淆的鉴别诊断。",
-        "correct": "根据病史和查体结果选择血常规/炎症指标、尿常规和必要影像，并说明每项检查要验证什么。",
+        "correct": "根据病史和查体结果选择能验证当前假设的检查，并说明每项检查要支持或排除什么。",
         "next": "下一轮每申请一个检查，都补一句它支持什么或排除什么。",
     },
     "reasoning": {
@@ -855,7 +855,7 @@ def _build_teacher_major_issues(
         linked_items = _dedupe_texts(linked_items)[:6]
         if not linked_items:
             continue
-        definition = ISSUE_GROUP_DEFINITIONS[group]
+        definition = _teacher_issue_definition(group, linked_items)
         issues.append(
             {
                 "title": definition["title"],
@@ -908,6 +908,27 @@ def _teacher_major_issues_from_reasoning_patterns(
             }
         )
     return issues
+
+
+def _teacher_issue_definition(group: str, linked_items: list[str]) -> dict[str, str]:
+    definition = dict(ISSUE_GROUP_DEFINITIONS[group])
+    focus = _compact_list_text(linked_items, limit=4, fallback="本病例的关键训练点")
+    if group == "history":
+        definition["correct"] = (
+            f"先用开放式问题确认主诉和病程，再依次完成：{focus}；"
+            "按起病与演变、核心症状、伴随与阴性信息整理。"
+        )
+        definition["next"] = f"下一轮先完成：{focus}；用一句话概括后再进入查体或检查申请。"
+    elif group == "physical_exam":
+        definition["correct"] = f"围绕当前诊断假设完成以下查体：{focus}；并说明每项结果支持或反驳什么。"
+        definition["next"] = f"下一轮在申请辅助检查前，先完成以下查体：{focus}；再根据结果调整假设。"
+    elif group == "auxiliary_test":
+        definition["correct"] = f"根据病史和查体结果选择以下辅助检查：{focus}；逐项说明要验证或排除什么。"
+        definition["next"] = f"下一轮选择以下辅助检查：{focus}；每项都补一句它支持或排除哪个假设。"
+    elif linked_items:
+        definition["correct"] = f"围绕{focus}，按“支持依据、反证/排除依据、仍需验证的问题”组织诊断推理。"
+        definition["next"] = f"下一轮提交诊断前，先用{focus}整理至少两条支持依据和一条排除依据。"
+    return definition
 
 
 def _reasoning_pattern_linked_labels(

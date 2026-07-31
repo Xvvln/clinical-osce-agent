@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from app.services import personal_training_skill_service as personal_skill_module
 from app.services.personal_training_skill_service import PersonalTrainingSkillService, build_teacher_reflection_review_payload
 from app.services.teacher_agent import DeterministicTeacherAgent
@@ -20,6 +22,68 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 
 def _load_case(case_id: str = "appendicitis_001"):
     return validate_case(json.loads((ROOT_DIR / "data" / "cases" / f"{case_id}.json").read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "missed_items", "expected_actions"),
+    [
+        (
+            "appendicitis_001",
+            ["ht_migration", "pe_tenderness", "ax_us"],
+            ["追问疼痛部位及转移特征", "检查腹部压痛", "申请腹部超声"],
+        ),
+        (
+            "acs_001",
+            ["ht_onset", "pe_blood_pressure", "at_ecg"],
+            ["追问胸痛起病时间与诱因", "检查血压", "申请心电图"],
+        ),
+        (
+            "heart_failure_001",
+            ["ht_progression", "pe_rales", "at_bnp"],
+            ["追问气短进展情况", "检查肺部湿啰音", "申请 BNP 检查"],
+        ),
+        (
+            "hyperthyroid_001",
+            ["ht_hypermetabolic", "pe_goiter", "at_tsh"],
+            ["追问怕热多汗与多食消瘦", "检查甲状腺肿大", "申请 TSH 检查"],
+        ),
+        (
+            "pneumonia_001",
+            ["ht_sputum", "pe_crackle", "at_chest_xray"],
+            ["追问痰液性质", "检查肺部湿啰音", "申请胸部 X 线"],
+        ),
+    ],
+)
+def test_teacher_fallback_actions_use_each_case_rubric_labels(
+    case_id: str,
+    missed_items: list[str],
+    expected_actions: list[str],
+) -> None:
+    case = _load_case(case_id)
+    report = {
+        "report_id": f"{case_id}-semantic-regression_report",
+        "case_id": case_id,
+        "total_score": 0,
+        "max_score": 100,
+        "missed_items": missed_items,
+        "training_progress_snapshot": {"coverage_map": {}},
+        "source_reference_items": [],
+    }
+
+    reflection = build_teacher_reflection_review_payload(report, case)
+
+    reflection_text = json.dumps(reflection, ensure_ascii=False)
+    for expected_action in expected_actions:
+        assert expected_action in reflection_text
+    if case_id != "appendicitis_001":
+        for irrelevant_phrase in [
+            "腹痛六问",
+            "急腹症",
+            "部位变化",
+            "恶心呕吐发热腹泻尿痛",
+            "腹膜刺激征",
+        ]:
+            assert irrelevant_phrase not in reflection_text
 
 
 class CapturingGenerator:
