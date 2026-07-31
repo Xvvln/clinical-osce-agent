@@ -861,14 +861,16 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /targetId: "report-feedback"/);
   assert.match(reportSource, /sectionId="report-feedback"/);
   assert.match(reportSource, /href=\{`#\$\{section\.targetId\}`\}/);
-  assert.ok(reportSource.indexOf('label: "总览"') < reportSource.indexOf('label: "复盘"'));
+  assert.ok(reportSource.indexOf('label: "总览"') < reportSource.indexOf('label: "结论"'));
+  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "图表"'));
+  assert.ok(reportSource.indexOf('label: "图表"') < reportSource.indexOf('label: "复盘"'));
   assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "Skill"'));
-  assert.ok(reportSource.indexOf('label: "Skill"') < reportSource.indexOf('label: "图表"'));
   assert.ok(reportSource.indexOf('label: "对话"') < reportSource.indexOf('label: "推荐"'));
   assert.ok(reportSource.indexOf('label: "推荐"') < reportSource.indexOf('label: "依据"'));
   assert.doesNotMatch(reportSource, /targetId: "report-ai-evaluation"/);
+  assert.ok(reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"') < reportSource.indexOf("<DimensionChartSection"));
+  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf("<AiReflectionReviewSection"));
   assert.ok(reportSource.indexOf("<AiReflectionReviewSection") < reportSource.indexOf("<PersonalTrainingSkillSection"));
-  assert.ok(reportSource.indexOf("<PersonalTrainingSkillSection") < reportSource.indexOf("<DimensionChartSection"));
   assert.ok(reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"') < reportSource.indexOf("<ConversationDetailsSection"));
   assert.ok(reportSource.indexOf("<ConversationDetailsSection") < reportSource.indexOf("<CaseRecommendations"));
 });
@@ -886,7 +888,7 @@ test("report section navigator keeps clicked sections selected instead of drifti
 
 test("report page prioritizes student learning over repeated source proof", () => {
   const summaryStart = reportSource.indexOf("function StudentReportSummary");
-  const summaryEnd = reportSource.indexOf("function ReportCoverageMapOverview", summaryStart);
+  const summaryEnd = reportSource.indexOf("function HumanisticCommunicationSection", summaryStart);
   const summarySource = reportSource.slice(summaryStart, summaryEnd);
 
   assert.match(reportSource, /function StudentReportSummary/);
@@ -895,8 +897,8 @@ test("report page prioritizes student learning over repeated source proof", () =
   assert.match(reportSource, /教师复盘/);
   assert.doesNotMatch(reportSource, /教练复盘/);
   assert.match(reportSource, /推荐训练病例/);
-  assert.doesNotMatch(summarySource, /最需要补的部分/);
-  assert.doesNotMatch(summarySource, /下一轮训练计划/);
+  assert.match(summarySource, /最重要的薄弱项/);
+  assert.match(summarySource, /下一轮先做这/);
   assert.doesNotMatch(summarySource, /LearningSummaryColumn/);
   assert.match(reportSource, /function TraceabilityDetailsSection/);
   assert.match(reportSource, /评分依据与来源/);
@@ -1089,7 +1091,7 @@ test("report page recommends only follow-up cases and does not list study materi
 
 test("report page shows submitted material coverage map as the round conclusion", () => {
   const summaryStart = reportSource.indexOf("function StudentReportSummary");
-  const summaryEnd = reportSource.indexOf("function ReportCoverageMapOverview", summaryStart);
+  const summaryEnd = reportSource.indexOf("function HumanisticCommunicationSection", summaryStart);
   const summarySource = reportSource.slice(summaryStart, summaryEnd);
 
   assert.match(reportModelSource, /export type ReportCoverageMapItem = Readonly<\{/);
@@ -1106,9 +1108,38 @@ test("report page shows submitted material coverage map as the round conclusion"
   assert.match(reportSource, /素材覆盖/);
   assert.match(reportSource, /item\.status === "covered" \? "已覆盖" : "未覆盖"/);
   assert.doesNotMatch(reportSource, /待补充/);
-  assert.doesNotMatch(summarySource, /primaryIssues/);
-  assert.doesNotMatch(summarySource, /report\.next_recommendations/);
-  assert.doesNotMatch(summarySource, /report\.reasoning_errors/);
+  assert.match(summarySource, /const priorityGaps = \[\.\.\.report\.training_gaps\]/);
+  assert.match(summarySource, /\.sort\(\(left, right\) => right\.missing_score - left\.missing_score\)/);
+  assert.match(summarySource, /\.\.\.report\.next_recommendations/);
+  assert.match(summarySource, /\.slice\(0, 3\);/);
+  assert.match(summarySource, /本轮素材覆盖明细/);
+  assert.match(summarySource, /默认折叠/);
+});
+
+test("report page keeps teacher, deep analysis, and Skill technical details collapsed by default", () => {
+  const deepAnalysisSource = reportSource.slice(
+    reportSource.indexOf("function DeepReportAnalysisSection"),
+    reportSource.indexOf("function DeepReportInlineList"),
+  );
+  const teacherReviewSource = reportSource.slice(
+    reportSource.indexOf("function AiReflectionReviewSection"),
+    reportSource.indexOf("function TeacherAnalysisContextSection"),
+  );
+  const personalSkillSource = reportSource.slice(
+    reportSource.indexOf("function PersonalTrainingSkillSection"),
+    reportSource.indexOf("function CaseRecommendations"),
+  );
+
+  for (const sectionSource of [deepAnalysisSource, teacherReviewSource, personalSkillSource]) {
+    assert.match(sectionSource, /<details>/);
+    assert.match(sectionSource, /<summary className=/);
+    assert.doesNotMatch(sectionSource, /<details open/);
+  }
+  assert.match(teacherReviewSource, /详细点评默认折叠/);
+  assert.match(deepAnalysisSource, /证据链与任务明细默认折叠/);
+  assert.match(personalSkillSource, /Skill 来源、生成策略与审批技术细节默认折叠/);
+  assert.match(teacherReviewSource, /review\.source_reference_items\.map/);
+  assert.match(personalSkillSource, /candidate\.rag_evidence_items\.map/);
 });
 
 test("home personal center links to the learning profile page", () => {

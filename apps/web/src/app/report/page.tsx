@@ -209,10 +209,10 @@ const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 
 const reportSections: readonly ReportSection[] = [
   { id: "overview", label: "总览", eyebrow: "分数与上下文", targetId: "report-overview" },
+  { id: "feedback", label: "结论", eyebrow: "本轮问题", targetId: "report-feedback" },
+  { id: "dimensions", label: "图表", eyebrow: "rubric 维度", targetId: "report-dimensions" },
   { id: "reflection", label: "复盘", eyebrow: "教师点评", targetId: "report-reflection" },
   { id: "personal_skill", label: "Skill", eyebrow: "个人策略", targetId: "report-personal-skill" },
-  { id: "dimensions", label: "图表", eyebrow: "rubric 维度", targetId: "report-dimensions" },
-  { id: "feedback", label: "结论", eyebrow: "本轮问题", targetId: "report-feedback" },
   { id: "conversation", label: "对话", eyebrow: "训练过程", targetId: "report-conversation" },
   { id: "recommendations", label: "推荐", eyebrow: "下一病例", targetId: "report-recommendations" },
   { id: "evidence", label: "依据", eyebrow: "折叠来源", targetId: "report-evidence" },
@@ -1239,6 +1239,8 @@ export default function ReportPage() {
                 <p className="mt-2 whitespace-pre-line">{errorText}</p>
               </div>
             ) : null}
+            {report ? <StudentReportSummary report={report} sectionId="report-feedback" /> : null}
+            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
             {report ? (
               <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
@@ -1246,8 +1248,6 @@ export default function ReportPage() {
             {report ? (
               <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
             ) : null}
-            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
-            {report ? <StudentReportSummary report={report} sectionId="report-feedback" /> : null}
             {report ? <HumanisticCommunicationSection report={report} /> : null}
 
             <ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} />
@@ -1455,6 +1455,25 @@ function ConversationDetailsSection({
 function StudentReportSummary({ report, sectionId }: Readonly<{ report: FeedbackReport; sectionId: string }>) {
   const coverageMap = report.training_progress_snapshot?.coverage_map;
   const coverageStats = coverageMap ? getCoverageMapStats(coverageMap) : null;
+  const priorityGaps = [...report.training_gaps]
+    .sort((left, right) => right.missing_score - left.missing_score)
+    .slice(0, 3);
+  const fallbackMissedItemId = report.missed_items[0];
+  const primaryWeaknessLabel = priorityGaps[0]?.label
+    ?? report.rubric_scores[fallbackMissedItemId]?.description
+    ?? fallbackMissedItemId
+    ?? "本轮暂无明确薄弱项";
+  const primaryWeaknessDetail = priorityGaps[0]?.evidence_summary
+    || priorityGaps[0]?.next_training_action
+    || report.reasoning_errors[0]
+    || "继续保持当前节奏，下一轮用新病例检验稳定性。";
+  const nextRoundActions = [
+    ...priorityGaps.map((gap) => gap.next_training_action),
+    ...report.next_recommendations,
+  ]
+    .map((action) => action.trim())
+    .filter((action, index, actions) => action.length > 0 && actions.indexOf(action) === index)
+    .slice(0, 3);
   return (
     <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id={sectionId}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1468,13 +1487,48 @@ function StudentReportSummary({ report, sectionId }: Readonly<{ report: Feedback
           {coverageStats ? `素材覆盖 ${coverageStats.covered}/${coverageStats.total}` : `${report.missed_items.length} 个待补强点`}
         </span>
       </div>
-      {coverageMap ? (
-        <ReportCoverageMapOverview coverageMap={coverageMap} />
-      ) : (
-        <p className="mt-4 rounded-xl border border-dashed border-border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
-          当前报告缺少素材覆盖快照，建议重新生成报告后查看本轮问诊、查体、辅助检查和推理证据覆盖情况。
-        </p>
-      )}
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <article className="rounded-xl border border-brand/20 bg-brand/5 p-4">
+          <p className="text-xs font-semibold text-brand">最重要的薄弱项</p>
+          <h3 className="mt-2 text-base font-semibold text-foreground">{primaryWeaknessLabel}</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{primaryWeaknessDetail}</p>
+        </article>
+        <article className="rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">下一轮先做这 {nextRoundActions.length || 1} 件事</h3>
+          {nextRoundActions.length > 0 ? (
+            <ol className="mt-3 grid gap-2 text-sm leading-6 text-muted-foreground">
+              {nextRoundActions.map((action, index) => (
+                <li className="flex gap-3 rounded-lg border border-border bg-background px-3 py-2" key={action}>
+                  <span className="font-semibold text-brand">{index + 1}</span>
+                  <span>{action}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">保持本轮有效做法，在下一个病例中独立完成同样的问诊与推理链。</p>
+          )}
+        </article>
+      </div>
+      <details className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">本轮素材覆盖明细</h3>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+              默认折叠，展开查看问诊、查体、辅助检查和推理证据的逐项覆盖情况。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+            {coverageStats ? `${coverageStats.covered}/${coverageStats.total}` : "暂无快照"}
+          </span>
+        </summary>
+        {coverageMap ? (
+          <ReportCoverageMapOverview coverageMap={coverageMap} />
+        ) : (
+          <p className="mt-4 rounded-xl border border-dashed border-border bg-background p-4 text-sm leading-6 text-muted-foreground">
+            当前报告缺少素材覆盖快照，建议重新生成报告后查看本轮问诊、查体、辅助检查和推理证据覆盖情况。
+          </p>
+        )}
+      </details>
     </section>
   );
 }
@@ -1742,17 +1796,19 @@ function DeepReportAnalysisSection({
   }
   return (
     <section className="scroll-mt-6 rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2" id="deep-report-analysis">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className={sectionHeadingClassName}>深度训练分析</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            基于本轮已采集证据、鉴别诊断和推理 trace，解释诊断判断为什么成立或为什么需要修正。
-          </p>
-        </div>
-        <span className="w-fit rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-          {getDiagnosticClassificationLabel(diagnostic.classification)}
-        </span>
-      </div>
+      <details>
+        <summary className="flex cursor-pointer list-none flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className={sectionHeadingClassName}>深度训练分析</h2>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+              {overall.summary || diagnostic.teacher_explanation || "展开查看鉴别诊断、证据链断点和临床任务的详细分析。"}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">证据链与任务明细默认折叠，不占用学生主阅读路径。</p>
+          </div>
+          <span className="w-fit shrink-0 rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+            {getDiagnosticClassificationLabel(diagnostic.classification)}
+          </span>
+        </summary>
       {overall.summary || overall.score_interpretation ? (
         <div className="mt-4 rounded-xl border border-brand/15 bg-brand/5 p-4">
           <div className="grid gap-4 lg:grid-cols-[1.3fr_1fr]">
@@ -1824,6 +1880,7 @@ function DeepReportAnalysisSection({
         <HumanisticCommunicationCard analysis={humanistic} />
         <NextTrainingPlanCard plan={nextTrainingPlan} />
       </div>
+      </details>
     </section>
   );
 }
@@ -2205,17 +2262,17 @@ function AiReflectionReviewSection({
   const nextPracticePlan = review.next_practice_plan.length > 0 ? review.next_practice_plan : review.next_focus ? [review.next_focus] : [];
   return (
     <section className="scroll-mt-6 rounded-2xl border border-brand/20 bg-background p-5 shadow-xs xl:col-span-2" id="report-reflection">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className={sectionHeadingClassName}>教师复盘</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            围绕当前病例和本轮证据链生成老师式点评，重点回答问题在哪、为什么要补、下一轮怎么练。
-          </p>
-        </div>
-        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-          {getAiReflectionStatusLabel(review.status)}
-        </span>
-      </div>
+      <details>
+        <summary className="flex cursor-pointer list-none flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className={sectionHeadingClassName}>教师复盘</h2>
+            <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{overallComment}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">详细点评默认折叠，展开查看问题原因、正确做法和教师推理轨迹。</p>
+          </div>
+          <span className="shrink-0 rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+            {getAiReflectionStatusLabel(review.status)}
+          </span>
+        </summary>
       <div className="mt-4 rounded-xl border border-brand/15 bg-brand/5 p-4">
         <h3 className="text-sm font-semibold text-foreground">总体判断</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{overallComment}</p>
@@ -2379,6 +2436,7 @@ function AiReflectionReviewSection({
         )}
       </details>
       {review.safety_note ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{review.safety_note}</p> : null}
+      </details>
     </section>
   );
 }
@@ -2526,17 +2584,21 @@ function PersonalTrainingSkillSection({
   const approvalDialogue = candidate.approval_dialogue ?? [];
   return (
     <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id="report-personal-skill">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className={sectionHeadingClassName}>个人训练 Skill</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            完整训练后生成个人级训练策略，后续同一学生的新 session 会作为针对性提示上下文。
-          </p>
-        </div>
-        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-          {getPersonalSkillStatusLabel(candidate.status)}
-        </span>
-      </div>
+      <details>
+        <summary className="flex cursor-pointer list-none flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className={sectionHeadingClassName}>个人训练 Skill</h2>
+            <p className="mt-1 line-clamp-2 text-sm font-medium leading-6 text-foreground">
+              {candidate.title || candidate.suggested_strategy || "本轮暂无可启用的个人训练策略。"}
+            </p>
+            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+              Skill 来源、生成策略与审批技术细节默认折叠，可展开完整查看。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+            {getPersonalSkillStatusLabel(candidate.status)}
+          </span>
+        </summary>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border border-border bg-muted/25 p-3">
           <p className="text-xs text-muted-foreground">生成结果</p>
@@ -2718,6 +2780,7 @@ function PersonalTrainingSkillSection({
           </div>
         </div>
       ) : null}
+      </details>
     </section>
   );
 }
