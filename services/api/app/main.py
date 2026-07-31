@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import json
 import logging
+import math
 import os
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -173,6 +174,9 @@ MODEL_PROVIDER_PAYLOAD_TOO_LARGE_DETAIL = "模型请求内容过大，未发送�
 MODEL_PROVIDER_TIMEOUT_DETAIL = "模型服务响应超时，请稍后重试。"
 SPEECH_PROVIDER_FAILURE_DETAIL = "语音服务调用失败，请稍后重试。"
 MAX_MODEL_PROVIDER_RETRY_AFTER_SECONDS = 300
+REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV = "OSCE_REPORT_MODEL_CALL_TIMEOUT_SECONDS"
+DEFAULT_REPORT_MODEL_CALL_TIMEOUT_SECONDS = 90.0
+MAX_REPORT_MODEL_CALL_TIMEOUT_SECONDS = 300.0
 BASE_HTTP_SECURITY_HEADERS = {
     "Content-Security-Policy": "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -1135,12 +1139,27 @@ async def _admit_authenticated_model_request(
         raise ModelProviderOverloadedError(
             "model request concurrency limit reached"
         )
-    deadline_token = set_model_call_deadline()
+    deadline_token = set_model_call_deadline(
+        _model_request_timeout_seconds(request.url.path)
+    )
     try:
         yield
     finally:
         reset_model_call_deadline(deadline_token)
         model_request_admission_gate.release()
+
+
+def _model_request_timeout_seconds(path: str) -> float | None:
+    if not str(path).endswith(("/report/generate", "/report/enrich")):
+        return None
+    raw_value = os.getenv(REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV, "").strip()
+    try:
+        configured = float(raw_value) if raw_value else DEFAULT_REPORT_MODEL_CALL_TIMEOUT_SECONDS
+    except ValueError:
+        return DEFAULT_REPORT_MODEL_CALL_TIMEOUT_SECONDS
+    if not math.isfinite(configured) or configured <= 0:
+        return DEFAULT_REPORT_MODEL_CALL_TIMEOUT_SECONDS
+    return min(configured, MAX_REPORT_MODEL_CALL_TIMEOUT_SECONDS)
 
 
 def _model_provider_busy_response() -> JSONResponse:

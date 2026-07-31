@@ -256,6 +256,23 @@ def test_model_request_dependency_holds_lease_through_background_task(
     assert gate.active == 0
 
 
+def test_report_model_requests_have_a_longer_bounded_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(main.REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV, raising=False)
+
+    assert main._model_request_timeout_seconds("/api/sessions/a/report/generate") == 90.0
+    assert main._model_request_timeout_seconds("/api/sessions/a/report/enrich") == 90.0
+    assert main._model_request_timeout_seconds("/api/sessions/a/message") is None
+
+    monkeypatch.setenv(main.REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV, "120")
+    assert main._model_request_timeout_seconds("/api/sessions/a/report/generate") == 120.0
+    monkeypatch.setenv(main.REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV, "9999")
+    assert main._model_request_timeout_seconds("/api/sessions/a/report/generate") == 300.0
+    monkeypatch.setenv(main.REPORT_MODEL_CALL_TIMEOUT_SECONDS_ENV, "invalid")
+    assert main._model_request_timeout_seconds("/api/sessions/a/report/generate") == 90.0
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_detail"),
     [
