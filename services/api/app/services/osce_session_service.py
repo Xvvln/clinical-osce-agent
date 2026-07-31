@@ -2457,6 +2457,7 @@ def _personal_skill_payload_for_report(
         build_not_ready_personal_skill_payload,
         personal_training_skill_service,
     )
+    from app.services.teacher_agent import DeterministicTeacherAgent
     from app.services.training_skill_candidate_service import TrainingSkillCandidateGenerationError
 
     if session.final_submission is None:
@@ -2478,20 +2479,18 @@ def _personal_skill_payload_for_report(
             event_store=service.training_event_store,
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
-    except ModelProviderPolicyError:
-        raise
     except TrainingSkillCandidateGenerationError:
         return build_generation_failed_personal_skill_payload(
             report=session.feedback_report,
             case=case,
-            teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+            teacher_agent=DeterministicTeacherAgent(),
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
     except Exception as exc:
         payload = build_generation_failed_personal_skill_payload(
             report=session.feedback_report,
             case=case,
-            teacher_agent=getattr(active_personal_skill_service, "_teacher_agent", None),
+            teacher_agent=DeterministicTeacherAgent(),
             teacher_longitudinal_context=teacher_longitudinal_context,
         )
         payload["generation_warnings"] = _append_report_generation_warning(

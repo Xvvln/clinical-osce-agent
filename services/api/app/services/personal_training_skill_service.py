@@ -282,7 +282,7 @@ class PersonalTrainingSkillService:
         generator = self._generator or create_default_training_skill_candidate_generator()
         try:
             candidate = generator.generate_candidate(context)
-        except TrainingSkillCandidateGenerationError as exc:
+        except (TrainingSkillCandidateGenerationError, ModelProviderPolicyError) as exc:
             candidate = TemplateTrainingSkillCandidateGenerator().generate_candidate(context)
             candidate["generation_mode"] = "template_fallback"
             candidate["generation_warnings"] = [str(exc)]
@@ -725,8 +725,6 @@ def _apply_teacher_agent_analysis(
     )
     try:
         analysis = normalize_teacher_analysis_response(teacher_agent(request))
-    except ModelProviderPolicyError:
-        raise
     except Exception as exc:
         warnings = list(review.get("generation_warnings", []))
         warnings.append(

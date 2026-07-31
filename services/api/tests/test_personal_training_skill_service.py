@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.services import personal_training_skill_service as personal_skill_module
+from app.services.model_call_policy import ModelProviderTimeoutError
 from app.services.personal_training_skill_service import PersonalTrainingSkillService, build_teacher_reflection_review_payload
 from app.services.teacher_agent import DeterministicTeacherAgent
 from app.services.training_event_store import TrainingEventStore
@@ -113,6 +114,12 @@ class FailingGenerator:
         raise TrainingSkillCandidateGenerationError("configured provider unavailable")
 
 
+class PolicyTimeoutGenerator:
+    def generate_candidate(self, context: Any) -> dict[str, Any]:
+        del context
+        raise ModelProviderTimeoutError("candidate model exceeded its request budget")
+
+
 class FailingTeacherAgent:
     def __call__(self, request: Any) -> dict[str, Any]:
         raise RuntimeError("teacher reflection should be reused from the saved candidate")
@@ -128,6 +135,12 @@ class TimeoutTeacherAgent:
                 "https://example.invalid/v1/chat/completions",
             ),
         )
+
+
+class PolicyTimeoutTeacherAgent:
+    def __call__(self, request: Any) -> dict[str, Any]:
+        del request
+        raise ModelProviderTimeoutError("teacher model exceeded its request budget")
 
 
 class EmptyCoreFieldsTeacherAgent:
@@ -819,10 +832,47 @@ def test_teacher_timeout_persists_deterministic_context_without_copying_longitud
     assert "longitudinal_context" not in persisted_skill["teacher_analysis_context"]
 
 
-def test_personal_skill_generator_failure_falls_back_to_template_candidate(tmp_path) -> None:
+def test_teacher_policy_timeout_returns_a_persistable_deterministic_review() -> None:
+    case = _load_case()
+    reflection = build_teacher_reflection_review_payload(
+        {
+            "report_id": "teacher-policy-timeout-report",
+            "case_id": case.case_id,
+            "total_score": 18,
+            "max_score": 60,
+            "missed_items": ["ht_migration", "pe_tenderness"],
+            "clinical_reasoning_trace": {"trace_version": "clinical_reasoning_trace_v1"},
+            "training_progress_snapshot": {"coverage_map": {}},
+            "source_reference_items": [],
+        },
+        case,
+        teacher_agent=PolicyTimeoutTeacherAgent(),
+    )
+
+    assert reflection["status"] == "generated"
+    assert reflection["generated_by"] == "teacher_agent_deterministic"
+    assert reflection["teacher_analysis_context"]["student_thinking_hypothesis"]
+    assert reflection["generation_warnings"] == [
+        {
+            "module": "teacher_agent_analysis",
+            "error_type": "ModelProviderTimeoutError",
+            "message": "teacher model exceeded its request budget",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [FailingGenerator(), PolicyTimeoutGenerator()],
+    ids=["provider-generation-error", "provider-policy-timeout"],
+)
+def test_personal_skill_generator_failure_falls_back_to_template_candidate(
+    tmp_path,
+    generator: Any,
+) -> None:
     case = _load_case()
     service = PersonalTrainingSkillService(
-        generator=FailingGenerator(),
+        generator=generator,
         approval_agent=ApprovingAgent(),
         regression_gate=PassingGate(),
         teacher_agent=FakeTeacherAgent(),
