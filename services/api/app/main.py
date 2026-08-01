@@ -1638,6 +1638,11 @@ def _enrich_learning_path_task(
         for item in task.get("target_rubric_item_refs", [])
         if isinstance(item, dict) and str(item.get("item_id") or "")
     ]
+    if not target_rubric_item_refs:
+        target_rubric_item_refs = [
+            {"case_id": rubric_label_case_id or case_id, "item_id": item_id}
+            for item_id in target_rubric_items
+        ]
     source_references = [str(reference) for reference in task.get("source_references", []) if str(reference)]
     label_case_id = rubric_label_case_id or case_id
     target_rubric_item_labels = (
@@ -1646,11 +1651,11 @@ def _enrich_learning_path_task(
         else rubric_item_labels(target_rubric_items, [label_case_id])
     )
     public_task = dict(task)
-    public_task.pop("target_rubric_item_refs", None)
     return {
         **public_task,
         "task_type_label": LEARNING_TASK_TYPE_LABELS.get(task_type, task_type or "训练任务"),
         "case_title": _get_case_title(case_id),
+        "target_rubric_item_refs": target_rubric_item_refs,
         "target_rubric_item_labels": target_rubric_item_labels,
         "source_reference_labels": reference_labels(source_references),
     }

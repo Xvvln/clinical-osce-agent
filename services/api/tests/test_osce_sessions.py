@@ -1135,6 +1135,13 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
             "ht_associated_gi",
             "ht_associated_fever",
         ],
+        "target_rubric_item_refs": [
+            {"case_id": "appendicitis_001", "item_id": "ht_migration"},
+            {"case_id": "appendicitis_001", "item_id": "ht_character"},
+            {"case_id": "appendicitis_001", "item_id": "ht_severity"},
+            {"case_id": "appendicitis_001", "item_id": "ht_associated_gi"},
+            {"case_id": "appendicitis_001", "item_id": "ht_associated_fever"},
+        ],
         "target_rubric_item_labels": [
             "追问疼痛部位及转移特征",
             "追问疼痛性质",
@@ -1170,6 +1177,13 @@ def test_current_user_profile_aggregates_only_owned_sessions_and_reports(tmp_pat
             "ht_severity",
             "ht_associated_gi",
             "ht_associated_fever",
+        ],
+        "target_rubric_item_refs": [
+            {"case_id": "appendicitis_001", "item_id": "ht_migration"},
+            {"case_id": "appendicitis_001", "item_id": "ht_character"},
+            {"case_id": "appendicitis_001", "item_id": "ht_severity"},
+            {"case_id": "appendicitis_001", "item_id": "ht_associated_gi"},
+            {"case_id": "appendicitis_001", "item_id": "ht_associated_fever"},
         ],
         "target_rubric_item_labels": [
             "追问疼痛部位及转移特征",
@@ -1209,6 +1223,37 @@ def test_learning_path_labels_mixed_case_missed_items_with_readable_text() -> No
         assert "申请甲状腺超声" in labels
         assert "ht_family_history" not in labels
         assert "at_thyroid_us" not in labels
+
+
+def test_learning_path_keeps_source_case_identity_for_repeated_item_ids() -> None:
+    reports = [
+        {
+            "case_id": "acs_001",
+            "missed_items": ["reasoning_core"],
+            "knowledge_recommendations": [],
+        },
+        {
+            "case_id": "heart_failure_001",
+            "missed_items": ["reasoning_core"],
+            "knowledge_recommendations": [],
+        },
+    ]
+
+    learning_path = main._build_learning_path(
+        reports,
+        {"key": "clinical_reasoning", "label": "临床推理", "average": 0},
+    )
+
+    primary_task = learning_path[0]
+    assert primary_task["target_rubric_items"] == ["reasoning_core", "reasoning_core"]
+    assert primary_task["target_rubric_item_refs"] == [
+        {"case_id": "acs_001", "item_id": "reasoning_core"},
+        {"case_id": "heart_failure_001", "item_id": "reasoning_core"},
+    ]
+    assert primary_task["target_rubric_item_labels"] == [
+        "推理链覆盖典型胸痛表现、危险因素和心电图证据",
+        "推理链覆盖呼吸困难进展、淤血体征和 BNP/超声证据",
+    ]
 
 
 def test_profile_dimension_averages_label_humanistic_dimensions() -> None:
