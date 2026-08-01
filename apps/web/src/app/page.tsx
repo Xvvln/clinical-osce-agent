@@ -6,6 +6,11 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, PointerEvent, ReactNode, UIEvent } from "react";
 import { getCurrentUser, loginUser, logoutUser } from "./auth-client";
 import type { AuthUser } from "./auth-client";
+import {
+  clearLocalAutoLoginSuppression,
+  isLocalAutoLoginSuppressed,
+  suppressLocalAutoLogin,
+} from "./local-auto-login";
 
 type StageStatus = "done" | "active" | "locked";
 
@@ -2833,7 +2838,12 @@ function HomeContent() {
     async function loadAuthUser() {
       try {
         let currentUser = await getCurrentUser();
-        if (currentUser === null && isLocalAutoLoginConfigured && !hasAttemptedLocalAutoLoginRef.current) {
+        if (
+          currentUser === null
+          && isLocalAutoLoginConfigured
+          && !isLocalAutoLoginSuppressed(window.sessionStorage)
+          && !hasAttemptedLocalAutoLoginRef.current
+        ) {
           hasAttemptedLocalAutoLoginRef.current = true;
           setAuthEmail(LOCAL_AUTO_LOGIN_EMAIL);
           setAuthPassword(LOCAL_AUTO_LOGIN_PASSWORD);
@@ -3644,6 +3654,7 @@ function HomeContent() {
 
     try {
       const nextUser = await loginUser(email, authPassword);
+      clearLocalAutoLoginSuppression(window.sessionStorage);
       setAuthUser(nextUser);
       setAuthPassword("");
       setIsAuthDialogOpen(false);
@@ -3667,6 +3678,7 @@ function HomeContent() {
 
     try {
       await logoutUser();
+      suppressLocalAutoLogin(window.sessionStorage);
       setAuthUser(null);
       setAuthEmail("");
       setAuthPassword("");
