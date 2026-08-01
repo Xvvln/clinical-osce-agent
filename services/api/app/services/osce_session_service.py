@@ -2985,6 +2985,17 @@ PROCEDURE_REQUEST_SYNONYMS_BY_CODE: dict[str, list[str]] = {
     "vital.temperature": ["体温", "发热", "测体温"],
 }
 
+PROCEDURE_REQUEST_GENERIC_LABEL_TERMS = {
+    "腹部",
+    "胸部",
+    "肺部",
+    "心脏",
+    "甲状腺",
+    "影像",
+    "实验室",
+    "生命体征",
+}
+
 
 def _standardize_procedure_request_text(request_text: str) -> dict[str, Any]:
     normalized_request = _normalize_procedure_request_text(request_text)
@@ -3040,7 +3051,7 @@ def _match_procedure_catalog_item(
     name_key: str,
 ) -> dict[str, Any] | None:
     code = str(item[code_key])
-    aliases = _procedure_aliases(code, str(item[name_key]), str(item.get("category") or ""))
+    aliases = _procedure_aliases(code, str(item[name_key]))
     match_candidates: list[dict[str, Any]] = []
     for alias in aliases:
         if not _is_searchable_procedure_alias(alias):
@@ -3053,8 +3064,10 @@ def _match_procedure_catalog_item(
     return sorted(match_candidates, key=lambda match: (int(match["index"]), -len(str(match["alias"]))))[0]
 
 
-def _procedure_aliases(code: str, name: str, category: str) -> list[str]:
-    aliases = [name, category, code, code.replace(".", " ")]
+def _procedure_aliases(code: str, name: str) -> list[str]:
+    # Category labels and bare anatomy fragments are too broad for free-text
+    # routing: for example, "腹部视诊" must not also request "腹部 CT".
+    aliases = [name, code, code.replace(".", " ")]
     aliases.extend(PROCEDURE_REQUEST_SYNONYMS_BY_CODE.get(code, []))
     aliases.extend(_split_procedure_label_terms(name))
     return _dedupe_non_empty([_normalize_procedure_request_text(alias) for alias in aliases])
@@ -3076,6 +3089,8 @@ def _normalize_procedure_request_text(value: str) -> str:
 
 
 def _is_searchable_procedure_alias(alias: str) -> bool:
+    if alias in PROCEDURE_REQUEST_GENERIC_LABEL_TERMS:
+        return False
     if len(alias) >= 2 and not alias.isascii():
         return True
     return alias in {"ct", "b超"} or len(alias) >= 3
@@ -3087,7 +3102,26 @@ def _extract_unmatched_procedure_terms(request_text: str, matched_aliases: list[
         r"和|及|与|并|再|看看|看一下|查一下|查个|检查|申请|做|测|查|要|想|请|，|,|、|；|;|。|\s+",
         request_text,
     )
-    ignored_terms = {"我", "我想", "一下", "一个", "相关", "项目", "结果", "还有", "一下子"}
+    ignored_terms = {
+        "我",
+        "我想",
+        "一下",
+        "一个",
+        "相关",
+        "项目",
+        "结果",
+        "还有",
+        "一下子",
+        "腹部",
+        "右下腹",
+        "左下腹",
+        "右上腹",
+        "左上腹",
+        "胸部",
+        "肺部",
+        "心脏",
+        "甲状腺",
+    }
     unmatched: list[str] = []
     for chunk in chunks:
         term = chunk.strip()

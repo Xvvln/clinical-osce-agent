@@ -12,6 +12,7 @@ from app.services.osce_session_service import (
     OsceSessionService,
     ProcedureRequestLimitError,
     UnknownProcedureCodeError,
+    _standardize_procedure_request_text,
 )
 from app.services.osce_session_store import (
     OsceSessionStore,
@@ -70,6 +71,23 @@ PROCEDURE_PATHS = (
         id="auxiliary-test",
     ),
 )
+
+
+def test_abdominal_exam_request_does_not_overmatch_abdominal_ct() -> None:
+    standardized = _standardize_procedure_request_text(
+        "测量体温；进行腹部视诊；检查右下腹 McBurney 点压痛、反跳痛和肌紧张，并检查 Rovsing 征。"
+    )
+
+    assert standardized["matched_exam_codes"] == [
+        "vital.temperature",
+        "abd.inspection",
+        "abd.palpation.tenderness",
+        "abd.palpation.rebound",
+        "abd.palpation.guarding",
+        "abd.special.rovsing",
+    ]
+    assert standardized["matched_test_codes"] == []
+    assert standardized["unmatched_requests"] == []
 
 
 def _canonical_patient_responder(request: object) -> str:
