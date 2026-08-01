@@ -432,8 +432,10 @@ test("home dialogue speaker labels render as plain text labels", () => {
   assert.doesNotMatch(pageSource, /<p className=\{messageLabelClass\}>[\s\S]*?\{message\.label\}/);
 });
 
-test("home patient messages render backend emotion metadata as a visible tag", () => {
+test("home patient messages always render a visible emotion tag", () => {
   assert.match(pageSource, /readonly emotion\?: string \| null;/);
+  assert.match(pageSource, /function normalizePatientEmotion\(emotion: string \| null \| undefined\): string/);
+  assert.match(pageSource, /return "平静";/);
   assert.match(pageSource, /emotion: normalizePatientEmotion\(message\.emotion\)/);
   assert.match(pageSource, /message\.emotion \? \(/);
   assert.match(pageSource, /情绪：\{message\.emotion\}/);

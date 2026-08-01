@@ -1000,10 +1000,10 @@ function getCoachMessageLabel(content: string): "安全边界" | "答题边界" 
   return "过程提示";
 }
 
-function normalizePatientEmotion(emotion: string | null | undefined): string | null {
+function normalizePatientEmotion(emotion: string | null | undefined): string {
   const normalizedEmotion = emotion?.trim();
   if (!normalizedEmotion || normalizedEmotion === "平静" || normalizedEmotion === "neutral") {
-    return null;
+    return "平静";
   }
   return normalizedEmotion;
 }
