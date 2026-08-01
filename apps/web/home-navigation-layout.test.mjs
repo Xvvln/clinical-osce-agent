@@ -1199,6 +1199,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /type LearningPathItem = Readonly<\{/);
   assert.match(profileSource, /task_type_label: string;/);
   assert.match(profileSource, /case_title: string;/);
+  assert.match(profileSource, /target_rubric_item_refs\?: readonly LearningPathTargetReference\[];/);
   assert.match(profileSource, /target_rubric_item_labels: readonly string\[];/);
   assert.match(profileSource, /source_reference_labels: readonly string\[];/);
   assert.match(profileSource, /case_title: string;/);
@@ -1211,6 +1212,7 @@ test("profile page reads backend aggregated learning profile without per-session
   assert.match(profileSource, /task\.task_type_label/);
   assert.match(profileSource, /task\.case_title/);
   assert.match(profileSource, /primaryLearningTask\.target_rubric_item_labels/);
+  assert.match(profileSource, /getLearningPathTargetKey\(primaryLearningTask, itemLabel, index\)/);
   assert.match(profileSource, /primaryLearningTask\.source_reference_labels/);
   assert.match(profileSource, /session\.case_title/);
   assert.match(profileSource, /session\.stage_label/);

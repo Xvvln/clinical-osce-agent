@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import {
+  getLearningPathTargetKey,
+  type LearningPathTargetReference,
+} from "./learning-path-target";
+
 type PersistedSessionSummary = Readonly<{
   session_id: string;
   case_id: string;
@@ -189,6 +194,7 @@ type LearningPathItem = Readonly<{
   case_title: string;
   objective: string;
   target_rubric_items: readonly string[];
+  target_rubric_item_refs?: readonly LearningPathTargetReference[];
   target_rubric_item_labels: readonly string[];
   source_report_count: number;
   source_references: readonly string[];
@@ -1103,7 +1109,7 @@ export default function ProfilePage() {
               {primaryLearningTask && primaryLearningTask.target_rubric_item_labels.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {primaryLearningTask.target_rubric_item_labels.map((itemLabel, index) => (
-                    <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground" key={`${primaryLearningTask.case_id}-${primaryLearningTask.target_rubric_items[index] ?? itemLabel}`}>
+                    <span className="rounded-full border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground" key={getLearningPathTargetKey(primaryLearningTask, itemLabel, index)}>
                       {itemLabel}
                     </span>
                   ))}
