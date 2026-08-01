@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import httpx
 
@@ -466,8 +466,9 @@ def _validated_tts_audio_url(audio_url: str, *, tts_endpoint: str) -> str:
     except ValueError as exc:
         raise RuntimeError("DashScope TTS response contains an invalid audio url") from exc
 
+    scheme = parsed.scheme.lower()
     if (
-        parsed.scheme.lower() != "https"
+        scheme not in {"http", "https"}
         or not audio_host
         or parsed.username is not None
         or parsed.password is not None
@@ -482,6 +483,8 @@ def _validated_tts_audio_url(audio_url: str, *, tts_endpoint: str) -> str:
     )
     if not trusted_host:
         raise RuntimeError("DashScope TTS response contains an untrusted audio url")
+    if scheme == "http":
+        return urlunsplit(parsed._replace(scheme="https"))
     return normalized_url
 
 

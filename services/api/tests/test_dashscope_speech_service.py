@@ -372,7 +372,7 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_tts_audio_url_policy_rejects_untrusted_targets(self) -> None:
         rejected_urls = [
-            "http://dashscope.aliyuncs.com/audio.wav",
+            "http://untrusted.example/audio.wav",
             "https://user:password@dashscope.aliyuncs.com/audio.wav",
             "https://localhost/audio.wav",
             "https://127.0.0.1/audio.wav",
@@ -417,6 +417,26 @@ class DashScopeSpeechServiceTests(unittest.IsolatedAsyncioTestCase):
                 tts_endpoint="https://speech-gateway.example/v1/tts",
             ),
             same_origin_url,
+        )
+
+    def test_tts_audio_url_policy_upgrades_official_http_result_url(self) -> None:
+        provider_url = (
+            "http://dashscope-a717.oss-cn-beijing.aliyuncs.com/"
+            "audio.wav?Expires=123&Signature=signed"
+        )
+
+        self.assertEqual(
+            dashscope_speech_service._validated_tts_audio_url(
+                provider_url,
+                tts_endpoint=(
+                    "https://dashscope.aliyuncs.com/api/v1/"
+                    "services/aigc/multimodal-generation/generation"
+                ),
+            ),
+            (
+                "https://dashscope-a717.oss-cn-beijing.aliyuncs.com/"
+                "audio.wav?Expires=123&Signature=signed"
+            ),
         )
 
     @patch.object(dashscope_speech_service.httpx, "AsyncClient", FakeAsyncClient)
