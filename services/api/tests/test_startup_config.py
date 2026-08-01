@@ -815,7 +815,9 @@ def test_compose_health_path_remains_valid() -> None:
         api_service["environment"]["CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS"]
         == (
             "${CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS:-"
-            "http://localhost:3000,http://127.0.0.1:3001,http://127.0.0.1:8000}"
+            "http://localhost:3000,http://127.0.0.1:3000,"
+            "http://localhost:3001,http://127.0.0.1:3001,"
+            "http://localhost:8000,http://127.0.0.1:8000}"
         )
     )
     assert (
@@ -881,8 +883,10 @@ def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_pa
     assert "CLINICAL_OSCE_DEPLOYMENT_MODE=local-demo" in env_example_source
     assert (
         "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS="
-        "http://localhost:3000,http://127.0.0.1:3001,"
-        "http://127.0.0.1:3100,http://127.0.0.1:8000"
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3001,http://127.0.0.1:3001,"
+        "http://localhost:3100,http://127.0.0.1:3100,"
+        "http://localhost:8000,http://127.0.0.1:8000"
     ) in env_example_source
     assert "CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true" in env_example_source
     assert (

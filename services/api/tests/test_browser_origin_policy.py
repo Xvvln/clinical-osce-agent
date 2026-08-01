@@ -12,6 +12,7 @@ from app.services.browser_origin_policy import normalize_browser_origin
 
 TRUSTED_BROWSER_ORIGINS_ENV_NAME = "CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS"
 STUDENT_ORIGIN = "http://localhost:3000"
+STUDENT_LOOPBACK_ORIGIN = "http://127.0.0.1:3000"
 ADMIN_COMPOSE_ORIGIN = "http://127.0.0.1:3001"
 
 
@@ -48,9 +49,11 @@ def test_trusted_local_browser_origins_can_write(client: TestClient) -> None:
         headers={"Origin": STUDENT_ORIGIN, "Sec-Fetch-Site": "same-origin"},
     )
     admin_origin_response = _login(client, origin=ADMIN_COMPOSE_ORIGIN)
+    student_loopback_response = _login(client, origin=STUDENT_LOOPBACK_ORIGIN)
 
     assert student_response.status_code == 200
     assert admin_origin_response.status_code == 200
+    assert student_loopback_response.status_code == 200
 
 
 def test_untrusted_same_site_origin_cannot_logout_existing_session(client: TestClient) -> None:
