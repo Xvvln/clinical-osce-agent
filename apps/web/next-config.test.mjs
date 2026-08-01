@@ -14,6 +14,10 @@ test("Next dev indicator is disabled in favor of the OSCE dock", () => {
   assert.equal(nextConfig.devIndicators, false);
 });
 
+test("Next dev accepts both local loopback hostnames", () => {
+  assert.deepEqual(nextConfig.allowedDevOrigins, ["127.0.0.1", "localhost"]);
+});
+
 test("Next config does not use rewrite proxy for API calls", () => {
   assert.equal(nextConfig.rewrites, undefined);
 });
