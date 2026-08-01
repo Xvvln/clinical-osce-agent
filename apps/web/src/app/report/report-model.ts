@@ -592,7 +592,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     procedure_simulation_audit_items: report.procedure_simulation_audit_items ?? [],
     score_groups: report.score_groups ?? {},
     dimension_traces: report.dimension_traces ?? {},
-    training_gaps: report.training_gaps ?? [],
+    training_gaps: deduplicateTrainingGaps(report.training_gaps ?? []),
     missed_opportunities: report.missed_opportunities ?? [],
     knowledge_recommendations: report.knowledge_recommendations ?? [],
     llm_reasoning_feedback: report.llm_reasoning_feedback ?? [],
@@ -602,6 +602,24 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     personal_skill_candidate: normalizePersonalTrainingSkillCandidate(report.personal_skill_candidate),
     deep_report_analysis: normalizeDeepReportAnalysis(report.deep_report_analysis),
   };
+}
+
+function deduplicateTrainingGaps(gaps: readonly TrainingGapItem[]): readonly TrainingGapItem[] {
+  const seen = new Set<string>();
+  return gaps.filter((gap) => {
+    const identity = [
+      gap.dimension_id,
+      gap.rubric_item_id,
+      gap.gap_type,
+      gap.gap_source,
+      gap.next_training_action,
+    ].join("\u001f");
+    if (seen.has(identity)) {
+      return false;
+    }
+    seen.add(identity);
+    return true;
+  });
 }
 
 const DEFAULT_DIAGNOSTIC_CONTRAST_ANALYSIS: DiagnosticContrastAnalysis = {

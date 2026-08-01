@@ -818,6 +818,35 @@ def test_humanistic_missed_opportunity_records_unanswered_patient_emotion() -> N
     assert missed_gap["trigger_stage"] == "history_taking"
 
 
+def test_repeated_emotion_signals_keep_occurrences_but_share_one_training_gap() -> None:
+    session = OsceSession(
+        session_id="session_repeated_missed_opportunity",
+        student_id="student_demo",
+        case_id="appendicitis_001",
+        stage="history_taking",
+        messages=[
+            {"role": "patient", "content": "我很担心是不是严重的病。"},
+            {"role": "student", "content": "疼痛是从什么时候开始的？"},
+            {"role": "patient", "content": "我还是很害怕。"},
+            {"role": "student", "content": "疼痛会向其他地方转移吗？"},
+        ],
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert len(report["missed_opportunities"]) == 2
+    empathy_gaps = [
+        gap
+        for gap in report["training_gaps"]
+        if gap["gap_source"] == "missed_opportunity"
+        and gap["gap_type"] == "relationship_empathy_missing"
+    ]
+    assert len(empathy_gaps) == 1
+    assert empathy_gaps[0]["next_training_action"] == (
+        "下一轮患者表达焦虑或担忧后，先用一句话承认情绪并说明会一起处理。"
+    )
+
+
 def test_humanistic_scoring_ledger_prevents_repeated_empathy_score() -> None:
     session = OsceSession(
         session_id="session_repeated_empathy",

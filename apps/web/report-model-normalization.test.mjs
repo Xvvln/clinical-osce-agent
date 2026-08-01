@@ -183,3 +183,41 @@ test("report model preserves TeacherAgent thinking profile for reflection and pe
     "用反问要求学生说明下一步证据验证什么。",
   );
 });
+
+test("report model collapses repeated training actions from legacy reports", () => {
+  const { normalizeFeedbackReport } = loadReportModel();
+  const repeatedGap = {
+    dimension_id: "relationship_building",
+    rubric_item_id: "",
+    gap_type: "relationship_empathy_missing",
+    label: "错失患者沟通信号",
+    missing_score: 2,
+    severity: "medium",
+    evidence_summary: "我很担心是不是严重的病。",
+    next_training_action: "下一轮先回应患者情绪，再继续医学问诊。",
+    skill_type: "relationship_repair",
+    gap_source: "missed_opportunity",
+  };
+  const report = normalizeFeedbackReport({
+    session_id: "legacy_duplicate_gaps",
+    case_id: "acs_001",
+    total_score: 75,
+    dimension_scores: {},
+    rubric_scores: {},
+    missed_items: [],
+    training_gaps: [
+      repeatedGap,
+      { ...repeatedGap, evidence_summary: "我还是很害怕。" },
+      { ...repeatedGap, gap_type: "communication_summary_missing" },
+    ],
+    strengths: [],
+    reasoning_errors: [],
+    next_recommendations: [],
+    source_references: [],
+    feedback_summary: "旧报告包含重复训练动作。",
+  });
+
+  assert.equal(report.training_gaps.length, 2);
+  assert.equal(report.training_gaps[0].gap_type, "relationship_empathy_missing");
+  assert.equal(report.training_gaps[1].gap_type, "communication_summary_missing");
+});

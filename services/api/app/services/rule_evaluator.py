@@ -161,7 +161,7 @@ def evaluate_session_rules(
         training_event_stream=[event.__dict__ for event in event_stream],
         scoring_ledger=scoring_ledger.to_dict(),
         missed_opportunities=missed_opportunities,
-        training_gaps=training_gaps,
+        training_gaps=_unique_training_gaps(training_gaps),
         humanistic_anchor_candidates=_humanistic_anchor_candidates(dimension_traces),
     ).to_dict()
 
@@ -795,4 +795,22 @@ def _unique_strings(values: list[str]) -> list[str]:
     for value in values:
         if value not in unique_values:
             unique_values.append(value)
+    return unique_values
+
+
+def _unique_training_gaps(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique_values: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for value in values:
+        identity = (
+            str(value.get("dimension_id") or ""),
+            str(value.get("rubric_item_id") or ""),
+            str(value.get("gap_type") or ""),
+            str(value.get("gap_source") or ""),
+            str(value.get("next_training_action") or ""),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique_values.append(value)
     return unique_values
