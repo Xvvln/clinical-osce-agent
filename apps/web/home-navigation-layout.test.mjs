@@ -1708,7 +1708,8 @@ test("home supports intermediate procedure catalog and batch procedure requests"
   assert.match(pageSource, /未识别项目/);
   assert.match(pageSource, /not_available_for_case/);
   assert.match(pageSource, /ai_simulated_for_training/);
-  assert.match(pageSource, /旧版模拟记录 · 不计分/);
+  assert.match(pageSource, /病例约束 AI 模拟 · 已审核 · 不计分/);
+  assert.match(pageSource, /基于脱敏病例依据生成并经一致性审核，不计入评分/);
   assert.match(pageSource, /formatProcedureResultText\(procedureResult\)/);
   assert.doesNotMatch(pageSource, /本次查体 \/ 检查申请/);
   assert.doesNotMatch(pageSource, /门禁状态：/);

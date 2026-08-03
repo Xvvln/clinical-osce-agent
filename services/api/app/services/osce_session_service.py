@@ -32,6 +32,11 @@ from app.services.osce_session_store import (
 )
 from app.services.patient_affect_state_service import build_initial_patient_affect_state
 from app.services.patient_language_service import build_patient_opening_utterance
+from app.services.procedure_result_simulation_service import (
+    PROCEDURE_SIMULATION_SAFETY_BOUNDARY,
+    ProcedureResultSimulationService,
+    merge_procedure_simulation_audit_items,
+)
 from app.services.procedure_request_router import (
     ProcedureRequestRoutingRequest,
     create_default_procedure_request_router,
@@ -322,6 +327,9 @@ class OsceSessionService:
         graph: Any | None = None,
         patient_responder: Any | None = None,
         procedure_request_router: Any | None = None,
+        procedure_result_simulator: Any | None = None,
+        procedure_result_approval_agent: Any | None = None,
+        procedure_result_simulation_service: Any | None = None,
     ) -> None:
         self._sessions: dict[str, _CachedSession] = {}
         self._session_locks = _SessionLockRegistry()
@@ -347,6 +355,13 @@ class OsceSessionService:
         self.student_profile_store = student_profile_store
         self.personal_skill_service = personal_skill_service
         self.procedure_request_router = procedure_request_router or create_default_procedure_request_router()
+        self.procedure_result_simulation_service = (
+            procedure_result_simulation_service
+            or ProcedureResultSimulationService(
+                procedure_result_simulator=procedure_result_simulator,
+                procedure_result_approval_agent=procedure_result_approval_agent,
+            )
+        )
         self._message_processing_statuses: dict[str, dict[str, Any]] = {}
         self._message_processing_status_lock = Lock()
 
@@ -1003,7 +1018,29 @@ class OsceSessionService:
             test_result_map,
         )
         matched_procedure_results.extend(_build_routed_unmatched_procedure_results(routed_unmatched_requests))
-        matched_procedure_results = _mark_unconfigured_procedure_results_unavailable(matched_procedure_results)
+        simulation_session = operation.working_session or session
+        simulation_batch = self.procedure_result_simulation_service.simulate(
+            case=case,
+            request_text=request_text,
+            matched_procedure_results=matched_procedure_results,
+            existing_audit_items=simulation_session.procedure_simulation_audit_items,
+            forbidden_terms=_procedure_forbidden_terms(case),
+        )
+        matched_procedure_results = simulation_batch.results
+        new_simulation_audit_items = simulation_batch.new_audit_items
+        if new_simulation_audit_items:
+            if operation.working_session is None:
+                operation.working_session = deepcopy(session)
+            operation.working_session.procedure_simulation_audit_items = (
+                merge_procedure_simulation_audit_items(
+                    operation.working_session.procedure_simulation_audit_items,
+                    new_simulation_audit_items,
+                )
+            )
+        has_simulated_results = any(
+            item.get("generated_by_ai") is True
+            for item in matched_procedure_results
+        )
         standardized_request = {
             "mode": "advanced_free_text_catalog",
             "raw_request": request_text,
@@ -1014,8 +1051,12 @@ class OsceSessionService:
                 routed_unmatched_requests,
             ),
             "routed_unmatched_requests": routed_unmatched_requests,
-            "generated_result_policy": "disabled",
-            "safety_boundary": "当前高级模式仅标准化到病例已配置项目；未配置项目不生成模拟结果，也不进入评分。",
+            "generated_result_policy": (
+                "ai_simulated_grounded_not_scoring"
+                if has_simulated_results
+                else "ai_simulation_enabled_fail_closed"
+            ),
+            "safety_boundary": PROCEDURE_SIMULATION_SAFETY_BOUNDARY,
         }
         free_text_event = SessionOutboxEvent(
             event_type="procedure_free_text_requested",
@@ -1023,6 +1064,13 @@ class OsceSessionService:
                 "request_text": request_text,
                 "standardized_request": standardized_request,
                 "matched_procedure_results": matched_procedure_results,
+                "procedure_simulation_audit_items": list(
+                    (
+                        operation.working_session.procedure_simulation_audit_items
+                        if operation.working_session is not None
+                        else session.procedure_simulation_audit_items
+                    )
+                ),
             },
         )
         if operation.working_session is not None:
@@ -1083,6 +1131,9 @@ class OsceSessionService:
             {
                 "standardized_request": standardized_request,
                 "matched_procedure_results": matched_procedure_results,
+                "procedure_simulation_audit_items": list(
+                    session.procedure_simulation_audit_items
+                ),
                 "exam_results": exam_results,
                 "test_results": test_results,
             }

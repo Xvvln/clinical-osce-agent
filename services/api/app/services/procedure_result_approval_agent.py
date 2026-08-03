@@ -21,6 +21,10 @@ from app.services.model_call_policy import (
     call_google_text_generate_content,
 )
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.procedure_result_grounding import (
+    build_procedure_result_grounding,
+    sanitize_grounding_text,
+)
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
@@ -31,9 +35,13 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 高级训练中的检查结果审批 Age
 任务：
 - 审核另一个 Agent 生成的“训练用模拟查体/辅助检查结果”是否可展示给学生。
 - 你只做安全与教学边界审查，不参与评分，不改病例标准事实，不生成标准答案。
+- case_grounding 是脱敏后的唯一病例依据；必须同时审核结果是否与这些病例表现、已配置所见和教学知识一致。
 
 必须批准的条件：
 - 结果只描述该项目本身的检查所见。
+- 结果不与 case_grounding 中的事实冲突；没有直接依据时，措辞必须保守、非决定性。
+- 不得把 case_grounding 未提及的症状或病史改写为明确阴性；“未提供”不等于“无”。
+- simulation_confidence 为 conservative_inference 时，不得出现病例依据中没有的具体数值、单位、分期、分级、波形参数、病原体或解剖测量值；若有，应 revise 为不含推测性精确参数的保守结果，无法安全改写则 blocked。
 - 没有泄露标准诊断名、鉴别诊断答案、治疗方案、手术方案、用药剂量或真实诊疗建议。
 - 没有声称这是病例标准答案、rubric 依据或评分证据。
 
@@ -58,6 +66,11 @@ class ProcedureResultApprovalRequest(BaseModel):
     procedure_code: str
     procedure_name_cn: str
     simulated_result: str
+    simulation_confidence: str = "conservative_inference"
+    grounding_basis: list[str] = Field(default_factory=list, max_length=3)
+    patient_context: dict[str, Any] = Field(default_factory=dict)
+    configured_results: list[dict[str, str]] = Field(default_factory=list)
+    retrieved_knowledge_context: list[dict[str, Any]] = Field(default_factory=list)
     source_context_references: list[str] = Field(default_factory=list)
     forbidden_terms: list[str] = Field(default_factory=list)
 
@@ -71,13 +84,25 @@ class ProcedureResultApprovalResponse(BaseModel):
     revised_result: str = Field(default="", max_length=180)
 
 
-def _procedure_approval_provider_payload(request: ProcedureResultApprovalRequest) -> dict[str, str]:
+def _procedure_approval_provider_payload(request: ProcedureResultApprovalRequest) -> dict[str, Any]:
     return {
         "request_text": request.request_text,
         "procedure_kind": request.procedure_kind,
         "procedure_code": request.procedure_code,
         "procedure_name_cn": request.procedure_name_cn,
         "simulated_result": request.simulated_result,
+        "simulation_confidence": request.simulation_confidence,
+        "grounding_basis": [
+            sanitize_grounding_text(item, request.forbidden_terms)
+            for item in request.grounding_basis[:3]
+            if sanitize_grounding_text(item, request.forbidden_terms)
+        ],
+        "case_grounding": build_procedure_result_grounding(
+            patient_context=request.patient_context,
+            configured_results=request.configured_results,
+            retrieved_knowledge_context=request.retrieved_knowledge_context,
+            forbidden_terms=request.forbidden_terms,
+        ),
     }
 
 

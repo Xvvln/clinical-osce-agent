@@ -2,6 +2,7 @@ import json
 import sqlite3
 from copy import deepcopy
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 import httpx
@@ -2700,7 +2701,7 @@ def test_advanced_procedure_request_does_not_fabricate_unmatched_patient_profile
     fake_router = FakeProcedureRequestRouter()
     monkeypatch.setattr(osce_session_service, "procedure_request_router", fake_router, raising=False)
     monkeypatch.setattr(
-        osce_session_service,
+        osce_session_service.procedure_result_simulation_service,
         "procedure_result_simulator",
         UnexpectedProcedureResultSimulator(),
         raising=False,
@@ -2731,23 +2732,33 @@ def test_advanced_procedure_request_does_not_fabricate_unmatched_patient_profile
             "safety_issues": ["unconfigured_patient_fact"],
         }
     ]
-    assert payload["standardized_request"]["generated_result_policy"] == "disabled"
+    assert payload["standardized_request"]["generated_result_policy"] == "ai_simulation_enabled_fail_closed"
     assert payload["matched_procedure_results"] == []
-    assert "procedure_simulation_audit_items" not in payload
+    assert payload["procedure_simulation_audit_items"] == []
     assert "175 cm" not in str(payload)
     assert "68 kg" not in str(payload)
     assert len(fake_router.calls) == 1
 
 
-def test_advanced_unconfigured_procedure_returns_unavailable_without_invoking_llm(
+def test_advanced_unconfigured_procedure_fails_closed_when_generation_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnexpectedAgent:
         def __call__(self, request: object) -> dict[str, object]:
             raise AssertionError(f"unconfigured procedures must not invoke an LLM: {request}")
 
-    monkeypatch.setattr(osce_session_service, "procedure_result_simulator", UnexpectedAgent(), raising=False)
-    monkeypatch.setattr(osce_session_service, "procedure_result_approval_agent", UnexpectedAgent(), raising=False)
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_simulator",
+        UnexpectedAgent(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_approval_agent",
+        UnexpectedAgent(),
+        raising=False,
+    )
     monkeypatch.setattr(osce_session_service, "procedure_request_router", UnexpectedAgent(), raising=False)
 
     create_response = client.post(
@@ -2767,10 +2778,210 @@ def test_advanced_unconfigured_procedure_returns_unavailable_without_invoking_ll
     unavailable_result = procedure_payload["matched_procedure_results"][0]
     assert unavailable_result["availability_status"] == "not_available_for_case"
     assert unavailable_result["generated_by_ai"] is False
-    assert unavailable_result["approval_status"] == "not_required"
+    assert unavailable_result["approval_status"] == "simulation_unavailable"
     assert unavailable_result["scoring_eligible"] is False
-    assert procedure_payload["standardized_request"]["generated_result_policy"] == "disabled"
-    assert "procedure_simulation_audit_items" not in procedure_payload
+    assert procedure_payload["standardized_request"]["generated_result_policy"] == "ai_simulation_enabled_fail_closed"
+    assert procedure_payload["procedure_simulation_audit_items"] == []
+
+
+def test_advanced_unconfigured_procedure_uses_grounded_generation_and_persisted_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    simulation_requests: list[object] = []
+    approval_requests: list[object] = []
+
+    class GroundedSimulator:
+        def __call__(self, request: object) -> object:
+            simulation_requests.append(request)
+            patient_context = getattr(request, "patient_context")
+            configured_results = getattr(request, "configured_results")
+            knowledge_context = getattr(request, "retrieved_knowledge_context")
+            assert "右下腹" in patient_context["present_illness_summary"]
+            assert any(item["name_cn"] == "血常规" for item in configured_results)
+            assert knowledge_context[0]["reference"] == "rag_knowledge:test-safe-ecg"
+            return SimpleNamespace(
+                result="窦性心律，未见明确急性 ST-T 改变。",
+                confidence="conservative_inference",
+                grounding_basis=["当前病例资料未提示明确心脏异常线索。"],
+            )
+
+    class ConsistencyApprovalGate:
+        def __call__(self, request: object) -> dict[str, object]:
+            approval_requests.append(request)
+            assert getattr(request, "simulated_result") == "窦性心律，未见明确急性 ST-T 改变。"
+            assert getattr(request, "patient_context")["chief_complaint"].startswith("转移性右下腹痛")
+            return {
+                "agent_id": "procedure_result_approval_agent",
+                "decision": "approved",
+                "approval_mode": "llm_consistency_review",
+                "rationale": "结果保守且不与脱敏病例依据冲突。",
+                "safety_issues": [],
+                "revised_result": "",
+            }
+
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_simulator",
+        GroundedSimulator(),
+    )
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_approval_agent",
+        ConsistencyApprovalGate(),
+    )
+    monkeypatch.setattr(
+        "app.services.procedure_result_simulation_service._retrieve_procedure_simulation_context",
+        lambda **_: [
+            {
+                "reference": "rag_knowledge:test-safe-ecg",
+                "title": "安全心电图教学片段",
+                "snippet": "无直接心脏证据时应使用保守、非决定性措辞。",
+            }
+        ],
+    )
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+    session_id = create_response.json()["session_id"]
+
+    first_response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
+
+    assert first_response.status_code == 200
+    first_payload = first_response.json()
+    generated_result = first_payload["matched_procedure_results"][0]
+    assert generated_result["availability_status"] == "ai_simulated_for_training"
+    assert generated_result["generated_by_ai"] is True
+    assert generated_result["scoring_eligible"] is False
+    assert generated_result["approval_status"] == "approved_by_consistency_gate"
+    assert generated_result["result"] == "AI 模拟：窦性心律，未见明确急性 ST-T 改变。（训练参考，不进入评分。）"
+    assert generated_result["generation_metadata"]["grounding_basis"] == [
+        "脱敏病例临床表现",
+        "病例已配置查体与检查所见",
+        "提交前安全教学知识片段",
+    ]
+    assert "当前病例资料未提示明确心脏异常线索" not in str(
+        generated_result["generation_metadata"]
+    )
+    assert first_payload["standardized_request"]["generated_result_policy"] == "ai_simulated_grounded_not_scoring"
+    assert first_payload["procedure_simulation_audit_items"][0]["procedure_id"] == "test:ecg.st_segment"
+    assert "case_grounding:deidentified_case_facts" in first_payload["procedure_simulation_audit_items"][0]["source_context_references"]
+
+    osce_session_service._sessions.pop(session_id, None)
+    repeated_response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
+
+    assert repeated_response.status_code == 200
+    assert repeated_response.json()["matched_procedure_results"][0]["result"] == generated_result["result"]
+    assert len(simulation_requests) == 1
+    assert len(approval_requests) == 1
+
+
+def test_advanced_generated_result_with_diagnosis_leak_is_blocked_locally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnsafeSimulator:
+        def __call__(self, request: object) -> object:
+            return SimpleNamespace(
+                result="该结果明确支持急性阑尾炎。",
+                confidence="grounded",
+                grounding_basis=[],
+            )
+
+    class UnexpectedApprovalGate:
+        def __call__(self, request: object) -> object:
+            raise AssertionError(f"local gate must block before approval: {request}")
+
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_simulator",
+        UnsafeSimulator(),
+    )
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_approval_agent",
+        UnexpectedApprovalGate(),
+    )
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+    session_id = create_response.json()["session_id"]
+    response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["matched_procedure_results"][0]
+    assert result["availability_status"] == "not_available_for_case"
+    assert result["approval_status"] == "blocked_by_local_safety_gate"
+    assert result["generated_by_ai"] is False
+    assert "急性阑尾炎" not in result["result"]
+    assert response.json()["procedure_simulation_audit_items"] == []
+
+
+def test_advanced_conservative_result_with_unsupported_precision_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OverpreciseSimulator:
+        def __call__(self, request: object) -> object:
+            return SimpleNamespace(
+                result="窦性心律，心率 88 次/分。",
+                confidence="conservative_inference",
+                grounding_basis=[],
+            )
+
+    class PermissiveApprovalGate:
+        def __call__(self, request: object) -> dict[str, object]:
+            return {
+                "agent_id": "procedure_result_approval_agent",
+                "decision": "approved",
+                "approval_mode": "llm_consistency_review",
+                "rationale": "结果可展示。",
+                "safety_issues": [],
+                "revised_result": "",
+            }
+
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_simulator",
+        OverpreciseSimulator(),
+    )
+    monkeypatch.setattr(
+        osce_session_service.procedure_result_simulation_service,
+        "procedure_result_approval_agent",
+        PermissiveApprovalGate(),
+    )
+
+    create_response = client.post(
+        "/api/sessions",
+        json={"case_id": "appendicitis_001", "training_difficulty": "advanced"},
+    )
+    session_id = create_response.json()["session_id"]
+    response = client.post(
+        f"/api/sessions/{session_id}/procedure-request",
+        json={"request_text": "我想查心电图"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["matched_procedure_results"][0]
+    assert result["availability_status"] == "not_available_for_case"
+    assert result["generated_by_ai"] is False
+    assert result["approval_status"] == "blocked_by_unsupported_precision_gate"
+    assert result["approval_agent_review"]["decision"] == "blocked"
+    assert "unsupported_numeric_precision" in result["approval_agent_review"][
+        "safety_issues"
+    ]
+    assert "88" not in result["result"]
+    assert response.json()["procedure_simulation_audit_items"] == []
 
 
 @pytest.mark.parametrize("training_difficulty", ["beginner", "intermediate"])

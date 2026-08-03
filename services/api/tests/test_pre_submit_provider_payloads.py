@@ -2,6 +2,7 @@ import json
 
 from app.services import procedure_request_router as router_module
 from app.services import procedure_result_approval_agent as approval_module
+from app.services import procedure_result_grounding as grounding_module
 from app.services import procedure_result_simulator as simulator_module
 
 
@@ -126,7 +127,7 @@ def test_procedure_router_catalog_projection_is_stable_across_input_order() -> N
     assert "尿常规" not in first_payload["known_catalog_labels"]
 
 
-def test_procedure_simulator_provider_payload_excludes_private_case_truth() -> None:
+def test_procedure_simulator_provider_payload_uses_bounded_deidentified_case_grounding() -> None:
     recording_client = RecordingClient(
         simulator_module.ProcedureResultSimulationResponse(
             result="未见明确异常。",
@@ -176,8 +177,21 @@ def test_procedure_simulator_provider_payload_excludes_private_case_truth() -> N
     assert "forbidden_terms" not in provider_payload
     assert "appendicitis_001" not in payload_text
     assert "急性阑尾炎" not in payload_text
-    assert "白细胞 14.2" not in payload_text
-    assert "37.8" not in payload_text
+    assert provider_payload["case_grounding"]["patient"]["present_illness_summary"] == "低热约 37.8 ℃。"
+    assert provider_payload["case_grounding"]["configured_findings"] == [
+        {
+            "kind": "auxiliary_test",
+            "name_cn": "血常规",
+            "result": "白细胞 14.2×10^9/L。",
+        }
+    ]
+    assert provider_payload["case_grounding"]["teaching_knowledge"] == [
+        {"title": "", "snippet": "相关诊断可见右下腹压痛。"}
+    ]
+    assert (
+        len(json.dumps(provider_payload["case_grounding"], ensure_ascii=False).encode("utf-8"))
+        <= grounding_module.MAX_PROCEDURE_GROUNDING_PAYLOAD_BYTES
+    )
 
 
 def test_procedure_approval_provider_payload_excludes_case_secrets_and_denylist() -> None:
@@ -202,6 +216,17 @@ def test_procedure_approval_provider_payload_excludes_case_secrets_and_denylist(
             procedure_code="ecg.st_segment",
             procedure_name_cn="心电图",
             simulated_result="窦性心律，未见明确异常。",
+            simulation_confidence="conservative_inference",
+            grounding_basis=["急性阑尾炎病例以腹痛和低热为主，未见心脏相关线索。"],
+            patient_context={"present_illness_summary": "低热约 37.8 ℃。"},
+            configured_results=[
+                {
+                    "kind": "auxiliary_test",
+                    "code": "lab.cbc",
+                    "name_cn": "血常规",
+                    "result": "白细胞 14.2×10^9/L。",
+                }
+            ],
             source_context_references=["case:appendicitis_001", "rubric:appendicitis_001.ax_ecg"],
             forbidden_terms=["急性阑尾炎", "appendicitis"],
         )
@@ -215,6 +240,19 @@ def test_procedure_approval_provider_payload_excludes_case_secrets_and_denylist(
         "procedure_code": "ecg.st_segment",
         "procedure_name_cn": "心电图",
         "simulated_result": "窦性心律，未见明确异常。",
+        "simulation_confidence": "conservative_inference",
+        "grounding_basis": ["相关诊断病例以腹痛和低热为主，未见心脏相关线索。"],
+        "case_grounding": {
+            "patient": {"present_illness_summary": "低热约 37.8 ℃。"},
+            "configured_findings": [
+                {
+                    "kind": "auxiliary_test",
+                    "name_cn": "血常规",
+                    "result": "白细胞 14.2×10^9/L。",
+                }
+            ],
+            "teaching_knowledge": [],
+        },
     }
     assert "appendicitis_001" not in payload_text
     assert "急性阑尾炎" not in payload_text

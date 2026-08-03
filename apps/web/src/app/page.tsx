@@ -4333,7 +4333,7 @@ function HomeContent() {
         unavailableResultCount: unavailableCount,
       });
       setIsAdvancedProcedureRequestSummaryOpen(false);
-      const simulatedText = simulatedCount > 0 ? ` 其中 ${simulatedCount} 项为教学模拟补充，不计分。` : "";
+      const simulatedText = simulatedCount > 0 ? ` 其中 ${simulatedCount} 项为病例约束 AI 模拟结果，已通过一致性审核且不计分。` : "";
       const unmatchedText = updatedSession.standardized_request.unmatched_requests.length > 0
         ? ` 未识别项目：${updatedSession.standardized_request.unmatched_requests.join("、")}。`
         : "";
@@ -5550,7 +5550,7 @@ function HomeContent() {
                 </h2>
                 {selectedProcedureResultItems.some((procedureResult) => procedureResult.generatedByAi) ? (
                   <p className="mt-2 inline-flex rounded-full border border-brand/25 bg-brand/5 px-2.5 py-1 text-xs font-medium text-brand">
-                    旧版模拟记录 · 不计分
+                    病例约束 AI 模拟 · 已审核 · 不计分
                   </p>
                 ) : null}
               </div>
@@ -5608,7 +5608,7 @@ function HomeContent() {
                       <div className="rounded-lg border border-border bg-background px-3 py-2" key={procedureItem.id}>
                         <p className="font-medium text-foreground">{procedureItem.label}</p>
                         {procedureItem.generatedByAi ? (
-                          <p className="mt-1 text-xs text-muted-foreground">教学模拟补充，不计入评分。</p>
+                          <p className="mt-1 text-xs text-muted-foreground">基于脱敏病例依据生成并经一致性审核，不计入评分。</p>
                         ) : procedureItem.availabilityStatus === "not_available_for_case" ? (
                           <p className="mt-1 text-xs text-muted-foreground">病例未配置结果，已记录申请。</p>
                         ) : (
@@ -5629,7 +5629,7 @@ function HomeContent() {
               ) : null}
               <p className="text-xs leading-5 text-muted-foreground">
                 已返回 {advancedProcedureRequestSummaryToShow.returnedResultCount} 项结果
-                {advancedProcedureRequestSummaryToShow.simulatedResultCount > 0 ? `，其中 ${advancedProcedureRequestSummaryToShow.simulatedResultCount} 项为教学模拟补充，不计入评分` : ""}。
+                {advancedProcedureRequestSummaryToShow.simulatedResultCount > 0 ? `，其中 ${advancedProcedureRequestSummaryToShow.simulatedResultCount} 项为病例约束 AI 模拟结果，已审核且不计入评分` : ""}。
               </p>
             </div>
           </div>

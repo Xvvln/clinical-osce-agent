@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 from google import genai
 from google.genai import types
@@ -17,6 +17,7 @@ from app.services.google_genai_http_options import (
 )
 from app.services.model_call_policy import call_google_text_generate_content
 from app.services.openai_compatible_chat_client import OpenAICompatibleChatClient, OpenAICompatibleSettings
+from app.services.procedure_result_grounding import build_procedure_result_grounding
 from app.services.runtime_model_config_store import runtime_model_config_store
 from app.services.runtime_model_object_cache import RuntimeModelObjectCache
 
@@ -24,16 +25,20 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 高级训练中的受控检查结果模�
 
 任务：
 - 当学生自由申请的查体或辅助检查项目能被标准目录识别，或已经被自由申请路由 Agent 判定为可生成，但当前病例没有预置结果时，生成一个“训练用模拟结果”。
-- 你可以参考病例私有上下文、已配置结果、学生请求和教学知识库片段，使结果与病例情境一致。
+- case_grounding 是已经脱敏、裁剪并通过提交前可见性检查的唯一病例依据，包括病例表现、已配置检查所见和教学知识片段。
+- 必须逐项参考 case_grounding，使结果与当前病例一致；不得使用模型记忆补写病例中没有依据的异常。
 
 硬性边界：
 - 只能输出该项目的简短结果，不得输出标准诊断名、鉴别诊断答案、治疗方案、手术方案、用药剂量或真实诊疗建议。
 - 不得声称该结果是病例标准答案；它只是训练参考。
 - 不得修改病例事实、rubric、评分依据或隐藏信息。
 - 不要解释评分，不要告诉学生“应该诊断什么”。
-- 如果证据不足，只给出保守、非决定性的结果。
+- 如果没有直接依据，只能给出保守、非决定性的结果，并将 confidence 标记为 conservative_inference。
+- case_grounding 没有提到某症状或病史，不等于患者明确否认；不得把“未提供”写成“无”。
+- conservative_inference 不得编造具体数值、单位、分期、分级、波形参数、病原体或解剖测量值；只能概括为“未见明确异常”或“未见明确急性异常”等非决定性表述。
+- grounding_basis 只写 1-3 条实际使用的依据摘要，不得写诊断名称。
 - 输出中文，贴近临床报告口吻，不超过 120 个汉字。
-- 只输出 JSON，字段为 result、safety_note。
+- 只输出 JSON，字段为 result、confidence、grounding_basis、safety_note。
 """
 
 
@@ -53,15 +58,23 @@ class ProcedureResultSimulationRequest(BaseModel):
 
 class ProcedureResultSimulationResponse(BaseModel):
     result: str = Field(..., min_length=1, max_length=160)
+    confidence: Literal["grounded", "conservative_inference"] = "conservative_inference"
+    grounding_basis: list[str] = Field(default_factory=list, max_length=3)
     safety_note: str = Field(default="", max_length=160)
 
 
-def _procedure_simulator_provider_payload(request: ProcedureResultSimulationRequest) -> dict[str, str]:
+def _procedure_simulator_provider_payload(request: ProcedureResultSimulationRequest) -> dict[str, Any]:
     return {
         "request_text": request.request_text,
         "procedure_kind": request.procedure_kind,
         "procedure_code": request.procedure_code,
         "procedure_name_cn": request.procedure_name_cn,
+        "case_grounding": build_procedure_result_grounding(
+            patient_context=request.patient_context,
+            configured_results=request.configured_results,
+            retrieved_knowledge_context=request.retrieved_knowledge_context,
+            forbidden_terms=request.forbidden_terms,
+        ),
     }
 
 
