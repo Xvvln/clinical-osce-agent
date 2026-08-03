@@ -107,6 +107,7 @@ test("admin uploads and editable resources enforce API limits locally", () => {
     "file size must be checked before reading and base64-encoding the document",
   );
   assert.match(uploadHandler, /parsedTags\.length > RAG_TAGS_MAX_ITEMS/);
+  assert.match(dashboardSource, /accept="[^"]*\.pptx[^"]*"/);
   assert.match(dashboardSource, /maxLength=\{RAG_TITLE_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{RAG_TEXT_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{CASE_TITLE_MAX_CHARS\}/);

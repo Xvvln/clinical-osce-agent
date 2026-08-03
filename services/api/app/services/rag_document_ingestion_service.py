@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,18 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 TEMP_UPLOAD_DIR = ROOT_DIR / "data" / "runtime" / "rag_document_uploads"
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 TEXT_SUFFIXES = {".txt", ".text", ".csv"}
+HTML_SUFFIXES = {".html", ".htm"}
+PDF_SUFFIXES = {".pdf"}
+DOCX_SUFFIXES = {".docx"}
+PPTX_SUFFIXES = {".pptx"}
+LOCAL_DOCUMENT_SUFFIXES = (
+    MARKDOWN_SUFFIXES
+    | TEXT_SUFFIXES
+    | HTML_SUFFIXES
+    | PDF_SUFFIXES
+    | DOCX_SUFFIXES
+    | PPTX_SUFFIXES
+)
 
 
 class RagDocumentParseError(ValueError):
@@ -57,7 +71,7 @@ def chunk_rag_document(
     overlap_chars: int = 120,
 ) -> list[RagDocumentChunk]:
     suffix = Path(file_name).suffix.lower()
-    if suffix not in MARKDOWN_SUFFIXES | TEXT_SUFFIXES:
+    if suffix not in LOCAL_DOCUMENT_SUFFIXES:
         return _chunk_with_unstructured(
             file_name=file_name,
             content_bytes=content_bytes,
@@ -72,6 +86,7 @@ def chunk_rag_document(
         document_id=document_id,
         max_chars=max_chars,
         overlap_chars=overlap_chars,
+        chunking_strategy=_local_chunking_strategy(suffix),
     )
 
 
@@ -87,6 +102,14 @@ def parse_rag_document(*, file_name: str, content_bytes: bytes) -> list[ParsedRa
         return _parse_markdown_text(_decode_text(content_bytes))
     if suffix in TEXT_SUFFIXES:
         return _parse_plain_text(_decode_text(content_bytes))
+    if suffix in HTML_SUFFIXES:
+        return _parse_html_document(_decode_text(content_bytes))
+    if suffix in PDF_SUFFIXES:
+        return _parse_pdf_document(content_bytes)
+    if suffix in DOCX_SUFFIXES:
+        return _parse_docx_document(content_bytes)
+    if suffix in PPTX_SUFFIXES:
+        return _parse_pptx_document(content_bytes)
     return _parse_with_unstructured(file_name=normalized_file_name, content_bytes=content_bytes)
 
 
@@ -97,6 +120,7 @@ def chunk_rag_document_elements(
     document_id: str,
     max_chars: int = 900,
     overlap_chars: int = 120,
+    chunking_strategy: str = "project_section_window",
 ) -> list[RagDocumentChunk]:
     if max_chars < 80:
         raise ValueError("max_chars must be at least 80")
@@ -131,7 +155,7 @@ def chunk_rag_document_elements(
                 page_number=current_page,
                 chunk_number=len(chunks) + 1,
             ),
-            chunking_strategy="project_section_window",
+            chunking_strategy=chunking_strategy,
             chunk_categories=chunk_categories,
             quality_warnings=_quality_warnings(chunk_text, section_title=current_section, categories=chunk_categories, max_chars=max_chars),
             risk_flags=_risk_flags(chunk_text, section_title=current_section),
@@ -151,6 +175,19 @@ def chunk_rag_document_elements(
         section_title = element.section_title.strip()
         if element.category.lower() == "title":
             section_title = text
+        page_changed = (
+            current_page is not None
+            and element.page_number is not None
+            and element.page_number != current_page
+        )
+        section_changed = (
+            bool(current_parts)
+            and element.category.lower() == "title"
+            and bool(section_title)
+            and section_title != current_section
+        )
+        if page_changed or section_changed:
+            flush()
         split_parts = _split_long_text(text, max_chars=max_chars)
         for part in split_parts:
             candidate_parts = [*current_parts, part]
@@ -322,6 +359,261 @@ def _parse_plain_text(text: str) -> list[ParsedRagDocumentElement]:
         )
         for index, block in enumerate(blocks)
     ]
+
+
+class _ReadableHtmlParser(HTMLParser):
+    _BLOCK_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote", "pre", "tr"}
+    _SKIPPED_TAGS = {"script", "style", "noscript", "svg"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[tuple[str, str]] = []
+        self._active_block = ""
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized_tag = tag.lower()
+        if normalized_tag in self._SKIPPED_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if normalized_tag in self._BLOCK_TAGS:
+            self._flush()
+            self._active_block = normalized_tag
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag in self._SKIPPED_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if self._skip_depth:
+            return
+        if normalized_tag == self._active_block:
+            self._flush()
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        normalized = re.sub(r"\s+", " ", data).strip()
+        if normalized:
+            self._parts.append(normalized)
+
+    def close(self) -> None:
+        super().close()
+        self._flush()
+
+    def _flush(self) -> None:
+        text = " ".join(self._parts).strip()
+        if text:
+            category = "Title" if self._active_block.startswith("h") else "NarrativeText"
+            self.blocks.append((text, category))
+        self._active_block = ""
+        self._parts = []
+
+
+def _parse_html_document(text: str) -> list[ParsedRagDocumentElement]:
+    parser = _ReadableHtmlParser()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception as exc:
+        raise RagDocumentParseError("HTML document could not be parsed") from exc
+    return _elements_from_text_blocks(parser.blocks)
+
+
+def _parse_pdf_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+        raise RagDocumentParseError("PDF parser dependency pypdf is not installed") from exc
+
+    try:
+        reader = PdfReader(BytesIO(content_bytes))
+        elements: list[ParsedRagDocumentElement] = []
+        current_section = ""
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = str(page.extract_text() or "").strip()
+            for text, category in _pdf_text_blocks(page_text):
+                if category == "Title":
+                    current_section = text
+                elements.append(
+                    ParsedRagDocumentElement(
+                        text=text,
+                        category=category,
+                        section_title=current_section,
+                        page_number=page_number,
+                        element_index=len(elements),
+                    )
+                )
+    except RagDocumentParseError:
+        raise
+    except Exception as exc:
+        raise RagDocumentParseError("PDF document could not be parsed") from exc
+    if not elements:
+        raise RagDocumentParseError(
+            "PDF contains no selectable text; scanned PDFs require OCR before upload"
+        )
+    return elements
+
+
+def _parse_docx_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
+    try:
+        from docx import Document
+    except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+        raise RagDocumentParseError("DOCX parser dependency python-docx is not installed") from exc
+
+    try:
+        document = Document(BytesIO(content_bytes))
+        blocks: list[tuple[str, str]] = []
+        for paragraph in document.paragraphs:
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            style_name = str(getattr(paragraph.style, "name", "") or "").strip().lower()
+            category = "Title" if style_name.startswith(("heading", "title", "标题")) else "NarrativeText"
+            blocks.append((text, category))
+        for table in document.tables:
+            rows = [
+                " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                for row in table.rows
+            ]
+            table_text = "\n".join(row for row in rows if row).strip()
+            if table_text:
+                blocks.append((table_text, "Table"))
+    except Exception as exc:
+        raise RagDocumentParseError("DOCX document could not be parsed") from exc
+    return _elements_from_text_blocks(blocks)
+
+
+def _parse_pptx_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
+    try:
+        from pptx import Presentation
+    except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+        raise RagDocumentParseError("PPTX parser dependency python-pptx is not installed") from exc
+
+    try:
+        presentation = Presentation(BytesIO(content_bytes))
+        elements: list[ParsedRagDocumentElement] = []
+        for page_number, slide in enumerate(presentation.slides, start=1):
+            title_shape = slide.shapes.title
+            section_title = _pptx_shape_text(title_shape) if title_shape is not None else ""
+            if section_title:
+                elements.append(
+                    ParsedRagDocumentElement(
+                        text=section_title,
+                        category="Title",
+                        section_title=section_title,
+                        page_number=page_number,
+                        element_index=len(elements),
+                    )
+                )
+            for shape in slide.shapes:
+                if (
+                    title_shape is not None
+                    and getattr(shape, "shape_id", None) == getattr(title_shape, "shape_id", None)
+                ):
+                    continue
+                shape_text = _pptx_shape_text(shape)
+                if shape_text:
+                    elements.append(
+                        ParsedRagDocumentElement(
+                            text=shape_text,
+                            category="NarrativeText",
+                            section_title=section_title,
+                            page_number=page_number,
+                            element_index=len(elements),
+                        )
+                    )
+                if not bool(getattr(shape, "has_table", False)):
+                    continue
+                rows = [
+                    " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    for row in shape.table.rows
+                ]
+                table_text = "\n".join(row for row in rows if row).strip()
+                if table_text:
+                    elements.append(
+                        ParsedRagDocumentElement(
+                            text=table_text,
+                            category="Table",
+                            section_title=section_title,
+                            page_number=page_number,
+                            element_index=len(elements),
+                        )
+                    )
+    except Exception as exc:
+        raise RagDocumentParseError("PPTX document could not be parsed") from exc
+    return elements
+
+
+def _pptx_shape_text(shape: Any) -> str:
+    if shape is None or not bool(getattr(shape, "has_text_frame", False)):
+        return ""
+    paragraphs = [
+        paragraph.text.strip()
+        for paragraph in shape.text_frame.paragraphs
+        if paragraph.text.strip()
+    ]
+    return "\n".join(paragraphs).strip()
+
+
+def _elements_from_text_blocks(
+    blocks: list[tuple[str, str]],
+) -> list[ParsedRagDocumentElement]:
+    elements: list[ParsedRagDocumentElement] = []
+    current_section = ""
+    for text, category in blocks:
+        normalized_text = text.strip()
+        if not normalized_text:
+            continue
+        if category == "Title":
+            current_section = normalized_text
+        elements.append(
+            ParsedRagDocumentElement(
+                text=normalized_text,
+                category=category,
+                section_title=current_section,
+                page_number=None,
+                element_index=len(elements),
+            )
+        )
+    return elements
+
+
+def _pdf_text_blocks(text: str) -> list[tuple[str, str]]:
+    normalized_lines = [line.strip() for line in text.replace("\r", "\n").split("\n")]
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", "\n".join(normalized_lines)) if block.strip()]
+    if not blocks and text.strip():
+        blocks = [text.strip()]
+    return [
+        (block, "Title" if _looks_like_section_title(block) else "NarrativeText")
+        for block in blocks
+    ]
+
+
+def _looks_like_section_title(text: str) -> bool:
+    normalized = " ".join(text.split()).strip()
+    return bool(
+        normalized
+        and len(normalized) <= 80
+        and "\n" not in text
+        and not re.search(r"[。！？!?；;.]$", normalized)
+    )
+
+
+def _local_chunking_strategy(suffix: str) -> str:
+    strategy_labels = {
+        **{item: "markdown_section_window" for item in MARKDOWN_SUFFIXES},
+        **{item: "plain_text_window" for item in TEXT_SUFFIXES},
+        **{item: "local_html_section_window" for item in HTML_SUFFIXES},
+        **{item: "local_pdf_page_window" for item in PDF_SUFFIXES},
+        **{item: "local_docx_section_window" for item in DOCX_SUFFIXES},
+        **{item: "local_pptx_slide_window" for item in PPTX_SUFFIXES},
+    }
+    return strategy_labels.get(suffix, "project_section_window")
 
 
 def _parse_with_unstructured(*, file_name: str, content_bytes: bytes) -> list[ParsedRagDocumentElement]:
