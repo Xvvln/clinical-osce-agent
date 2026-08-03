@@ -32,6 +32,8 @@ type ProcedureActionGroup = "physical_exam" | "auxiliary_test";
 
 type TrainingDifficultyMode = "beginner" | "intermediate" | "advanced";
 
+type PatientReplyMode = "text" | "voice";
+
 type SearchParamReader = Readonly<{
   get: (name: string) => string | null;
 }>;
@@ -648,6 +650,7 @@ const TEST_STAGE_API_CONFIG_MESSAGE = "测试阶段，统一使用我们提供�
 const SERVER_MANAGED_API_CONFIG_MESSAGE = `${TEST_STAGE_API_CONFIG_MESSAGE}主对话模型为 Gemini 3.5 Flash，备用对话模型为 MiMo V2.5 Pro；向量检索优先使用 Gemini Embedding，失败时回落到本地向量模型。请不要高并发连续请求，上游 API 有速率限制。`;
 const TRAINING_MODEL_CONFIG_REQUIRED_MESSAGE = "请先在 API 配置中应用可用模型，再开始训练。";
 const OSCE_DOCK_POSITION_STORAGE_KEY = "clinical_osce_osce_dock_position";
+const PATIENT_REPLY_MODE_STORAGE_KEY = "clinical_osce_patient_reply_mode";
 const DIAGNOSIS_TEXTAREA_MAX_HEIGHT = 160;
 const AUTH_EMAIL_MAX_CHARS = 254;
 const AUTH_PASSWORD_MAX_CHARS = 256;
@@ -2459,6 +2462,8 @@ function HomeContent() {
   const [inputValue, setInputValue] = useState("");
   const [speechInputState, setSpeechInputState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [speechStatusText, setSpeechStatusText] = useState<string | null>(null);
+  const [patientReplyMode, setPatientReplyMode] = useState<PatientReplyMode>("text");
+  const [patientSpeechStatusText, setPatientSpeechStatusText] = useState<string | null>(null);
   const [speechPlaybackState, setSpeechPlaybackState] = useState<Readonly<{ messageId: string; status: "loading" | "playing" }> | null>(null);
   const [statusText, setStatusText] = useState("选择病例后，发送问诊或点击训练操作会自动创建训练会话。");
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -2526,13 +2531,49 @@ function HomeContent() {
   const speechInputMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const speechInputStreamRef = useRef<MediaStream | null>(null);
   const speechInputChunksRef = useRef<Blob[]>([]);
+  const patientReplyModeRef = useRef<PatientReplyMode>("text");
+  const patientSpeechRequestSequenceRef = useRef(0);
+  const patientSpeechAudioContextRef = useRef<AudioContext | null>(null);
+  const patientSpeechBufferSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const patientSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
   const patientSpeechObjectUrlRef = useRef<string | null>(null);
   const isNextStepRequired = trainingDifficultyMode !== "beginner";
 
   useEffect(() => {
+    try {
+      const storedMode = window.localStorage.getItem(PATIENT_REPLY_MODE_STORAGE_KEY);
+      if (storedMode === "text" || storedMode === "voice") {
+        patientReplyModeRef.current = storedMode;
+        setPatientReplyMode(storedMode);
+        setPatientSpeechStatusText(
+          storedMode === "voice"
+            ? "语音模式：新患者回复会自动播放。"
+            : "文本模式：新患者回复只显示文字。",
+        );
+      }
+    } catch {
+      // Storage access can be disabled. Keep the safe text-mode default.
+    }
+  }, []);
+
+  useEffect(() => {
     trainingContextEpochRef.current += 1;
+    stopPatientSpeechPlayback();
+    setPatientSpeechStatusText(
+      patientReplyModeRef.current === "voice"
+        ? "语音模式：等待下一条患者回复。"
+        : "文本模式：新患者回复只显示文字。",
+    );
   }, [authUser?.user_id, requestedSessionId]);
+
+  useEffect(() => {
+    stopPatientSpeechPlayback();
+    setPatientSpeechStatusText(
+      patientReplyModeRef.current === "voice"
+        ? "语音模式：等待下一条患者回复。"
+        : "文本模式：新患者回复只显示文字。",
+    );
+  }, [session?.session_id]);
 
   function createClientChatMessageId(prefix: string): string {
     clientChatMessageSequenceRef.current += 1;
@@ -2545,7 +2586,48 @@ function HomeContent() {
     speechInputMediaRecorderRef.current = null;
   }
 
+  function preparePatientSpeechAudioContext(): AudioContext | null {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    if (patientSpeechAudioContextRef.current) {
+      const currentContext = patientSpeechAudioContextRef.current;
+      if (currentContext.state === "suspended") {
+        void currentContext.resume().catch(() => undefined);
+      }
+      return currentContext;
+    }
+
+    const audioContextConstructor = window.AudioContext
+      ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!audioContextConstructor) {
+      return null;
+    }
+    try {
+      const audioContext = new audioContextConstructor();
+      patientSpeechAudioContextRef.current = audioContext;
+      if (audioContext.state === "suspended") {
+        void audioContext.resume().catch(() => undefined);
+      }
+      return audioContext;
+    } catch {
+      return null;
+    }
+  }
+
   function stopPatientSpeechPlayback(options: { updateState?: boolean } = {}): void {
+    patientSpeechRequestSequenceRef.current += 1;
+    const bufferSource = patientSpeechBufferSourceRef.current;
+    patientSpeechBufferSourceRef.current = null;
+    if (bufferSource) {
+      bufferSource.onended = null;
+      try {
+        bufferSource.stop();
+      } catch {
+        // The source may already have ended.
+      }
+      bufferSource.disconnect();
+    }
     patientSpeechAudioRef.current?.pause();
     patientSpeechAudioRef.current = null;
     if (patientSpeechObjectUrlRef.current) {
@@ -2555,6 +2637,24 @@ function HomeContent() {
     if (options.updateState !== false) {
       setSpeechPlaybackState(null);
     }
+  }
+
+  function handlePatientReplyModeChange(nextMode: PatientReplyMode): void {
+    patientReplyModeRef.current = nextMode;
+    setPatientReplyMode(nextMode);
+    try {
+      window.localStorage.setItem(PATIENT_REPLY_MODE_STORAGE_KEY, nextMode);
+    } catch {
+      // Mode still applies for this page even when storage is unavailable.
+    }
+
+    if (nextMode === "voice") {
+      preparePatientSpeechAudioContext();
+      setPatientSpeechStatusText("语音模式：新患者回复会自动播放。");
+      return;
+    }
+    stopPatientSpeechPlayback();
+    setPatientSpeechStatusText("文本模式：新患者回复只显示文字。");
   }
 
   function getSpeechInputRecorderOptions(): MediaRecorderOptions | undefined {
@@ -2676,47 +2776,137 @@ function HomeContent() {
     }
   }
 
-  async function handlePatientSpeechButtonClick(message: ChatMessage): Promise<void> {
+  async function playPatientSpeech(
+    message: ChatMessage,
+    options: Readonly<{ automatic?: boolean; sessionId?: string }> = {},
+  ): Promise<boolean> {
     const speechText = getPatientSpeechText(message);
     if (!speechText) {
-      return;
-    }
-    if (speechPlaybackState?.messageId === message.id) {
-      stopPatientSpeechPlayback();
-      return;
+      return false;
     }
     if (speechText.length > SPEECH_INPUT_MAX_CHARS) {
       stopPatientSpeechPlayback();
       setErrorText(`患者回复超过 ${SPEECH_INPUT_MAX_CHARS} 个字符，暂时无法生成语音。`);
-      return;
+      return false;
     }
 
+    const audioContext = preparePatientSpeechAudioContext();
     stopPatientSpeechPlayback({ updateState: false });
+    const playbackRequestId = patientSpeechRequestSequenceRef.current + 1;
+    patientSpeechRequestSequenceRef.current = playbackRequestId;
     setSpeechPlaybackState({ messageId: message.id, status: "loading" });
     setErrorText(null);
+    setPatientSpeechStatusText(
+      options.automatic ? "语音模式：正在自动生成患者语音..." : "正在生成患者语音...",
+    );
 
     try {
       const audioBlob = await synthesizePatientSpeech(speechText, {
-        sessionId: session?.session_id,
+        sessionId: options.sessionId ?? session?.session_id,
         messageIndex: message.apiMessageIndex,
         emotion: message.emotion,
       });
+      if (
+        playbackRequestId !== patientSpeechRequestSequenceRef.current
+        || (options.automatic && patientReplyModeRef.current !== "voice")
+      ) {
+        return false;
+      }
+
+      if (audioContext) {
+        try {
+          if (audioContext.state === "suspended") {
+            await audioContext.resume();
+          }
+          const decodedAudio = await audioContext.decodeAudioData(await audioBlob.arrayBuffer());
+          if (
+            playbackRequestId !== patientSpeechRequestSequenceRef.current
+            || (options.automatic && patientReplyModeRef.current !== "voice")
+          ) {
+            return false;
+          }
+          const bufferSource = audioContext.createBufferSource();
+          bufferSource.buffer = decodedAudio;
+          bufferSource.connect(audioContext.destination);
+          patientSpeechBufferSourceRef.current = bufferSource;
+          bufferSource.onended = () => {
+            if (patientSpeechBufferSourceRef.current !== bufferSource) {
+              return;
+            }
+            stopPatientSpeechPlayback();
+            setPatientSpeechStatusText(
+              patientReplyModeRef.current === "voice"
+                ? "语音模式：等待下一条患者回复。"
+                : "患者语音播放完毕。",
+            );
+          };
+          bufferSource.start();
+          setSpeechPlaybackState({ messageId: message.id, status: "playing" });
+          setPatientSpeechStatusText(
+            options.automatic ? "语音模式：正在自动播放患者回复。" : "正在播放患者回复。",
+          );
+          return true;
+        } catch {
+          // Fall back to the browser audio element when Web Audio is unavailable.
+        }
+      }
+
       const audioUrl = URL.createObjectURL(audioBlob);
       patientSpeechObjectUrlRef.current = audioUrl;
       const audio = new Audio(audioUrl);
       patientSpeechAudioRef.current = audio;
-      audio.onended = () => stopPatientSpeechPlayback();
+      audio.onended = () => {
+        stopPatientSpeechPlayback();
+        setPatientSpeechStatusText(
+          patientReplyModeRef.current === "voice"
+            ? "语音模式：等待下一条患者回复。"
+            : "患者语音播放完毕。",
+        );
+      };
       audio.onerror = () => {
         stopPatientSpeechPlayback();
         setErrorText("患者语音播放失败。");
       };
       await audio.play();
+      if (playbackRequestId !== patientSpeechRequestSequenceRef.current) {
+        audio.pause();
+        return false;
+      }
       setSpeechPlaybackState({ messageId: message.id, status: "playing" });
+      setPatientSpeechStatusText(
+        options.automatic ? "语音模式：正在自动播放患者回复。" : "正在播放患者回复。",
+      );
+      return true;
     } catch (error) {
+      if (playbackRequestId !== patientSpeechRequestSequenceRef.current) {
+        return false;
+      }
       stopPatientSpeechPlayback({ updateState: false });
       setSpeechPlaybackState(null);
-      setErrorText(error instanceof Error ? error.message : "患者语音生成失败。");
+      if (options.automatic && error instanceof DOMException && error.name === "NotAllowedError") {
+        setPatientSpeechStatusText("浏览器阻止了自动播放，请点击患者回复右上角的播放按钮。");
+      } else {
+        const errorMessage = error instanceof Error ? error.message : "患者语音生成失败。";
+        setErrorText(errorMessage);
+        setPatientSpeechStatusText(
+          options.automatic ? "自动播放失败，可点击患者回复右上角的播放按钮重试。" : null,
+        );
+      }
+      return false;
     }
+  }
+
+  async function handlePatientSpeechButtonClick(message: ChatMessage): Promise<void> {
+    if (speechPlaybackState?.messageId === message.id) {
+      stopPatientSpeechPlayback();
+      setPatientSpeechStatusText(
+        patientReplyModeRef.current === "voice"
+          ? "语音模式：已停止播放，等待下一条患者回复。"
+          : "已停止患者语音播放。",
+      );
+      return;
+    }
+    await playPatientSpeech(message);
   }
 
   useEffect(() => {
@@ -2728,6 +2918,11 @@ function HomeContent() {
       }
       stopSpeechInputStream();
       stopPatientSpeechPlayback({ updateState: false });
+      const audioContext = patientSpeechAudioContextRef.current;
+      patientSpeechAudioContextRef.current = null;
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch(() => undefined);
+      }
     };
   }, []);
 
@@ -3943,6 +4138,10 @@ function HomeContent() {
       promptTrainingModelConfigRequired();
       return;
     }
+    if (patientReplyModeRef.current === "voice") {
+      // Resume audio while the send action still carries a browser user gesture.
+      preparePatientSpeechAudioContext();
+    }
 
     setIsSending(true);
     setErrorText(null);
@@ -4008,6 +4207,20 @@ function HomeContent() {
         setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
         return;
       }
+      const patientReplyMessageIndex = replyMessageMetadata.apiMessageIndex;
+      const patientReplyApiMessage = patientReplyMessageIndex === undefined
+        ? undefined
+        : updatedSession.messages[patientReplyMessageIndex];
+      const patientReplySpeechMessage = patientReplyApiMessage?.role === "patient" && patientReplyMessageIndex !== undefined
+        ? mapApiMessage(patientReplyApiMessage, patientReplyMessageIndex, updatedSession)
+        : {
+            id: createClientChatMessageId("patient-speech"),
+            speaker: "patient" as const,
+            label: "标准化病人",
+            text: replyText,
+            emotion: normalizePatientEmotion(patientReplyApiMessage?.emotion),
+            apiMessageIndex: patientReplyMessageIndex,
+          };
       const completedTimeline = buildCompletedAgentProcessingTimeline(updatedSession, replyText);
       const patientReplyProcessingElapsedMs = Math.max(0, Date.now() - patientReplyProcessingStartedAtMs);
       setPendingPatientMessage((currentMessage) =>
@@ -4031,6 +4244,12 @@ function HomeContent() {
         return;
       }
       setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
+      if (patientReplyModeRef.current === "voice") {
+        void playPatientSpeech(patientReplySpeechMessage, {
+          automatic: true,
+          sessionId: updatedSession.session_id,
+        });
+      }
     } catch (error) {
       stopProcessingTimelinePolling?.();
       if (
@@ -4632,15 +4851,50 @@ function HomeContent() {
                     {session?.case_title ?? selectedCase?.title ?? "请先选择病例"}
                   </h2>
                 </div>
-                {errorText ? (
+                <div className="flex max-w-md flex-col items-start gap-2 sm:items-end">
                   <div
-                    aria-live="assertive"
-                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-600"
-                    role="alert"
+                    aria-label="患者回复模式"
+                    className="inline-flex items-center rounded-full border border-border bg-muted/40 p-1"
+                    role="group"
                   >
-                    {errorText}
+                    <button
+                      aria-pressed={patientReplyMode === "text"}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                        patientReplyMode === "text"
+                          ? "bg-background text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => handlePatientReplyModeChange("text")}
+                      type="button"
+                    >
+                      文本模式
+                    </button>
+                    <button
+                      aria-pressed={patientReplyMode === "voice"}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                        patientReplyMode === "voice"
+                          ? "bg-brand text-white shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => handlePatientReplyModeChange("voice")}
+                      type="button"
+                    >
+                      语音模式
+                    </button>
                   </div>
-                ) : null}
+                  <p aria-live="polite" className="text-xs leading-5 text-muted-foreground">
+                    {patientSpeechStatusText ?? "文本模式：新患者回复只显示文字。"}
+                  </p>
+                  {errorText ? (
+                    <div
+                      aria-live="assertive"
+                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-600"
+                      role="alert"
+                    >
+                      {errorText}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
 

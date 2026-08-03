@@ -208,7 +208,7 @@ test("home composer supports speech input and patient reply playback through bac
   assert.match(pageSource, /<MicrophoneIcon \/>/);
   assert.match(pageSource, /<SpeakerIcon \/>/);
   assert.match(pageSource, /canShowPatientSpeechPlayback\(message\) \?/);
-  assert.match(pageSource, /await synthesizePatientSpeech\(speechText, \{[\s\S]*?sessionId: session\?\.session_id,[\s\S]*?messageIndex: message\.apiMessageIndex,[\s\S]*?emotion: message\.emotion,[\s\S]*?\}\);/);
+  assert.match(pageSource, /await synthesizePatientSpeech\(speechText, \{[\s\S]*?sessionId: options\.sessionId \?\? session\?\.session_id,[\s\S]*?messageIndex: message\.apiMessageIndex,[\s\S]*?emotion: message\.emotion,[\s\S]*?\}\);/);
   assert.doesNotMatch(pageSource, />\s*\{speechInputButtonLabel\}\s*<\/button>/);
   assert.doesNotMatch(pageSource, /\{patientSpeechState === "loading" \? "生成中" : patientSpeechState === "playing" \? "停止" : "播放"\}/);
 
@@ -218,6 +218,29 @@ test("home composer supports speech input and patient reply playback through bac
   const speechStopSource = pageSource.slice(speechStopStart, speechStopEnd);
   assert.match(speechStopSource, /setInputValue/);
   assert.doesNotMatch(speechStopSource, /sendHistoryMessage|handleSubmit/, "speech transcription should fill the composer instead of auto-sending");
+});
+
+test("home supports persisted text and voice modes with patient reply autoplay", () => {
+  assert.match(pageSource, /type PatientReplyMode = "text" \| "voice";/);
+  assert.match(pageSource, /const PATIENT_REPLY_MODE_STORAGE_KEY = "clinical_osce_patient_reply_mode";/);
+  assert.match(pageSource, /window\.localStorage\.getItem\(PATIENT_REPLY_MODE_STORAGE_KEY\)/);
+  assert.match(pageSource, /window\.localStorage\.setItem\(PATIENT_REPLY_MODE_STORAGE_KEY, nextMode\)/);
+  assert.match(pageSource, /aria-label="患者回复模式"/);
+  assert.match(pageSource, /aria-pressed=\{patientReplyMode === "text"\}/);
+  assert.match(pageSource, /aria-pressed=\{patientReplyMode === "voice"\}/);
+  assert.match(pageSource, />\s*文本模式\s*<\/button>/);
+  assert.match(pageSource, />\s*语音模式\s*<\/button>/);
+  assert.match(pageSource, /function handlePatientReplyModeChange\(nextMode: PatientReplyMode\)/);
+  assert.match(pageSource, /if \(nextMode === "voice"\) \{[\s\S]*?preparePatientSpeechAudioContext\(\);[\s\S]*?新患者回复会自动播放/);
+  assert.match(pageSource, /stopPatientSpeechPlayback\(\);[\s\S]*?文本模式：新患者回复只显示文字/);
+  assert.match(pageSource, /if \(patientReplyModeRef\.current === "voice"\) \{[\s\S]*?preparePatientSpeechAudioContext\(\);/);
+  assert.match(pageSource, /void playPatientSpeech\(patientReplySpeechMessage, \{[\s\S]*?automatic: true,[\s\S]*?sessionId: updatedSession\.session_id/);
+  assert.match(pageSource, /patientReplyApiMessage\?\.role === "patient"/);
+  assert.match(pageSource, /options\.automatic && patientReplyModeRef\.current !== "voice"/);
+  assert.match(pageSource, /error\.name === "NotAllowedError"[\s\S]*?浏览器阻止了自动播放/);
+  assert.match(pageSource, /const patientSpeechRequestSequenceRef = useRef\(0\);/);
+  assert.match(pageSource, /patientSpeechBufferSourceRef/);
+  assert.match(pageSource, /audioContext\.decodeAudioData/);
 });
 
 test("home pending patient reply renders a collapsible agent processing timeline", () => {
