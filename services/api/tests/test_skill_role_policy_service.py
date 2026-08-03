@@ -103,3 +103,37 @@ def test_approval_projection_blocks_explicitly_weakened_boundary_or_metrics() ->
         "prohibited_content_policy_complete",
         "success_metrics_declared",
     ]
+
+
+def test_realistic_anxious_patient_scenario_keeps_three_role_boundaries_separate() -> None:
+    """A worried patient must not turn a teaching Skill into clinical facts or answers."""
+
+    active_context = _active_context()
+    patient_projection = build_patient_skill_role_projection(active_context)
+    teacher_projection = build_teacher_skill_role_projection(
+        active_context,
+        ["skill_reasoning_bridge"],
+    )
+    weakened_policy = build_prohibited_content_policy()
+    weakened_policy["forbid_hidden_facts"] = False
+    approval_projection = build_approval_skill_role_policy(
+        {
+            "prohibited_content_policy": weakened_policy,
+            "success_metrics": build_success_metrics(),
+        }
+    )
+
+    assert patient_projection["source_skill_ids"] == ["skill_relationship_repair"]
+    patient_provider_text = str(patient_projection["provider_policy"])
+    assert "整理支持与排除证据" not in patient_provider_text
+    assert "急性阑尾炎" not in patient_provider_text
+
+    assert teacher_projection["source_skill_ids"] == ["skill_reasoning_bridge"]
+    teacher_provider_text = str(teacher_projection["provider_policy"])
+    assert "整理支持与排除证据" in teacher_provider_text
+    assert "患者情绪回应训练" not in teacher_provider_text
+
+    assert approval_projection["passed"] is False
+    assert approval_projection["failed_checks"] == [
+        "prohibited_content_policy_complete"
+    ]
