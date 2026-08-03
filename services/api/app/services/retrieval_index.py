@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import os
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -55,12 +55,26 @@ class RetrievalDocument:
     stage_scope: tuple[str, ...] = ()
 
 
-def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocument]:
-    results_by_query = search_retrieval_documents_batch([query], limit=limit)
+def search_retrieval_documents(
+    query: str,
+    limit: int = 5,
+    *,
+    allowed_references: Collection[str] | None = None,
+) -> list[RetrievalDocument]:
+    results_by_query = search_retrieval_documents_batch(
+        [query],
+        limit=limit,
+        allowed_references=allowed_references,
+    )
     return results_by_query[0] if results_by_query else []
 
 
-def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> list[list[RetrievalDocument]]:
+def search_retrieval_documents_batch(
+    queries: Sequence[str],
+    limit: int = 5,
+    *,
+    allowed_references: Collection[str] | None = None,
+) -> list[list[RetrievalDocument]]:
     normalized_queries = [str(query).strip() for query in queries]
     results_by_query: list[list[RetrievalDocument]] = [[] for _ in normalized_queries]
     active_queries = [
@@ -68,7 +82,12 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
         for index, query in enumerate(normalized_queries)
         if query
     ]
-    if limit <= 0 or not active_queries:
+    reference_filter = (
+        frozenset(str(reference).strip() for reference in allowed_references if str(reference).strip())
+        if allowed_references is not None
+        else None
+    )
+    if limit <= 0 or not active_queries or reference_filter == frozenset():
         return results_by_query
 
     embedding_clients = _build_embedding_clients_from_environment()
@@ -78,19 +97,25 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
 
     reranker = _build_dashscope_reranker()
     retrieval_limit = _rerank_candidate_limit(limit, reranker)
+    source_documents = get_chroma_source_documents()
+    chroma_candidate_limit = (
+        len(source_documents)
+        if reference_filter is not None
+        else retrieval_limit
+    )
 
     for embedding_client, embedding_model in embedding_clients:
         try:
             chroma_index = build_chroma_retrieval_index_from_environment(
                 embedding_client=embedding_client,
-                documents=get_chroma_source_documents(),
+                documents=source_documents,
                 root_dir=ROOT_DIR,
                 embedding_model=embedding_model,
             )
             if chroma_index is not None:
                 chroma_results_by_query = chroma_index.search_batch(
                     [query for _, query in active_queries],
-                    limit=retrieval_limit,
+                    limit=chroma_candidate_limit,
                 )
                 for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
                     vector_results = [
@@ -102,10 +127,11 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
                             score=result.score,
                         )
                         for result in chroma_results
+                        if reference_filter is None or result.reference in reference_filter
                     ]
                     results_by_query[original_index] = _apply_dashscope_rerank(
                         normalized_queries[original_index],
-                        vector_results,
+                        vector_results[:retrieval_limit],
                         limit=limit,
                         reranker=reranker,
                     )
@@ -127,11 +153,15 @@ def search_retrieval_documents_batch(queries: Sequence[str], limit: int = 5) -> 
             )
 
         try:
+            fallback_kwargs: dict[str, object] = {}
+            if reference_filter is not None:
+                fallback_kwargs["allowed_references"] = reference_filter
             embedding_results_by_query = search_retrieval_documents_with_embeddings_batch(
                 [query for _, query in active_queries],
                 embedding_client=embedding_client,
                 limit=limit,
                 reranker=reranker,
+                **fallback_kwargs,
             )
             for (original_index, _), embedding_results in zip(active_queries, embedding_results_by_query):
                 results_by_query[original_index] = embedding_results
@@ -176,11 +206,13 @@ def search_retrieval_documents_with_embeddings(
     *,
     embedding_client: EmbeddingClient,
     limit: int = 5,
+    allowed_references: Collection[str] | None = None,
 ) -> list[RetrievalDocument]:
     results_by_query = search_retrieval_documents_with_embeddings_batch(
         [query],
         embedding_client=embedding_client,
         limit=limit,
+        allowed_references=allowed_references,
     )
     return results_by_query[0] if results_by_query else []
 
@@ -191,6 +223,7 @@ def search_retrieval_documents_with_embeddings_batch(
     embedding_client: EmbeddingClient,
     limit: int = 5,
     reranker: DashScopeReranker | None = None,
+    allowed_references: Collection[str] | None = None,
 ) -> list[list[RetrievalDocument]]:
     normalized_queries = [str(query).strip() for query in queries]
     results_by_query: list[list[RetrievalDocument]] = [[] for _ in normalized_queries]
@@ -204,7 +237,18 @@ def search_retrieval_documents_with_embeddings_batch(
 
     reranker = reranker if reranker is not None else _build_dashscope_reranker()
     retrieval_limit = _rerank_candidate_limit(limit, reranker)
-    documents = list(_retrieval_documents())
+    reference_filter = (
+        frozenset(str(reference).strip() for reference in allowed_references if str(reference).strip())
+        if allowed_references is not None
+        else None
+    )
+    documents = [
+        document
+        for document in _retrieval_documents()
+        if reference_filter is None or document.reference in reference_filter
+    ]
+    if not documents:
+        return results_by_query
     query_vectors = embedding_client.embed_texts(
         [query for _, query in active_queries],
         task_type="RETRIEVAL_QUERY",

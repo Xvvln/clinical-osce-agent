@@ -260,7 +260,7 @@ def test_reflection_node_records_filtered_post_submit_rag_context(tmp_path, monk
     monkeypatch.setattr(
         agent_rag_context_module,
         "search_retrieval_documents",
-        lambda query, limit: [
+        lambda query, limit, *, allowed_references=None: [
             RetrievalDocument(
                 reference="rag_knowledge:case:appendicitis_001:reflection:evidence_chain",
                 source_type="rag_knowledge",

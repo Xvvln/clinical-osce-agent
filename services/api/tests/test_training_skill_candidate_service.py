@@ -34,10 +34,8 @@ FORBIDDEN_EVALUATION_TERMS = ["治疗方案", "用药剂量", "手术方案"]
 
 
 def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
-    monkeypatch.setattr(
-        agent_rag_context_module,
-        "search_retrieval_documents",
-        lambda query, limit: [
+    def fake_search(query, limit, *, allowed_references=None):
+        documents = [
             RetrievalDocument(
                 reference=f"rag_knowledge:{knowledge_id}",
                 source_type="rag_knowledge",
@@ -46,7 +44,15 @@ def mock_vector_rag_hits(monkeypatch, *knowledge_ids: str) -> None:
                 score=max(0.0, 1.0 - index * 0.01),
             )
             for index, knowledge_id in enumerate(knowledge_ids)
-        ][:limit],
+        ]
+        if allowed_references is not None:
+            documents = [item for item in documents if item.reference in allowed_references]
+        return documents[:limit]
+
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        fake_search,
         raising=False,
     )
 

@@ -8,6 +8,7 @@ from app.services import vertex_embedding_retriever as vertex_embedding_retrieve
 from app.services.chroma_retriever import (
     DEFAULT_CHROMA_SEARCH_EF,
     ChromaRetrievalIndex,
+    ChromaRetrievalResult,
     ChromaRetrievalSettings,
     ChromaSourceDocument,
     build_chroma_manifest_status,
@@ -1048,6 +1049,69 @@ def test_search_retrieval_documents_uses_batch_fallback_once_when_chroma_fails(
     assert fallback_calls[0]["queries"] == ["右下腹痛"]
     assert fallback_calls[0]["embedding_client"] is embedding_client
     assert fallback_calls[0]["limit"] == 3
+
+
+def test_search_retrieval_documents_filters_allowed_references_before_rerank(
+    monkeypatch,
+) -> None:
+    embedding_client = FakeEmbeddingClient()
+    captured_limits: list[int] = []
+    allowed_reference = "rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence"
+
+    class GlobalChromaIndex:
+        def search_batch(
+            self,
+            queries: list[str],
+            *,
+            limit: int,
+        ) -> list[list[ChromaRetrievalResult]]:
+            captured_limits.append(limit)
+            global_hits = [
+                ChromaRetrievalResult(
+                    reference=f"rubric:appendicitis_001_rubric.item.noise_{index}",
+                    source_type="rubric",
+                    title=f"noise {index}",
+                    snippet="global corpus noise",
+                    score=1.0 - index * 0.01,
+                )
+                for index in range(30)
+            ]
+            global_hits.append(
+                ChromaRetrievalResult(
+                    reference=allowed_reference,
+                    source_type="rag_knowledge",
+                    title="腹痛问诊教学知识",
+                    snippet="先追问起病和疼痛迁移。",
+                    score=0.4,
+                )
+            )
+            return [global_hits[:limit] for _ in queries]
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: embedding_client,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_chroma_retrieval_index_from_environment",
+        lambda **_: GlobalChromaIndex(),
+    )
+    monkeypatch.setattr(retrieval_index_module, "_build_dashscope_reranker", lambda: None)
+
+    results = search_retrieval_documents(
+        "腹痛问诊",
+        limit=3,
+        allowed_references={allowed_reference},
+    )
+
+    assert captured_limits == [len(retrieval_index_module.get_chroma_source_documents())]
+    assert [result.reference for result in results] == [allowed_reference]
 
 
 def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(monkeypatch) -> None:

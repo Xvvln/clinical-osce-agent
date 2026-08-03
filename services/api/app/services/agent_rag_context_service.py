@@ -45,23 +45,26 @@ def retrieve_agent_context(
             *[stage for stage in requested_stage_scope if stage != "any"],
         ]
     )
+    eligible_items_by_reference = {
+        f"rag_knowledge:{item['knowledge_id']}": item
+        for item in knowledge_store.list_items()
+        if _agent_can_read_knowledge_item(
+            item,
+            agent_role=agent_role,
+            case_ids=normalized_case_ids,
+            allowed_visibilities=allowed_visibilities,
+            requested_stage_scope=set(requested_stage_scope),
+        )
+    }
     selected_items: list[dict[str, Any]] = []
     if query_text:
-        retrieval_limit = max(limit * 20, 40)
-        for result in search_retrieval_documents(query_text, limit=retrieval_limit):
-            if result.source_type != "rag_knowledge" or not result.reference.startswith("rag_knowledge:"):
-                continue
-            knowledge_id = result.reference.removeprefix("rag_knowledge:")
-            item = knowledge_store.get_item(knowledge_id)
+        for result in search_retrieval_documents(
+            query_text,
+            limit=limit,
+            allowed_references=set(eligible_items_by_reference),
+        ):
+            item = eligible_items_by_reference.get(result.reference)
             if item is None:
-                continue
-            if not _agent_can_read_knowledge_item(
-                item,
-                agent_role=agent_role,
-                case_ids=normalized_case_ids,
-                allowed_visibilities=allowed_visibilities,
-                requested_stage_scope=set(requested_stage_scope),
-            ):
                 continue
             selected_items.append(item)
             if len(selected_items) >= limit:

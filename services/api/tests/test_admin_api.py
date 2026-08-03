@@ -85,7 +85,12 @@ def configure_case_import_directories(tmp_path, monkeypatch) -> tuple[Path, Path
 
 
 def mock_vector_rag_hits_for_store(monkeypatch, store: RagKnowledgeStore) -> None:
-    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+    def fake_search_retrieval_documents(
+        query: str,
+        limit: int,
+        *,
+        allowed_references: set[str],
+    ) -> list[RetrievalDocument]:
         return [
             RetrievalDocument(
                 reference=f"rag_knowledge:{item['knowledge_id']}",
@@ -95,6 +100,7 @@ def mock_vector_rag_hits_for_store(monkeypatch, store: RagKnowledgeStore) -> Non
                 score=max(0.0, 1.0 - index * 0.01),
             )
             for index, item in enumerate(store.list_items())
+            if f"rag_knowledge:{item['knowledge_id']}" in allowed_references
         ][:limit]
 
     monkeypatch.setattr(

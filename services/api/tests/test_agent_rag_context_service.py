@@ -71,7 +71,15 @@ def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forb
         updated_by="admin@example.test",
     )
 
-    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+    def fake_search_retrieval_documents(
+        query: str,
+        limit: int,
+        *,
+        allowed_references: set[str],
+    ) -> list[RetrievalDocument]:
+        assert allowed_references == {
+            "rag_knowledge:case:appendicitis_001:coach:pain_migration"
+        }
         return [
             RetrievalDocument(
                 reference="rag_knowledge:case:appendicitis_001:coach:pain_migration",
@@ -170,9 +178,18 @@ def test_retrieve_agent_context_filters_by_training_stage_and_normalizes_aliases
     ]
     captured_queries: list[str] = []
 
-    def fake_search(query: str, limit: int) -> list[RetrievalDocument]:
+    def fake_search(
+        query: str,
+        limit: int,
+        *,
+        allowed_references: set[str],
+    ) -> list[RetrievalDocument]:
         captured_queries.append(query)
-        return vector_hits[:limit]
+        return [
+            item
+            for item in vector_hits
+            if item.reference in allowed_references
+        ][:limit]
 
     monkeypatch.setattr(agent_rag_context_module, "search_retrieval_documents", fake_search)
 
@@ -232,7 +249,7 @@ def test_retrieve_agent_context_does_not_keyword_scan_when_vector_retrieval_miss
     monkeypatch.setattr(
         agent_rag_context_module,
         "search_retrieval_documents",
-        lambda query, limit: [],
+        lambda query, limit, *, allowed_references: [],
         raising=False,
     )
 
@@ -270,8 +287,16 @@ def test_retrieve_agent_context_uses_vector_retrieval_results_without_keyword_ov
     )
     captured_queries: list[str] = []
 
-    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+    def fake_search_retrieval_documents(
+        query: str,
+        limit: int,
+        *,
+        allowed_references: set[str],
+    ) -> list[RetrievalDocument]:
         captured_queries.append(query)
+        assert allowed_references == {
+            "rag_knowledge:case:appendicitis_001:coach:sequence_bridge"
+        }
         return [
             RetrievalDocument(
                 reference="rag_knowledge:case:appendicitis_001:coach:sequence_bridge",
@@ -325,9 +350,16 @@ def test_retrieve_agent_context_keeps_teacher_document_when_non_rag_hits_are_ahe
         updated_by="admin@example.test",
     )
     captured_limits: list[int] = []
+    captured_allowed_references: list[set[str]] = []
 
-    def fake_search_retrieval_documents(query: str, limit: int) -> list[RetrievalDocument]:
+    def fake_search_retrieval_documents(
+        query: str,
+        limit: int,
+        *,
+        allowed_references: set[str],
+    ) -> list[RetrievalDocument]:
         captured_limits.append(limit)
+        captured_allowed_references.append(allowed_references)
         all_hits = [
             RetrievalDocument(
                 reference=f"rubric:appendicitis_001_rubric.item.ht_{index}",
@@ -347,7 +379,11 @@ def test_retrieve_agent_context_keeps_teacher_document_when_non_rag_hits_are_ahe
                 score=0.7,
             )
         )
-        return all_hits[:limit]
+        return [
+            item
+            for item in all_hits
+            if item.reference in allowed_references
+        ][:limit]
 
     monkeypatch.setattr(
         agent_rag_context_module,
@@ -364,7 +400,10 @@ def test_retrieve_agent_context_keeps_teacher_document_when_non_rag_hits_are_ahe
         store=store,
     )
 
-    assert captured_limits and captured_limits[0] >= 40
+    assert captured_limits == [3]
+    assert captured_allowed_references == [
+        {"rag_knowledge:kbdoc:appendicitis_001:teacher_note:chunk:0000"}
+    ]
     assert [item["reference"] for item in results] == [
         "rag_knowledge:kbdoc:appendicitis_001:teacher_note:chunk:0000"
     ]
@@ -375,7 +414,7 @@ def test_retrieve_agent_context_reads_seeded_public_knowledge_without_revealing_
     monkeypatch.setattr(
         agent_rag_context_module,
         "search_retrieval_documents",
-        lambda query, limit: [
+        lambda query, limit, *, allowed_references: [
             RetrievalDocument(
                 reference="rag_knowledge:case:appendicitis_001:coach:abdominal_pain_history_sequence",
                 source_type="rag_knowledge",
@@ -409,7 +448,7 @@ def test_retrieve_agent_context_reads_seeded_recommended_case_knowledge(tmp_path
     monkeypatch.setattr(
         agent_rag_context_module,
         "search_retrieval_documents",
-        lambda query, limit: [
+        lambda query, limit, *, allowed_references: [
             RetrievalDocument(
                 reference="rag_knowledge:case:acs_001:coach:chest_pain_history_sequence",
                 source_type="rag_knowledge",

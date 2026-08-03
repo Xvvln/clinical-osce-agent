@@ -246,7 +246,7 @@ def test_training_skill_approval_agent_records_filtered_rag_knowledge_context(tm
     monkeypatch.setattr(
         agent_rag_context_module,
         "search_retrieval_documents",
-        lambda query, limit: [
+        lambda query, limit, *, allowed_references=None: [
             RetrievalDocument(
                 reference="rag_knowledge:case:appendicitis_001:skill_review:pain_sequence",
                 source_type="rag_knowledge",
