@@ -10,6 +10,26 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "rag_knowledge.sqlite3"
 DEFAULT_SEED_PATH = ROOT_DIR / "data" / "rag_knowledge" / "default_items.json"
 DEFAULT_SEED_UPDATED_BY = "system:default_rag_knowledge_seed"
+RAG_KNOWLEDGE_STAGE_SCOPES = frozenset(
+    {
+        "any",
+        "case_intro",
+        "history_taking",
+        "physical_exam",
+        "auxiliary_test",
+        "diagnosis_submission",
+        "evaluation",
+        "feedback",
+    }
+)
+RAG_KNOWLEDGE_STAGE_ALIASES = {
+    "history": "history_taking",
+    "auxiliary_testing": "auxiliary_test",
+    "diagnosis": "diagnosis_submission",
+    "diagnosis_submitted": "diagnosis_submission",
+    "feedback_review": "feedback",
+    "report_ready": "feedback",
+}
 
 
 class RagKnowledgeStore:
@@ -66,7 +86,7 @@ class RagKnowledgeStore:
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row[0])
+        return _hydrate_item(json.loads(row[0]))
 
     def list_items(
         self,
@@ -98,7 +118,7 @@ class RagKnowledgeStore:
                 """,
                 params,
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [_hydrate_item(json.loads(row[0])) for row in rows]
 
     def list_document_items(self, document_id: str) -> list[dict[str, Any]]:
         normalized_document_id = document_id.strip()
@@ -263,6 +283,7 @@ def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
         "content_kind": str(item["content_kind"]).strip(),
         "visibility": str(item["visibility"]).strip(),
         "allowed_agents": _string_list(item.get("allowed_agents", [])),
+        "stage_scope": normalize_rag_stage_scope(item.get("stage_scope")),
         "source_id": str(item.get("source_id") or "").strip(),
         "title": str(item["title"]).strip(),
         "text": str(item["text"]).strip(),
@@ -301,6 +322,36 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def normalize_rag_stage_scope(value: Any) -> list[str]:
+    normalized_stages: list[str] = []
+    for raw_stage in value if isinstance(value, list) else []:
+        stage = str(raw_stage).strip()
+        if not stage:
+            continue
+        stage = RAG_KNOWLEDGE_STAGE_ALIASES.get(stage, stage)
+        if stage not in normalized_stages:
+            normalized_stages.append(stage)
+    if not normalized_stages or "any" in normalized_stages:
+        return ["any"]
+    return normalized_stages
+
+
+def unsupported_rag_stage_scopes(value: Any) -> list[str]:
+    normalized_stages = {
+        RAG_KNOWLEDGE_STAGE_ALIASES.get(str(raw_stage).strip(), str(raw_stage).strip())
+        for raw_stage in (value if isinstance(value, list) else [])
+        if str(raw_stage).strip()
+    }
+    return sorted(normalized_stages - RAG_KNOWLEDGE_STAGE_SCOPES)
+
+
+def _hydrate_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **item,
+        "stage_scope": normalize_rag_stage_scope(item.get("stage_scope")),
+    }
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -322,6 +373,7 @@ def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "enabled": all(bool(item.get("enabled", True)) for item in sorted_items),
         "visibility": str(first_item.get("visibility", "")).strip(),
         "allowed_agents": _string_list(first_item.get("allowed_agents", [])),
+        "stage_scope": normalize_rag_stage_scope(first_item.get("stage_scope")),
         "source_id": str(first_item.get("source_id", "")).strip(),
         "tags": sorted({tag for item in sorted_items for tag in _string_list(item.get("tags", []))}),
         "chunking_strategies": sorted(

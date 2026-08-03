@@ -14,7 +14,7 @@ DEFAULT_CHROMA_COLLECTION = "clinical_osce_retrieval"
 DEFAULT_CHROMA_PERSIST_DIRECTORY = "./data/processed/chroma"
 DEFAULT_CHROMA_SEARCH_EF = 500
 CHROMA_MANIFEST_FILENAME = "retrieval_index_manifest.json"
-CHROMA_MANIFEST_SCHEMA_VERSION = "1.1"
+CHROMA_MANIFEST_SCHEMA_VERSION = "1.2"
 
 
 class EmbeddingClient(Protocol):
@@ -28,6 +28,10 @@ class ChromaSourceDocument:
     source_type: str
     title: str
     snippet: str
+    case_id: str = ""
+    visibility: str = ""
+    allowed_agents: str = ""
+    stage_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -161,6 +165,10 @@ class ChromaRetrievalIndex:
                     "source_type": document.source_type,
                     "title": document.title,
                     "snippet": document.snippet,
+                    "case_id": document.case_id,
+                    "visibility": document.visibility,
+                    "allowed_agents": document.allowed_agents,
+                    "stage_scope": document.stage_scope,
                 }
                 for document in self._documents
             ],
@@ -319,7 +327,21 @@ def resolve_chroma_persist_directory(raw_path: str, *, root_dir: Path) -> Path:
 
 
 def _document_embedding_text(document: ChromaSourceDocument) -> str:
-    return f"{document.source_type}\n{document.reference}\n{document.title}\n{document.snippet}"
+    metadata_lines = [
+        f"case_id: {document.case_id}" if document.case_id else "",
+        f"visibility: {document.visibility}" if document.visibility else "",
+        f"allowed_agents: {document.allowed_agents}" if document.allowed_agents else "",
+        f"stage_scope: {document.stage_scope}" if document.stage_scope else "",
+    ]
+    return "\n".join(
+        [
+            document.source_type,
+            document.reference,
+            document.title,
+            *[line for line in metadata_lines if line],
+            document.snippet,
+        ]
+    )
 
 
 def _document_id(document: ChromaSourceDocument) -> str:
@@ -414,6 +436,10 @@ def _manifest_content_hash(
                 "source_type": document.source_type,
                 "title": document.title,
                 "snippet": document.snippet,
+                "case_id": document.case_id,
+                "visibility": document.visibility,
+                "allowed_agents": document.allowed_agents,
+                "stage_scope": document.stage_scope,
             }
             for document in sorted(documents, key=lambda item: (item.source_type, item.reference, item.title, item.snippet))
         ],

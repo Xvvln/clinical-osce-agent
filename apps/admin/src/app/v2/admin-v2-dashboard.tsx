@@ -54,6 +54,16 @@ const RAG_TAG_MAX_CHARS = 64;
 const RAG_TAGS_MAX_ITEMS = 32;
 const RAG_TITLE_MAX_CHARS = 200;
 const RAG_TEXT_MAX_CHARS = 16_384;
+const RAG_STAGE_OPTIONS = ["any", "case_intro", "history_taking", "physical_exam", "auxiliary_test", "diagnosis_submission", "feedback"] as const;
+const RAG_STAGE_LABELS: Readonly<Record<(typeof RAG_STAGE_OPTIONS)[number], string>> = {
+  any: "全部训练阶段",
+  case_intro: "病例导入",
+  history_taking: "问诊阶段",
+  physical_exam: "查体阶段",
+  auxiliary_test: "辅助检查",
+  diagnosis_submission: "诊断提交前",
+  feedback: "训练后复盘",
+};
 const CASE_TITLE_MAX_CHARS = 120;
 const CHIEF_COMPLAINT_MAX_CHARS = 500;
 const SAFETY_NOTES_MAX_CHARS = 1000;
@@ -280,6 +290,8 @@ type AdminRagDocument = Readonly<{
   enabled?: boolean;
   visibility?: string;
   allowed_agents?: readonly string[];
+  stage_scope?: readonly string[];
+  stage_scope_labels?: readonly string[];
   updated_at?: string;
 }>;
 
@@ -297,6 +309,8 @@ type AdminRagKnowledgeItem = Readonly<{
   content_kind?: string;
   visibility?: string;
   allowed_agents?: readonly string[] | string;
+  stage_scope?: readonly string[] | string;
+  stage_scope_labels?: readonly string[];
   tags?: readonly string[] | string;
   version?: number;
   chunk_index?: number | null;
@@ -315,6 +329,7 @@ type AdminRagKnowledgeItemPayload = Readonly<{
   content_kind: string;
   visibility: string;
   allowed_agents: readonly string[];
+  stage_scope: readonly string[];
   source_id: string;
   title: string;
   text: string;
@@ -324,6 +339,7 @@ type AdminRagKnowledgeItemPayload = Readonly<{
 
 type AdminRagDocumentUploadPayload = Readonly<{
   allowed_agents: readonly string[];
+  stage_scope: readonly string[];
   case_id: string;
   content_base64: string;
   enabled: boolean;
@@ -1772,6 +1788,7 @@ function ResourcesSection({
                   <th className="py-3 pr-4">文档</th>
                   <th className="py-3 pr-4">范围</th>
                   <th className="py-3 pr-4">关联病例</th>
+                  <th className="py-3 pr-4">适用阶段</th>
                   <th className="py-3 pr-4">片段</th>
                   <th className="py-3 pr-4">状态</th>
                   <th className="py-3 pr-4">操作</th>
@@ -1783,6 +1800,7 @@ function ResourcesSection({
                     <td className="py-3 pr-4 font-medium">{document.title || document.filename || document.document_id}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.scope === "case" ? "病例知识库" : "全局知识库"}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.case_title || "全部病例"}</td>
+                    <td className="py-3 pr-4 text-[#6F6257]">{joinText(document.stage_scope_labels ?? document.stage_scope, "全部训练阶段")}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.chunk_count ?? "-"}</td>
                     <td className="py-3 pr-4">
                       <Badge variant={document.enabled ? "success" : "muted"}>{document.enabled ? "已启用" : "未启用"}</Badge>
@@ -1862,6 +1880,7 @@ function DocumentUploadPanel({
   const [visibility, setVisibility] = useState("pre_submit_safe");
   const [tags, setTags] = useState("teacher_document");
   const [allowedAgents, setAllowedAgents] = useState<readonly string[]>(["coach", "reflection", "skill_generation", "skill_approval"]);
+  const [stageScope, setStageScope] = useState<readonly string[]>(["any"]);
   const [enabled, setEnabled] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [localErrorText, setLocalErrorText] = useState("");
@@ -1902,6 +1921,7 @@ function DocumentUploadPanel({
     try {
       const response = await onUploadDocument({
         allowed_agents: allowedAgents,
+        stage_scope: stageScope,
         case_id: scope === "case" ? caseId : "",
         content_base64: await readFileAsBase64(file),
         enabled,
@@ -1920,6 +1940,19 @@ function DocumentUploadPanel({
 
   function toggleAgent(agentId: string) {
     setAllowedAgents((current) => (current.includes(agentId) ? current.filter((item) => item !== agentId) : [...current, agentId]));
+  }
+
+  function toggleStage(stageId: string) {
+    setStageScope((current) => {
+      if (stageId === "any") {
+        return ["any"];
+      }
+      const stageSpecific = current.filter((item) => item !== "any");
+      const next = stageSpecific.includes(stageId)
+        ? stageSpecific.filter((item) => item !== stageId)
+        : [...stageSpecific, stageId];
+      return next.length > 0 ? next : ["any"];
+    });
   }
 
   return (
@@ -1987,6 +2020,18 @@ function DocumentUploadPanel({
             上传文档
           </Button>
           <p className="text-sm text-[#6F6257]">{file ? file.name : `${documents.length} 份文档已在库中`}</p>
+        </div>
+        <div className="rounded-2xl border border-[#E7E0D4] bg-white p-3">
+          <p className="mb-2 text-sm font-semibold">适用训练阶段</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {RAG_STAGE_OPTIONS.map((stageId) => (
+              <label className="flex items-center gap-2 rounded-xl border border-[#E7E0D4] bg-[#FAF9F5] px-3 py-2 text-sm" key={stageId}>
+                <input checked={stageScope.includes(stageId)} onChange={() => toggleStage(stageId)} type="checkbox" />
+                {RAG_STAGE_LABELS[stageId]}
+              </label>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-[#8A7D6F]">选择“全部训练阶段”时跨阶段可用；选择具体阶段后，只在对应训练节点进入 Agent 检索。</p>
         </div>
         {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
         {localStatusText ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{localStatusText}</p> : null}
@@ -2443,9 +2488,10 @@ function KnowledgeContentModal({
           <section className="min-h-0 overflow-y-auto p-5">
             {selectedItem ? (
               <div className="grid gap-4">
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-3 md:grid-cols-4">
                   <MiniStat label="可见性" value={getKnowledgeVisibilityLabel(selectedItem.visibility)} />
                   <MiniStat label="可用模块" value={joinText(toTokenList(selectedItem.allowed_agents), "未配置")} />
+                  <MiniStat label="适用阶段" value={joinText(selectedItem.stage_scope_labels ?? selectedItem.stage_scope, "全部训练阶段")} />
                   <MiniStat label="更新时间" value={formatDateTime(selectedItem.updated_at ?? "")} />
                 </div>
                 <label className="grid gap-2 text-sm font-semibold">
@@ -4464,6 +4510,7 @@ function buildRagKnowledgePayload(item: AdminRagKnowledgeItem): AdminRagKnowledg
     content_kind: item.content_kind || "teaching_note",
     visibility: item.visibility || "pre_submit_safe",
     allowed_agents: toTokenList(item.allowed_agents).length > 0 ? toTokenList(item.allowed_agents) : ["coach", "reflection", "skill_generation", "skill_approval"],
+    stage_scope: toTokenList(item.stage_scope).length > 0 ? toTokenList(item.stage_scope) : ["any"],
     source_id: item.source_id || "",
     title: item.title || item.section_title || "知识片段",
     text: item.text || "",

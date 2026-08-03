@@ -428,6 +428,7 @@ def test_chroma_source_documents_include_admin_managed_knowledge_in_manifest(tmp
             "content_kind": "teaching_note",
             "visibility": "post_submit_review",
             "allowed_agents": ["reflection", "skill_approval"],
+            "stage_scope": ["feedback"],
             "source_id": "fareez_osce_2022",
             "title": "右下腹痛问诊中的疼痛迁移",
             "text": "训练后复盘可强调疼痛演变采集不足的问题。",
@@ -454,6 +455,11 @@ def test_chroma_source_documents_include_admin_managed_knowledge_in_manifest(tmp
     )
     assert managed_document.source_type == "rag_knowledge"
     assert "post_submit_review" in managed_document.snippet
+    assert "stage_scope: feedback" in managed_document.snippet
+    assert managed_document.case_id == "appendicitis_001"
+    assert managed_document.visibility == "post_submit_review"
+    assert managed_document.allowed_agents == "reflection|skill_approval"
+    assert managed_document.stage_scope == "feedback"
     assert manifest["source_count"] == len(documents)
     assert "appendicitis_001" in manifest["case_ids"]
     assert manifest["content_hash"].startswith("sha256:")

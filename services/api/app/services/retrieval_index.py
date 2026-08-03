@@ -23,7 +23,7 @@ from app.services.model_call_policy import (
     ModelProviderPolicyError,
     ModelProviderTimeoutError,
 )
-from app.services.rag_knowledge_store import rag_knowledge_store
+from app.services.rag_knowledge_store import normalize_rag_stage_scope, rag_knowledge_store
 from app.services.vertex_embedding_retriever import (
     DEFAULT_VERTEX_EMBEDDING_MODEL,
     build_vertex_embedding_client_from_environment,
@@ -49,6 +49,10 @@ class RetrievalDocument:
     title: str
     snippet: str
     score: float
+    case_id: str = ""
+    visibility: str = ""
+    allowed_agents: tuple[str, ...] = ()
+    stage_scope: tuple[str, ...] = ()
 
 
 def search_retrieval_documents(query: str, limit: int = 5) -> list[RetrievalDocument]:
@@ -247,6 +251,10 @@ def get_chroma_source_documents() -> tuple[ChromaSourceDocument, ...]:
             source_type=document.source_type,
             title=document.title,
             snippet=document.snippet,
+            case_id=document.case_id,
+            visibility=document.visibility,
+            allowed_agents="|".join(document.allowed_agents),
+            stage_scope="|".join(document.stage_scope),
         )
         for document in _retrieval_documents()
     )
@@ -329,6 +337,7 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
             f"content_kind: {str(item.get('content_kind', '')).strip()}",
             f"visibility: {visibility}",
             f"allowed_agents: {', '.join(str(agent) for agent in item.get('allowed_agents', []) if str(agent))}",
+            f"stage_scope: {', '.join(normalize_rag_stage_scope(item.get('stage_scope')))}",
             f"source_id: {str(item.get('source_id', '')).strip()}",
             f"tags: {', '.join(str(tag) for tag in item.get('tags', []) if str(tag))}",
             f"document_id: {str(item.get('document_id', '')).strip()}",
@@ -342,6 +351,14 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
                 title=title,
                 snippet="；".join(part for part in snippet_parts if part),
                 score=0,
+                case_id=str(item.get("case_id", "")).strip(),
+                visibility=visibility,
+                allowed_agents=tuple(
+                    str(agent).strip()
+                    for agent in item.get("allowed_agents", [])
+                    if str(agent).strip()
+                ),
+                stage_scope=tuple(normalize_rag_stage_scope(item.get("stage_scope"))),
             )
         )
     return documents

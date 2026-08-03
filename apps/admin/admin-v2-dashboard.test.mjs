@@ -108,6 +108,9 @@ test("admin uploads and editable resources enforce API limits locally", () => {
   );
   assert.match(uploadHandler, /parsedTags\.length > RAG_TAGS_MAX_ITEMS/);
   assert.match(dashboardSource, /accept="[^"]*\.pptx[^"]*"/);
+  assert.match(uploadHandler, /stage_scope: stageScope/);
+  assert.match(dashboardSource, /const RAG_STAGE_OPTIONS = \["any", "case_intro", "history_taking", "physical_exam", "auxiliary_test", "diagnosis_submission", "feedback"\]/);
+  assert.match(dashboardSource, /stage_scope: toTokenList\(item\.stage_scope\)/);
   assert.match(dashboardSource, /maxLength=\{RAG_TITLE_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{RAG_TEXT_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{CASE_TITLE_MAX_CHARS\}/);

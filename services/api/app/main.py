@@ -122,7 +122,12 @@ from app.services.osce_session_store import (
     SessionWriteConflictError,
 )
 from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
-from app.services.rag_knowledge_store import rag_knowledge_store
+from app.services.rag_knowledge_store import (
+    RAG_KNOWLEDGE_STAGE_SCOPES,
+    normalize_rag_stage_scope,
+    rag_knowledge_store,
+    unsupported_rag_stage_scopes,
+)
 from app.services.rag_document_ingestion_service import (
     RagDocumentParseError,
     chunk_rag_document,
@@ -230,6 +235,7 @@ RAG_KNOWLEDGE_AGENT_ROLES = {
 }
 RAG_GENERATIVE_AGENT_ROLES = {"coach", "reflection", "skill_approval", "skill_generation"}
 RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS = ["coach", "reflection", "skill_generation", "skill_approval"]
+RAG_STAGE_SCOPE_MAX_ITEMS = len(RAG_KNOWLEDGE_STAGE_SCOPES)
 RAG_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024
 RAG_DOCUMENT_MAX_BASE64_CHARS = 4 * ((RAG_DOCUMENT_MAX_BYTES + 2) // 3)
 API_REQUEST_BODY_MAX_BYTES = 12 * 1024 * 1024
@@ -744,6 +750,7 @@ async def add_http_security_headers(request: Request, call_next: Any) -> Respons
 ProcedureCode = Annotated[str, Field(max_length=PROCEDURE_CODE_MAX_CHARS)]
 RagAgentRole = Annotated[str, Field(max_length=32)]
 RagTag = Annotated[str, Field(max_length=64)]
+RagStageScope = Annotated[str, Field(max_length=32)]
 
 
 class RequestModel(BaseModel):
@@ -897,6 +904,10 @@ class AdminRagKnowledgeItemRequest(RequestModel):
         default_factory=list,
         max_length=RAG_ALLOWED_AGENTS_MAX_ITEMS,
     )
+    stage_scope: list[RagStageScope] = Field(
+        default_factory=lambda: ["any"],
+        max_length=RAG_STAGE_SCOPE_MAX_ITEMS,
+    )
     source_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
     title: str = Field(default="", max_length=200)
     text: str = Field(default="", max_length=RAG_TEXT_MAX_CHARS)
@@ -915,6 +926,10 @@ class AdminRagDocumentUploadRequest(RequestModel):
     allowed_agents: list[RagAgentRole] = Field(
         default_factory=lambda: list(RAG_DOCUMENT_DEFAULT_ALLOWED_AGENTS),
         max_length=RAG_ALLOWED_AGENTS_MAX_ITEMS,
+    )
+    stage_scope: list[RagStageScope] = Field(
+        default_factory=lambda: ["any"],
+        max_length=RAG_STAGE_SCOPE_MAX_ITEMS,
     )
     source_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
     tags: list[RagTag] = Field(default_factory=list, max_length=RAG_TAGS_MAX_ITEMS)
@@ -1766,6 +1781,9 @@ def _load_admin_sources() -> list[dict[str, Any]]:
 
 def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> dict[str, Any]:
     item = request.model_dump()
+    unknown_stage_scopes = unsupported_rag_stage_scopes(item.get("stage_scope"))
+    if unknown_stage_scopes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge stage scope")
     item["scope"] = item["scope"].strip()
     item["case_id"] = item["case_id"].strip()
     item["content_kind"] = item["content_kind"].strip()
@@ -1774,6 +1792,7 @@ def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> di
     item["title"] = item["title"].strip()
     item["text"] = item["text"].strip()
     item["allowed_agents"] = [str(agent).strip() for agent in item["allowed_agents"] if str(agent).strip()]
+    item["stage_scope"] = normalize_rag_stage_scope(item.get("stage_scope"))
     item["tags"] = [str(tag).strip() for tag in item["tags"] if str(tag).strip()]
     knowledge_id = str(item.get("knowledge_id", "")).strip()
     if not knowledge_id:
@@ -1824,6 +1843,10 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
     visibility = request.visibility.strip()
     source_id = request.source_id.strip()
     allowed_agents = [str(agent).strip() for agent in request.allowed_agents if str(agent).strip()]
+    unknown_stage_scopes = unsupported_rag_stage_scopes(request.stage_scope)
+    if unknown_stage_scopes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge stage scope")
+    stage_scope = normalize_rag_stage_scope(request.stage_scope)
     tags = [str(tag).strip() for tag in request.tags if str(tag).strip()]
     if scope not in {"global", "case"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported document scope")
@@ -1872,6 +1895,7 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
             "content_kind": "document_chunk",
             "visibility": visibility,
             "allowed_agents": allowed_agents,
+            "stage_scope": stage_scope,
             "source_id": source_id,
             "title": f"{file_stem} · {chunk.section_title or f'片段 {chunk.chunk_index + 1}'}",
             "text": chunk.text,

@@ -53,6 +53,7 @@ SKILL_TYPE_LABELS: dict[str, str] = {
 }
 
 SKILL_STAGE_LABELS: dict[str, str] = {
+    "any": "全部训练阶段",
     "case_intro": "训练开始",
     "history": "问诊阶段",
     "history_taking": "问诊阶段",
@@ -63,6 +64,7 @@ SKILL_STAGE_LABELS: dict[str, str] = {
     "diagnosis_submission": "诊断提交前",
     "feedback": "复盘阶段",
     "feedback_review": "复盘阶段",
+    "evaluation": "评分阶段",
 }
 
 FOCUS_SCOPE_LABELS: dict[str, str] = {
@@ -483,18 +485,24 @@ def enrich_report(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def enrich_rag_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
+    stage_scope = [str(stage) for stage in item.get("stage_scope", ["any"]) if str(stage)]
     return {
         **item,
         "case_title": case_title(str(item.get("case_id", ""))),
         "source_title": source_title(str(item.get("source_id", ""))),
+        "stage_scope": stage_scope or ["any"],
+        "stage_scope_labels": stage_scope_labels(stage_scope or ["any"]),
     }
 
 
 def enrich_rag_document(document: dict[str, Any]) -> dict[str, Any]:
+    stage_scope = [str(stage) for stage in document.get("stage_scope", ["any"]) if str(stage)]
     return {
         **document,
         "case_title": case_title(str(document.get("case_id", ""))),
         "source_title": source_title(str(document.get("source_id", ""))),
+        "stage_scope": stage_scope or ["any"],
+        "stage_scope_labels": stage_scope_labels(stage_scope or ["any"]),
     }
 
 

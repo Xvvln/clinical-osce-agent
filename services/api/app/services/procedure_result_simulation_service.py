@@ -505,6 +505,7 @@ def _retrieve_procedure_simulation_context(
                 str(procedure_result.get("code", "")),
             ],
             allowed_visibilities={"pre_submit_safe"},
+            stage_scope=[str(procedure_result.get("kind") or "")],
             forbidden_terms=forbidden_terms,
             limit=3,
         )

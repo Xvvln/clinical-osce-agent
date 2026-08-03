@@ -12,6 +12,7 @@ def test_rag_knowledge_store_persists_and_filters_items(tmp_path) -> None:
             "content_kind": "teaching_note",
             "visibility": "pre_submit_safe",
             "allowed_agents": ["coach", "skill_approval"],
+            "stage_scope": ["history"],
             "source_id": "fareez_osce_2022",
             "title": "右下腹痛问诊中的疼痛迁移",
             "text": "追问疼痛是否从上腹或脐周转移到右下腹，用于训练疼痛演变采集。",
@@ -39,6 +40,7 @@ def test_rag_knowledge_store_persists_and_filters_items(tmp_path) -> None:
 
     assert case_item["updated_by"] == "admin@example.test"
     assert case_item["allowed_agents"] == ["coach", "skill_approval"]
+    assert case_item["stage_scope"] == ["history_taking"]
     assert case_item["tags"] == ["abdominal_pain", "history_taking"]
     assert case_item["updated_at"]
 
@@ -50,6 +52,7 @@ def test_rag_knowledge_store_persists_and_filters_items(tmp_path) -> None:
         "case:appendicitis_001:teaching:history_migration"
     ]
     assert len(store.list_items(visibility="pre_submit_safe")) == 2
+    assert store.get_item("global:osce:history:pain_timeline")["stage_scope"] == ["any"]
 
     assert store.delete_item("case:appendicitis_001:teaching:history_migration")
     assert store.get_item("case:appendicitis_001:teaching:history_migration") is None
@@ -68,12 +71,14 @@ def test_rag_knowledge_store_can_seed_public_appendicitis_teaching_items(tmp_pat
     assert coach_item is not None
     assert coach_item["visibility"] == "pre_submit_safe"
     assert coach_item["allowed_agents"] == ["coach"]
+    assert coach_item["stage_scope"] == ["case_intro", "history_taking"]
     assert coach_item["source_id"] == "aafp_acute_abdominal_pain_2023"
     assert "急性阑尾炎" not in coach_item["text"]
 
     reflection_item = store.get_item("case:appendicitis_001:reflection:appendicitis_reasoning_review")
     assert reflection_item is not None
     assert reflection_item["visibility"] == "post_submit_review"
+    assert reflection_item["stage_scope"] == ["feedback"]
     assert "急性阑尾炎" in reflection_item["text"]
 
 

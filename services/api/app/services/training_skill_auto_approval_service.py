@@ -456,6 +456,10 @@ def _retrieve_skill_approval_knowledge_context(candidate: dict[str, Any], *, lim
             *[str(case_id) for case_id in candidate.get("case_ids", []) if str(case_id)],
         ],
         allowed_visibilities=SKILL_APPROVAL_RAG_VISIBILITIES,
+        stage_scope=[
+            *[str(stage) for stage in candidate.get("stage_scope", []) if str(stage)],
+            "feedback",
+        ],
         limit=limit,
         store=rag_knowledge_store,
     )

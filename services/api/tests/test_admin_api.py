@@ -467,6 +467,7 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
         "content_kind": "teaching_note",
         "visibility": "pre_submit_safe",
         "allowed_agents": ["coach", "skill_approval"],
+        "stage_scope": ["history_taking"],
         "source_id": "fareez_osce_2022",
         "title": "右下腹痛问诊中的疼痛迁移",
         "text": "追问疼痛是否从上腹或脐周转移到右下腹，用于训练疼痛演变采集。",
@@ -487,6 +488,7 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
         **payload,
         "case_title": "右下腹痛教学病例",
         "source_title": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
+        "stage_scope_labels": ["问诊阶段"],
         "updated_by": "admin@osce.test",
         "updated_at": created_item["updated_at"],
     }
@@ -558,6 +560,7 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
                 "content_base64": base64.b64encode(document_text.encode("utf-8")).decode("ascii"),
                 "visibility": "pre_submit_safe",
                 "allowed_agents": ["coach", "reflection", "skill_generation", "skill_approval"],
+                "stage_scope": ["history_taking"],
                 "source_id": "fareez_osce_2022",
                 "tags": ["abdominal_pain", "teacher_document"],
             },
@@ -571,6 +574,8 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
         assert uploaded_document["file_name"] == "appendicitis_teaching.md"
         assert uploaded_document["chunk_count"] >= 2
         assert uploaded_document["enabled"] is True
+        assert uploaded_document["stage_scope"] == ["history_taking"]
+        assert uploaded_document["stage_scope_labels"] == ["问诊阶段"]
         assert uploaded_document["source_title"] == "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases"
 
         assert documents_response.status_code == 200
@@ -581,6 +586,7 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
         assert {item["document_id"] for item in stored_chunks} == {uploaded_document["document_id"]}
         assert all(item["content_kind"] == "document_chunk" for item in stored_chunks)
         assert all(item["enabled"] is True for item in stored_chunks)
+        assert all(item["stage_scope"] == ["history_taking"] for item in stored_chunks)
         assert all(item["source_location"].startswith("appendicitis_teaching.md") for item in stored_chunks)
 
         mock_vector_rag_hits_for_store(monkeypatch, store)
@@ -589,10 +595,22 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
             case_ids=["appendicitis_001"],
             query_terms=["疼痛迁移 诱发缓解因素"],
             allowed_visibilities={"pre_submit_safe"},
+            stage_scope=["history_taking"],
             store=store,
         )
         assert enabled_context
         assert enabled_context[0]["knowledge_id"].startswith(uploaded_document["document_id"])
+        assert (
+            retrieve_agent_context(
+                agent_role="coach",
+                case_ids=["appendicitis_001"],
+                query_terms=["疼痛迁移 诱发缓解因素"],
+                allowed_visibilities={"pre_submit_safe"},
+                stage_scope=["physical_exam"],
+                store=store,
+            )
+            == []
+        )
 
         disabled_response = client.patch(
             f"/api/admin/rag/documents/{uploaded_document['document_id']}/enabled",
@@ -610,6 +628,7 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
             case_ids=["appendicitis_001"],
             query_terms=["疼痛迁移 诱发缓解因素"],
             allowed_visibilities={"pre_submit_safe"},
+            stage_scope=["history_taking"],
             store=store,
         )
         == []
@@ -636,6 +655,8 @@ def test_admin_rag_document_upload_defaults_apply_to_all_generative_agents(tmp_p
     assert upload_response.status_code == 200
     uploaded_document = upload_response.json()["document"]
     assert uploaded_document["visibility"] == "pre_submit_safe"
+    assert uploaded_document["stage_scope"] == ["any"]
+    assert uploaded_document["stage_scope_labels"] == ["全部训练阶段"]
     assert set(uploaded_document["allowed_agents"]) == {
         "coach",
         "reflection",
@@ -789,6 +810,10 @@ def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypat
             "/api/admin/rag/knowledge",
             json={**base_payload, "visibility": "secret_scoring_only", "allowed_agents": ["coach"]},
         )
+        unknown_stage_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={**base_payload, "stage_scope": ["any", "operating_room"]},
+        )
         empty_content_response = client.post(
             "/api/admin/rag/knowledge",
             json={
@@ -807,6 +832,8 @@ def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypat
     assert unknown_source_response.json()["detail"] == "source_id is not registered"
     assert secret_for_coach_response.status_code == 400
     assert secret_for_coach_response.json()["detail"] == "secret scoring knowledge cannot be exposed to generative agents"
+    assert unknown_stage_response.status_code == 400
+    assert unknown_stage_response.json()["detail"] == "unsupported knowledge stage scope"
     assert empty_content_response.status_code == 400
     assert empty_content_response.json()["detail"] == "knowledge content requires kind, title and text"
 

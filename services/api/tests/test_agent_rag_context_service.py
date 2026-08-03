@@ -117,8 +117,94 @@ def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forb
     ]
     assert results[0]["visibility"] == "pre_submit_safe"
     assert results[0]["allowed_agents"] == ["coach"]
+    assert results[0]["stage_scope"] == ["any"]
     assert "急性阑尾炎" not in str(results[0])
     assert "标准诊断" in results[0]["snippet"]
+
+
+def test_retrieve_agent_context_filters_by_training_stage_and_normalizes_aliases(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    for knowledge_id, stage_scope, title in [
+        ("case:appendicitis_001:coach:history", ["history_taking"], "问诊阶段资料"),
+        ("case:appendicitis_001:coach:exam", ["physical_exam"], "查体阶段资料"),
+        ("case:appendicitis_001:coach:test", ["auxiliary_test"], "检查阶段资料"),
+        ("case:appendicitis_001:coach:any", ["any"], "全阶段安全资料"),
+    ]:
+        store.upsert_item(
+            {
+                "knowledge_id": knowledge_id,
+                "scope": "case",
+                "case_id": "appendicitis_001",
+                "content_kind": "coach_hint_note",
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach"],
+                "stage_scope": stage_scope,
+                "source_id": "",
+                "title": title,
+                "text": f"{title}正文。",
+                "tags": ["stage_test"],
+                "version": 1,
+            },
+            updated_by="admin@example.test",
+        )
+
+    vector_hits = [
+        RetrievalDocument(
+            reference=f"rag_knowledge:{knowledge_id}",
+            source_type="rag_knowledge",
+            title=title,
+            snippet=title,
+            score=1.0 - index * 0.01,
+        )
+        for index, (knowledge_id, _, title) in enumerate(
+            [
+                ("case:appendicitis_001:coach:history", [], "问诊阶段资料"),
+                ("case:appendicitis_001:coach:exam", [], "查体阶段资料"),
+                ("case:appendicitis_001:coach:test", [], "检查阶段资料"),
+                ("case:appendicitis_001:coach:any", [], "全阶段安全资料"),
+            ]
+        )
+    ]
+    captured_queries: list[str] = []
+
+    def fake_search(query: str, limit: int) -> list[RetrievalDocument]:
+        captured_queries.append(query)
+        return vector_hits[:limit]
+
+    monkeypatch.setattr(agent_rag_context_module, "search_retrieval_documents", fake_search)
+
+    history_results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["腹痛训练"],
+        allowed_visibilities={"pre_submit_safe"},
+        stage_scope=["history_taking"],
+        limit=4,
+        store=store,
+    )
+    test_results = retrieve_agent_context(
+        agent_role="coach",
+        case_ids=["appendicitis_001"],
+        query_terms=["腹痛训练"],
+        allowed_visibilities={"pre_submit_safe"},
+        stage_scope=["auxiliary_testing"],
+        limit=4,
+        store=store,
+    )
+
+    assert [item["knowledge_id"] for item in history_results] == [
+        "case:appendicitis_001:coach:history",
+        "case:appendicitis_001:coach:any",
+    ]
+    assert [item["knowledge_id"] for item in test_results] == [
+        "case:appendicitis_001:coach:test",
+        "case:appendicitis_001:coach:any",
+    ]
+    assert "history_taking" in captured_queries[0]
+    assert "auxiliary_test" in captured_queries[1]
 
 
 def test_retrieve_agent_context_does_not_keyword_scan_when_vector_retrieval_misses(

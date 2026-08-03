@@ -744,6 +744,7 @@ def _retrieve_skill_generation_knowledge_context(
         case_ids=context.case_ids,
         query_terms=query_terms,
         allowed_visibilities=SKILL_GENERATION_RAG_VISIBILITIES,
+        stage_scope=[*_stage_scope(_skill_type(context)), "feedback"],
         limit=limit,
         store=rag_knowledge_store,
     )
