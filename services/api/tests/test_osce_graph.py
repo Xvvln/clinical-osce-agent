@@ -291,6 +291,34 @@ def active_skill_context() -> dict[str, list[dict[str, object]]]:
     }
 
 
+def humanistic_active_skill_context() -> dict[str, list[dict[str, object]]]:
+    return {
+        "skill_index": [
+            {
+                "skill_id": "skill_relationship_repair",
+                "title": "患者情绪回应训练",
+                "stage_scope": ["history_taking"],
+                "trigger_item_ids": ["rel_empathy"],
+            }
+        ],
+        "selected_skills": [
+            {
+                "skill_id": "skill_relationship_repair",
+                "skill_type": "relationship_repair",
+                "title": "患者情绪回应训练",
+                "suggested_strategy": "先识别情绪，再继续问诊。",
+                "intervention": {
+                    "teaching_goal": "识别并回应患者当前情绪。",
+                    "coach_strategy": "先用一句话承认情绪，再继续问诊。",
+                    "hint_ladder": ["先识别情绪。", "再继续医学问诊。"],
+                    "avoid": ["不得虚构患者情绪。"],
+                },
+            }
+        ],
+        "skipped_reasons": [],
+    }
+
+
 def test_osce_graph_loads_case_intro_state() -> None:
     graph = build_osce_graph()
 
@@ -1246,6 +1274,41 @@ def test_osce_graph_uses_injected_patient_responder_for_history_reply() -> None:
         in getattr(patient_request, "protected_fact_texts")
     )
     assert getattr(patient_request, "deterministic_hints")["answerable_fact_ids"] == ["appendicitis_001.hf_01"]
+
+
+def test_osce_graph_projects_humanistic_skill_to_patient_style_without_strategy_or_facts() -> None:
+    captured_requests: list[object] = []
+
+    def capturing_patient_responder(request: object) -> str:
+        captured_requests.append(request)
+        return str(getattr(request, "canonical_answer"))
+
+    graph = build_osce_graph(
+        patient_responder=capturing_patient_responder,
+        coach_agent=silent_coach_agent,
+    )
+
+    result = graph.invoke(
+        base_hint_state(
+            stage="history_taking",
+            student_message="你现在最担心什么？",
+            active_skill_context=humanistic_active_skill_context(),
+        )
+    )
+
+    assert len(captured_requests) == 1
+    role_policy = getattr(captured_requests[0], "role_skill_policy")
+    assert role_policy["active"] is True
+    assert role_policy["practice_focus"] == [
+        "让当前已存在的患者情绪更容易被学生感知和回应"
+    ]
+    assert "skill_relationship_repair" not in str(role_policy)
+    assert "先用一句话承认情绪" not in str(role_policy)
+    patient_turn = result["agent_turn_memory"][0]
+    assert patient_turn["selected_skill_ids"] == ["skill_relationship_repair"]
+    audit_policy = patient_turn["turn_analysis"]["patient_skill_role_policy"]
+    assert audit_policy["active"] is True
+    assert audit_policy["source_skill_ids"] == ["skill_relationship_repair"]
 
 
 def test_patient_responder_receives_revealed_facts_and_dialogue_context() -> None:
@@ -2286,6 +2349,14 @@ def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:
         "复盘提示：复盘本轮是否先建立腹痛演变时间线。\n"
         "避免事项：不得透露标准诊断。"
     ]
+    teacher_role_policy = getattr(captured_requests[1], "hint_context")["skill_selection"]["role_policy"]
+    assert teacher_role_policy["active"] is True
+    assert teacher_role_policy["precedence"][:3] == [
+        "case_fact_boundary",
+        "current_hint_policy",
+        "safety_boundary",
+    ]
+    assert teacher_role_policy["interventions"][0]["skill_id"] == "skill_selected_history"
     assert "腹痛迁移追问训练" in getattr(captured_requests[1], "base_hint")
     assert "旧技能" not in getattr(captured_requests[1], "base_hint")
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == ["skill_selected_history"]
@@ -2299,6 +2370,11 @@ def test_osce_graph_socratic_hint_uses_active_selected_skill_context() -> None:
     assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selection_policy"] == (
         "deterministic_fallback"
     )
+    assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["role_policy"] == {
+        "version": "skill_role_policy.v1",
+        "active": True,
+        "source_skill_ids": ["skill_selected_history"],
+    }
 
 
 def test_osce_graph_socratic_hint_does_not_inject_skill_before_student_action() -> None:
@@ -2319,6 +2395,7 @@ def test_osce_graph_socratic_hint_does_not_inject_skill_before_student_action() 
     assert request_payload["hint_context"]["skill_selection"]["available_skill_ids"] == ["skill_selected_history"]
     assert getattr(captured_requests[1], "prompt_kind") == "socratic_hint"
     assert getattr(captured_requests[1], "skill_context") == []
+    assert "role_policy" not in getattr(captured_requests[1], "hint_context")["skill_selection"]
     assert result["hint"] == "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
     assert "本轮训练重点" not in result["hint"]
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == []

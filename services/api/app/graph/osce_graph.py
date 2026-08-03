@@ -47,6 +47,10 @@ from app.services.patient_emotion import infer_patient_emotion, normalize_patien
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.rule_evaluator import LlmRubricScorer, evaluate_session_rules
 from app.services.session_resource_policy import MAX_HYPOTHESIS_RECORDS_PER_SESSION
+from app.services.skill_role_policy_service import (
+    build_patient_skill_role_projection,
+    build_teacher_skill_role_projection,
+)
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
 from app.services.turn_intent_agent import (
     TurnIntentRequest,
@@ -420,6 +424,9 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         student_message=student_message,
         turn_id=turn_id,
     )
+    patient_skill_role_projection = build_patient_skill_role_projection(
+        state.get("active_skill_context", {})
+    )
     _emit_processing_progress(state, "patient_reply", status="active")
     patient_reply_started_at, patient_reply_started_perf = _start_processing_step()
     raw_patient_reply = patient_responder(
@@ -458,6 +465,11 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
                 answerable_fact_ids=answerable_fact_ids,
                 turn_policy=turn_policy,
             ),
+            role_skill_policy=(
+                patient_skill_role_projection["provider_policy"]
+                if patient_skill_role_projection["active"]
+                else {}
+            ),
         )
     )
     reply, patient_emotion = _normalize_patient_responder_output(raw_patient_reply)
@@ -488,6 +500,16 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
             ]
         )
 
+    patient_turn_analysis = dict(turn_analysis)
+    if patient_skill_role_projection["active"]:
+        patient_turn_analysis["patient_skill_role_policy"] = {
+            "version": patient_skill_role_projection["version"],
+            "active": True,
+            "source_skill_ids": list(patient_skill_role_projection["source_skill_ids"]),
+            "practice_focus": list(
+                patient_skill_role_projection["provider_policy"].get("practice_focus", [])
+            ),
+        }
     agent_turn_memory = _append_agent_turn_memory(
         state,
         student_message=student_message,
@@ -495,13 +517,18 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         reply_role="patient",
         current_intents=current_intents,
         turn_policy=turn_policy,
-        turn_analysis=turn_analysis,
+        turn_analysis=patient_turn_analysis,
         agent_path=["input_router_node", "patient_response_node"],
         revealed_fact_id=revealed_fact_id,
         revealed_fact_ids=revealed_fact_ids,
         safety_flags=list(state.get("safety_flags", [])),
         reply_emotion=patient_emotion,
         patient_affect_transition=selected_patient_affect_transition,
+        selected_skill_ids=(
+            list(patient_skill_role_projection["source_skill_ids"])
+            if patient_skill_role_projection["active"]
+            else None
+        ),
         processing_trace=processing_trace,
     )
     patient_processing_trace = list(processing_trace)
@@ -831,6 +858,22 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         turn_analysis = {**turn_analysis, "routed_skill_context": routed_skill_context}
     if router_turn_analysis:
         turn_analysis = {**turn_analysis, **router_turn_analysis}
+    teacher_skill_role_projection = build_teacher_skill_role_projection(
+        state.get("active_skill_context", {}),
+        selected_skill_ids,
+    )
+    if teacher_skill_role_projection["active"]:
+        skill_selection_context = hint_context.get("skill_selection")
+        if not isinstance(skill_selection_context, dict):
+            skill_selection_context = {}
+            hint_context["skill_selection"] = skill_selection_context
+        skill_selection_context["role_policy"] = teacher_skill_role_projection["provider_policy"]
+        if routed_skill_context is not None:
+            routed_skill_context["role_policy"] = {
+                "version": teacher_skill_role_projection["version"],
+                "active": True,
+                "source_skill_ids": list(teacher_skill_role_projection["source_skill_ids"]),
+            }
     skill_base_hint = _build_enabled_skill_hint(selected_skill_context)
     selected_hint_level = _selected_hint_ladder_level(pedagogy_state)
     coach_base_hint = _compose_progressive_coach_base_hint(

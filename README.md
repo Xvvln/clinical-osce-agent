@@ -64,9 +64,9 @@ TraceOSCE 适合用于：
 
 | 智能体 | 职责 |
 | --- | --- |
-| PatientAgent | 扮演标准化病人，只回答当前允许披露的病例事实 |
-| TeacherAgent | 负责训练提示、上下文评估、Skill Router、RAG 教学知识辅助和训练后复盘 |
-| ApprovalAgent | 审核 Skill 候选和需要进入受控链路的模型输出；审批异常时按 fail-closed（失败关闭）处理 |
+| PatientAgent | 扮演标准化病人，只回答当前允许披露的病例事实；人文类 Skill 只能通过去标识化角色投影影响表达与已存在情绪的可感知度 |
+| TeacherAgent | 负责训练提示、上下文评估、Skill Router、RAG 教学知识辅助和训练后复盘；只使用本轮 Router 选中的 Skill 干预 |
+| ApprovalAgent | 审核 Skill 候选和需要进入受控链路的模型输出；禁区策略、成效指标或质量检查不合格时由回归门禁阻断，异常时按 fail-closed（失败关闭）处理 |
 
 以下部分保持确定性或工具层实现：
 
@@ -109,7 +109,7 @@ Skill 是学生训练后的可复用教学记忆。它不是医学事实库，�
 3. 高频问题或本轮关键问题生成候选 Skill。
 4. 审批 Agent 和回归门禁检查候选内容。
 5. 管理员审核或自动应用。
-6. enabled Skill 在后续训练中由 TeacherAgent 按上下文选择性调用。
+6. enabled Skill 在后续训练中先根据病例、学生、阶段和当前缺口筛选，再按角色投影：PatientAgent 只获得无事实的人文表达约束，TeacherAgent 只获得本轮 Router 选中的教学干预，ApprovalAgent 负责准入检查。
 
 当样本不足时，系统只展示“样本不足”或应用痕迹，不伪造能力提升。
 

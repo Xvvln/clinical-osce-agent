@@ -29,7 +29,13 @@ class TrainingSkillRegressionGate:
     def review_candidate(self, candidate: dict[str, Any], batch_result: EvaluationBatchResult) -> dict[str, Any]:
         safety_violations = _candidate_safety_violations(candidate)
         context_violations = candidate_context_safety_violations(candidate)
-        regression_passed = batch_result.passed and not safety_violations and not context_violations
+        approval_violations = _approval_agent_violations(candidate)
+        regression_passed = (
+            batch_result.passed
+            and not safety_violations
+            and not context_violations
+            and not approval_violations
+        )
         review: dict[str, Any] = {
             "candidate_id": candidate["candidate_id"],
             "status": "ready_for_review" if regression_passed else "blocked_by_regression",
@@ -47,6 +53,8 @@ class TrainingSkillRegressionGate:
             review["candidate_safety_violations"] = safety_violations
         if context_violations:
             review["candidate_context_violations"] = context_violations
+        if approval_violations:
+            review["approval_agent_violations"] = approval_violations
         return review
 
 
@@ -64,6 +72,27 @@ def _candidate_safety_violations(candidate: dict[str, Any]) -> list[str]:
         for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items()
         if pattern.search(candidate_text)
     )
+    return violations
+
+
+def _approval_agent_violations(candidate: dict[str, Any]) -> list[str]:
+    approval_review = candidate.get("approval_agent_review")
+    if not isinstance(approval_review, dict):
+        return []
+    violations: list[str] = []
+    if str(approval_review.get("decision") or "") == "blocked":
+        violations.append("approval_decision_blocked")
+    quality_review = approval_review.get("quality_review")
+    if isinstance(quality_review, dict) and quality_review.get("passed") is False:
+        violations.append("approval_quality_review_failed")
+        for failed_check in quality_review.get("failed_checks", []):
+            violation = f"approval_check:{str(failed_check).strip()}"
+            if violation not in violations:
+                violations.append(violation)
+    role_policy = approval_review.get("role_policy")
+    if isinstance(role_policy, dict) and role_policy.get("passed") is False:
+        if "approval_role_policy_failed" not in violations:
+            violations.append("approval_role_policy_failed")
     return violations
 
 

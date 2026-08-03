@@ -51,6 +51,8 @@ def test_patient_responder_prompt_requires_real_patient_voice() -> None:
     assert "patient_affect_state" in module.SYSTEM_PROMPT_TEMPLATE
     assert "只能影响语气" in module.SYSTEM_PROMPT_TEMPLATE
     assert "不能新增病例事实" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "role_skill_policy" in module.SYSTEM_PROMPT_TEMPLATE
+    assert "不能选择、补写或改变任何病例事实" in module.SYSTEM_PROMPT_TEMPLATE
 
 
 def test_create_configured_patient_responder_falls_back_to_deterministic_without_external_config(monkeypatch) -> None:
@@ -364,6 +366,35 @@ def test_patient_provider_payload_contains_only_current_answerable_facts() -> No
     assert "急性阑尾炎" not in payload_text
     assert hidden_fact not in payload_text
     assert "present_illness_summary" not in payload_text
+
+
+def test_patient_provider_payload_includes_only_deidentified_role_skill_policy() -> None:
+    request = module.PatientResponderRequest(
+        case_id="appendicitis_001",
+        case_title="急性腹痛问诊",
+        chief_complaint="腹痛 1 天",
+        student_message="你现在最担心什么？",
+        current_intents=["ask_ideas_concerns_expectations"],
+        canonical_answer="我有点害怕是不是很严重。",
+        forbidden_terms=["急性阑尾炎"],
+        role_skill_policy={
+            "version": "skill_role_policy.v1",
+            "role": "patient",
+            "active": True,
+            "practice_focus": ["让当前已存在的患者情绪更容易被学生感知和回应"],
+            "constraints": ["表达风格不得决定或新增病例事实"],
+        },
+    )
+
+    provider_payload, _ = module._build_patient_provider_payload(request)
+
+    assert provider_payload["role_skill_policy"]["active"] is True
+    payload_text = str(provider_payload)
+    assert "skill_role_policy.v1" in payload_text
+    assert "skill_id" not in payload_text
+    assert "suggested_strategy" not in payload_text
+    assert "rubric" not in payload_text.casefold()
+    assert "急性阑尾炎" not in payload_text
 
 
 def _large_patient_fact_request() -> module.PatientResponderRequest:

@@ -76,6 +76,52 @@ def test_training_skill_approval_agent_removes_dose_and_drug_variants() -> None:
     assert "剂量" not in reviewed_text
     assert reviewed_candidate["candidate_id"] == candidate["candidate_id"]
     assert reviewed_candidate["trigger_item_ids"] == candidate["trigger_item_ids"]
+    approval_review = reviewed_candidate["approval_agent_review"]
+    assert approval_review["decision"] == "prepared_for_auto_apply"
+    assert approval_review["quality_review"]["passed"] is True
+    assert approval_review["role_policy"]["passed"] is True
+    assert approval_review["role_policy"]["prohibited_content_policy_source"] == "platform_default"
+    assert approval_review["role_policy"]["success_metrics_source"] == "platform_default"
+
+
+def test_training_skill_approval_agent_blocks_explicitly_weakened_role_policy() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_weakened_policy",
+        "trigger_item_id": "training_pattern_weakened_policy",
+        "trigger_item_ids": ["ht_migration"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "history_bundle",
+        "stage_scope": ["history_taking"],
+        "applies_when": {},
+        "effect_status": "insufficient_samples",
+        "title": "疼痛迁移问诊训练",
+        "description": "学生需要建立疼痛演变时间线。",
+        "suggested_strategy": "先追问起病部位和迁移过程。",
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": [],
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {
+            "forbid_main_diagnosis": True,
+            "forbid_hidden_facts": False,
+            "forbid_test_results": True,
+            "forbid_treatment_plan": True,
+            "forbid_dose": True,
+            "allowed_scope": "teaching_strategy_only",
+        },
+        "success_metrics": ["target_rubric_item_recovery_rate"],
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(candidate)
+    approval_review = reviewed_candidate["approval_agent_review"]
+
+    assert approval_review["decision"] == "blocked"
+    assert approval_review["quality_review"]["passed"] is False
+    assert approval_review["quality_review"]["failed_checks"] == [
+        "prohibited_content_policy_complete",
+        "success_metrics_declared",
+    ]
+    assert approval_review["role_policy"]["passed"] is False
 
 
 def test_training_skill_approval_agent_rewrites_protected_diagnosis_without_answer_placeholder() -> None:

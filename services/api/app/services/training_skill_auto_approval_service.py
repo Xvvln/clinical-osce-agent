@@ -11,6 +11,7 @@ from typing import Any
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.admin_display_resolver import trigger_item_labels as resolve_trigger_item_labels
 from app.services.rag_knowledge_store import rag_knowledge_store
+from app.services.skill_role_policy_service import build_approval_skill_role_policy
 from app.services.training_skill_policy import build_skill_memory_fields, build_teaching_action_plan
 from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_PATTERNS, FORBIDDEN_CANDIDATE_TERMS
 
@@ -194,9 +195,10 @@ class TrainingSkillApprovalAgent:
             reviewed_candidate=reviewed_candidate,
             retrieved_knowledge_context=retrieved_knowledge_context,
         )
+        approval_role_policy = build_approval_skill_role_policy(reviewed_candidate)
         reviewed_candidate["approval_agent_review"] = {
             "agent_id": self.agent_id,
-            "decision": "prepared_for_auto_apply",
+            "decision": "prepared_for_auto_apply" if quality_review["passed"] else "blocked",
             "revision_status": "modified" if changed_fields else "unchanged",
             "changed_fields": changed_fields,
             "reviewed_fields": [
@@ -208,6 +210,7 @@ class TrainingSkillApprovalAgent:
             ],
             "protected_fields": list(PROTECTED_CANDIDATE_FIELDS),
             "quality_review": quality_review,
+            "role_policy": approval_role_policy,
             "knowledge_references": [item["reference"] for item in retrieved_knowledge_context],
             "retrieved_knowledge_context": retrieved_knowledge_context,
             "safety_constraints": [
@@ -302,6 +305,12 @@ def _build_quality_review(
     ]
     intervention = _dict(reviewed_candidate.get("intervention"))
     teaching_sop = _dict(intervention.get("teaching_sop"))
+    approval_role_policy = build_approval_skill_role_policy(reviewed_candidate)
+    role_policy_checks = {
+        str(check.get("check_id") or ""): check
+        for check in approval_role_policy.get("checks", [])
+        if isinstance(check, dict)
+    }
     checks = [
         _quality_check(
             "protected_fields_preserved",
@@ -341,6 +350,18 @@ def _build_quality_review(
                 for item in retrieved_knowledge_context
             ),
             "RAG 片段已按 skill_approval 可见性过滤",
+        ),
+        _quality_check(
+            "prohibited_content_policy_complete",
+            "审批角色禁区策略完整",
+            bool(role_policy_checks.get("prohibited_content_policy_complete", {}).get("passed")),
+            str(role_policy_checks.get("prohibited_content_policy_complete", {}).get("detail") or "缺少禁区策略"),
+        ),
+        _quality_check(
+            "success_metrics_declared",
+            "审批角色已声明可追踪成效指标",
+            bool(role_policy_checks.get("success_metrics_declared", {}).get("passed")),
+            str(role_policy_checks.get("success_metrics_declared", {}).get("detail") or "缺少成效指标"),
         ),
     ]
     failed_checks = [check["check_id"] for check in checks if not check["passed"]]

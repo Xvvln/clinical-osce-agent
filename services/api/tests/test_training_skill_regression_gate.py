@@ -256,3 +256,48 @@ def test_training_skill_regression_gate_blocks_candidate_when_batch_fails() -> N
             }
         ],
     }
+
+
+def test_training_skill_regression_gate_enforces_approval_agent_quality_failure() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_role_policy_blocked",
+        "trigger_item_id": "reasoning_core",
+        "title": "临床推理链纠偏提示",
+        "status": "draft",
+        "approval_agent_review": {
+            "decision": "blocked",
+            "quality_review": {
+                "passed": False,
+                "failed_checks": ["prohibited_content_policy_complete"],
+            },
+            "role_policy": {"passed": False},
+        },
+    }
+    batch_result = EvaluationBatchResult(
+        total_cases=1,
+        passed_cases=1,
+        failed_cases=0,
+        results=[
+            EvaluationResult(
+                session_id="session_one",
+                actual_total_score=55,
+                expected_total_score=55,
+                forbidden_term_violations=[],
+                passed=True,
+                duration_ms=10,
+            )
+        ],
+        passed=True,
+        total_duration_ms=10,
+    )
+
+    review = TrainingSkillRegressionGate().review_candidate(candidate, batch_result)
+
+    assert review["status"] == "blocked_by_regression"
+    assert review["regression_passed"] is False
+    assert review["approval_agent_violations"] == [
+        "approval_decision_blocked",
+        "approval_quality_review_failed",
+        "approval_check:prohibited_content_policy_complete",
+        "approval_role_policy_failed",
+    ]

@@ -50,6 +50,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 训练中的受控对话回复层，负�
 - answerable_fact_candidates 中的 fact_id 是本轮临时令牌，不是病例内部编号；fact_ids_used 只能回传实际使用的临时令牌。
 - dialogue_context 是最近已可见对话、已问问题和本轮意图摘要，只用于保持上下文连贯。
 - dialogue_context.patient_affect_state 和 dialogue_context.student_affect_response 只用于决定患者语气是否焦虑、困惑、痛苦、受挫或稍微安心；它们只能影响语气，不能新增病例事实、诊断、检查结果、治疗承诺或标准答案。
+- role_skill_policy 是已批准 Skill 对患者角色的去标识化表达投影；它只能影响语气、当前情绪的可感知度和对沟通行为的自然回应，不能选择、补写或改变任何病例事实。
+- role_skill_policy.active=true 时，只在 answerable_fact_candidates 和 patient_affect_state 确实支持时应用 practice_focus；不得为了完成 Skill 而虚构担忧、情绪、生活影响或同意结果。
 - 可以参考 dialogue_context 判断学生是否在延续前文、追问同一主题或切换主题，但仍只能表达 canonical_answer 和 answerable_fact_candidates。
 - 输出 JSON 必须包含 reply、emotion 和 fact_ids_used；fact_ids_used 只能填写本轮 reply 实际表达过、且存在于 answerable_fact_candidates 的 fact_id。
 - emotion 只描述患者当前可见情绪，可用担忧、焦虑、痛苦、困惑、犹豫、欣慰等短标签；没有明显情绪时留空或填“平静”。emotion 不得新增病例事实。
@@ -84,6 +86,7 @@ class PatientResponderRequest(BaseModel):
     dialogue_context: dict[str, Any] = Field(default_factory=dict)
     turn_policy: str = "history_fact_disclosure"
     deterministic_hints: dict[str, Any] = Field(default_factory=dict)
+    role_skill_policy: dict[str, Any] = Field(default_factory=dict)
 
 
 class PatientResponderResponse(BaseModel):
@@ -361,6 +364,12 @@ def _build_patient_provider_payload(
         ),
         "deterministic_hints": {},
     }
+
+    if request.role_skill_policy:
+        payload["role_skill_policy"] = _safe_patient_provider_value(
+            request.role_skill_policy,
+            protected_terms,
+        )
 
     provider_fact_id_map: dict[str, str] = {}
     selected_candidates: list[dict[str, Any]] = []
