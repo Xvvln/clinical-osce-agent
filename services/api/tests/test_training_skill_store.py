@@ -52,6 +52,18 @@ def _expected_success_metrics() -> list[str]:
     ]
 
 
+def _with_approval(candidate: dict[str, object]) -> dict[str, object]:
+    return {
+        **candidate,
+        "approval_agent_review": {
+            "agent_id": "skill_auto_approval_agent",
+            "decision": "ready_for_human_review",
+            "quality_review": {"passed": True, "failed_checks": []},
+            "role_policy": {"passed": True},
+        },
+    }
+
+
 def _without_memory_fields(skill: dict[str, object]) -> dict[str, object]:
     return {
         key: value
@@ -99,7 +111,7 @@ def test_training_skill_store_enables_approved_candidate_across_instances(tmp_pa
         },
     }
 
-    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+    enabled = TrainingSkillStore(database_path).enable_candidate(_with_approval(candidate))
     loaded_skill = TrainingSkillStore(database_path).get_skill("skill_reasoning_core")
 
     assert enabled is True
@@ -211,7 +223,7 @@ def test_training_skill_store_preserves_skill_policy_metadata(tmp_path) -> None:
         "review": {"status": "approved", "regression_passed": True},
     }
 
-    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+    enabled = TrainingSkillStore(database_path).enable_candidate(_with_approval(candidate))
     loaded_skill = TrainingSkillStore(database_path).get_skill("skill_training_pattern_dxd_crohn_reasoning_core")
 
     assert enabled is True
@@ -289,10 +301,39 @@ def test_training_skill_store_does_not_enable_unapproved_candidate(tmp_path) -> 
         },
     }
 
-    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+    enabled = TrainingSkillStore(database_path).enable_candidate(_with_approval(candidate))
 
     assert enabled is False
     assert TrainingSkillStore(database_path).get_skill("skill_reasoning_core") is None
+
+
+def test_training_skill_store_fails_closed_without_complete_approval_evidence(tmp_path) -> None:
+    database_path = tmp_path / "training_skills.sqlite3"
+    candidate = {
+        "candidate_id": "skill_candidate_activation_gate_probe",
+        "trigger_item_id": "activation_gate_probe",
+        "title": "证据链训练",
+        "description": "训练学生结构化表达证据。",
+        "suggested_strategy": "请学生按支持、排除和待验证三类复盘。",
+        "source_report_count": 2,
+        "support_count": 2,
+        "review": {"status": "approved", "regression_passed": True},
+    }
+    store = TrainingSkillStore(database_path)
+
+    assert store.enable_candidate(candidate) is False
+
+    regression_failed = _with_approval(candidate)
+    regression_failed["review"] = {"status": "approved", "regression_passed": False}
+    assert store.enable_candidate(regression_failed) is False
+
+    quality_failed = _with_approval(candidate)
+    quality_failed["approval_agent_review"] = {
+        **quality_failed["approval_agent_review"],
+        "quality_review": {"passed": False, "failed_checks": ["case_facts_removed"]},
+    }
+    assert store.enable_candidate(quality_failed) is False
+    assert store.list_enabled_skills() == []
 
 
 def test_training_skill_store_does_not_enable_case_incompatible_approved_candidate(tmp_path) -> None:
@@ -310,7 +351,7 @@ def test_training_skill_store_does_not_enable_case_incompatible_approved_candida
         "review": {"status": "approved", "regression_passed": True},
     }
 
-    enabled = TrainingSkillStore(database_path).enable_candidate(candidate)
+    enabled = TrainingSkillStore(database_path).enable_candidate(_with_approval(candidate))
 
     assert enabled is False
     assert TrainingSkillStore(database_path).list_enabled_skills() == []
@@ -320,7 +361,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
     database_path = tmp_path / "training_skills.sqlite3"
     store = TrainingSkillStore(database_path)
     store.enable_candidate(
-        {
+        _with_approval({
             "candidate_id": "skill_candidate_reasoning_core",
             "trigger_item_id": "reasoning_core",
             "title": "临床推理链纠偏提示",
@@ -329,10 +370,10 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "source_report_count": 3,
             "support_count": 2,
             "review": {"status": "approved", "regression_passed": True},
-        }
+        })
     )
     store.enable_candidate(
-        {
+        _with_approval({
             "candidate_id": "skill_candidate_ht_location",
             "trigger_item_id": "ht_location",
             "title": "疼痛部位追问提示",
@@ -341,7 +382,7 @@ def test_training_skill_store_lists_enabled_skills_in_insert_order(tmp_path) -> 
             "source_report_count": 4,
             "support_count": 2,
             "review": {"status": "approved", "regression_passed": True},
-        }
+        })
     )
 
     skills = TrainingSkillStore(database_path).list_enabled_skills()
@@ -443,7 +484,7 @@ def test_global_skill_source_cleanup_marks_stale_disables_and_fences_late_enable
         trigger_item_id: str,
         source_session_ids: list[str],
     ) -> dict[str, object]:
-        return {
+        return _with_approval({
             "candidate_id": candidate_id,
             "trigger_item_id": trigger_item_id,
             "trigger_item_ids": [trigger_item_id],
@@ -476,7 +517,7 @@ def test_global_skill_source_cleanup_marks_stale_disables_and_fences_late_enable
                 "status": "approved",
                 "regression_passed": True,
             },
-        }
+        })
 
     affected_candidate = candidate(
         "candidate-affected",
@@ -571,7 +612,7 @@ def test_skill_hydration_cannot_overwrite_concurrent_source_cleanup(
             "regression_passed": True,
         },
     }
-    assert store.enable_candidate(candidate)
+    assert store.enable_candidate(_with_approval(candidate))
 
     hydrate_entered = Event()
     allow_hydrate = Event()
@@ -754,7 +795,7 @@ def _personal_skill_candidate(
     owner_student_id: str,
 ) -> dict[str, object]:
     candidate_id = f"personal_skill_candidate_{session_id}"
-    return {
+    return _with_approval({
         "candidate_id": candidate_id,
         "trigger_item_id": f"personal_{session_id}",
         "trigger_item_ids": ["reasoning_core"],
@@ -775,4 +816,4 @@ def _personal_skill_candidate(
             "status": "approved",
             "regression_passed": True,
         },
-    }
+    })

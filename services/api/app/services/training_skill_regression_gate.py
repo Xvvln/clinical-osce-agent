@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
+from app.services.training_skill_activation_gate import approval_agent_review_violations
 from app.services.training_skill_context_safety import candidate_context_safety_violations
 
 FORBIDDEN_CANDIDATE_TERMS = [
@@ -24,12 +25,11 @@ FORBIDDEN_CANDIDATE_PATTERNS = {
     "dose_frequency": re.compile(r"(?<![A-Za-z0-9])(?:q\d+h|bid|tid|qid|qd|qn|prn|po|iv|im)(?![A-Za-z0-9])", re.IGNORECASE),
 }
 
-
 class TrainingSkillRegressionGate:
     def review_candidate(self, candidate: dict[str, Any], batch_result: EvaluationBatchResult) -> dict[str, Any]:
         safety_violations = _candidate_safety_violations(candidate)
         context_violations = candidate_context_safety_violations(candidate)
-        approval_violations = _approval_agent_violations(candidate)
+        approval_violations = approval_agent_review_violations(candidate)
         regression_passed = (
             batch_result.passed
             and not safety_violations
@@ -72,27 +72,6 @@ def _candidate_safety_violations(candidate: dict[str, Any]) -> list[str]:
         for violation_id, pattern in FORBIDDEN_CANDIDATE_PATTERNS.items()
         if pattern.search(candidate_text)
     )
-    return violations
-
-
-def _approval_agent_violations(candidate: dict[str, Any]) -> list[str]:
-    approval_review = candidate.get("approval_agent_review")
-    if not isinstance(approval_review, dict):
-        return []
-    violations: list[str] = []
-    if str(approval_review.get("decision") or "") == "blocked":
-        violations.append("approval_decision_blocked")
-    quality_review = approval_review.get("quality_review")
-    if isinstance(quality_review, dict) and quality_review.get("passed") is False:
-        violations.append("approval_quality_review_failed")
-        for failed_check in quality_review.get("failed_checks", []):
-            violation = f"approval_check:{str(failed_check).strip()}"
-            if violation not in violations:
-                violations.append(violation)
-    role_policy = approval_review.get("role_policy")
-    if isinstance(role_policy, dict) and role_policy.get("passed") is False:
-        if "approval_role_policy_failed" not in violations:
-            violations.append("approval_role_policy_failed")
     return violations
 
 

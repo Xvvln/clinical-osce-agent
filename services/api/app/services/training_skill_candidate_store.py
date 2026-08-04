@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.training_skill_activation_gate import candidate_activation_gate_violations
 from app.services.training_skill_context_safety import candidate_with_context_safety_review
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -334,7 +335,12 @@ class TrainingSkillCandidateStore:
                     (json.dumps(candidate, ensure_ascii=False), candidate_id),
                 )
             return False
-        candidate["review"] = {**candidate["review"], "status": status, "reviewer_id": reviewer_id}
+        next_review = {**candidate["review"], "status": status, "reviewer_id": reviewer_id}
+        if status == "approved" and candidate_activation_gate_violations(
+            {**candidate, "review": next_review}
+        ):
+            return False
+        candidate["review"] = next_review
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
                 "UPDATE training_skill_candidates SET candidate_json = ? WHERE candidate_id = ?",

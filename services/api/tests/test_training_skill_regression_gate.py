@@ -2,12 +2,22 @@ from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResu
 from app.services.training_skill_regression_gate import TrainingSkillRegressionGate
 
 
+def _passing_approval_agent_review() -> dict[str, object]:
+    return {
+        "agent_id": "skill_auto_approval_agent",
+        "decision": "prepared_for_auto_apply",
+        "quality_review": {"passed": True, "failed_checks": []},
+        "role_policy": {"passed": True},
+    }
+
+
 def test_training_skill_regression_gate_marks_candidate_ready_when_batch_passes() -> None:
     candidate = {
         "candidate_id": "skill_candidate_reasoning_core",
         "trigger_item_id": "reasoning_core",
         "title": "临床推理链纠偏提示",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=2,
@@ -48,6 +58,29 @@ def test_training_skill_regression_gate_marks_candidate_ready_when_batch_passes(
     }
 
 
+def test_training_skill_regression_gate_blocks_candidate_without_approval_review() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_missing_approval_review",
+        "trigger_item_id": "reasoning_core",
+        "title": "临床推理链纠偏提示",
+        "status": "draft",
+    }
+    batch_result = EvaluationBatchResult(
+        total_cases=1,
+        passed_cases=1,
+        failed_cases=0,
+        results=[],
+        passed=True,
+        total_duration_ms=1,
+    )
+
+    review = TrainingSkillRegressionGate().review_candidate(candidate, batch_result)
+
+    assert review["status"] == "blocked_by_regression"
+    assert review["regression_passed"] is False
+    assert review["approval_agent_violations"] == ["approval_review_missing"]
+
+
 def test_training_skill_regression_gate_blocks_candidate_with_forbidden_medical_content() -> None:
     candidate = {
         "candidate_id": "skill_candidate_reasoning_core",
@@ -56,6 +89,7 @@ def test_training_skill_regression_gate_blocks_candidate_with_forbidden_medical_
         "description": "提醒学生按证据链梳理诊断。",
         "suggested_strategy": "直接告诉学生治疗方案和用药剂量。",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=1,
@@ -97,6 +131,7 @@ def test_training_skill_regression_gate_blocks_dose_and_drug_variants() -> None:
         "description": "提醒学生不要直接写阿莫西林500mg q8h。",
         "suggested_strategy": "提示学生给出处方。",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=1,
@@ -139,6 +174,7 @@ def test_training_skill_regression_gate_blocks_case_incompatible_candidate_conte
         "description": "急腹症鉴别诊断反复遗漏，需补充妇科和泌尿系统排除。",
         "suggested_strategy": "面对急性腹痛患者时，请系统排除妇科、异位妊娠、泌尿科及肠道相关疾病。",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=1,
@@ -180,6 +216,7 @@ def test_training_skill_regression_gate_prefers_explicit_case_ids_over_related_r
         "description": "女性甲状腺病例中需要追问月经变化和家族史。",
         "suggested_strategy": "追问月经变化、怕热多汗和家族史，但不透露诊断答案。",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=1,
@@ -211,6 +248,7 @@ def test_training_skill_regression_gate_blocks_candidate_when_batch_fails() -> N
         "trigger_item_id": "reasoning_core",
         "title": "临床推理链纠偏提示",
         "status": "draft",
+        "approval_agent_review": _passing_approval_agent_review(),
     }
     batch_result = EvaluationBatchResult(
         total_cases=2,
@@ -265,6 +303,7 @@ def test_training_skill_regression_gate_enforces_approval_agent_quality_failure(
         "title": "临床推理链纠偏提示",
         "status": "draft",
         "approval_agent_review": {
+            "agent_id": "skill_auto_approval_agent",
             "decision": "blocked",
             "quality_review": {
                 "passed": False,

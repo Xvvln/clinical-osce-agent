@@ -340,6 +340,19 @@ def test_admin_can_seed_demo_training_loop(tmp_path, monkeypatch) -> None:
     assert payload["candidate"]["status"] == "approved"
     assert payload["enabled_skill"]["skill_id"] == "skill_training_pattern_abdominal_pain_history_bundle"
     assert payload["enabled_skill"]["status"] == "enabled"
+    stored_candidate = candidate_store.get_candidate(payload["candidate"]["candidate_id"])
+    assert stored_candidate is not None
+    assert stored_candidate["approval_agent_review"]["decision"] == "ready_for_human_review"
+    assert stored_candidate["approval_agent_review"]["quality_review"]["passed"] is True
+    assert stored_candidate["review"]["regression_passed"] is True
+    candidate_events = osce_session_service.training_event_store.list_session_events(
+        payload["candidate"]["candidate_id"]
+    )
+    assert [event["event_type"] for event in candidate_events] == [
+        "admin_skill_candidate_generated",
+        "admin_skill_candidate_agent_reviewed",
+        "admin_skill_candidate_approved",
+    ]
     applied_events = [
         event
         for event in osce_session_service.training_event_store.list_session_events(payload["sessions"][-1]["session_id"])
@@ -3280,6 +3293,12 @@ def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_ca
             "status": "draft",
             "source_report_count": 1,
             "support_count": 1,
+            "approval_agent_review": {
+                "agent_id": "skill_auto_approval_agent",
+                "decision": "ready_for_human_review",
+                "quality_review": {"passed": True, "failed_checks": []},
+                "role_policy": {"passed": True},
+            },
         },
         {
             "candidate_id": reviewed_candidate_id,
@@ -4060,6 +4079,12 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
             "source_report_count": 2,
             "support_count": 2,
             "related_recommendations": [],
+            "approval_agent_review": {
+                "agent_id": "skill_auto_approval_agent",
+                "decision": "ready_for_human_review",
+                "quality_review": {"passed": True, "failed_checks": []},
+                "role_policy": {"passed": True},
+            },
         },
         {
             "candidate_id": "skill_candidate_reasoning_core",

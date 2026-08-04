@@ -212,9 +212,13 @@ class ApprovingAgent:
         return {
             **candidate,
             "approval_agent_review": {
+                "agent_id": "skill_auto_approval_agent",
+                "decision": "prepared_for_auto_apply",
                 "revision_status": "unchanged",
                 "changed_fields": [],
                 "protected_terms_checked": len(protected_terms),
+                "quality_review": {"passed": True, "failed_checks": []},
+                "role_policy": {"passed": True},
             },
         }
 

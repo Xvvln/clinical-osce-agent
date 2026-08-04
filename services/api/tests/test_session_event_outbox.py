@@ -492,6 +492,12 @@ def test_create_uses_one_skill_snapshot_for_session_and_events(
         "source_report_count": 1,
         "support_count": 1,
         "review": {"status": "approved", "regression_passed": True},
+        "approval_agent_review": {
+            "agent_id": "skill_auto_approval_agent",
+            "decision": "ready_for_human_review",
+            "quality_review": {"passed": True, "failed_checks": []},
+            "role_policy": {"passed": True},
+        },
     }
     second_candidate = {
         "candidate_id": "candidate-second-snapshot",
@@ -504,6 +510,12 @@ def test_create_uses_one_skill_snapshot_for_session_and_events(
         "source_report_count": 1,
         "support_count": 1,
         "review": {"status": "approved", "regression_passed": True},
+        "approval_agent_review": {
+            "agent_id": "skill_auto_approval_agent",
+            "decision": "ready_for_human_review",
+            "quality_review": {"passed": True, "failed_checks": []},
+            "role_policy": {"passed": True},
+        },
     }
     assert service.training_skill_store.enable_candidate(first_candidate)
     assert service.training_skill_store.enable_candidate(second_candidate)

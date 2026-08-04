@@ -37,6 +37,15 @@ client = TestClient(app)
 AGENT_EVENT_TYPES = {"agent_decision_traced", "agent_reflection_recorded"}
 
 
+def _approved_agent_review() -> dict[str, object]:
+    return {
+        "agent_id": "skill_auto_approval_agent",
+        "decision": "ready_for_human_review",
+        "quality_review": {"passed": True, "failed_checks": []},
+        "role_policy": {"passed": True},
+    }
+
+
 def canonical_patient_responder(request: object) -> str:
     return str(getattr(request, "canonical_answer"))
 
@@ -1376,7 +1385,8 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             "source_report_count": 2,
             "support_count": 2,
             "related_recommendations": [],
-            "review": {"status": "approved"},
+            "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
     current_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
@@ -1501,6 +1511,7 @@ def test_new_session_skill_selection_uses_recent_profile_errors(tmp_path) -> Non
             "source_report_count": 20,
             "support_count": 20,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
     osce_session_service.training_skill_store.enable_candidate(
@@ -1516,6 +1527,7 @@ def test_new_session_skill_selection_uses_recent_profile_errors(tmp_path) -> Non
             "source_report_count": 1,
             "support_count": 1,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -1928,6 +1940,7 @@ def test_create_session_primes_enabled_training_skill_without_injecting_prompt(t
             "support_count": 2,
             "related_recommendations": ["rubric:appendicitis_001_rubric.item.reasoning_core"],
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -1962,6 +1975,7 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
             "support_count": 3,
             "related_recommendations": ["rubric:appendicitis_001_rubric.item.ht_migration"],
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -2020,6 +2034,7 @@ def test_active_skill_context_refreshes_after_session_stage_changes(tmp_path) ->
             "source_report_count": 2,
             "support_count": 3,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
     osce_session_service.training_skill_store.enable_candidate(
@@ -2035,6 +2050,7 @@ def test_active_skill_context_refreshes_after_session_stage_changes(tmp_path) ->
             "source_report_count": 2,
             "support_count": 4,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -2079,6 +2095,7 @@ def test_create_session_does_not_inject_enabled_training_skill_for_unrelated_cas
             "support_count": 7,
             "related_recommendations": ["rubric:appendicitis_001_rubric.item.dxd_crohn"],
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -2121,6 +2138,7 @@ def test_create_session_filters_enabled_skill_with_case_incompatible_teaching_co
             "support_count": 7,
             "related_recommendations": ["rubric:appendicitis_001_rubric.item.rs_exclude"],
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -2163,6 +2181,7 @@ def test_create_session_respects_enabled_training_skill_stage_scope(tmp_path) ->
                 "min_support_count": 2,
             },
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
 
@@ -3149,6 +3168,7 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
             "source_report_count": 3,
             "support_count": 2,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
     create_response = client.post(
@@ -4030,6 +4050,7 @@ def test_osce_session_records_training_events(tmp_path, authenticated_user: dict
             "source_report_count": 3,
             "support_count": 2,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": _approved_agent_review(),
         }
     )
     create_response = client.post(

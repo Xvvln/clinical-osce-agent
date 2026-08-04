@@ -216,6 +216,12 @@ def test_real_cross_session_skill_waits_for_recurrence_activates_then_exits_afte
             "source_report_count": 2,
             "support_count": 2,
             "review": {"status": "approved", "regression_passed": True},
+            "approval_agent_review": {
+                "agent_id": "skill_auto_approval_agent",
+                "decision": "ready_for_human_review",
+                "quality_review": {"passed": True, "failed_checks": []},
+                "role_policy": {"passed": True},
+            },
         }
     )
     assert enabled is True

@@ -61,6 +61,15 @@ def _build_service(tmp_path: Path) -> OsceSessionService:
     )
 
 
+def _approved_agent_review() -> dict[str, object]:
+    return {
+        "agent_id": "skill_auto_approval_agent",
+        "decision": "ready_for_human_review",
+        "quality_review": {"passed": True, "failed_checks": []},
+        "role_policy": {"passed": True},
+    }
+
+
 def _personal_candidate(*, session_id: str, student_id: str) -> dict[str, object]:
     candidate_id = f"personal_skill_candidate_{session_id}"
     return {
@@ -85,6 +94,7 @@ def _personal_candidate(*, session_id: str, student_id: str) -> dict[str, object
             "status": "approved",
             "regression_passed": True,
         },
+        "approval_agent_review": _approved_agent_review(),
     }
 
 
@@ -107,6 +117,7 @@ def _global_candidate() -> dict[str, object]:
             "status": "approved",
             "regression_passed": True,
         },
+        "approval_agent_review": _approved_agent_review(),
     }
 
 
@@ -154,6 +165,7 @@ def _source_global_candidate(
             "status": review_status,
             "regression_passed": True,
         },
+        "approval_agent_review": _approved_agent_review(),
     }
 
 

@@ -4,9 +4,16 @@ from typing import Any
 
 from app.services.auth_store import AuthStore
 from app.services.deployment_config import get_configured_admin_email_set
+from app.services.evaluation_runner import EvaluationBatchResult
 from app.services.osce_session_service import OsceSessionService
+from app.services.training_skill_auto_approval_service import (
+    AUTO_APPROVAL_AGENT_ID,
+    TrainingSkillApprovalAgent,
+)
+from app.services.training_skill_activation_gate import candidate_activation_gate_violations
 from app.services.training_skill_candidate_store import TrainingSkillCandidateStore
 from app.services.training_skill_policy import build_prohibited_content_policy, build_success_metrics, build_teaching_action_plan
+from app.services.training_skill_regression_gate import TrainingSkillRegressionGate
 
 DEMO_STUDENT_DISPLAY_NAME = "演示学生"
 DEMO_ADMIN_DISPLAY_NAME = "演示管理员"
@@ -53,10 +60,36 @@ def seed_demo_data(
         seeded_sessions.append({"session_id": session_id, "case_id": DEMO_CASE_ID, "purpose": "source_report"})
         seeded_reports.append(session_id)
 
-    candidate = _demo_skill_candidate()
-    if candidate_store.get_candidate(DEMO_CANDIDATE_ID) is None:
-        candidate_store.save_candidate(candidate, _ready_for_review_payload())
+    candidate, ready_review = _review_demo_skill_candidate()
+    stored_candidate = candidate_store.get_candidate(DEMO_CANDIDATE_ID)
+    if stored_candidate is None:
+        candidate_store.save_candidate(candidate, ready_review)
         _append_demo_candidate_event(osce_service, reviewer_email, "admin_skill_candidate_generated")
+        _append_demo_candidate_event(
+            osce_service,
+            AUTO_APPROVAL_AGENT_ID,
+            "admin_skill_candidate_agent_reviewed",
+            payload=candidate["approval_agent_review"],
+        )
+    elif (
+        stored_candidate.get("review", {}).get("status") == "approved"
+        and candidate_activation_gate_violations(stored_candidate)
+    ):
+        candidate_store.save_candidate(
+            candidate,
+            {
+                **ready_review,
+                "status": "approved",
+                "reviewer_id": str(stored_candidate.get("review", {}).get("reviewer_id") or reviewer_email),
+                "approval_mode": "manual_demo",
+            },
+        )
+        _append_demo_candidate_event(
+            osce_service,
+            AUTO_APPROVAL_AGENT_ID,
+            "admin_skill_candidate_agent_reviewed",
+            payload={**candidate["approval_agent_review"], "migration_review": True},
+        )
     stored_candidate = candidate_store.get_candidate(DEMO_CANDIDATE_ID)
     if stored_candidate is not None and stored_candidate.get("review", {}).get("status") == "ready_for_review":
         candidate_store.approve_candidate(DEMO_CANDIDATE_ID, reviewer_email)
@@ -204,19 +237,43 @@ def _demo_skill_candidate() -> dict[str, Any]:
     }
 
 
-def _ready_for_review_payload() -> dict[str, Any]:
-    return {
+def _review_demo_skill_candidate() -> tuple[dict[str, Any], dict[str, Any]]:
+    candidate = TrainingSkillApprovalAgent().review_candidate(_demo_skill_candidate())
+    review = TrainingSkillRegressionGate().review_candidate(
+        candidate,
+        EvaluationBatchResult(
+            total_cases=1,
+            passed_cases=1,
+            failed_cases=0,
+            results=[],
+            passed=True,
+            total_duration_ms=0,
+        ),
+    )
+    agent_review = dict(candidate["approval_agent_review"])
+    candidate["approval_agent_review"] = {
+        **agent_review,
+        "decision": (
+            "ready_for_human_review"
+            if review["status"] == "ready_for_review"
+            else "blocked_by_regression"
+        ),
+        "regression_status": review["status"],
+        "regression_passed": review["regression_passed"],
+    }
+    return candidate, {
         "candidate_id": DEMO_CANDIDATE_ID,
-        "status": "ready_for_review",
-        "regression_passed": True,
-        "evaluation_total_cases": 1,
-        "evaluation_passed_cases": 1,
-        "evaluation_failed_cases": 0,
-        "blocking_failures": [],
+        **review,
     }
 
 
-def _append_demo_candidate_event(osce_service: OsceSessionService, reviewer_email: str, event_type: str) -> None:
+def _append_demo_candidate_event(
+    osce_service: OsceSessionService,
+    reviewer_email: str,
+    event_type: str,
+    *,
+    payload: dict[str, Any] | None = None,
+) -> None:
     osce_service.training_event_store.append_event(
         session_id=DEMO_CANDIDATE_ID,
         case_id=DEMO_TRIGGER_ITEM_ID,
@@ -227,5 +284,6 @@ def _append_demo_candidate_event(osce_service: OsceSessionService, reviewer_emai
             "skill_id": DEMO_SKILL_ID,
             "support_count": 2,
             "source_report_count": 2,
+            **(payload or {}),
         },
     )

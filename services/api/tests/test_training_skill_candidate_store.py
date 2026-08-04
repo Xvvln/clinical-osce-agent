@@ -11,6 +11,15 @@ from app.services.training_skill_candidate_store import (
 )
 
 
+def _approved_agent_review() -> dict[str, object]:
+    return {
+        "agent_id": "skill_auto_approval_agent",
+        "decision": "ready_for_human_review",
+        "quality_review": {"passed": True, "failed_checks": []},
+        "role_policy": {"passed": True},
+    }
+
+
 def test_training_skill_candidate_store_persists_candidate_with_review_across_instances(tmp_path) -> None:
     database_path = tmp_path / "training_skill_candidates.sqlite3"
     candidate = {
@@ -143,6 +152,7 @@ def test_training_skill_candidate_store_does_not_overwrite_reviewed_candidate_wh
             "status": "draft",
             "source_report_count": 2,
             "support_count": 2,
+            "approval_agent_review": _approved_agent_review(),
         },
         {
             "candidate_id": "skill_candidate_reasoning_core",
@@ -247,6 +257,7 @@ def test_training_skill_candidate_store_approves_ready_candidate(tmp_path) -> No
             "status": "draft",
             "source_report_count": 3,
             "support_count": 2,
+            "approval_agent_review": _approved_agent_review(),
         },
         {
             "candidate_id": "skill_candidate_reasoning_core",
@@ -269,6 +280,7 @@ def test_training_skill_candidate_store_approves_ready_candidate(tmp_path) -> No
         "status": "draft",
         "source_report_count": 3,
         "support_count": 2,
+        "approval_agent_review": _approved_agent_review(),
         "review": {
             "candidate_id": "skill_candidate_reasoning_core",
             "status": "approved",
@@ -280,6 +292,36 @@ def test_training_skill_candidate_store_approves_ready_candidate(tmp_path) -> No
             "reviewer_id": "teacher_demo",
         },
     }
+
+
+def test_training_skill_candidate_store_does_not_approve_without_agent_evidence(tmp_path) -> None:
+    database_path = tmp_path / "training_skill_candidates.sqlite3"
+    store = TrainingSkillCandidateStore(database_path)
+    store.save_candidate(
+        {
+            "candidate_id": "skill_candidate_missing_agent_review",
+            "trigger_item_id": "reasoning_core",
+            "title": "临床推理链纠偏提示",
+            "status": "draft",
+            "source_report_count": 2,
+            "support_count": 2,
+        },
+        {
+            "candidate_id": "skill_candidate_missing_agent_review",
+            "status": "ready_for_review",
+            "regression_passed": True,
+            "evaluation_total_cases": 1,
+            "evaluation_passed_cases": 1,
+            "evaluation_failed_cases": 0,
+            "blocking_failures": [],
+        },
+    )
+
+    assert store.approve_candidate(
+        "skill_candidate_missing_agent_review",
+        reviewer_id="teacher_demo",
+    ) is False
+    assert store.get_candidate("skill_candidate_missing_agent_review")["review"]["status"] == "ready_for_review"
 
 
 def test_training_skill_candidate_store_rejects_ready_candidate(tmp_path) -> None:
