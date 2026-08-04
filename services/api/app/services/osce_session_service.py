@@ -428,6 +428,11 @@ class OsceSessionService:
                 rubric_item_ids=rubric_item_ids,
                 student_profile=student_profile,
                 patient_profile={"gender": case.patient_profile.gender},
+                current_session_state=_skill_activation_state(session),
+                current_covered_item_ids=_current_covered_rubric_item_ids(session, case),
+            )
+            session.evolution_candidates = _enabled_skill_prompts_from_active_context(
+                session.active_skill_context
             )
             prepared = self.session_store.prepare_session_for_create(session)
             _refresh_session_in_place(
@@ -2013,6 +2018,8 @@ class OsceSessionService:
             current_missing_evidence=_current_missing_evidence(session),
             student_profile=student_profile,
             patient_profile={"gender": case.patient_profile.gender},
+            current_session_state=_skill_activation_state(session),
+            current_covered_item_ids=_current_covered_rubric_item_ids(session, case),
         )
         session.active_skill_context = active_skill_context
         session.evolution_candidates = _enabled_skill_prompts_from_active_context(active_skill_context)
@@ -3999,6 +4006,8 @@ def _enabled_skill_prompts_from_active_context(active_skill_context: dict[str, A
     for skill in selected_skills:
         if not isinstance(skill, dict):
             continue
+        if skill.get("activation_ready") is not True:
+            continue
         title = str(skill.get("title") or "").strip()
         strategy = str(skill.get("suggested_strategy") or "").strip()
         if title and strategy:
@@ -4034,6 +4043,38 @@ def _current_missing_evidence(session: OsceSession) -> list[str]:
     if not isinstance(missing_items, list):
         return []
     return [str(item_id) for item_id in missing_items if str(item_id)]
+
+
+def _skill_activation_state(session: OsceSession) -> dict[str, Any]:
+    return {
+        "stage": session.stage,
+        "messages": list(session.messages),
+        "asked_questions": list(session.asked_questions),
+        "revealed_facts": list(session.revealed_facts),
+        "requested_exams": list(session.requested_exams),
+        "requested_tests": list(session.requested_tests),
+        "student_hypotheses": list(session.student_hypotheses),
+        "final_submission": dict(session.final_submission) if session.final_submission else None,
+        "patient_affect_state": dict(session.patient_affect_state),
+        "teacher_decision_records": [dict(record) for record in session.teacher_decision_records],
+    }
+
+
+def _current_covered_rubric_item_ids(session: OsceSession, case: Case) -> list[str]:
+    covered: list[str] = []
+    revealed_fact_ids = set(session.revealed_facts)
+    requested_exam_codes = set(session.requested_exams)
+    requested_test_codes = set(session.requested_tests)
+    for fact in case.history.hidden_facts:
+        if fact.fact_id in revealed_fact_ids:
+            covered.extend(fact.linked_rubric_items)
+    for exam in [*case.physical_exam.must_items, *case.physical_exam.optional_items]:
+        if exam.exam_code in requested_exam_codes:
+            covered.extend(exam.linked_rubric_items)
+    for test in [*case.auxiliary_tests.must_items, *case.auxiliary_tests.optional_items]:
+        if test.test_code in requested_test_codes:
+            covered.extend(test.linked_rubric_items)
+    return list(dict.fromkeys(str(item_id) for item_id in covered if str(item_id)))
 
 
 def _enabled_skills_for_case(

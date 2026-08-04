@@ -29,6 +29,30 @@ HUMANISTIC_SKILL_TYPES = {
     "relationship_repair",
 }
 
+HISTORY_REPRODUCTION_ACTION_THRESHOLD = 2
+
+PATIENT_AFFECT_GAP_TYPES = {
+    "narrative_patient_perspective_missing",
+    "relationship_empathy_missing",
+}
+
+CONSENT_GAP_TYPES = {
+    "ethics_consent_missing",
+}
+
+REASONING_PATTERN_SEQUENCE_ISSUES = {
+    "premature_testing_before_exam": {
+        "sequence:auxiliary_test_before_history",
+        "sequence:auxiliary_test_before_physical_exam",
+    },
+    "delayed_hypothesis_generation": {
+        "sequence:auxiliary_test_without_hypothesis",
+    },
+    "premature_closure_risk": {
+        "sequence:hypothesis_before_core_history",
+    },
+}
+
 GAP_TYPE_LABELS = {
     "narrative_patient_perspective_missing": "患者视角与担忧期待缺失",
     "communication_summary_missing": "阶段性总结与确认缺失",
@@ -50,12 +74,21 @@ def build_active_skill_context(
     current_missing_evidence: Iterable[str] = (),
     student_profile: Mapping[str, Any] | None = None,
     patient_profile: Mapping[str, Any] | None = None,
+    current_session_state: Mapping[str, Any] | None = None,
+    current_covered_item_ids: Iterable[str] = (),
     limit: int = 3,
-) -> dict[str, list[dict[str, Any]]]:
-    """Select a compact, safe Skill context for the current training turn."""
+) -> dict[str, Any]:
+    """Select and gate a compact, safe Skill context for the current turn.
+
+    Longitudinal profile matches are only *primed* candidates.  A candidate is
+    allowed into TeacherAgent/CoachAgent context after the same issue becomes
+    observable in the current session, and is withdrawn once the issue is
+    repaired.  This prevents an old weakness from biasing every later case.
+    """
 
     rubric_item_set = {str(item_id) for item_id in rubric_item_ids}
     missing_item_set = {str(item_id) for item_id in current_missing_evidence}
+    covered_item_set = {str(item_id) for item_id in current_covered_item_ids if str(item_id)}
     profile = student_profile or {}
     skill_states = profile.get("skill_states", {})
     if not isinstance(skill_states, Mapping):
@@ -130,6 +163,15 @@ def build_active_skill_context(
             recent_training_gap_types=recent_training_gap_types,
             skill_states=skill_states,
         )
+        activation = _current_session_activation(
+            skill,
+            trigger_item_ids=trigger_item_ids,
+            reasoning_pattern_ids=reasoning_pattern_ids,
+            trigger_gap_types=trigger_gap_types,
+            current_missing_evidence=missing_item_set,
+            current_covered_item_ids=covered_item_set,
+            current_session_state=current_session_state,
+        )
         candidates.append(
             {
                 "skill": dict(skill),
@@ -146,6 +188,7 @@ def build_active_skill_context(
                     training_gap_labels.get(gap_type, _gap_type_label(gap_type)) for gap_type in training_gap_hits
                 ],
                 "training_skill_type_hits": training_skill_type_hits,
+                **activation,
                 "why_candidate": _why_candidate(
                     trigger_item_ids,
                     missing_item_set,
@@ -172,6 +215,7 @@ def build_active_skill_context(
 
     candidates.sort(
         key=lambda item: (
+            -int(bool(item.get("activation_ready"))),
             -int(item["priority"]),
             -int(item["skill"].get("support_count") or 0),
             str(item["skill"].get("title", "")),
@@ -187,7 +231,167 @@ def build_active_skill_context(
         "skipped_reasons": skipped_reasons,
         "current_training_gaps": current_training_gaps[:3],
         "humanistic_training_goals": humanistic_training_goals[:3],
+        "current_covered_item_ids": sorted(covered_item_set),
     }
+
+
+def _current_session_activation(
+    skill: Mapping[str, Any],
+    *,
+    trigger_item_ids: list[str],
+    reasoning_pattern_ids: list[str],
+    trigger_gap_types: list[str],
+    current_missing_evidence: set[str],
+    current_covered_item_ids: set[str],
+    current_session_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if current_session_state is None:
+        return _activation_payload(False, "缺少当前会话证据，Skill 仅待命。")
+
+    state = current_session_state
+    open_issue_ids = _open_teacher_issue_ids(state.get("teacher_decision_records"))
+    affect_state = state.get("patient_affect_state")
+    unanswered_affect = bool(affect_state.get("unanswered_signal")) if isinstance(affect_state, Mapping) else False
+    remaining_trigger_items = [
+        item_id for item_id in trigger_item_ids if item_id not in current_covered_item_ids
+    ]
+
+    if trigger_item_ids and not remaining_trigger_items:
+        return _activation_payload(
+            False,
+            "当前会话已覆盖该训练点，Skill 退出教学上下文。",
+            issue_ids=trigger_item_ids,
+            status="recovered",
+        )
+
+    current_item_hits = [
+        item_id for item_id in remaining_trigger_items if item_id in current_missing_evidence
+    ]
+    if current_item_hits:
+        return _activation_payload(
+            True,
+            "当前会话评估再次确认同类证据缺口。",
+            issue_ids=current_item_hits,
+        )
+
+    current_gap_hits: list[str] = []
+    if set(trigger_gap_types) & PATIENT_AFFECT_GAP_TYPES and unanswered_affect:
+        current_gap_hits.extend(sorted(set(trigger_gap_types) & PATIENT_AFFECT_GAP_TYPES))
+    if set(trigger_gap_types) & CONSENT_GAP_TYPES and "humanistic:consent_before_procedure" in open_issue_ids:
+        current_gap_hits.extend(sorted(set(trigger_gap_types) & CONSENT_GAP_TYPES))
+    if current_gap_hits:
+        return _activation_payload(
+            True,
+            "当前会话再次出现对应的人文沟通缺口。",
+            issue_ids=current_gap_hits,
+        )
+
+    sequence_pattern_hits = [
+        pattern_id
+        for pattern_id in reasoning_pattern_ids
+        if REASONING_PATTERN_SEQUENCE_ISSUES.get(pattern_id, set()) & open_issue_ids
+    ]
+    if sequence_pattern_hits:
+        return _activation_payload(
+            True,
+            "当前会话再次出现对应的临床推理顺序问题。",
+            issue_ids=sequence_pattern_hits,
+        )
+
+    asked_count = len(_mapping_string_list(state.get("asked_questions")))
+    exam_count = len(_mapping_string_list(state.get("requested_exams")))
+    test_count = len(_mapping_string_list(state.get("requested_tests")))
+    hypothesis_count = len(_mapping_string_list(state.get("student_hypotheses")))
+    final_submission = state.get("final_submission")
+
+    stage_item_hits: list[str] = []
+    history_items = [item_id for item_id in remaining_trigger_items if item_id.startswith("ht_")]
+    if asked_count >= HISTORY_REPRODUCTION_ACTION_THRESHOLD:
+        stage_item_hits.extend(history_items)
+    if exam_count:
+        stage_item_hits.extend(item_id for item_id in remaining_trigger_items if item_id.startswith("pe_"))
+    if test_count:
+        stage_item_hits.extend(item_id for item_id in remaining_trigger_items if item_id.startswith("ax_"))
+    if hypothesis_count or isinstance(final_submission, Mapping):
+        stage_item_hits.extend(
+            item_id
+            for item_id in remaining_trigger_items
+            if item_id.startswith(("dx_", "dxd_", "rs_"))
+        )
+    if stage_item_hits:
+        return _activation_payload(
+            True,
+            "当前阶段已形成足够观察窗口，历史缺口仍未被当前操作覆盖。",
+            issue_ids=stage_item_hits,
+        )
+
+    if "weak_problem_representation" in reasoning_pattern_ids and asked_count >= 3 and hypothesis_count == 0:
+        return _activation_payload(
+            True,
+            "当前问诊已推进多轮，但仍未形成可验证的问题表征。",
+            issue_ids=["weak_problem_representation"],
+        )
+    if "delayed_hypothesis_generation" in reasoning_pattern_ids and test_count and hypothesis_count == 0:
+        return _activation_payload(
+            True,
+            "当前会话已申请检查但仍未形成诊断假设。",
+            issue_ids=["delayed_hypothesis_generation"],
+        )
+    if "thin_differential_reasoning" in reasoning_pattern_ids and isinstance(final_submission, Mapping):
+        return _activation_payload(
+            True,
+            "当前会话已经提交结论，进入鉴别诊断完整性检查窗口。",
+            issue_ids=["thin_differential_reasoning"],
+        )
+
+    return _activation_payload(False, "当前会话尚未重现该历史问题，Skill 保持静默待命。")
+
+
+def _activation_payload(
+    ready: bool,
+    reason: str,
+    *,
+    issue_ids: Iterable[str] = (),
+    status: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "activation_ready": bool(ready),
+        "activation_status": status or ("active" if ready else "primed"),
+        "activation_reason": str(reason),
+        "current_issue_ids": _deduplicated_strings(issue_ids),
+    }
+
+
+def _open_teacher_issue_ids(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    open_issue_ids: set[str] = set()
+    for record in value:
+        if not isinstance(record, Mapping):
+            continue
+        resolved = record.get("resolved_issue_ids")
+        if isinstance(resolved, list):
+            for issue_id in resolved:
+                open_issue_ids.discard(str(issue_id))
+        issue_id = str(record.get("issue_id") or "").strip()
+        if issue_id and str(record.get("mode") or "") in {"observe", "hint"}:
+            open_issue_ids.add(issue_id)
+    return open_issue_ids
+
+
+def _mapping_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item)]
+
+
+def _deduplicated_strings(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _skip_reason(
@@ -341,6 +545,10 @@ def _serialize_skill_index(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "priority": int(candidate["priority"]),
         "why_candidate": str(candidate["why_candidate"]),
         "why_selected_label": str(candidate["why_selected_label"]),
+        "activation_ready": bool(candidate.get("activation_ready")),
+        "activation_status": str(candidate.get("activation_status") or "primed"),
+        "activation_reason": str(candidate.get("activation_reason") or ""),
+        "current_issue_ids": list(candidate.get("current_issue_ids", [])),
     }
     for field_name in ("summary", "when_to_use", "when_not_to_use", "risk"):
         field_value = str(router_index.get(field_name) or "").strip()
@@ -376,6 +584,10 @@ def _serialize_selected_skill(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why_candidate": str(candidate["why_candidate"]),
         "why_selected_label": str(candidate["why_selected_label"]),
         "effect_status": str(skill.get("effect_status", "insufficient_samples")),
+        "activation_ready": bool(candidate.get("activation_ready")),
+        "activation_status": str(candidate.get("activation_status") or "primed"),
+        "activation_reason": str(candidate.get("activation_reason") or ""),
+        "current_issue_ids": list(candidate.get("current_issue_ids", [])),
     }
     intervention = skill.get("intervention")
     if isinstance(intervention, Mapping):

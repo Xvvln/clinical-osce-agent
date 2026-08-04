@@ -408,10 +408,15 @@ def _skill_context_ids(state: dict[str, Any]) -> list[str]:
             selected_ids = [
                 str(skill.get("skill_id"))
                 for skill in selected_skills
-                if isinstance(skill, dict) and str(skill.get("skill_id") or "").strip()
+                if isinstance(skill, dict)
+                and skill.get("activation_ready") is True
+                and str(skill.get("skill_id") or "").strip()
             ]
             if selected_ids:
                 return selected_ids
+            # Structured context distinguishes primed longitudinal candidates
+            # from Skills actually activated by a current-session issue.
+            return []
     skills = _string_list(state.get("evolution_candidates", []))
     return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(skills)]
 

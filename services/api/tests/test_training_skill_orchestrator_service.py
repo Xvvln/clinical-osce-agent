@@ -208,6 +208,10 @@ def test_skill_orchestrator_returns_compact_index_without_full_strategy_text() -
             "priority": 4,
             "why_candidate": "当前缺口命中 ht_onset",
             "why_selected_label": "当前缺口命中：追问起病时间。",
+            "activation_ready": False,
+            "activation_status": "primed",
+            "activation_reason": "缺少当前会话证据，Skill 仅待命。",
+            "current_issue_ids": [],
             "summary": "腹痛问诊顺序训练：训练学生先建立病史时间线。",
             "when_to_use": "学生开始问诊但未形成疼痛演变时间线时使用。",
             "when_not_to_use": "空白开局或学生已经覆盖疼痛演变时间线时不要使用。",
@@ -441,3 +445,173 @@ def test_skill_orchestrator_selects_humanistic_skill_by_training_gap_type() -> N
     assert context["selected_skills"][0]["why_selected_label"] == "近期训练缺口命中：查体或检查前说明目的并征得同意。"
     assert context["current_training_gaps"][0]["gap_type"] == "ethics_consent_missing"
     assert context["humanistic_training_goals"][0]["success_signal"] == "查体或检查前先说明目的并征得同意。"
+
+
+def test_longitudinal_skill_waits_for_current_issue_then_withdraws_after_repair() -> None:
+    skill = {
+        "skill_id": "skill_ht_migration",
+        "title": "疼痛迁移追问训练",
+        "suggested_strategy": "围绕疼痛迁移和加重过程追问。",
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["case_intro"],
+        "trigger_item_ids": ["ht_migration"],
+        "support_count": 3,
+    }
+
+    after_one_generic_question = build_active_skill_context(
+        [skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="history_taking",
+        rubric_item_ids=["ht_onset", "ht_migration", "ht_severity"],
+        student_profile={"recent_error_item_ids": ["ht_migration"]},
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？"],
+            "revealed_facts": ["appendicitis_001.hf_01"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+        current_covered_item_ids=["ht_onset"],
+    )
+    primed = after_one_generic_question["selected_skills"][0]
+    assert primed["activation_ready"] is False
+    assert primed["activation_status"] == "primed"
+    assert primed["current_issue_ids"] == []
+
+    after_second_unrelated_question = build_active_skill_context(
+        [skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="history_taking",
+        rubric_item_ids=["ht_onset", "ht_migration", "ht_severity"],
+        student_profile={"recent_error_item_ids": ["ht_migration"]},
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？", "疼痛有多重？"],
+            "revealed_facts": ["appendicitis_001.hf_01", "appendicitis_001.hf_04"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+        current_covered_item_ids=["ht_onset", "ht_severity"],
+    )
+    activated = after_second_unrelated_question["selected_skills"][0]
+    assert activated["activation_ready"] is True
+    assert activated["activation_status"] == "active"
+    assert activated["current_issue_ids"] == ["ht_migration"]
+
+    after_migration_repair = build_active_skill_context(
+        [skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="history_taking",
+        rubric_item_ids=["ht_onset", "ht_migration", "ht_severity"],
+        student_profile={"recent_error_item_ids": ["ht_migration"]},
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？", "疼痛有多重？", "疼痛位置变化过吗？"],
+            "revealed_facts": [
+                "appendicitis_001.hf_01",
+                "appendicitis_001.hf_02",
+                "appendicitis_001.hf_04",
+            ],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+        current_covered_item_ids=["ht_onset", "ht_migration", "ht_severity"],
+    )
+    recovered = after_migration_repair["selected_skills"][0]
+    assert recovered["activation_ready"] is False
+    assert recovered["activation_status"] == "recovered"
+
+
+def test_humanistic_skill_activates_only_for_matching_open_current_issue() -> None:
+    consent_skill = {
+        "skill_id": "skill_ethics_consent",
+        "title": "查体前同意训练",
+        "suggested_strategy": "先说明目的和可能不适，再征得同意。",
+        "skill_type": "ethics_consent",
+        "trigger_gap_types": ["ethics_consent_missing"],
+        "case_ids": ["appendicitis_001"],
+        "stage_scope": ["physical_exam"],
+    }
+    profile = {
+        "recent_training_gap_types": ["ethics_consent_missing"],
+        "recent_training_skill_types": ["ethics_consent"],
+    }
+
+    primed_context = build_active_skill_context(
+        [consent_skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="physical_exam",
+        student_profile=profile,
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？", "哪里疼？"],
+            "requested_exams": [],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+    )
+    assert primed_context["selected_skills"][0]["activation_ready"] is False
+
+    active_context = build_active_skill_context(
+        [consent_skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="physical_exam",
+        student_profile=profile,
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？", "哪里疼？"],
+            "requested_exams": ["abd.palpation.tenderness"],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [
+                {
+                    "mode": "hint",
+                    "issue_id": "humanistic:consent_before_procedure",
+                    "resolved_issue_ids": [],
+                }
+            ],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+    )
+    activated = active_context["selected_skills"][0]
+    assert activated["activation_ready"] is True
+    assert activated["current_issue_ids"] == ["ethics_consent_missing"]
+
+    repaired_context = build_active_skill_context(
+        [consent_skill],
+        case_id="appendicitis_001",
+        student_id="student-a",
+        stage="physical_exam",
+        student_profile=profile,
+        current_session_state={
+            "asked_questions": ["什么时候开始疼的？", "哪里疼？"],
+            "requested_exams": ["abd.palpation.tenderness"],
+            "requested_tests": [],
+            "student_hypotheses": [],
+            "teacher_decision_records": [
+                {
+                    "mode": "hint",
+                    "issue_id": "humanistic:consent_before_procedure",
+                    "resolved_issue_ids": [],
+                },
+                {
+                    "mode": "silent",
+                    "issue_id": "",
+                    "resolved_issue_ids": ["humanistic:consent_before_procedure"],
+                },
+            ],
+            "patient_affect_state": {"unanswered_signal": False},
+        },
+    )
+    assert repaired_context["selected_skills"][0]["activation_ready"] is False

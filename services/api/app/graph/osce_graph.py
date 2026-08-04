@@ -1072,8 +1072,24 @@ def _route_skill_context_for_coach(
     retrieved_knowledge_context: list[dict[str, Any]],
     hint_context: dict[str, Any],
 ) -> tuple[list[str], list[str], dict[str, Any] | None, dict[str, Any] | None]:
+    primed_skill_items = _primed_skill_items(state)
     candidate_skill_items = _selected_skill_items(state)
     if not candidate_skill_items:
+        if primed_skill_items:
+            return (
+                [],
+                [],
+                {
+                    "available_skill_ids": [],
+                    "primed_skill_ids": _skill_ids_from_items(primed_skill_items),
+                    "selected_skill_ids": [],
+                    "selection_policy": "current_issue_not_reproduced",
+                    "intervention_level": "none",
+                    "selection_reason": "历史 Skill 仅待命；当前会话尚未重现对应问题。",
+                    "rejected_skill_ids": [],
+                },
+                None,
+            )
         return [], [], None, None
     try:
         router_response = normalize_coach_response(
@@ -2017,6 +2033,10 @@ def _has_student_training_action(state: OsceGraphState) -> bool:
 
 
 def _selected_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:
+    return [skill for skill in _primed_skill_items(state) if skill.get("activation_ready") is True]
+
+
+def _primed_skill_items(state: OsceGraphState) -> list[dict[str, Any]]:
     active_skill_context = state.get("active_skill_context", {})
     if not isinstance(active_skill_context, dict):
         return []
@@ -2077,6 +2097,8 @@ def _selected_skill_context_strings(state: OsceGraphState) -> list[str]:
     selected_skill_texts = _skill_context_strings_from_items(_selected_skill_items(state))
     if selected_skill_texts:
         return selected_skill_texts
+    if _has_structured_skill_candidates(state):
+        return []
     return [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
 
 
@@ -2092,6 +2114,8 @@ def _selected_skill_ids(state: OsceGraphState) -> list[str]:
     selected_skill_ids = _skill_ids_from_items(_selected_skill_items(state))
     if selected_skill_ids:
         return selected_skill_ids
+    if _has_structured_skill_candidates(state):
+        return []
     legacy_candidates = [str(skill) for skill in state.get("evolution_candidates", []) if str(skill).strip()]
     return [f"enabled_skill:{index + 1}" for index, _skill in enumerate(legacy_candidates)]
 
@@ -2132,6 +2156,8 @@ def _selected_skill_index_terms(state: OsceGraphState) -> list[str]:
                 terms.append(label_text)
     if terms:
         return terms
+    if _has_structured_skill_candidates(state):
+        return []
     legacy_terms: list[str] = []
     for candidate in state.get("evolution_candidates", []):
         candidate_text = str(candidate).strip()
@@ -2139,6 +2165,13 @@ def _selected_skill_index_terms(state: OsceGraphState) -> list[str]:
             continue
         legacy_terms.append(candidate_text.split("：", 1)[0])
     return legacy_terms
+
+
+def _has_structured_skill_candidates(state: OsceGraphState) -> bool:
+    active_skill_context = state.get("active_skill_context")
+    if not isinstance(active_skill_context, dict):
+        return False
+    return isinstance(active_skill_context.get("selected_skills"), list)
 
 
 def _selected_skill_reason_items(

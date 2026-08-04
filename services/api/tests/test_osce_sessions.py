@@ -1913,7 +1913,7 @@ def test_osce_session_redirects_direct_answer_request_to_coach_event(tmp_path) -
 
 
 
-def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> None:
+def test_create_session_primes_enabled_training_skill_without_injecting_prompt(tmp_path) -> None:
     osce_session_service.training_skill_store = TrainingSkillStore(tmp_path / "training_skills.sqlite3")
     osce_session_service.training_skill_store.enable_candidate(
         {
@@ -1940,9 +1940,11 @@ def test_create_session_includes_enabled_training_skill_prompts(tmp_path) -> Non
     assert "evolution_candidates" not in create_response.json()
     created_session = osce_session_service._get_session(create_response.json()["session_id"])
     assert created_session is not None
-    assert created_session.evolution_candidates == [
-        "临床推理链纠偏提示：在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
-    ]
+    assert created_session.evolution_candidates == []
+    primed_skill = created_session.active_skill_context["selected_skills"][0]
+    assert primed_skill["skill_id"] == "skill_reasoning_core"
+    assert primed_skill["activation_ready"] is False
+    assert primed_skill["activation_status"] == "primed"
 
 
 def test_create_session_returns_structured_active_skill_context(tmp_path) -> None:
@@ -1984,6 +1986,10 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
             "priority": 0,
             "why_candidate": "适用训练点 ht_migration",
             "why_selected_label": "适用训练点：追问疼痛部位及转移特征。",
+            "activation_ready": False,
+            "activation_status": "primed",
+            "activation_reason": "当前会话尚未重现该历史问题，Skill 保持静默待命。",
+            "current_issue_ids": [],
             "summary": "腹痛迁移追问训练：反复遗漏腹痛迁移过程。",
             "when_to_use": "当学生在训练开始阶段暴露出病史采集结构化不足，且当前上下文命中关联训练点时使用。",
             "when_not_to_use": "空白开局、学生尚未暴露相关错误模式、该问题已冷却/退休，或提示会泄露标准答案 / 隐藏事实时不要使用。",
@@ -1992,6 +1998,7 @@ def test_create_session_returns_structured_active_skill_context(tmp_path) -> Non
     ]
     assert active_skill_context["selected_skills"][0]["suggested_strategy"] == "先围绕起病部位、迁移过程和疼痛变化做聚焦追问。"
     assert active_skill_context["selected_skills"][0]["skill_id"] == "skill_ht_migration"
+    assert active_skill_context["selected_skills"][0]["activation_ready"] is False
     assert active_skill_context["skipped_reasons"] == []
 
 
@@ -3074,7 +3081,7 @@ def test_osce_session_returns_socratic_hint_without_revealing_diagnosis(tmp_path
         "history_message",
         "hint_requested",
     ]
-    hint_event_payload = find_event(events, "hint_requested")["payload"]
+    hint_event_payload = [event for event in events if event["event_type"] == "hint_requested"][-1]["payload"]
     internal_session = osce_session_service._get_session(session_id)
     assert internal_session is not None
     assert hint_event_payload == {
@@ -3133,7 +3140,8 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
     osce_session_service.training_skill_store.enable_candidate(
         {
             "candidate_id": "skill_candidate_reasoning_core",
-            "trigger_item_id": "reasoning_core",
+            "trigger_item_id": "ht_migration",
+            "trigger_item_ids": ["ht_migration"],
             "case_ids": ["appendicitis_001"],
             "title": "临床推理链纠偏提示",
             "description": "推理链反复遗漏。",
@@ -3150,11 +3158,19 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
     session_id = create_response.json()["session_id"]
     client.post(f"/api/sessions/{session_id}/message", json={"message": "什么时候开始疼的？"})
 
+    early_hint_response = client.post(f"/api/sessions/{session_id}/hint")
+
+    assert early_hint_response.status_code == 200
+    assert "本轮训练重点" not in early_hint_response.json()["hint"]
+
+    client.post(f"/api/sessions/{session_id}/message", json={"message": "疼痛大概有多严重？"})
+
     hint_response = client.post(f"/api/sessions/{session_id}/hint")
 
     assert hint_response.status_code == 200
     payload = hint_response.json()
-    assert payload["hint"] == "本轮训练重点是临床推理链纠偏提示。提交诊断前，请按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。"
+    assert "本轮训练重点是临床推理链纠偏提示" in payload["hint"]
+    assert "病史" in payload["hint"]
     assert payload["messages"][-1] == {"role": "coach", "content": payload["hint"]}
     assert payload["final_submission"] is None
     assert "rubric_scores" not in payload
@@ -3167,8 +3183,10 @@ def test_osce_session_uses_enabled_training_skill_when_requesting_socratic_hint(
         "training_skill_applied",
         "history_message",
         "hint_requested",
+        "history_message",
+        "hint_requested",
     ]
-    hint_event_payload = find_event(events, "hint_requested")["payload"]
+    hint_event_payload = [event for event in events if event["event_type"] == "hint_requested"][-1]["payload"]
     internal_session = osce_session_service._get_session(session_id)
     assert internal_session is not None
     assert hint_event_payload == {
@@ -3306,9 +3324,10 @@ def test_completed_training_generates_personal_skill_and_ai_reflection_for_next_
     assert "evolution_candidates" not in next_session
     next_internal_session = osce_session_service._get_session(next_session["session_id"])
     assert next_internal_session is not None
-    assert next_internal_session.evolution_candidates == [
-        f"{enabled_skill['title']}：{enabled_skill['suggested_strategy']}"
-    ]
+    assert next_internal_session.evolution_candidates == []
+    primed_skill = next_internal_session.active_skill_context["selected_skills"][0]
+    assert primed_skill["skill_id"] == skill_id
+    assert primed_skill["activation_ready"] is False
     assert skill_events[0]["payload"]["skill_id"] == skill_id
     assert skill_events[0]["payload"]["scope"] == "personal"
     assert skill_events[0]["payload"]["source_session_id"] == session_id

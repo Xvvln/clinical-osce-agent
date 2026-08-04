@@ -164,16 +164,18 @@ def _skill_selection(state: dict[str, Any]) -> dict[str, Any]:
         for item in skill_index_items
         if isinstance(item, dict) and str(item.get("skill_id") or "")
     }
+    primed_skills = [skill for skill in selected_skills if isinstance(skill, dict)]
+    activated_skills = [skill for skill in primed_skills if skill.get("activation_ready") is True]
     candidate_skills = [
         _compact_skill_selection_payload(
             skill,
             index_by_skill_id.get(str(skill.get("skill_id") or ""), {}),
         )
-        for skill in selected_skills
-        if isinstance(skill, dict)
+        for skill in activated_skills
     ]
     return {
-        "selected_count": len([item for item in selected_skills if isinstance(item, dict)]),
+        "primed_count": len(primed_skills),
+        "selected_count": len(candidate_skills),
         "available_skill_ids": [skill["skill_id"] for skill in candidate_skills if skill["skill_id"]],
         "candidate_skills": candidate_skills,
         "selected_skills": candidate_skills,
@@ -191,6 +193,8 @@ def _compact_skill_selection_payload(skill: dict[str, Any], indexed_skill: dict[
         "why_selected_label": str(skill.get("why_selected_label") or skill.get("why_candidate") or ""),
         "trigger_item_labels": _string_list(skill.get("trigger_item_labels", [])),
         "stage_scope": _string_list(skill.get("stage_scope", [])),
+        "activation_reason": str(skill.get("activation_reason") or ""),
+        "current_issue_ids": _string_list(skill.get("current_issue_ids", [])),
     }
     for field_name in ("summary", "when_to_use", "when_not_to_use", "risk"):
         field_value = str(skill.get(field_name) or indexed_skill.get(field_name) or "").strip()

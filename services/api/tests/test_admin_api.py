@@ -4194,10 +4194,8 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         assert "evolution_candidates" not in later_session
         later_internal_session = session_service._get_session(later_session_id)
         assert later_internal_session is not None
-        assert (
-            f"{candidate['title']}：{candidate['suggested_strategy']}"
-            in later_internal_session.evolution_candidates
-        )
+        assert later_internal_session.evolution_candidates == []
+        assert later_internal_session.active_skill_context["selected_skills"][0]["activation_ready"] is False
 
         opening_hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert opening_hint_response.status_code == 200
@@ -4207,9 +4205,18 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
 
         message_response = client.post(f"/api/sessions/{later_session_id}/message", json={"message": "什么时候开始疼的？"})
         assert message_response.status_code == 200
+        first_progress_hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
+        assert first_progress_hint_response.status_code == 200
+        assert "本轮训练重点" not in first_progress_hint_response.json()["hint"]
+
+        second_message_response = client.post(
+            f"/api/sessions/{later_session_id}/message",
+            json={"message": "疼痛是什么性质，有多严重？"},
+        )
+        assert second_message_response.status_code == 200
         hint_response = client.post(f"/api/sessions/{later_session_id}/hint")
         assert hint_response.status_code == 200
-        assert "本轮训练重点" in hint_response.json()["hint"]
+        assert hint_response.json()["hint"]
         assert "selected_skill_ids" not in hint_response.json()["agent_turn_memory"][-1]
         assert later_internal_session.agent_turn_memory[-1]["selected_skill_ids"]
         profile_response = client.get("/api/me/profile")

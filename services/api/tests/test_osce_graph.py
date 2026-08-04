@@ -256,7 +256,7 @@ def test_current_intents_from_state_prefers_authoritative_intent_list() -> None:
     assert current_intents == ["ask_character", "ask_severity"]
 
 
-def active_skill_context() -> dict[str, list[dict[str, object]]]:
+def active_skill_context(*, activation_ready: bool = True) -> dict[str, list[dict[str, object]]]:
     return {
         "skill_index": [
             {
@@ -271,6 +271,14 @@ def active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "when_to_use": "学生问诊已开始但未形成腹痛演变时间线时使用。",
                 "when_not_to_use": "空白开局或学生已经覆盖疼痛演变时间线时不要使用。",
                 "risk": "不得透露标准诊断或隐藏事实。",
+                "activation_ready": activation_ready,
+                "activation_status": "active" if activation_ready else "primed",
+                "activation_reason": (
+                    "当前会话再次出现对应缺口。"
+                    if activation_ready
+                    else "当前会话尚未重现该历史问题，Skill 保持静默待命。"
+                ),
+                "current_issue_ids": ["ht_migration"] if activation_ready else [],
             }
         ],
         "selected_skills": [
@@ -289,6 +297,14 @@ def active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "trigger_item_ids": ["ht_migration"],
                 "priority": 12,
                 "why_candidate": "当前缺口命中 ht_migration",
+                "activation_ready": activation_ready,
+                "activation_status": "active" if activation_ready else "primed",
+                "activation_reason": (
+                    "当前会话再次出现对应缺口。"
+                    if activation_ready
+                    else "当前会话尚未重现该历史问题，Skill 保持静默待命。"
+                ),
+                "current_issue_ids": ["ht_migration"] if activation_ready else [],
             }
         ],
         "skipped_reasons": [
@@ -305,6 +321,10 @@ def humanistic_active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "title": "患者情绪回应训练",
                 "stage_scope": ["history_taking"],
                 "trigger_item_ids": ["rel_empathy"],
+                "activation_ready": True,
+                "activation_status": "active",
+                "activation_reason": "当前会话再次出现对应的人文沟通缺口。",
+                "current_issue_ids": ["relationship_empathy_missing"],
             }
         ],
         "selected_skills": [
@@ -313,6 +333,10 @@ def humanistic_active_skill_context() -> dict[str, list[dict[str, object]]]:
                 "skill_type": "relationship_repair",
                 "title": "患者情绪回应训练",
                 "suggested_strategy": "先识别情绪，再继续问诊。",
+                "activation_ready": True,
+                "activation_status": "active",
+                "activation_reason": "当前会话再次出现对应的人文沟通缺口。",
+                "current_issue_ids": ["relationship_empathy_missing"],
                 "intervention": {
                     "teaching_goal": "识别并回应患者当前情绪。",
                     "coach_strategy": "先用一句话承认情绪，再继续问诊。",
@@ -2467,21 +2491,26 @@ def test_osce_graph_socratic_hint_does_not_inject_skill_before_student_action() 
 
     graph = build_osce_graph(coach_agent=echo_base_hint_coach_agent)
 
-    result = graph.invoke(base_hint_state(active_skill_context=active_skill_context()))
+    result = graph.invoke(base_hint_state(active_skill_context=active_skill_context(activation_ready=False)))
 
-    assert len(captured_requests) == 2
+    assert len(captured_requests) == 1
     request_payload = captured_requests[0].model_dump()
-    assert getattr(captured_requests[0], "prompt_kind") == "skill_router"
+    assert getattr(captured_requests[0], "prompt_kind") == "socratic_hint"
     assert getattr(captured_requests[0], "skill_context") == []
-    assert request_payload["hint_context"]["skill_selection"]["available_skill_ids"] == ["skill_selected_history"]
-    assert getattr(captured_requests[1], "prompt_kind") == "socratic_hint"
-    assert getattr(captured_requests[1], "skill_context") == []
-    assert "role_policy" not in getattr(captured_requests[1], "hint_context")["skill_selection"]
+    skill_selection = request_payload["hint_context"]["skill_selection"]
+    assert skill_selection["primed_count"] == 1
+    assert skill_selection["selected_count"] == 0
+    assert skill_selection["available_skill_ids"] == []
+    assert skill_selection["candidate_skills"] == []
+    assert "role_policy" not in skill_selection
     assert result["hint"] == "你还没有开始问诊。第一步先用开放式问题建立病史主线，例如起病时间、疼痛部位、性质、程度和伴随症状。"
     assert "本轮训练重点" not in result["hint"]
     assert result["agent_turn_memory"][-1]["selected_skill_ids"] == []
     assert "skill_context" not in result["agent_turn_memory"][-1]
     assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selected_skill_ids"] == []
+    assert result["agent_turn_memory"][-1]["turn_analysis"]["routed_skill_context"]["selection_policy"] == (
+        "current_issue_not_reproduced"
+    )
 
 
 def test_osce_graph_socratic_hint_keeps_onboarding_before_untriggered_training_goal() -> None:
