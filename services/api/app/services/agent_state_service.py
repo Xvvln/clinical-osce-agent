@@ -119,9 +119,22 @@ def build_clinical_reasoning_state(state: dict[str, Any]) -> dict[str, Any]:
     requested_exams = _string_list(state.get("requested_exams", []))
     requested_tests = _string_list(state.get("requested_tests", []))
     student_hypotheses = _string_list(state.get("student_hypotheses", []))
-    history_covered = _nested_int(progress, "history", "covered", len(revealed_facts))
-    exam_requested = _nested_int(progress, "physical_exam", "requested", len(requested_exams))
-    test_requested = _nested_int(progress, "auxiliary_test", "requested", len(requested_tests))
+    # Graph action nodes append the current fact/procedure before the persisted
+    # training-progress projection is refreshed.  Use the newer observable
+    # collection size so TeacherAgent evaluates the action that just happened,
+    # rather than one-turn-old progress.
+    history_covered = max(
+        len(revealed_facts),
+        _nested_int(progress, "history", "covered", len(revealed_facts)),
+    )
+    exam_requested = max(
+        len(requested_exams),
+        _nested_int(progress, "physical_exam", "requested", len(requested_exams)),
+    )
+    test_requested = max(
+        len(requested_tests),
+        _nested_int(progress, "auxiliary_test", "requested", len(requested_tests)),
+    )
     pending_history_fact_ids = _nested_string_list(progress, "history", "pending_fact_ids")
     pending_exam_codes = _nested_string_list(progress, "physical_exam", "pending_codes")
     must_pending_exam_codes = _nested_string_list(progress, "physical_exam", "must_pending_codes")

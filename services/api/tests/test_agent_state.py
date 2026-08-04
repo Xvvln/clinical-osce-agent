@@ -182,6 +182,35 @@ def test_agent_strategy_node_tracks_auxiliary_test_before_physical_exam_as_reaso
     assert result["agent_decision_trace"][0]["act"]["next_best_action"] == clinical_state["next_best_action"]["message"]
 
 
+def test_agent_strategy_uses_current_action_when_progress_projection_is_one_turn_behind() -> None:
+    result = training_strategy_node(
+        {
+            "case_id": "appendicitis_001",
+            "session_id": "session-current-action",
+            "stage": "auxiliary_test",
+            "revealed_facts": ["appendicitis_001.hf_01"],
+            "requested_exams": [],
+            "requested_tests": ["lab.cbc"],
+            "student_hypotheses": [],
+            "final_submission": None,
+            "training_progress": {
+                "history": {"covered": 1, "pending_fact_ids": ["appendicitis_001.hf_02"]},
+                "physical_exam": {"requested": 0, "must_pending_codes": ["abd.palpation.tenderness"]},
+                # This is the persisted projection from immediately before the
+                # current auxiliary-test action.
+                "auxiliary_test": {"requested": 0, "must_pending_codes": ["lab.cbc"]},
+                "reasoning": {"pending_evidence": [], "ready_for_hypothesis": False},
+            },
+            "agent_decision_trace": [],
+        }
+    )
+
+    clinical_state = result["pedagogy_state"]["clinical_reasoning_state"]
+    assert "auxiliary_test_before_physical_exam" in clinical_state["sequence_flags"]
+    assert "auxiliary_test_without_hypothesis" in clinical_state["sequence_flags"]
+    assert clinical_state["readiness"]["auxiliary_test"] == "started"
+
+
 def test_reflection_node_does_not_leak_diagnosis() -> None:
     result = reflection_node(
         {
