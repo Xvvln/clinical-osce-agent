@@ -3475,6 +3475,33 @@ def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> Non
     }
 
 
+def test_admin_evaluation_service_uses_deterministic_agents(monkeypatch) -> None:
+    graph = object()
+    graph_options: dict[str, object] = {}
+
+    def build_graph(**kwargs):
+        graph_options.update(kwargs)
+        return graph
+
+    monkeypatch.setattr(main, "build_osce_graph", build_graph)
+
+    service = main._build_admin_evaluation_service()
+
+    assert service.osce_graph is graph
+    assert isinstance(graph_options["coach_agent"], main.DeterministicCoachAgent)
+    assert isinstance(graph_options["turn_intent_agent"], main.DeterministicTurnIntentAgent)
+    assert graph_options["llm_scorer"] is None
+    assert isinstance(service.personal_skill_service, main.PersonalTrainingSkillService)
+    assert isinstance(
+        service.personal_skill_service._generator,
+        main.TemplateTrainingSkillCandidateGenerator,
+    )
+    assert isinstance(
+        service.personal_skill_service._teacher_agent,
+        main.DeterministicTeacherAgent,
+    )
+
+
 def test_admin_can_manage_evaluation_cases_suites_thresholds_and_schedule(
     tmp_path,
     monkeypatch,

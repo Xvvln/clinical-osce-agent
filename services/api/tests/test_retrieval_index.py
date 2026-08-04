@@ -1308,3 +1308,25 @@ def test_search_retrieval_documents_batch_uses_chroma_once_for_multiple_queries(
     assert results_by_query[0]
     assert results_by_query[0][0].reference == "knowledge:appendicitis_001.rp_03"
     assert ("RETRIEVAL_QUERY", 2) in counting_client.calls
+
+
+def test_lexical_retrieval_only_skips_optional_model_providers(monkeypatch) -> None:
+    def fail_model_provider_build() -> None:
+        raise AssertionError("optional model provider must not be initialized")
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "_build_dashscope_reranker",
+        fail_model_provider_build,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "_build_embedding_clients_from_environment",
+        fail_model_provider_build,
+    )
+
+    with retrieval_index_module.lexical_retrieval_only():
+        results = search_retrieval_documents("炎症实验室证据", limit=3)
+
+    assert results
+    assert all(result.retrieval_methods == ("lexical",) for result in results)

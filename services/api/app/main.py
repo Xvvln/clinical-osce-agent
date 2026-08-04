@@ -66,6 +66,7 @@ from app.services.classroom_store import (
     ClassroomNameConflictError,
     classroom_store,
 )
+from app.services.coach_agent import DeterministicCoachAgent
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
     get_admin_teaching_focus_pattern,
@@ -139,6 +140,7 @@ from app.services.osce_session_store import (
     SessionWriteConflictError,
 )
 from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
+from app.services.personal_training_skill_service import PersonalTrainingSkillService
 from app.services.rag_knowledge_store import (
     RAG_KNOWLEDGE_REVIEW_STATUSES,
     RAG_KNOWLEDGE_STAGE_SCOPES,
@@ -181,13 +183,16 @@ from app.services.speech_synthesis_cache_service import speech_synthesis_cache
 from app.services.rule_evaluator import RUBRICS_DIR
 from app.services.source_freshness_service import enrich_source_freshness, summarize_source_freshness
 from app.services.student_model_config_service import test_student_model_config_connectivity
+from app.services.teacher_agent import DeterministicTeacherAgent
 from app.services.user_model_config_store import user_model_config_store
 from app.services.training_insight_service import TrainingInsightService
+from app.services.turn_intent_agent import DeterministicTurnIntentAgent
 from app.services.training_skill_auto_approval_service import (
     AUTO_APPROVAL_AGENT_ID,
     training_skill_approval_agent,
     training_skill_auto_approval_settings_store,
 )
+from app.services.training_skill_candidate_service import TemplateTrainingSkillCandidateGenerator
 from app.services.training_skill_candidate_service import training_skill_candidate_service
 from app.services.training_skill_candidate_store import training_skill_candidate_store
 from app.services.training_skill_context_safety import candidate_with_context_safety_review
@@ -419,14 +424,13 @@ def _run_admin_evaluation_suite(
         configured_cases.append(_admin_evaluation_case_from_payload(evaluation_case))
     if not configured_cases:
         raise ValueError("evaluation suite has no enabled cases")
-    return (
-        run_evaluation_cases(
+    with retrieval_index.lexical_retrieval_only():
+        batch_result = run_evaluation_cases(
             configured_cases,
             _build_admin_evaluation_service(),
             _admin_evaluation_thresholds_from_suite(suite),
-        ),
-        suite,
-    )
+        )
+    return batch_result, suite
 
 
 def _scheduled_evaluation_batch_id(suite_id: str, now: datetime) -> str:
@@ -511,15 +515,22 @@ def _build_admin_evaluation_service() -> OsceSessionService:
         training_event_store=osce_session_service.training_event_store,
         training_skill_store=osce_session_service.training_skill_store,
         session_store=osce_session_service.session_store,
+        personal_skill_service=PersonalTrainingSkillService(
+            generator=TemplateTrainingSkillCandidateGenerator(),
+            teacher_agent=DeterministicTeacherAgent(),
+        ),
         graph=build_osce_graph(
+            coach_agent=DeterministicCoachAgent(),
             patient_responder=_canonical_admin_patient_responder,
             llm_scorer=None,
+            turn_intent_agent=DeterministicTurnIntentAgent(),
         ),
     )
 
 
 def _run_admin_evaluation_cases() -> EvaluationBatchResult:
-    return run_evaluation_cases(ADMIN_EVALUATION_CASES, _build_admin_evaluation_service())
+    with retrieval_index.lexical_retrieval_only():
+        return run_evaluation_cases(ADMIN_EVALUATION_CASES, _build_admin_evaluation_service())
 
 
 def _real_training_session_ids() -> list[str]:

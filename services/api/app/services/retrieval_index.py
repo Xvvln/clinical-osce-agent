@@ -4,7 +4,9 @@ import json
 import logging
 import math
 import os
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -42,6 +44,20 @@ RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
 SOURCE_REGISTRY_PATH = ROOT_DIR / "data" / "attribution" / "source_registry" / "sources.json"
 LOGGER = logging.getLogger(__name__)
 INDEXABLE_RAG_KNOWLEDGE_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
+_MODEL_ASSISTED_RETRIEVAL_ENABLED: ContextVar[bool] = ContextVar(
+    "model_assisted_retrieval_enabled",
+    default=True,
+)
+
+
+@contextmanager
+def lexical_retrieval_only() -> Iterator[None]:
+    """Keep deterministic system checks independent from optional model providers."""
+    token = _MODEL_ASSISTED_RETRIEVAL_ENABLED.set(False)
+    try:
+        yield
+    finally:
+        _MODEL_ASSISTED_RETRIEVAL_ENABLED.reset(token)
 
 
 class EmbeddingClient(Protocol):
@@ -100,7 +116,8 @@ def search_retrieval_documents_batch(
     if limit <= 0 or not active_queries or reference_filter == frozenset():
         return results_by_query
 
-    reranker = _build_dashscope_reranker()
+    model_assisted_retrieval_enabled = _MODEL_ASSISTED_RETRIEVAL_ENABLED.get()
+    reranker = _build_dashscope_reranker() if model_assisted_retrieval_enabled else None
     retrieval_limit = _hybrid_candidate_limit(limit, reranker)
     eligible_documents = _eligible_retrieval_documents(reference_filter)
     eligible_references = frozenset(document.reference for document in eligible_documents)
@@ -112,6 +129,10 @@ def search_retrieval_documents_batch(
         )
         for original_index, query in active_queries
     }
+    if not model_assisted_retrieval_enabled:
+        for original_index, _ in active_queries:
+            results_by_query[original_index] = lexical_results_by_query[original_index][:limit]
+        return results_by_query
     embedding_clients = _build_embedding_clients_from_environment()
     if not embedding_clients:
         LOGGER.info("RAG vector retrieval skipped because no embedding client is configured; using lexical retrieval")
