@@ -97,6 +97,36 @@ def test_procedure_router_projects_only_bounded_lexical_catalog_neighbors() -> N
     assert all(label.encode("utf-8").decode("utf-8") == label for label in projected_labels)
 
 
+def test_openai_compatible_procedure_router_restores_single_omitted_raw_text() -> None:
+    recording_client = RecordingClient(
+        router_module.ProcedureRequestRoutingResponse(
+            routed_items=[
+                router_module.ProcedureRequestRouteItem(
+                    decision="generate",
+                    kind="auxiliary_test",
+                    name_cn="动脉血气分析",
+                )
+            ]
+        )
+    )
+    router = router_module.OpenAICompatibleProcedureRequestRouter(
+        object(),
+        client=recording_client,
+    )
+
+    response = router(
+        router_module.ProcedureRequestRoutingRequest(
+            case_id="case_001",
+            case_title="教学病例",
+            chief_complaint="不适",
+            request_text="申请动脉血气分析",
+            unmatched_requests=["动脉血气分析"],
+        )
+    )
+
+    assert response.routed_items[0].raw_text == "动脉血气分析"
+
+
 def test_procedure_router_catalog_projection_is_stable_across_input_order() -> None:
     recording_client = RecordingClient(router_module.ProcedureRequestRoutingResponse())
     router = router_module.OpenAICompatibleProcedureRequestRouter(object(), client=recording_client)
@@ -192,6 +222,17 @@ def test_procedure_simulator_provider_payload_uses_bounded_deidentified_case_gro
         len(json.dumps(provider_payload["case_grounding"], ensure_ascii=False).encode("utf-8"))
         <= grounding_module.MAX_PROCEDURE_GROUNDING_PAYLOAD_BYTES
     )
+
+
+def test_procedure_simulator_downgrades_unknown_provider_confidence() -> None:
+    response = simulator_module.ProcedureResultSimulationResponse.model_validate(
+        {
+            "result": "未见明确急性异常。",
+            "confidence": "high",
+        }
+    )
+
+    assert response.confidence == "conservative_inference"
 
 
 def test_procedure_approval_provider_payload_excludes_case_secrets_and_denylist() -> None:

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.anthropic_chat_client import AnthropicChatClient, AnthropicSettings
 from app.services.api_call_log_service import call_with_api_logging
@@ -61,6 +61,17 @@ class ProcedureResultSimulationResponse(BaseModel):
     confidence: Literal["grounded", "conservative_inference"] = "conservative_inference"
     grounding_basis: list[str] = Field(default_factory=list, max_length=3)
     safety_note: str = Field(default="", max_length=160)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_provider_confidence(cls, value: object) -> str:
+        # OpenAI-compatible providers sometimes return generic labels such as
+        # "high" despite the requested schema.  Never upgrade an unknown label
+        # to grounded: the conservative path keeps numeric precision and the
+        # downstream approval gates fail-closed.
+        if value in {"grounded", "conservative_inference"}:
+            return str(value)
+        return "conservative_inference"
 
 
 def _procedure_simulator_provider_payload(request: ProcedureResultSimulationRequest) -> dict[str, Any]:

@@ -78,7 +78,11 @@ _LEXICAL_BOILERPLATE = (
 
 
 class ProcedureRequestRouteItem(BaseModel):
-    raw_text: str
+    # Some OpenAI-compatible providers omit this echo field even when the
+    # decision itself is valid.  Keep the provider envelope parseable; the
+    # router below only restores it from the original, server-owned request
+    # when the mapping is unambiguous.
+    raw_text: str = ""
     decision: Literal["generate", "clarify", "block"]
     kind: Literal["physical_exam", "auxiliary_test", "patient_profile", "vital_sign", "other"] = "other"
     name_cn: str = ""
@@ -273,12 +277,13 @@ class OpenAICompatibleProcedureRequestRouter:
         self._client = client or OpenAICompatibleChatClient(settings)
 
     def __call__(self, request: ProcedureRequestRoutingRequest) -> ProcedureRequestRoutingResponse:
-        return self._client.complete_json(
+        response = self._client.complete_json(
             system_prompt=SYSTEM_PROMPT_TEMPLATE,
             payload=_procedure_router_provider_payload(request),
             response_model=ProcedureRequestRoutingResponse,
             temperature=0.0,
         )
+        return _restore_missing_route_raw_text(response, request.unmatched_requests)
 
 
 class AnthropicProcedureRequestRouter:
@@ -363,6 +368,38 @@ class LazyProcedureRequestRouter:
 
 def create_default_procedure_request_router() -> LazyProcedureRequestRouter:
     return LazyProcedureRequestRouter()
+
+
+def _restore_missing_route_raw_text(
+    response: ProcedureRequestRoutingResponse,
+    unmatched_requests: list[str],
+) -> ProcedureRequestRoutingResponse:
+    """Restore provider-omitted echoes without guessing across ambiguous items."""
+
+    routed_items = list(response.routed_items)
+    missing_indexes = [
+        index
+        for index, item in enumerate(routed_items)
+        if not item.raw_text.strip()
+    ]
+    claimed_raw_text = {
+        item.raw_text.strip()
+        for item in routed_items
+        if item.raw_text.strip()
+    }
+    remaining_requests = [
+        request_text
+        for request_text in unmatched_requests
+        if request_text.strip() not in claimed_raw_text
+    ]
+    if len(missing_indexes) != len(remaining_requests):
+        return response
+    repaired_items = list(routed_items)
+    for item_index, raw_text in zip(missing_indexes, remaining_requests, strict=True):
+        repaired_items[item_index] = repaired_items[item_index].model_copy(
+            update={"raw_text": raw_text}
+        )
+    return response.model_copy(update={"routed_items": repaired_items})
 
 
 def _create_configured_router() -> (
