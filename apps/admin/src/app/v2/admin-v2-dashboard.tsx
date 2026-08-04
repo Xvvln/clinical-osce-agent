@@ -14,9 +14,12 @@ import {
   LogOut,
   PlusCircle,
   RefreshCw,
+  School,
   ShieldCheck,
   Sparkles,
   Stethoscope,
+  Trash2,
+  UsersRound,
   Wrench,
 } from "lucide-react";
 import {
@@ -72,11 +75,39 @@ const CASE_CREATION_HISTORY_MAX_ITEMS = 8;
 const CASE_CREATION_PROCEDURE_MAX_ITEMS = 6;
 const CASE_CREATION_DIFFERENTIAL_MAX_ITEMS = 4;
 const CASE_CREATION_REASONING_MAX_ITEMS = 4;
+const CLASSROOM_NAME_MAX_CHARS = 80;
+const CLASSROOM_DESCRIPTION_MAX_CHARS = 500;
 
 type AuthUser = Readonly<{
   user_id: string;
   email: string;
+  display_name?: string;
+  created_at?: string;
   is_admin: boolean;
+}>;
+
+type AdminManagedUser = AuthUser &
+  Readonly<{
+    eligible_for_classroom: boolean;
+  }>;
+
+type AdminClassroom = Readonly<{
+  classroom_id: string;
+  name: string;
+  description: string;
+  member_user_ids: readonly string[];
+  member_count: number;
+  members: readonly AdminManagedUser[];
+  created_by: string;
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}>;
+
+type AdminClassroomPayload = Readonly<{
+  name: string;
+  description: string;
+  member_user_ids: readonly string[];
 }>;
 
 type Pagination = Readonly<{
@@ -880,6 +911,8 @@ type TrainingSkillEffects = Readonly<{
 type DashboardData = Readonly<{
   modelConfig: AdminModelConfig | null;
   apiLogs: ModelApiLogs | null;
+  users: readonly AdminManagedUser[];
+  classrooms: readonly AdminClassroom[];
   sessions: readonly AdminSessionSummary[];
   sessionPagination: Pagination | null;
   reports: readonly AdminReportSummary[];
@@ -903,11 +936,13 @@ type DashboardData = Readonly<{
   autoApprovalSettings: TrainingSkillAutoApprovalSettings | null;
 }>;
 
-type AdminSectionId = "overview" | "resources" | "training" | "insights" | "skill" | "evaluation" | "logs";
+type AdminSectionId = "overview" | "classes" | "resources" | "training" | "insights" | "skill" | "evaluation" | "logs";
 
 const emptyDashboardData: DashboardData = {
   modelConfig: null,
   apiLogs: null,
+  users: [],
+  classrooms: [],
   sessions: [],
   sessionPagination: null,
   reports: [],
@@ -933,6 +968,7 @@ const emptyDashboardData: DashboardData = {
 
 const sections: readonly Readonly<{ id: AdminSectionId; label: string; icon: typeof LayoutDashboard }>[] = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
+  { id: "classes", label: "班级管理", icon: School },
   { id: "resources", label: "教学资源", icon: BookOpen },
   { id: "training", label: "训练管理", icon: Stethoscope },
   { id: "insights", label: "教学洞察", icon: Brain },
@@ -966,6 +1002,8 @@ async function loadDashboardData(): Promise<DashboardData> {
   const [
     modelConfigPayload,
     apiLogPayload,
+    usersPayload,
+    classroomsPayload,
     sessionPayload,
     reportPayload,
     candidatePayload,
@@ -979,12 +1017,13 @@ async function loadDashboardData(): Promise<DashboardData> {
     procedureAuditPayload,
     teachingFocusPayload,
     auditEventsPayload,
-    retrievalEvalPayload,
     skillEffectsPayload,
     autoApprovalSettingsPayload,
   ] = await Promise.all([
     fetchJson<{ providers: readonly AdminModelProvider[]; policy: AdminModelConfig["policy"] }>("/api/admin/model-config"),
     fetchJson<ModelApiLogs>("/api/admin/model-api-logs?limit=60"),
+    fetchJson<{ users: readonly AdminManagedUser[] }>("/api/admin/users"),
+    fetchJson<{ classrooms: readonly AdminClassroom[] }>("/api/admin/classrooms"),
     fetchJson<{ sessions: readonly AdminSessionSummary[]; pagination?: Pagination }>("/api/admin/sessions?limit=20"),
     fetchJson<{ reports: readonly AdminReportSummary[]; pagination?: Pagination }>("/api/admin/reports?limit=20"),
     fetchJson<{ candidates: readonly TrainingSkillCandidateSummary[]; pagination?: Pagination }>("/api/admin/evolution/candidates?limit=20&review_status=all"),
@@ -998,13 +1037,14 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
     fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"),
     fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"),
-    fetchJson<{ retrieval_eval: AdminRetrievalEval }>("/api/admin/retrieval-eval"),
     fetchJson<{ skill_effects: TrainingSkillEffects }>("/api/admin/evolution/skill-effects"),
     fetchJson<{ settings: TrainingSkillAutoApprovalSettings }>("/api/admin/evolution/settings"),
   ]);
   return {
     modelConfig: modelConfigPayload,
     apiLogs: apiLogPayload,
+    users: usersPayload.users,
+    classrooms: classroomsPayload.classrooms,
     sessions: sessionPayload.sessions,
     sessionPagination: sessionPayload.pagination ?? null,
     reports: reportPayload.reports,
@@ -1023,7 +1063,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     procedureAuditSummary: procedureAuditPayload.summary ?? null,
     teachingFocusPatterns: teachingFocusPayload.patterns,
     auditEvents: auditEventsPayload.events,
-    retrievalEval: retrievalEvalPayload.retrieval_eval,
+    retrievalEval: null,
     skillEffects: skillEffectsPayload.skill_effects,
     autoApprovalSettings: autoApprovalSettingsPayload.settings,
   };
@@ -1154,6 +1194,40 @@ async function reviewCandidate(candidateId: string, action: "approve" | "reject"
   });
 }
 
+async function createClassroom(payload: AdminClassroomPayload): Promise<AdminClassroom> {
+  const response = await fetchJson<{ classroom: AdminClassroom }>("/api/admin/classrooms", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+  return response.classroom;
+}
+
+async function updateClassroom(classroomId: string, payload: AdminClassroomPayload): Promise<AdminClassroom> {
+  const response = await fetchJson<{ classroom: AdminClassroom }>(`/api/admin/classrooms/${encodeURIComponent(classroomId)}`, {
+    body: JSON.stringify(payload),
+    method: "PUT",
+  });
+  return response.classroom;
+}
+
+async function deleteClassroom(classroomId: string): Promise<void> {
+  await fetchJson(`/api/admin/classrooms/${encodeURIComponent(classroomId)}`, {
+    method: "DELETE",
+  });
+}
+
+async function getClassroomLearningAnalytics(classroomId: string): Promise<AdminLearningAnalytics> {
+  const response = await fetchJson<{ learning_analytics: AdminLearningAnalytics }>(
+    `/api/admin/learning-analytics?classroom_id=${encodeURIComponent(classroomId)}`,
+  );
+  return response.learning_analytics;
+}
+
+async function runRetrievalEvaluation(): Promise<AdminRetrievalEval> {
+  const response = await fetchJson<{ retrieval_eval: AdminRetrievalEval }>("/api/admin/retrieval-eval");
+  return response.retrieval_eval;
+}
+
 export function AdminV2Dashboard() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<AdminSectionId>("overview");
@@ -1172,6 +1246,8 @@ export function AdminV2Dashboard() {
   const [isDetailBusy, setIsDetailBusy] = useState(false);
   const [isSkillBusy, setIsSkillBusy] = useState(false);
   const [isDocumentBusy, setIsDocumentBusy] = useState(false);
+  const [isClassroomBusy, setIsClassroomBusy] = useState(false);
+  const [isRetrievalEvalBusy, setIsRetrievalEvalBusy] = useState(false);
   const [isCaseCreationBusy, setIsCaseCreationBusy] = useState(false);
   const [isCaseCreationOpen, setIsCaseCreationOpen] = useState(false);
   const [errorText, setErrorText] = useState("");
@@ -1398,6 +1474,85 @@ export function AdminV2Dashboard() {
       setErrorText(error instanceof Error ? error.message : "更新自动应用设置失败");
     } finally {
       setIsSkillBusy(false);
+    }
+  }
+
+  async function handleSaveClassroom(
+    classroomId: string,
+    payload: AdminClassroomPayload,
+  ): Promise<AdminClassroom> {
+    setIsClassroomBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const savedClassroom = classroomId
+        ? await updateClassroom(classroomId, payload)
+        : await createClassroom(payload);
+      setData((current) => {
+        const exists = current.classrooms.some(
+          (classroom) => classroom.classroom_id === savedClassroom.classroom_id,
+        );
+        const classrooms = exists
+          ? current.classrooms.map((classroom) =>
+              classroom.classroom_id === savedClassroom.classroom_id
+                ? savedClassroom
+                : classroom,
+            )
+          : [...current.classrooms, savedClassroom];
+        return {
+          ...current,
+          classrooms: [...classrooms].sort((left, right) =>
+            left.name.localeCompare(right.name, "zh-CN"),
+          ),
+        };
+      });
+      setStatusText(
+        classroomId
+          ? `已更新班级：${savedClassroom.name}`
+          : `已创建班级：${savedClassroom.name}`,
+      );
+      return savedClassroom;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存班级失败");
+      throw error;
+    } finally {
+      setIsClassroomBusy(false);
+    }
+  }
+
+  async function handleDeleteClassroom(classroomId: string): Promise<void> {
+    setIsClassroomBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      await deleteClassroom(classroomId);
+      setData((current) => ({
+        ...current,
+        classrooms: current.classrooms.filter(
+          (classroom) => classroom.classroom_id !== classroomId,
+        ),
+      }));
+      setStatusText("班级已删除，学生账号和训练记录未受影响。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除班级失败");
+      throw error;
+    } finally {
+      setIsClassroomBusy(false);
+    }
+  }
+
+  async function handleRunRetrievalEvaluation(): Promise<void> {
+    setIsRetrievalEvalBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const retrievalEval = await runRetrievalEvaluation();
+      setData((current) => ({ ...current, retrievalEval }));
+      setStatusText("RAG 检索评测已完成。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "RAG 检索评测失败");
+    } finally {
+      setIsRetrievalEvalBusy(false);
     }
   }
 
@@ -1707,6 +1862,15 @@ export function AdminV2Dashboard() {
             {activeSectionId === "overview" ? (
               <OverviewSection data={data} onGenerateSkillCandidates={() => void generateSkillCandidates()} onRunEvaluation={() => void runEvaluation()} isMutating={isMutating} />
             ) : null}
+            {activeSectionId === "classes" ? (
+              <ClassroomSection
+                classrooms={data.classrooms}
+                isBusy={isClassroomBusy}
+                onDeleteClassroom={(classroomId) => handleDeleteClassroom(classroomId)}
+                onSaveClassroom={(classroomId, payload) => handleSaveClassroom(classroomId, payload)}
+                users={data.users}
+              />
+            ) : null}
             {activeSectionId === "resources" ? (
               <ResourcesSection
                 data={data}
@@ -1733,7 +1897,9 @@ export function AdminV2Dashboard() {
                 selectedSession={selectedSession}
               />
             ) : null}
-            {activeSectionId === "insights" ? <InsightsSection data={data} /> : null}
+            {activeSectionId === "insights" ? (
+              <InsightsSection data={data} />
+            ) : null}
             {activeSectionId === "skill" ? (
               <SkillSection
                 data={data}
@@ -1748,7 +1914,16 @@ export function AdminV2Dashboard() {
               />
             ) : null}
             {activeSectionId === "evaluation" ? (
-              <EvaluationSection data={data} isDetailBusy={isDetailBusy} isMutating={isMutating} onReadEvaluation={(batchId) => void readEvaluationDetail(batchId)} onRunEvaluation={() => void runEvaluation()} selectedEvaluation={selectedEvaluation} />
+              <EvaluationSection
+                data={data}
+                isDetailBusy={isDetailBusy}
+                isMutating={isMutating}
+                isRetrievalEvalBusy={isRetrievalEvalBusy}
+                onReadEvaluation={(batchId) => void readEvaluationDetail(batchId)}
+                onRunEvaluation={() => void runEvaluation()}
+                onRunRetrievalEvaluation={() => void handleRunRetrievalEvaluation()}
+                selectedEvaluation={selectedEvaluation}
+              />
             ) : null}
             {activeSectionId === "logs" ? <LogsSection data={data} /> : null}
           </div>
@@ -1815,6 +1990,269 @@ function OverviewSection({
               {isMutating ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
               运行系统评测
             </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ClassroomSection({
+  classrooms,
+  isBusy,
+  onDeleteClassroom,
+  onSaveClassroom,
+  users,
+}: Readonly<{
+  classrooms: readonly AdminClassroom[];
+  isBusy: boolean;
+  onDeleteClassroom: (classroomId: string) => Promise<void>;
+  onSaveClassroom: (classroomId: string, payload: AdminClassroomPayload) => Promise<AdminClassroom>;
+  users: readonly AdminManagedUser[];
+}>) {
+  const [editingClassroomId, setEditingClassroomId] = useState("");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [selectedMemberIds, setSelectedMemberIds] = useState<readonly string[]>([]);
+  const [userSearchText, setUserSearchText] = useState("");
+  const [validationText, setValidationText] = useState("");
+  const eligibleUsers = useMemo(
+    () => users.filter((user) => user.eligible_for_classroom && !user.is_admin),
+    [users],
+  );
+  const filteredUsers = useMemo(() => {
+    const query = userSearchText.trim().toLocaleLowerCase("zh-CN");
+    if (!query) {
+      return eligibleUsers;
+    }
+    return eligibleUsers.filter((user) =>
+      [user.display_name ?? "", user.email]
+        .join(" ")
+        .toLocaleLowerCase("zh-CN")
+        .includes(query),
+    );
+  }, [eligibleUsers, userSearchText]);
+  const assignedMembershipCount = classrooms.reduce(
+    (total, classroom) => total + classroom.member_count,
+    0,
+  );
+
+  function startNewClassroom() {
+    setEditingClassroomId("");
+    setName("");
+    setDescription("");
+    setSelectedMemberIds([]);
+    setUserSearchText("");
+    setValidationText("");
+  }
+
+  function openClassroom(classroom: AdminClassroom) {
+    setEditingClassroomId(classroom.classroom_id);
+    setName(classroom.name);
+    setDescription(classroom.description);
+    setSelectedMemberIds(classroom.member_user_ids);
+    setUserSearchText("");
+    setValidationText("");
+  }
+
+  function toggleMember(userId: string) {
+    setSelectedMemberIds((current) =>
+      current.includes(userId)
+        ? current.filter((memberUserId) => memberUserId !== userId)
+        : [...current, userId],
+    );
+  }
+
+  async function handleSave() {
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      setValidationText("请填写班级名称。");
+      return;
+    }
+    setValidationText("");
+    try {
+      const savedClassroom = await onSaveClassroom(editingClassroomId, {
+        description: description.trim(),
+        member_user_ids: selectedMemberIds,
+        name: normalizedName,
+      });
+      openClassroom(savedClassroom);
+    } catch {
+      // The parent dashboard renders the API error without duplicating it here.
+    }
+  }
+
+  async function handleDelete() {
+    if (!editingClassroomId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `确定删除班级“${name || "未命名班级"}”吗？学生账号和训练记录不会被删除。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await onDeleteClassroom(editingClassroomId);
+      startNewClassroom();
+    } catch {
+      // The parent dashboard renders the API error without duplicating it here.
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <SectionIntro
+          description="创建真实教学班，从现有学生账号中选择成员；一个学生可以进入多个训练班。"
+          eyebrow="教学组织"
+          title="班级与成员"
+        />
+        <Button onClick={startNewClassroom} type="button">
+          <PlusCircle />
+          新建班级
+        </Button>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <MetricCard icon={<School />} label="班级" value={formatCount(classrooms.length)} helper="可持续编辑" />
+        <MetricCard icon={<UsersRound />} label="可选学生" value={formatCount(eligibleUsers.length)} helper="管理员账号已排除" />
+        <MetricCard icon={<GraduationCap />} label="成员关系" value={formatCount(assignedMembershipCount)} helper="支持学生加入多个班" />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>班级列表</CardTitle>
+            <CardDescription>选择班级后可修改名称、说明和成员。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3">
+              {classrooms.map((classroom) => (
+                <button
+                  aria-pressed={editingClassroomId === classroom.classroom_id}
+                  className={cn(
+                    "w-full rounded-2xl border p-4 text-left transition",
+                    editingClassroomId === classroom.classroom_id
+                      ? "border-[#141413] bg-[#F7F4ED] shadow-sm"
+                      : "border-[#E7E0D4] bg-white hover:bg-[#FAF9F5]",
+                  )}
+                  key={classroom.classroom_id}
+                  onClick={() => openClassroom(classroom)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{classroom.name}</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#6F6257]">
+                        {classroom.description || "未填写班级说明"}
+                      </p>
+                    </div>
+                    <Badge variant="muted">{formatCount(classroom.member_count)} 人</Badge>
+                  </div>
+                  <p className="mt-3 text-xs text-[#8A7D6F]">更新于 {formatDateTime(classroom.updated_at)}</p>
+                </button>
+              ))}
+              {classrooms.length === 0 ? <EmptyText>暂无班级。点击“新建班级”开始设置。</EmptyText> : null}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex-row items-start justify-between gap-4">
+            <div>
+              <CardTitle>{editingClassroomId ? "编辑班级" : "创建班级"}</CardTitle>
+              <CardDescription>保存后成员关系会持久化，并可用于班级学情筛选。</CardDescription>
+            </div>
+            <Badge variant={editingClassroomId ? "warning" : "muted"}>
+              {formatCount(selectedMemberIds.length)} 名成员
+            </Badge>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <label className="grid gap-2 text-sm font-medium">
+              班级名称
+              <Input
+                maxLength={CLASSROOM_NAME_MAX_CHARS}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="例如：2026 级临床一班"
+                value={name}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              班级说明
+              <textarea
+                className="min-h-24 w-full resize-y rounded-xl border border-[#E7E0D4] bg-white px-3 py-2 text-sm text-[#141413] outline-none transition placeholder:text-[#9A8B7D] focus:border-[#141413] focus:ring-2 focus:ring-[#141413]/10"
+                maxLength={CLASSROOM_DESCRIPTION_MAX_CHARS}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="填写训练周期、课程或本阶段重点"
+                value={description}
+              />
+            </label>
+            <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">选择学生</h3>
+                  <p className="mt-1 text-xs text-[#6F6257]">只显示现有学生账号，管理员不能被纳入班级。</p>
+                </div>
+                <Input
+                  aria-label="搜索可纳入班级的学生"
+                  className="sm:max-w-64"
+                  onChange={(event) => setUserSearchText(event.target.value)}
+                  placeholder="搜索姓名或邮箱"
+                  value={userSearchText}
+                />
+              </div>
+              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1">
+                {filteredUsers.map((user) => {
+                  const checked = selectedMemberIds.includes(user.user_id);
+                  return (
+                    <label
+                      className={cn(
+                        "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-3 transition",
+                        checked ? "border-[#141413] bg-white" : "border-[#E7E0D4] bg-[#FAF9F5] hover:bg-white",
+                      )}
+                      key={user.user_id}
+                    >
+                      <input
+                        checked={checked}
+                        className="size-4 accent-[#141413]"
+                        onChange={() => toggleMember(user.user_id)}
+                        type="checkbox"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">{user.display_name || user.email}</span>
+                        <span className="mt-1 block truncate text-xs text-[#8A7D6F]">{user.email}</span>
+                      </span>
+                      <Badge variant={checked ? "success" : "muted"}>{checked ? "已纳入" : "未选择"}</Badge>
+                    </label>
+                  );
+                })}
+                {filteredUsers.length === 0 ? (
+                  <EmptyText>
+                    {eligibleUsers.length === 0
+                      ? "当前没有可纳入的学生账号；学生登录或由部署管理员预置后会出现在这里。"
+                      : "没有匹配的学生。"}
+                  </EmptyText>
+                ) : null}
+              </div>
+            </div>
+            {validationText ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{validationText}</p> : null}
+            <div className="flex flex-wrap justify-between gap-3">
+              <div>
+                {editingClassroomId ? (
+                  <Button disabled={isBusy} onClick={() => void handleDelete()} type="button" variant="destructive">
+                    <Trash2 />
+                    删除班级
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={isBusy} onClick={startNewClassroom} type="button" variant="secondary">
+                  清空
+                </Button>
+                <Button disabled={isBusy || !name.trim()} onClick={() => void handleSave()} type="button">
+                  {isBusy ? <Loader2 className="animate-spin" /> : <School />}
+                  {editingClassroomId ? "保存班级" : "创建班级"}
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -3447,10 +3885,54 @@ function ProcedureAuditList({
 }
 
 function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
+  const [selectedClassroomId, setSelectedClassroomId] = useState("");
+  const [classroomAnalytics, setClassroomAnalytics] = useState<AdminLearningAnalytics | null>(null);
+  const [isClassroomAnalyticsLoading, setIsClassroomAnalyticsLoading] = useState(false);
+  const [classroomAnalyticsError, setClassroomAnalyticsError] = useState("");
+  const classroomAnalyticsRequestRef = useRef(0);
   const missedItems = toInsightDisplayItems(data.insights?.frequent_missed_items, "未覆盖训练点");
   const turnPatterns = toInsightDisplayItems(data.insights?.frequent_turn_patterns, "训练模式");
   const humanisticInsight = data.insights?.humanistic_communication;
-  const learningAnalytics = data.learningAnalytics;
+  const learningAnalytics = selectedClassroomId ? classroomAnalytics : data.learningAnalytics;
+
+  useEffect(() => {
+    if (
+      selectedClassroomId
+      && !data.classrooms.some((classroom) => classroom.classroom_id === selectedClassroomId)
+    ) {
+      setSelectedClassroomId("");
+      setClassroomAnalytics(null);
+      setClassroomAnalyticsError("");
+    }
+  }, [data.classrooms, selectedClassroomId]);
+
+  async function handleClassroomAnalyticsSelection(classroomId: string) {
+    setSelectedClassroomId(classroomId);
+    setClassroomAnalyticsError("");
+    const requestId = classroomAnalyticsRequestRef.current + 1;
+    classroomAnalyticsRequestRef.current = requestId;
+    if (!classroomId) {
+      setClassroomAnalytics(null);
+      setIsClassroomAnalyticsLoading(false);
+      return;
+    }
+    setIsClassroomAnalyticsLoading(true);
+    try {
+      const nextAnalytics = await getClassroomLearningAnalytics(classroomId);
+      if (classroomAnalyticsRequestRef.current === requestId) {
+        setClassroomAnalytics(nextAnalytics);
+      }
+    } catch (error) {
+      if (classroomAnalyticsRequestRef.current === requestId) {
+        setClassroomAnalytics(null);
+        setClassroomAnalyticsError(error instanceof Error ? error.message : "读取班级学情失败");
+      }
+    } finally {
+      if (classroomAnalyticsRequestRef.current === requestId) {
+        setIsClassroomAnalyticsLoading(false);
+      }
+    }
+  }
 
   return (
     <div className="grid gap-4">
@@ -3477,6 +3959,35 @@ function InsightsSection({ data }: Readonly<{ data: DashboardData }>) {
         </CardContent>
       </Card>
       <HumanisticInsightsPanel insight={humanisticInsight} />
+      <Card>
+        <CardHeader className="flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>班级学情范围</CardTitle>
+            <CardDescription>选择班级后，下方学情分析只统计该班成员的真实训练记录。</CardDescription>
+          </div>
+          {isClassroomAnalyticsLoading ? <Loader2 className="size-5 animate-spin text-[#AE5630]" /> : <UsersRound className="size-5 text-[#AE5630]" />}
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <label className="grid max-w-lg gap-2 text-sm font-medium">
+            统计范围
+            <select
+              className="h-10 w-full rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm text-[#141413] outline-none transition focus:border-[#141413] focus:ring-2 focus:ring-[#141413]/10"
+              disabled={isClassroomAnalyticsLoading}
+              onChange={(event) => void handleClassroomAnalyticsSelection(event.target.value)}
+              value={selectedClassroomId}
+            >
+              <option value="">全部学生</option>
+              {data.classrooms.map((classroom) => (
+                <option key={classroom.classroom_id} value={classroom.classroom_id}>
+                  {classroom.name}（{classroom.member_count} 人）
+                </option>
+              ))}
+            </select>
+          </label>
+          {data.classrooms.length === 0 ? <p className="text-sm text-[#6F6257]">还没有班级，可先在“班级管理”中创建并选择学生。</p> : null}
+          {classroomAnalyticsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{classroomAnalyticsError}</p> : null}
+        </CardContent>
+      </Card>
       <LearningAnalyticsPanel analytics={learningAnalytics} />
       <TeachingFocusList patterns={data.teachingFocusPatterns} />
     </div>
@@ -3489,13 +4000,14 @@ function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearni
   const cohort = analytics?.cohort_analytics ?? null;
   const caseItems = analytics?.case_analytics ?? [];
   const studentItems = analytics?.student_analytics ?? [];
+  const scopeLabel = cohort?.scope_label || "全用户";
 
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-4">
         <div>
-          <CardTitle>全用户、病例与学生学情分析</CardTitle>
-          <CardDescription>把报告、训练缺口、错失机会和患者情绪回应汇总到全用户、病例级与学生级，供教师安排下一轮训练。</CardDescription>
+          <CardTitle>{scopeLabel}、病例与学生学情分析</CardTitle>
+          <CardDescription>把报告、训练缺口、错失机会和患者情绪回应汇总到当前范围、病例级与学生级，供教师安排下一轮训练。</CardDescription>
         </div>
         <Badge variant="muted">{formatCount(summary?.report_count ?? 0)} 份报告</Badge>
       </CardHeader>
@@ -3515,7 +4027,7 @@ function LearningAnalyticsPanel({ analytics }: Readonly<{ analytics: AdminLearni
             onClick={() => setView("cohort")}
             type="button"
           >
-            全用户总览
+            {scopeLabel}总览
           </button>
           <button
             className={cn(
@@ -4072,15 +4584,19 @@ function EvaluationSection({
   data,
   isDetailBusy,
   isMutating,
+  isRetrievalEvalBusy,
   onReadEvaluation,
   onRunEvaluation,
+  onRunRetrievalEvaluation,
   selectedEvaluation,
 }: Readonly<{
   data: DashboardData;
   isDetailBusy: boolean;
   isMutating: boolean;
+  isRetrievalEvalBusy: boolean;
   onReadEvaluation: (batchId: string) => void;
   onRunEvaluation: () => void;
+  onRunRetrievalEvaluation: () => void;
   selectedEvaluation: EvaluationBatchDetail | null;
 }>) {
   const totalCases = data.evaluations.reduce((sum, evaluation) => sum + evaluation.total_cases, 0);
@@ -4111,7 +4627,11 @@ function EvaluationSection({
         <MetricCard icon={<Gauge />} label="总通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
         <MetricCard icon={<Wrench />} label="失败用例" value={formatCount(data.evaluations.reduce((sum, evaluation) => sum + evaluation.failed_cases, 0))} helper="需要排查" />
       </div>
-      <RetrievalEvalPanel retrievalEval={data.retrievalEval} />
+      <RetrievalEvalPanel
+        isLoading={isRetrievalEvalBusy}
+        onRun={onRunRetrievalEvaluation}
+        retrievalEval={data.retrievalEval}
+      />
       <Card>
         <CardHeader>
           <CardTitle>评测批次</CardTitle>
@@ -4175,7 +4695,15 @@ function EvaluationSection({
   );
 }
 
-function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRetrievalEval | null }>) {
+function RetrievalEvalPanel({
+  isLoading,
+  onRun,
+  retrievalEval,
+}: Readonly<{
+  isLoading: boolean;
+  onRun: () => void;
+  retrievalEval: AdminRetrievalEval | null;
+}>) {
   const metrics = retrievalEval?.metrics;
   const results = retrievalEval?.results ?? [];
   return (
@@ -4185,7 +4713,13 @@ function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRe
           <CardTitle>RAG 检索评测</CardTitle>
           <CardDescription>用固定 gold query 检查知识库召回和来源覆盖；不参与标准诊断裁判。</CardDescription>
         </div>
-        <Badge variant="muted">{formatCount(metrics?.query_count ?? retrievalEval?.gold_set?.query_count ?? results.length)} 条查询</Badge>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Badge variant="muted">{formatCount(metrics?.query_count ?? retrievalEval?.gold_set?.query_count ?? results.length)} 条查询</Badge>
+          <Button disabled={isLoading} onClick={onRun} size="sm" type="button" variant="secondary">
+            {isLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {retrievalEval ? "重新运行检索评测" : "运行检索评测"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {retrievalEval ? (
@@ -4223,7 +4757,7 @@ function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRe
             </div>
           </div>
         ) : (
-          <EmptyText>暂无 RAG 检索评测结果。</EmptyText>
+          <EmptyText>尚未运行 RAG 检索评测；按需运行不会阻塞其他管理数据。</EmptyText>
         )}
       </CardContent>
     </Card>
@@ -4259,7 +4793,7 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
 }
 
 function ModelApiLogList({ logs }: Readonly<{ logs: readonly ApiCallLog[] }>) {
-  const items = logs.slice(0, 18);
+  const items = logs;
   if (items.length === 0) {
     return <EmptyText>暂无模型调用日志。</EmptyText>;
   }

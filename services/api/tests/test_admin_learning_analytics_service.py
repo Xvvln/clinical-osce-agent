@@ -339,6 +339,34 @@ def test_admin_learning_analytics_filters_by_case_and_student(tmp_path) -> None:
     assert [item["student_id"] for item in analytics["student_analytics"]] == ["student_a"]
 
 
+def test_admin_learning_analytics_respects_an_explicit_empty_session_scope(
+    tmp_path,
+) -> None:
+    session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    session_store.create_session(
+        OsceSession(
+            session_id="evaluation_only",
+            student_id="admin-eval:student",
+            case_id="appendicitis_001",
+            stage="feedback",
+        )
+    )
+
+    analytics = AdminLearningAnalyticsService(
+        session_store=session_store,
+        report_store=report_store,
+    ).summarize(session_ids=[])
+
+    assert analytics["summary"] == {
+        "session_count": 0,
+        "report_count": 0,
+        "case_count": 0,
+        "student_count": 0,
+    }
+    assert analytics["cohort_analytics"]["session_count"] == 0
+
+
 def test_admin_learning_analytics_normalizes_mixed_rubrics_and_excludes_absent_group(tmp_path) -> None:
     session_store = OsceSessionStore(tmp_path / "sessions.sqlite3")
     report_store = ReportStore(tmp_path / "reports.sqlite3")

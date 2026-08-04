@@ -33,15 +33,25 @@ class AdminLearningAnalyticsService:
         session_ids: list[str] | None = None,
         case_id: str = "",
         student_id: str = "",
+        student_ids: set[str] | None = None,
+        cohort_scope: str = "all_users",
+        cohort_scope_label: str = "全用户",
         limit: int | None = None,
     ) -> dict[str, Any]:
-        session_filter = set(session_ids or [])
+        session_filter = None if session_ids is None else set(session_ids)
         sessions = [
             session
             for session in self.session_store.list_session_summaries()
-            if (not session_filter or str(session.get("session_id")) in session_filter)
+            if (
+                session_filter is None
+                or str(session.get("session_id")) in session_filter
+            )
             and (not case_id or str(session.get("case_id")) == case_id)
             and (not student_id or str(session.get("student_id")) == student_id)
+            and (
+                student_ids is None
+                or str(session.get("student_id")) in student_ids
+            )
         ]
         if limit is not None:
             sessions = sessions[: max(0, limit)]
@@ -87,7 +97,9 @@ class AdminLearningAnalyticsService:
                 "student_count": len(student_analytics),
             },
             "cohort_analytics": _build_cohort_analytics(
-                [session for grouped_sessions in case_groups.values() for session in grouped_sessions]
+                [session for grouped_sessions in case_groups.values() for session in grouped_sessions],
+                scope=cohort_scope,
+                scope_label=cohort_scope_label,
             ),
             "case_analytics": case_analytics,
             "student_analytics": student_analytics,
@@ -98,15 +110,20 @@ def session_payload_report(session: dict[str, Any], reports_by_session_id: dict[
     return reports_by_session_id.get(str(session.get("session_id") or ""))
 
 
-def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_cohort_analytics(
+    sessions: list[dict[str, Any]],
+    *,
+    scope: str = "all_users",
+    scope_label: str = "全用户",
+) -> dict[str, Any]:
     reports = _reports_from_sessions(sessions)
     affect_signals = _affect_signal_summary(sessions)
     frequent_missed_items = _frequent_missed_items(reports)
     frequent_humanistic_gaps = _frequent_humanistic_gaps(reports)
     frequent_missed_opportunities = _frequent_missed_opportunities(reports)
     return {
-        "scope": "all_users",
-        "scope_label": "全用户",
+        "scope": scope,
+        "scope_label": scope_label,
         "session_count": len(sessions),
         "report_count": len(reports),
         "case_count": len({str(session.get("case_id") or "") for session in sessions if session.get("case_id")}),
@@ -119,8 +136,8 @@ def _build_cohort_analytics(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "affect_signals": affect_signals,
         "teaching_actions": _cohort_teaching_actions(frequent_humanistic_gaps, frequent_missed_opportunities, affect_signals),
         "training_drills": _build_training_drills(
-            scope="all_users",
-            scope_id="",
+            scope="classroom" if scope.startswith("classroom:") else "all_users",
+            scope_id=scope.removeprefix("classroom:") if scope.startswith("classroom:") else "",
             clinical_missed_items=_clinical_missed_items_for_drills(reports, frequent_missed_items),
             gaps=frequent_humanistic_gaps,
             missed_opportunities=frequent_missed_opportunities,

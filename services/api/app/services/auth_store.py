@@ -145,6 +145,18 @@ class AuthStore:
             ).fetchone()
         return None if row is None else _user_from_row(row)
 
+    def list_users(self) -> list[dict[str, str]]:
+        self._initialize()
+        with sqlite3.connect(self.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT user_id, email, display_name, password_hash, password_salt, created_at
+                FROM users
+                ORDER BY display_name COLLATE NOCASE ASC, email COLLATE NOCASE ASC
+                """
+            ).fetchall()
+        return [_user_from_row(row) for row in rows]
+
     def has_any_user(self, emails: Iterable[str]) -> bool:
         normalized_emails = {
             _normalize_email(email)

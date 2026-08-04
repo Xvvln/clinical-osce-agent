@@ -55,6 +55,10 @@ from app.services.api_call_log_service import (
 )
 from app.services.auth_store import auth_store
 from app.services.browser_origin_policy import browser_state_change_request_rejection_reason
+from app.services.classroom_store import (
+    ClassroomNameConflictError,
+    classroom_store,
+)
 from app.services.derived_teaching_focus_service import (
     build_admin_teaching_focus_patterns,
     get_admin_teaching_focus_pattern,
@@ -250,6 +254,9 @@ AUTH_EMAIL_MAX_CHARS = 254
 AUTH_PASSWORD_MAX_CHARS = 256
 DISPLAY_NAME_MAX_CHARS = 80
 IDENTIFIER_MAX_CHARS = 128
+CLASSROOM_NAME_MAX_CHARS = 80
+CLASSROOM_DESCRIPTION_MAX_CHARS = 500
+CLASSROOM_MEMBER_MAX_ITEMS = 500
 PROCEDURE_CODE_MAX_CHARS = 64
 PROCEDURE_BATCH_MAX_ITEMS = 64
 QUESTION_MAX_CHARS = 500
@@ -855,6 +862,22 @@ class AdminTrainingSkillAutoApprovalSettingsRequest(RequestModel):
     auto_apply_enabled: bool
 
 
+class AdminClassroomUpsertRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=CLASSROOM_NAME_MAX_CHARS)
+    description: str = Field(default="", max_length=CLASSROOM_DESCRIPTION_MAX_CHARS)
+    member_user_ids: list[
+        Annotated[str, Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)]
+    ] = Field(default_factory=list, max_length=CLASSROOM_MEMBER_MAX_ITEMS)
+
+    @model_validator(mode="after")
+    def validate_classroom_name(self) -> "AdminClassroomUpsertRequest":
+        if not self.name.strip():
+            raise ValueError("classroom name is required")
+        return self
+
+
 class AdminCaseValidationRequest(RequestModel):
     case: dict[str, Any]
     rubric: dict[str, Any] | None = None
@@ -1389,6 +1412,88 @@ def _build_auth_user_payload(user: dict[str, str]) -> dict[str, object]:
         **user,
         "is_admin": is_admin_email_allowed(user["email"]),
     }
+
+
+def _admin_user_directory() -> list[dict[str, object]]:
+    users = [_build_auth_user_payload(user) for user in auth_store.list_users()]
+    return [
+        {
+            **user,
+            "eligible_for_classroom": not bool(user.get("is_admin")),
+        }
+        for user in users
+    ]
+
+
+def _validated_classroom_member_user_ids(
+    requested_user_ids: list[str],
+) -> list[str]:
+    normalized_user_ids = list(
+        dict.fromkeys(user_id.strip() for user_id in requested_user_ids)
+    )
+    users_by_id = {
+        str(user["user_id"]): user
+        for user in _admin_user_directory()
+    }
+    invalid_user_ids = [
+        user_id
+        for user_id in normalized_user_ids
+        if user_id not in users_by_id or bool(users_by_id[user_id].get("is_admin"))
+    ]
+    if invalid_user_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="班级成员必须是已存在的非管理员账号",
+        )
+    return normalized_user_ids
+
+
+def _build_admin_classroom_payload(
+    classroom: dict[str, Any],
+) -> dict[str, object]:
+    users_by_id = {
+        str(user["user_id"]): user
+        for user in _admin_user_directory()
+    }
+    member_user_ids = _eligible_classroom_member_user_ids(
+        classroom,
+        users_by_id=users_by_id,
+    )
+    members = [
+        users_by_id[user_id]
+        for user_id in member_user_ids
+        if user_id in users_by_id
+    ]
+    return {
+        **classroom,
+        "member_user_ids": member_user_ids,
+        "member_count": len(member_user_ids),
+        "members": members,
+    }
+
+
+def _eligible_classroom_member_user_ids(
+    classroom: dict[str, Any],
+    *,
+    users_by_id: dict[str, dict[str, object]] | None = None,
+) -> list[str]:
+    effective_users_by_id = (
+        users_by_id
+        if users_by_id is not None
+        else {
+            str(user["user_id"]): user
+            for user in _admin_user_directory()
+        }
+    )
+    return [
+        user_id
+        for user_id in (
+            str(value)
+            for value in classroom.get("member_user_ids", [])
+        )
+        if user_id in effective_users_by_id
+        and not bool(effective_users_by_id[user_id].get("is_admin"))
+    ]
 
 
 def _matches_demo_admin_credentials(email: str, password: str) -> bool:
@@ -2233,6 +2338,10 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
             required_tables=("auth_sessions", "users"),
         ),
         SQLiteReadinessTarget(
+            database_path=classroom_store.database_path,
+            required_tables=("classroom_memberships", "classrooms"),
+        ),
+        SQLiteReadinessTarget(
             database_path=session_store.database_path,
             required_tables=("osce_sessions", "osce_session_event_outbox"),
         ),
@@ -2278,6 +2387,7 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
 def _initialize_readiness_persistence() -> None:
     session_service = osce_session_service
     auth_store._initialize()
+    classroom_store._initialize()
     session_service.session_store._initialize()
     session_service.report_store._initialize()
     session_service.training_event_store._initialize()
@@ -2775,6 +2885,90 @@ def get_case_raw(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return _get_case_raw_response(case_id)
+
+
+@app.get("/api/admin/users")
+def list_admin_users(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {"users": _admin_user_directory()}
+
+
+@app.get("/api/admin/classrooms")
+def list_admin_classrooms(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    return {
+        "classrooms": [
+            _build_admin_classroom_payload(classroom)
+            for classroom in classroom_store.list_classrooms()
+        ]
+    }
+
+
+@app.post("/api/admin/classrooms", status_code=status.HTTP_201_CREATED)
+def create_admin_classroom(
+    request: AdminClassroomUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    admin_user = _require_admin_user(auth_token)
+    member_user_ids = _validated_classroom_member_user_ids(
+        request.member_user_ids
+    )
+    try:
+        classroom = classroom_store.create_classroom(
+            name=request.name,
+            description=request.description,
+            member_user_ids=member_user_ids,
+            actor_user_id=admin_user["user_id"],
+        )
+    except ClassroomNameConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="班级名称已存在",
+        ) from exc
+    return {"classroom": _build_admin_classroom_payload(classroom)}
+
+
+@app.put("/api/admin/classrooms/{classroom_id}")
+def update_admin_classroom(
+    classroom_id: str,
+    request: AdminClassroomUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    admin_user = _require_admin_user(auth_token)
+    member_user_ids = _validated_classroom_member_user_ids(
+        request.member_user_ids
+    )
+    try:
+        classroom = classroom_store.update_classroom(
+            classroom_id,
+            name=request.name,
+            description=request.description,
+            member_user_ids=member_user_ids,
+            actor_user_id=admin_user["user_id"],
+        )
+    except ClassroomNameConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="班级名称已存在",
+        ) from exc
+    if classroom is None:
+        raise HTTPException(status_code=404, detail="班级不存在")
+    return {"classroom": _build_admin_classroom_payload(classroom)}
+
+
+@app.delete("/api/admin/classrooms/{classroom_id}")
+def delete_admin_classroom(
+    classroom_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    if not classroom_store.delete_classroom(classroom_id):
+        raise HTTPException(status_code=404, detail="班级不存在")
+    return {"deleted": True, "classroom_id": classroom_id}
 
 
 @app.get("/api/admin/cases/{case_id}/raw")
@@ -3387,10 +3581,21 @@ def get_admin_training_insights(
 def get_admin_learning_analytics(
     case_id: str = Query(default=""),
     student_id: str = Query(default=""),
+    classroom_id: str = Query(default="", max_length=IDENTIFIER_MAX_CHARS),
     limit: int | None = Query(default=None, ge=1),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
+    classroom = None
+    classroom_student_ids: set[str] | None = None
+    if classroom_id:
+        classroom = classroom_store.get_classroom(classroom_id)
+        if classroom is None:
+            raise HTTPException(status_code=404, detail="班级不存在")
+        classroom_student_ids = {
+            user_id
+            for user_id in _eligible_classroom_member_user_ids(classroom)
+        }
     session_ids = _real_training_session_ids()
     analytics = AdminLearningAnalyticsService(
         session_store=osce_session_service.session_store,
@@ -3399,6 +3604,13 @@ def get_admin_learning_analytics(
         session_ids=session_ids,
         case_id=case_id,
         student_id=student_id,
+        student_ids=classroom_student_ids,
+        cohort_scope=(
+            f"classroom:{classroom_id}" if classroom is not None else "all_users"
+        ),
+        cohort_scope_label=(
+            str(classroom["name"]) if classroom is not None else "全用户"
+        ),
         limit=limit,
     )
     return {"learning_analytics": analytics}

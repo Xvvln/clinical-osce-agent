@@ -42,7 +42,7 @@ test("admin v2 documents the Dashboard Blocks adaptation and migration boundary"
 });
 
 test("admin v2 exposes the core management modules with clean Chinese labels", () => {
-  for (const label of ["概览", "教学资源", "训练管理", "教学洞察", "Skill 进化", "系统评测", "调用日志"]) {
+  for (const label of ["概览", "班级管理", "教学资源", "训练管理", "教学洞察", "Skill 进化", "系统评测", "调用日志"]) {
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should expose ${label}`);
   }
 
@@ -60,10 +60,12 @@ test("admin v2 exposes the core management modules with clean Chinese labels", (
   assert.doesNotMatch(dashboardSource, /把训练、资源、Skill、评测和模型日志重组为表格化管理视图/);
 });
 
-test("admin v2 reads the existing backend APIs without adding a new backend contract", () => {
+test("admin v2 reads the management APIs including classroom membership", () => {
   for (const endpoint of [
     "/api/admin/model-config",
     "/api/admin/model-api-logs?limit=60",
+    "/api/admin/users",
+    "/api/admin/classrooms",
     "/api/admin/sessions?limit=20",
     "/api/admin/reports?limit=20",
     "/api/admin/sessions/${sessionId}/report",
@@ -98,6 +100,42 @@ test("admin v2 reads the existing backend APIs without adding a new backend cont
   ]) {
     assert.match(dashboardSource, new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `v2 dashboard should use ${endpoint}`);
   }
+});
+
+test("admin v2 manages real classroom membership and filters learning analytics", () => {
+  for (const label of [
+    "班级与成员",
+    "新建班级",
+    "选择学生",
+    "管理员账号已排除",
+    "已纳入",
+    "保存班级",
+    "删除班级",
+    "班级学情范围",
+  ]) {
+    assert.match(dashboardSource, new RegExp(label), `classroom management should expose ${label}`);
+  }
+  assert.match(dashboardSource, /createClassroom/);
+  assert.match(dashboardSource, /updateClassroom/);
+  assert.match(dashboardSource, /deleteClassroom/);
+  assert.match(dashboardSource, /eligible_for_classroom/);
+  assert.match(dashboardSource, /member_user_ids/);
+  assert.match(dashboardSource, /learning-analytics\?classroom_id=/);
+  assert.match(dashboardSource, /window\.confirm/);
+});
+
+test("admin v2 runs retrieval evaluation on demand without blocking dashboard startup", () => {
+  const dashboardLoader = sourceBetween(dashboardSource, "async function loadDashboardData", "async function getSessionReport");
+  assert.doesNotMatch(dashboardLoader, /\/api\/admin\/retrieval-eval/);
+  assert.match(dashboardSource, /async function runRetrievalEvaluation/);
+  assert.match(dashboardSource, /运行检索评测/);
+  assert.match(dashboardSource, /按需运行不会阻塞其他管理数据/);
+});
+
+test("admin v2 renders every model log returned by its 60 item query", () => {
+  const modelLogList = sourceBetween(dashboardSource, "function ModelApiLogList", "function LogMeta");
+  assert.match(dashboardSource, /model-api-logs\?limit=60/);
+  assert.doesNotMatch(modelLogList, /logs\.slice\(/);
 });
 
 test("admin uploads and editable resources enforce API limits locally", () => {

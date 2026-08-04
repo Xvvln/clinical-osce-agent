@@ -18,6 +18,7 @@ from app.services import gemini_patient_responder as gemini_patient_responder_mo
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.auth_store import AuthStore
 from app.services.api_call_log_service import ApiCallLogStore
+from app.services.classroom_store import ClassroomStore
 from app.services.evaluation_result_store import EvaluationResultStore
 from app.services.evaluation_runner import EvaluationBatchResult, EvaluationResult
 from app.services.osce_session_service import OsceSession, OsceSessionService, osce_session_service
@@ -40,6 +41,12 @@ def isolate_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None
         main,
         "training_skill_auto_approval_settings_store",
         TrainingSkillAutoApprovalSettingsStore(tmp_path / "training_skill_auto_approval.sqlite3"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "classroom_store",
+        ClassroomStore(tmp_path / "classrooms.sqlite3"),
         raising=False,
     )
 
@@ -183,6 +190,17 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
             unauthenticated_client.get("/api/admin/insights"),
             unauthenticated_client.get("/api/admin/learning-analytics"),
+            unauthenticated_client.get("/api/admin/users"),
+            unauthenticated_client.get("/api/admin/classrooms"),
+            unauthenticated_client.post(
+                "/api/admin/classrooms",
+                json={"name": "临床一班", "member_user_ids": []},
+            ),
+            unauthenticated_client.put(
+                "/api/admin/classrooms/missing-classroom",
+                json={"name": "临床一班", "member_user_ids": []},
+            ),
+            unauthenticated_client.delete("/api/admin/classrooms/missing-classroom"),
             unauthenticated_client.get("/api/admin/evaluations"),
             unauthenticated_client.get("/api/admin/evaluations/missing_batch"),
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
@@ -238,6 +256,17 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.post("/api/admin/evolution/reject", json={"candidate_id": "missing_candidate"}),
             client.get("/api/admin/insights"),
             client.get("/api/admin/learning-analytics"),
+            client.get("/api/admin/users"),
+            client.get("/api/admin/classrooms"),
+            client.post(
+                "/api/admin/classrooms",
+                json={"name": "临床一班", "member_user_ids": []},
+            ),
+            client.put(
+                "/api/admin/classrooms/missing-classroom",
+                json={"name": "临床一班", "member_user_ids": []},
+            ),
+            client.delete("/api/admin/classrooms/missing-classroom"),
             client.get("/api/admin/evaluations"),
             client.get("/api/admin/evaluations/missing_batch"),
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
@@ -271,6 +300,175 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
 
     assert [response.status_code for response in responses] == [403] * len(responses)
     assert all(response.json() == {"detail": "admin access required"} for response in responses)
+
+
+def test_admin_can_manage_classroom_members_from_existing_users(tmp_path, monkeypatch) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        student_a = main.auth_store.create_user(
+            "student-a@example.test",
+            "safe-password-a",
+            "张三",
+        )
+        student_b = main.auth_store.create_user(
+            "student-b@example.test",
+            "safe-password-b",
+            "李四",
+        )
+        assert student_a is not None
+        assert student_b is not None
+
+        users_response = client.get("/api/admin/users")
+        assert users_response.status_code == 200
+        users = users_response.json()["users"]
+        assert {user["display_name"] for user in users} >= {"演示管理员", "张三", "李四"}
+        assert all("password_hash" not in user for user in users)
+        assert next(user for user in users if user["user_id"] == student_a["user_id"])[
+            "eligible_for_classroom"
+        ] is True
+        admin_user = next(user for user in users if user["is_admin"])
+        assert admin_user["eligible_for_classroom"] is False
+
+        create_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "2026 级临床一班",
+                "description": "春季 OSCE 综合训练",
+                "member_user_ids": [student_a["user_id"], student_b["user_id"]],
+            },
+        )
+        assert create_response.status_code == 201
+        classroom = create_response.json()["classroom"]
+        assert classroom["member_count"] == 2
+        assert [member["display_name"] for member in classroom["members"]] == ["张三", "李四"]
+
+        classroom_id = classroom["classroom_id"]
+        update_response = client.put(
+            f"/api/admin/classrooms/{classroom_id}",
+            json={
+                "name": "2026 级临床一班 A 组",
+                "description": "本周重点练习急腹症",
+                "member_user_ids": [student_b["user_id"]],
+            },
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["classroom"]
+        assert updated["name"] == "2026 级临床一班 A 组"
+        assert updated["member_user_ids"] == [student_b["user_id"]]
+
+        list_response = client.get("/api/admin/classrooms")
+        assert list_response.status_code == 200
+        assert list_response.json()["classrooms"] == [updated]
+
+        analytics_response = client.get(
+            f"/api/admin/learning-analytics?classroom_id={classroom_id}"
+        )
+        assert analytics_response.status_code == 200
+        cohort = analytics_response.json()["learning_analytics"]["cohort_analytics"]
+        assert cohort["scope"] == f"classroom:{classroom_id}"
+        assert cohort["scope_label"] == "2026 级临床一班 A 组"
+        assert cohort["student_count"] == 0
+
+        delete_response = client.delete(f"/api/admin/classrooms/{classroom_id}")
+        assert delete_response.status_code == 200
+        assert client.get("/api/admin/classrooms").json()["classrooms"] == []
+
+
+def test_admin_classroom_rejects_admin_unknown_and_duplicate_names(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        users = client.get("/api/admin/users").json()["users"]
+        admin_user = next(user for user in users if user["is_admin"])
+
+        admin_member_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "管理员不可加入",
+                "member_user_ids": [admin_user["user_id"]],
+            },
+        )
+        unknown_member_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "未知用户不可加入",
+                "member_user_ids": ["missing-user"],
+            },
+        )
+        assert admin_member_response.status_code == 400
+        assert unknown_member_response.status_code == 400
+
+        first_response = client.post(
+            "/api/admin/classrooms",
+            json={"name": "Clinical A", "member_user_ids": []},
+        )
+        duplicate_response = client.post(
+            "/api/admin/classrooms",
+            json={"name": "clinical a", "member_user_ids": []},
+        )
+        assert first_response.status_code == 201
+        assert duplicate_response.status_code == 409
+
+
+def test_admin_classroom_rejects_blank_name_and_unknown_classroom(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        blank_name_response = client.post(
+            "/api/admin/classrooms",
+            json={"name": "   ", "member_user_ids": []},
+        )
+        missing_update_response = client.put(
+            "/api/admin/classrooms/missing-classroom",
+            json={"name": "临床一班", "member_user_ids": []},
+        )
+        missing_delete_response = client.delete(
+            "/api/admin/classrooms/missing-classroom"
+        )
+        missing_analytics_response = client.get(
+            "/api/admin/learning-analytics?classroom_id=missing-classroom"
+        )
+
+    assert blank_name_response.status_code == 422
+    assert missing_update_response.status_code == 404
+    assert missing_delete_response.status_code == 404
+    assert missing_analytics_response.status_code == 404
+
+
+def test_classroom_excludes_member_who_later_becomes_an_admin(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        student = main.auth_store.create_user(
+            "promoted@example.test",
+            "safe-password",
+            "待晋升学生",
+        )
+        assert student is not None
+        create_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "临床二班",
+                "member_user_ids": [student["user_id"]],
+            },
+        )
+        assert create_response.status_code == 201
+        classroom_id = create_response.json()["classroom"]["classroom_id"]
+
+        monkeypatch.setenv(
+            "CLINICAL_OSCE_ADMIN_EMAILS",
+            f"{main._get_demo_admin_email()},{student['email']}",
+        )
+        classroom = client.get("/api/admin/classrooms").json()["classrooms"][0]
+        analytics = client.get(
+            f"/api/admin/learning-analytics?classroom_id={classroom_id}"
+        ).json()["learning_analytics"]
+
+    assert classroom["member_count"] == 0
+    assert classroom["member_user_ids"] == []
+    assert analytics["summary"]["student_count"] == 0
 
 
 def test_admin_can_read_model_api_logs(tmp_path, monkeypatch) -> None:
