@@ -29,6 +29,11 @@ SYSTEM_PROMPT_TEMPLATE = """你是 OSCE 临床思维训练的评分员。你只�
 - 若学生推理包含不在 relevant_facts_revealed 中的事实编造，rationale 必须指出，并不得因此加分。
 - 如果输入包含 provider_projection，证据列表是有界的确定性投影；必须使用其中的原始总数作为评分分母，未列出的证据不得推断为已覆盖，也不得据此补充病例事实；不得仅因某事实未出现在投影列表中就判为编造。
 - rationale 不超过 120 字，不输出具体用药方案、剂量或真实诊疗建议。
+
+输出要求：
+- 只输出一个 JSON 对象，且必须包含 score、covered_evidence、missing_evidence、rationale 四个字段。
+- covered_evidence 和 missing_evidence 必须逐字复制 required_evidence 中的完整条目，并共同覆盖全部 required_evidence；没有内容时也必须输出空数组。
+- 示例：{"score": 5, "covered_evidence": ["证据A"], "missing_evidence": ["证据B"], "rationale": "已覆盖证据A，仍缺证据B。"}
 """
 
 RUBRIC_PROVIDER_PAYLOAD_MAX_BYTES = 48 * 1024

@@ -316,7 +316,7 @@ def _current_session_activation(
         stage_item_hits.extend(
             item_id
             for item_id in remaining_trigger_items
-            if item_id.startswith(("dx_", "dxd_", "rs_"))
+            if item_id.startswith(("dx_", "dxd_", "dd_", "diff_", "rs_"))
         )
     if stage_item_hits:
         return _activation_payload(

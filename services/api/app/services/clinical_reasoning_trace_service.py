@@ -531,7 +531,7 @@ def _build_cognitive_patterns(
                 "thin_differential_reasoning",
                 severity="high" if _dimension_score(report, "differential_diagnosis") <= 0 else "medium",
                 evidence="提交内容未充分呈现相近诊断的支持或排除依据。",
-                source_signal_ids=sorted(item for item in missed_item_set if item.startswith(("dxd_", "diff_", "rs_"))),
+                source_signal_ids=sorted(item for item in missed_item_set if item.startswith(("dxd_", "dd_", "diff_", "rs_"))),
             )
         )
     if final_submission and evidence_synthesis.get("status") in {"weak", "developing"}:
@@ -546,7 +546,7 @@ def _build_cognitive_patterns(
                 severity="high" if evidence_synthesis.get("status") == "weak" else "medium",
                 evidence="已收集线索尚未充分整理为支持、排除和仍需验证的证据链。",
                 source_signal_ids=[
-                    *sorted(item for item in missed_item_set if item.startswith(("rs_", "dxd_", "dx_"))),
+                    *sorted(item for item in missed_item_set if item.startswith(("rs_", "dxd_", "dd_", "diff_", "dx_"))),
                     *breakpoint_sources,
                 ],
             )

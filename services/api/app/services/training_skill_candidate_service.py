@@ -840,7 +840,7 @@ def _skill_type(context: TrainingSkillCandidateContext) -> SkillCandidateType:
     item_ids = [item.item_id for item in missed_items]
     if any("safety" in item_id or "forbidden" in item_id for item_id in item_ids):
         return "safety_boundary"
-    if any(item_id.startswith(("dxd_", "diff_")) for item_id in item_ids):
+    if any(item_id.startswith(("dxd_", "dd_", "diff_")) for item_id in item_ids):
         return "differential_broadening"
     if any("reasoning" in item_id or item_id.startswith("rp_") for item_id in item_ids):
         return "reasoning_bridge"

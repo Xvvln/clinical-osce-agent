@@ -242,6 +242,25 @@ def test_diagnosis_concept_scores_differential_concepts_from_structured_reasonin
     assert "dxd_gastroenteritis" not in report["missed_items"]
 
 
+def test_legacy_dd_prefix_scores_differentials_from_structured_reasoning() -> None:
+    session = OsceSession(
+        session_id="session_pneumonia",
+        student_id="student_demo",
+        case_id="pneumonia_001",
+        stage="diagnosis_submission",
+        final_submission={
+            "diagnosis": "社区获得性肺炎",
+            "reasoning": "鉴别诊断包括急性支气管炎和肺栓塞，结合感染指标及胸片进行排除。",
+        },
+    )
+
+    report = evaluate_session_rules(session)
+
+    assert report["dimension_scores"]["differential_diagnosis"] == 10
+    assert report["rubric_scores"]["dd_bronchitis"]["score"] == 5
+    assert report["rubric_scores"]["dd_pulmonary_embolism"]["score"] == 5
+
+
 def test_reasoning_coverage_scores_full_score_when_evidence_coverage_meets_threshold() -> None:
     session = OsceSession(
         session_id="session_demo",
@@ -312,8 +331,8 @@ def test_llm_rubric_uses_injected_scorer_contract() -> None:
         captured_requests.append(request)
         return LlmRubricResponse(
             score=10,
-            covered_evidence=["appendicitis_001.hf_02", "abd.palpation.rebound"],
-            missing_evidence=["lab.cbc"],
+            covered_evidence=request.required_evidence[:2],
+            missing_evidence=request.required_evidence[2:],
             rationale="覆盖腹痛迁移与反跳痛，缺少血常规证据。",
         )
 
@@ -324,11 +343,14 @@ def test_llm_rubric_uses_injected_scorer_contract() -> None:
             description="推理链覆盖关键证据并能自圆其说",
             max_score=15,
             student_final_reasoning="转移性右下腹痛和反跳痛支持急性阑尾炎。",
-            relevant_facts_revealed=["appendicitis_001.hf_02", "abd.palpation.rebound"],
+            relevant_facts_revealed=[
+                "appendicitis_001.hf_02｜开始在上腹部，大约 8 小时前转移并固定到右下腹。",
+                "abd.palpation.rebound｜右下腹反跳痛阳性。",
+            ],
             required_evidence=[
-                "appendicitis_001.hf_02",
-                "abd.palpation.rebound",
-                "lab.cbc",
+                "appendicitis_001.hf_02｜开始在上腹部，大约 8 小时前转移并固定到右下腹。",
+                "abd.palpation.rebound｜右下腹反跳痛阳性。",
+                "lab.cbc｜白细胞 14.2×10^9/L，中性粒细胞比例 85%。",
             ],
         )
     ]

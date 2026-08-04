@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -24,6 +26,8 @@ from app.services.humanistic_evaluator import (
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
+CASES_DIR = ROOT_DIR / "data" / "cases"
+PROVIDER_EVIDENCE_SEPARATOR = "｜"
 
 
 class RuleEvaluationSession(Protocol):
@@ -569,7 +573,7 @@ def _matched_diagnosis_concept_evidence(
         return []
     concepts = [spec["target"], *spec.get("synonyms", [])]
     source_texts = [session.final_submission["diagnosis"]]
-    if item_id.startswith("dxd_"):
+    if item_id.startswith(("dxd_", "dd_", "diff_")):
         source_texts.append(session.final_submission["reasoning"])
     return [text for text in source_texts if _text_contains_any_concept(text, concepts)]
 
@@ -586,18 +590,35 @@ def _evaluate_llm_rubric(
 ) -> dict[str, Any]:
     if not session.final_submission:
         return {"trace": _build_score_trace(item, 0, [])}
+    required_evidence = [str(value) for value in item.get("evidence_expected", [])]
+    provider_required_evidence = [
+        _provider_evidence_reference(session.case_id, evidence)
+        for evidence in required_evidence
+    ]
+    relevant_evidence = list(
+        dict.fromkeys(
+            [
+                *session.revealed_facts,
+                *session.requested_exams,
+                *session.requested_tests,
+            ]
+        )
+    )
     request = LlmRubricRequest(
         rubric_item_id=item["item_id"],
         description=item["description"],
         max_score=int(item["max_score"]),
         student_final_reasoning=session.final_submission["reasoning"],
-        relevant_facts_revealed=session.revealed_facts,
-        required_evidence=item.get("evidence_expected", []),
+        relevant_facts_revealed=[
+            _provider_evidence_reference(session.case_id, evidence)
+            for evidence in relevant_evidence
+        ],
+        required_evidence=provider_required_evidence,
     )
     try:
         response = llm_scorer(request)
     except ValidationError:
-        missing_evidence = list(request.required_evidence)
+        missing_evidence = required_evidence
         rationale = "模型评分输出结构不完整，已按未覆盖处理。"
         return {
             "trace": _build_score_trace(
@@ -611,13 +632,94 @@ def _evaluate_llm_rubric(
             "missing_evidence": missing_evidence,
             "rationale": rationale,
         }
+    covered_evidence = _restore_provider_evidence_references(
+        response.covered_evidence,
+        required_evidence=required_evidence,
+        provider_required_evidence=provider_required_evidence,
+    )
+    covered_set = set(covered_evidence)
+    missing_evidence = [
+        evidence
+        for evidence in required_evidence
+        if evidence not in covered_set
+    ]
     score = min(response.score, int(item["max_score"]))
     return {
-        "trace": _build_score_trace(item, score, response.covered_evidence, response.rationale),
-        "covered_evidence": response.covered_evidence,
-        "missing_evidence": response.missing_evidence,
+        "trace": _build_score_trace(item, score, covered_evidence, response.rationale),
+        "covered_evidence": covered_evidence,
+        "missing_evidence": missing_evidence,
         "rationale": response.rationale,
     }
+
+
+def _provider_evidence_reference(case_id: str, evidence: str) -> str:
+    description = _case_evidence_descriptions(case_id).get(evidence, "")
+    return (
+        f"{evidence}{PROVIDER_EVIDENCE_SEPARATOR}{description}"
+        if description
+        else evidence
+    )
+
+
+@lru_cache(maxsize=32)
+def _case_evidence_descriptions(case_id: str) -> dict[str, str]:
+    case_path = CASES_DIR / f"{case_id}.json"
+    try:
+        payload = json.loads(case_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    descriptions: dict[str, str] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        description = next(
+            (
+                str(value.get(field) or "").strip()
+                for field in ("statement", "canonical_answer", "result")
+                if str(value.get(field) or "").strip()
+            ),
+            "",
+        )
+        if description:
+            for id_field in ("fact_id", "point_id", "exam_code", "test_code"):
+                evidence_id = str(value.get(id_field) or "").strip()
+                if evidence_id:
+                    descriptions.setdefault(evidence_id, description)
+        for child in value.values():
+            visit(child)
+
+    visit(payload)
+    return descriptions
+
+
+def _restore_provider_evidence_references(
+    values: list[str],
+    *,
+    required_evidence: list[str],
+    provider_required_evidence: list[str],
+) -> list[str]:
+    original_by_provider = dict(
+        zip(provider_required_evidence, required_evidence, strict=True)
+    )
+    required_set = set(required_evidence)
+    restored: list[str] = []
+    for value in values:
+        normalized = str(value).strip()
+        original = original_by_provider.get(normalized)
+        if original is None and normalized in required_set:
+            original = normalized
+        if original is None and PROVIDER_EVIDENCE_SEPARATOR in normalized:
+            candidate = normalized.split(PROVIDER_EVIDENCE_SEPARATOR, 1)[0].strip()
+            if candidate in required_set:
+                original = candidate
+        if original and original not in restored:
+            restored.append(original)
+    return restored
 
 
 def _score_reasoning_coverage(session: RuleEvaluationSession, spec: dict[str, Any], max_score: int) -> int:

@@ -1119,7 +1119,7 @@ def _teacher_issue_group_for_item(item_id: str) -> str:
         return "physical_exam"
     if normalized.startswith(("ax_", "at_", "lab", "image", "test")):
         return "auxiliary_test"
-    if normalized.startswith(("rs_", "dxd_", "dx_", "diagnosis", "reasoning")):
+    if normalized.startswith(("rs_", "dxd_", "dd_", "diff_", "dx_", "diagnosis", "reasoning")):
         return "reasoning"
     if "exam" in normalized or "rebound" in normalized or "tender" in normalized:
         return "physical_exam"

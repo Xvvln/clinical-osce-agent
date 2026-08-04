@@ -550,7 +550,7 @@ def _clinical_training_drill_contract(item_id: str, label: str) -> dict[str, Any
             "success_signal": "学生能说出检查目的，并根据结果更新主要诊断或鉴别路径。",
             "priority_bonus": 2,
         }
-    if normalized_item_id.startswith(("dx_", "dxd_", "diagnosis_")):
+    if normalized_item_id.startswith(("dx_", "dxd_", "dd_", "diff_", "diagnosis_")):
         return {
             "trigger_stage": "诊断提交前",
             "trigger_signal": f"整理「{label}」对应的主诊断或鉴别诊断时",
