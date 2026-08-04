@@ -1998,7 +1998,7 @@ function DocumentUploadPanel({
           </FormField>
           <FormField label="文档文件">
             <Input
-              accept=".md,.markdown,.txt,.text,.csv,.pdf,.docx,.pptx,.html,.htm"
+              accept=".md,.markdown,.txt,.text,.csv,.pdf,.docx,.pptx,.html,.htm,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               type="file"
             />

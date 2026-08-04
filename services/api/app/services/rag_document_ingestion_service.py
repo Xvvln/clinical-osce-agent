@@ -8,6 +8,13 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from app.services.rag_ocr_service import (
+    RagOcrError,
+    image_to_png_bytes,
+    recognize_image,
+    recognize_image_pages,
+)
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 TEMP_UPLOAD_DIR = ROOT_DIR / "data" / "runtime" / "rag_document_uploads"
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
@@ -16,6 +23,7 @@ HTML_SUFFIXES = {".html", ".htm"}
 PDF_SUFFIXES = {".pdf"}
 DOCX_SUFFIXES = {".docx"}
 PPTX_SUFFIXES = {".pptx"}
+IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 LOCAL_DOCUMENT_SUFFIXES = (
     MARKDOWN_SUFFIXES
     | TEXT_SUFFIXES
@@ -23,7 +31,10 @@ LOCAL_DOCUMENT_SUFFIXES = (
     | PDF_SUFFIXES
     | DOCX_SUFFIXES
     | PPTX_SUFFIXES
+    | IMAGE_SUFFIXES
 )
+MIN_SELECTABLE_PDF_PAGE_CHARS = 16
+MAX_OCR_PDF_PAGES = 80
 
 
 class RagDocumentParseError(ValueError):
@@ -110,6 +121,8 @@ def parse_rag_document(*, file_name: str, content_bytes: bytes) -> list[ParsedRa
         return _parse_docx_document(content_bytes)
     if suffix in PPTX_SUFFIXES:
         return _parse_pptx_document(content_bytes)
+    if suffix in IMAGE_SUFFIXES:
+        return _parse_image_document(content_bytes)
     return _parse_with_unstructured(file_name=normalized_file_name, content_bytes=content_bytes)
 
 
@@ -434,6 +447,8 @@ def _parse_pdf_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
         reader = PdfReader(BytesIO(content_bytes))
         elements: list[ParsedRagDocumentElement] = []
         current_section = ""
+        pdfium_document = None
+        ocr_page_count = 0
         for page_number, page in enumerate(reader.pages, start=1):
             page_text = str(page.extract_text() or "").strip()
             for text, category in _pdf_text_blocks(page_text):
@@ -448,14 +463,31 @@ def _parse_pdf_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
                         element_index=len(elements),
                     )
                 )
+            if len(_compact_text(page_text)) < MIN_SELECTABLE_PDF_PAGE_CHARS:
+                ocr_page_count += 1
+                if ocr_page_count > MAX_OCR_PDF_PAGES:
+                    raise RagDocumentParseError(
+                        f"PDF requires OCR on too many pages; maximum is {MAX_OCR_PDF_PAGES}"
+                    )
+                if pdfium_document is None:
+                    pdfium_document = _open_pdf_for_ocr(content_bytes)
+                ocr_text = _ocr_pdf_page(pdfium_document, page_number=page_number)
+                if ocr_text and not _is_duplicate_ocr_text(ocr_text, page_text):
+                    elements.append(
+                        ParsedRagDocumentElement(
+                            text=ocr_text,
+                            category="OCRText",
+                            section_title=current_section,
+                            page_number=page_number,
+                            element_index=len(elements),
+                        )
+                    )
     except RagDocumentParseError:
         raise
     except Exception as exc:
         raise RagDocumentParseError("PDF document could not be parsed") from exc
     if not elements:
-        raise RagDocumentParseError(
-            "PDF contains no selectable text; scanned PDFs require OCR before upload"
-        )
+        raise RagDocumentParseError("PDF OCR returned no readable text")
     return elements
 
 
@@ -483,6 +515,32 @@ def _parse_docx_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]
             table_text = "\n".join(row for row in rows if row).strip()
             if table_text:
                 blocks.append((table_text, "Table"))
+        seen_images: set[str] = set()
+        ocr_errors: list[RagOcrError] = []
+        for relationship in document.part.rels.values():
+            if bool(getattr(relationship, "is_external", False)):
+                continue
+            target_part = getattr(relationship, "target_part", None)
+            content_type = str(getattr(target_part, "content_type", "") or "")
+            if not content_type.startswith("image/"):
+                continue
+            image_bytes = bytes(getattr(target_part, "blob", b"") or b"")
+            image_digest = hashlib.sha1(image_bytes).hexdigest() if image_bytes else ""
+            if not image_digest or image_digest in seen_images:
+                continue
+            seen_images.add(image_digest)
+            try:
+                ocr_pages = recognize_image_pages(image_bytes)
+            except RagOcrError as exc:
+                ocr_errors.append(exc)
+                continue
+            for page in ocr_pages:
+                if page.text and not any(_is_duplicate_ocr_text(page.text, text) for text, _ in blocks):
+                    blocks.append((page.text, "OCRText"))
+        if not blocks and ocr_errors:
+            raise ocr_errors[0]
+    except RagOcrError as exc:
+        raise RagDocumentParseError(str(exc)) from exc
     except Exception as exc:
         raise RagDocumentParseError("DOCX document could not be parsed") from exc
     return _elements_from_text_blocks(blocks)
@@ -497,6 +555,7 @@ def _parse_pptx_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]
     try:
         presentation = Presentation(BytesIO(content_bytes))
         elements: list[ParsedRagDocumentElement] = []
+        ocr_errors: list[RagOcrError] = []
         for page_number, slide in enumerate(presentation.slides, start=1):
             title_shape = slide.shapes.title
             section_title = _pptx_shape_text(title_shape) if title_shape is not None else ""
@@ -527,26 +586,101 @@ def _parse_pptx_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]
                             element_index=len(elements),
                         )
                     )
-                if not bool(getattr(shape, "has_table", False)):
-                    continue
-                rows = [
-                    " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                    for row in shape.table.rows
-                ]
-                table_text = "\n".join(row for row in rows if row).strip()
-                if table_text:
-                    elements.append(
-                        ParsedRagDocumentElement(
-                            text=table_text,
-                            category="Table",
-                            section_title=section_title,
-                            page_number=page_number,
-                            element_index=len(elements),
+                if bool(getattr(shape, "has_table", False)):
+                    rows = [
+                        " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        for row in shape.table.rows
+                    ]
+                    table_text = "\n".join(row for row in rows if row).strip()
+                    if table_text:
+                        elements.append(
+                            ParsedRagDocumentElement(
+                                text=table_text,
+                                category="Table",
+                                section_title=section_title,
+                                page_number=page_number,
+                                element_index=len(elements),
+                            )
                         )
-                    )
+                image = getattr(shape, "image", None)
+                image_bytes = bytes(getattr(image, "blob", b"") or b"")
+                if image_bytes:
+                    try:
+                        ocr_pages = recognize_image_pages(image_bytes)
+                    except RagOcrError as exc:
+                        ocr_errors.append(exc)
+                        continue
+                    for ocr_page in ocr_pages:
+                        existing_slide_text = "\n".join(
+                            element.text
+                            for element in elements
+                            if element.page_number == page_number
+                        )
+                        if not ocr_page.text or _is_duplicate_ocr_text(ocr_page.text, existing_slide_text):
+                            continue
+                        elements.append(
+                            ParsedRagDocumentElement(
+                                text=ocr_page.text,
+                                category="OCRText",
+                                section_title=section_title,
+                                page_number=page_number,
+                                element_index=len(elements),
+                            )
+                        )
+        if not elements and ocr_errors:
+            raise ocr_errors[0]
+    except RagOcrError as exc:
+        raise RagDocumentParseError(str(exc)) from exc
     except Exception as exc:
         raise RagDocumentParseError("PPTX document could not be parsed") from exc
     return elements
+
+
+def _parse_image_document(content_bytes: bytes) -> list[ParsedRagDocumentElement]:
+    try:
+        pages = recognize_image_pages(content_bytes)
+    except RagOcrError as exc:
+        raise RagDocumentParseError(str(exc)) from exc
+    elements = [
+        ParsedRagDocumentElement(
+            text=page.text,
+            category="OCRText",
+            section_title="",
+            page_number=page.page_number,
+            element_index=index,
+        )
+        for index, page in enumerate(pages)
+        if page.text
+    ]
+    if not elements:
+        raise RagDocumentParseError("image OCR returned no readable text")
+    return elements
+
+
+def _open_pdf_for_ocr(content_bytes: bytes) -> Any:
+    try:
+        import pypdfium2
+    except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+        raise RagDocumentParseError("PDF OCR dependency pypdfium2 is not installed") from exc
+    try:
+        return pypdfium2.PdfDocument(content_bytes)
+    except Exception as exc:
+        raise RagDocumentParseError("PDF could not be rendered for OCR") from exc
+
+
+def _ocr_pdf_page(pdfium_document: Any, *, page_number: int) -> str:
+    try:
+        page = pdfium_document[page_number - 1]
+        bitmap = page.render(scale=2.0)
+        rendered_image = bitmap.to_pil()
+        return recognize_image(
+            image_to_png_bytes(rendered_image),
+            page_number=page_number,
+        ).text
+    except RagOcrError as exc:
+        raise RagDocumentParseError(str(exc)) from exc
+    except Exception as exc:
+        raise RagDocumentParseError(f"PDF page {page_number} could not be rendered for OCR") from exc
 
 
 def _pptx_shape_text(shape: Any) -> str:
@@ -612,8 +746,21 @@ def _local_chunking_strategy(suffix: str) -> str:
         **{item: "local_pdf_page_window" for item in PDF_SUFFIXES},
         **{item: "local_docx_section_window" for item in DOCX_SUFFIXES},
         **{item: "local_pptx_slide_window" for item in PPTX_SUFFIXES},
+        **{item: "local_image_ocr_window" for item in IMAGE_SUFFIXES},
     }
     return strategy_labels.get(suffix, "project_section_window")
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _is_duplicate_ocr_text(ocr_text: str, existing_text: str) -> bool:
+    compact_ocr = _compact_text(ocr_text).lower()
+    compact_existing = _compact_text(existing_text).lower()
+    if not compact_ocr or not compact_existing:
+        return False
+    return compact_ocr in compact_existing or compact_existing in compact_ocr
 
 
 def _parse_with_unstructured(*, file_name: str, content_bytes: bytes) -> list[ParsedRagDocumentElement]:

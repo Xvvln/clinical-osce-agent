@@ -6,7 +6,9 @@ import types
 
 import pytest
 
+import app.services.rag_document_ingestion_service as ingestion_module
 from app.services.rag_document_ingestion_service import RagDocumentParseError, chunk_rag_document
+from app.services.rag_ocr_service import RagOcrPage
 
 
 def test_document_parser_stack_is_a_default_backend_dependency() -> None:
@@ -21,6 +23,9 @@ def test_document_parser_stack_is_a_default_backend_dependency() -> None:
     assert "python-pptx>=1.0.0,<2.0.0" in dependencies
     assert "pdfminer-six>=20251230,<20270000" in dependencies
     assert "pypdf>=6.14.2,<7.0.0" in dependencies
+    assert "rapidocr>=3.4.0,<4.0.0" in dependencies
+    assert "pypdfium2>=5.0.0,<6.0.0" in dependencies
+    assert "onnxruntime>=1.20.0,<2.0.0" in dependencies
     assert not any(dependency.startswith("unstructured[all-docs]") for dependency in dependencies)
     assert "documents" not in optional_dependencies
 
@@ -190,7 +195,7 @@ def test_pdf_document_uses_local_pypdf_text_extraction(monkeypatch) -> None:
     assert all(chunk.chunking_strategy == "local_pdf_page_window" for chunk in chunks)
 
 
-def test_scanned_pdf_without_selectable_text_requests_ocr(monkeypatch) -> None:
+def test_scanned_pdf_without_selectable_text_uses_local_ocr(monkeypatch) -> None:
     import pypdf
 
     class FakePage:
@@ -198,13 +203,51 @@ def test_scanned_pdf_without_selectable_text_requests_ocr(monkeypatch) -> None:
             return ""
 
     monkeypatch.setattr(pypdf, "PdfReader", lambda stream: types.SimpleNamespace(pages=[FakePage()]))
+    monkeypatch.setattr(ingestion_module, "_open_pdf_for_ocr", lambda content: object())
+    monkeypatch.setattr(
+        ingestion_module,
+        "_ocr_pdf_page",
+        lambda document, *, page_number: "扫描病历教学材料\n应追问疼痛迁移、发热和恶心呕吐。",
+    )
 
-    with pytest.raises(RagDocumentParseError, match="require OCR"):
-        chunk_rag_document(
-            file_name="scanned.pdf",
-            content_bytes=b"%PDF-scanned-test",
-            document_id="kbdoc:global:scanned",
-        )
+    chunks = chunk_rag_document(
+        file_name="scanned.pdf",
+        content_bytes=b"%PDF-scanned-test",
+        document_id="kbdoc:global:scanned",
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 1
+    assert chunks[0].chunking_strategy == "local_pdf_page_window"
+    assert chunks[0].chunk_categories == ["OCRText"]
+    assert "疼痛迁移" in chunks[0].text
+
+
+def test_image_document_uses_local_ocr_and_preserves_frame_number(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ingestion_module,
+        "recognize_image_pages",
+        lambda content: [
+            RagOcrPage(
+                page_number=1,
+                text="床旁教学卡：先询问主诉、起病和伴随症状。",
+                mean_confidence=0.96,
+                line_count=1,
+            )
+        ],
+    )
+
+    chunks = chunk_rag_document(
+        file_name="bedside_card.png",
+        content_bytes=b"pretend-image",
+        document_id="kbdoc:global:image",
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 1
+    assert chunks[0].chunk_categories == ["OCRText"]
+    assert chunks[0].chunking_strategy == "local_image_ocr_window"
+    assert "床旁教学卡" in chunks[0].text
 
 
 def test_docx_document_uses_local_section_and_table_extraction() -> None:
@@ -255,6 +298,44 @@ def test_pptx_document_uses_local_slide_extraction() -> None:
     assert [chunk.section_title for chunk in chunks] == ["病史采集", "辅助检查"]
     assert all(chunk.chunking_strategy == "local_pptx_slide_window" for chunk in chunks)
     assert "追问疼痛迁移" in chunks[0].text
+
+
+def test_pptx_document_ocr_reads_text_inside_picture(monkeypatch) -> None:
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    image_stream = BytesIO()
+    Image.new("RGB", (320, 120), "white").save(image_stream, format="PNG")
+    image_stream.seek(0)
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_picture(image_stream, Inches(1), Inches(1))
+    presentation_stream = BytesIO()
+    presentation.save(presentation_stream)
+    monkeypatch.setattr(
+        ingestion_module,
+        "recognize_image_pages",
+        lambda content: [
+            RagOcrPage(
+                page_number=1,
+                text="图片内教学提示：查体前先形成诊断假设。",
+                mean_confidence=0.93,
+                line_count=1,
+            )
+        ],
+    )
+
+    chunks = chunk_rag_document(
+        file_name="image_only_slide.pptx",
+        content_bytes=presentation_stream.getvalue(),
+        document_id="kbdoc:global:image-pptx",
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_number == 1
+    assert chunks[0].chunk_categories == ["OCRText"]
+    assert "查体前先形成诊断假设" in chunks[0].text
 
 
 def test_html_document_uses_local_readable_content_extraction() -> None:
