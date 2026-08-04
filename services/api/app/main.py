@@ -7,9 +7,11 @@ import logging
 import math
 import os
 import re
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
+from datetime import date
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -36,7 +38,7 @@ from app.services.env_file_loader import load_api_env_file
 load_api_env_file()
 
 from app.graph.osce_graph import build_osce_graph
-from app.services import retrieval_index, source_retriever
+from app.services import admin_display_resolver, retrieval_index, source_retriever
 from app.services.admin_display_resolver import (
     enrich_rag_document,
     enrich_rag_knowledge_item,
@@ -48,6 +50,7 @@ from app.services.admin_display_resolver import (
     rubric_item_labels,
 )
 from app.services.admin_audit_store import admin_audit_store
+from app.services.admin_asset_version_store import admin_asset_version_store
 from app.services.api_call_log_service import (
     api_call_log_store,
     normalize_api_call_session_id,
@@ -952,6 +955,88 @@ class AdminClassroomImportRequest(RequestModel):
 
     csv_text: str = Field(min_length=1, max_length=CLASSROOM_IMPORT_MAX_CHARS)
     mode: Literal["merge", "replace"] = "merge"
+
+
+class AdminSourceUpsertRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)
+    source_name: str = Field(min_length=1, max_length=300)
+    source_url: str = Field(default="", max_length=2_000)
+    license: str = Field(default="", max_length=300)
+    data_type: str = Field(min_length=1, max_length=128)
+    allowed_usage: list[str] = Field(default_factory=list, max_length=64)
+    transformation: str = Field(default="", max_length=2_000)
+    attribution_required: bool = True
+    risk_note: str = Field(default="", max_length=2_000)
+    source_version: str = Field(default="", max_length=500)
+    last_reviewed_at: str = Field(default="", max_length=10)
+    review_interval_days: int = Field(default=365, ge=1, le=3_650)
+    source_status: Literal["active", "superseded", "inactive"] = "active"
+    superseded_by: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    review_basis: str = Field(default="", max_length=2_000)
+    search_aliases: list[str] = Field(default_factory=list, max_length=64)
+    change_note: str = Field(default="", max_length=500)
+    medical_review_note: str = Field(default="", max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_source_payload(self) -> "AdminSourceUpsertRequest":
+        if not _is_safe_admin_import_id(self.source_id):
+            raise ValueError("source_id is invalid")
+        if self.last_reviewed_at:
+            try:
+                date.fromisoformat(self.last_reviewed_at)
+            except ValueError as exc:
+                raise ValueError("last_reviewed_at must use YYYY-MM-DD") from exc
+        return self
+
+
+class AdminSourceReviewRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    last_reviewed_at: str = Field(min_length=10, max_length=10)
+    review_interval_days: int = Field(default=365, ge=1, le=3_650)
+    review_basis: str = Field(min_length=1, max_length=2_000)
+    source_status: Literal["active", "superseded", "inactive"] = "active"
+    superseded_by: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    medical_review_note: str = Field(default="", max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_review_date(self) -> "AdminSourceReviewRequest":
+        try:
+            date.fromisoformat(self.last_reviewed_at)
+        except ValueError as exc:
+            raise ValueError("last_reviewed_at must use YYYY-MM-DD") from exc
+        return self
+
+
+class AdminCaseAssetReplaceRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case: dict[str, Any]
+    rubric: dict[str, Any]
+    change_note: str = Field(min_length=1, max_length=500)
+    review_status: Literal["unreviewed", "approved", "rejected"] = "unreviewed"
+    medical_review_note: str = Field(default="", max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_logical_payload_size(self) -> "AdminCaseAssetReplaceRequest":
+        _validate_admin_case_request_size({"case": self.case, "rubric": self.rubric})
+        return self
+
+
+class AdminAssetReviewRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_status: Literal["approved", "rejected"]
+    medical_review_note: str = Field(min_length=1, max_length=2_000)
+
+
+class AdminAssetRollbackRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    change_note: str = Field(default="", max_length=500)
 
 
 class AdminCaseValidationRequest(RequestModel):
@@ -2223,12 +2308,128 @@ def _load_admin_rubric(rubric_id: str) -> dict[str, Any] | None:
 
 
 def _load_admin_sources() -> list[dict[str, Any]]:
+    if not SOURCE_REGISTRY_PATH.exists():
+        return []
     sources = json.loads(SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
     return [
         enrich_source_freshness(source)
         for source in sources
         if isinstance(source, dict)
     ] if isinstance(sources, list) else []
+
+
+def _load_admin_sources_raw() -> list[dict[str, Any]]:
+    if not SOURCE_REGISTRY_PATH.exists():
+        return []
+    payload = json.loads(SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("source registry must be a list")
+    return [deepcopy(item) for item in payload if isinstance(item, dict)]
+
+
+def _normalize_admin_source_payload(request: AdminSourceUpsertRequest) -> dict[str, Any]:
+    payload = request.model_dump(exclude={"change_note", "medical_review_note"})
+    for field_name in (
+        "source_id",
+        "source_name",
+        "source_url",
+        "license",
+        "data_type",
+        "transformation",
+        "risk_note",
+        "source_version",
+        "last_reviewed_at",
+        "source_status",
+        "superseded_by",
+        "review_basis",
+    ):
+        payload[field_name] = str(payload.get(field_name) or "").strip()
+    payload["allowed_usage"] = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in payload.get("allowed_usage", [])
+            if str(value).strip()
+        )
+    )
+    payload["search_aliases"] = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in payload.get("search_aliases", [])
+            if str(value).strip()
+        )
+    )
+    return payload
+
+
+def _validate_admin_source_registry(sources: list[dict[str, Any]]) -> None:
+    source_ids = [str(source.get("source_id") or "").strip() for source in sources]
+    if any(not _is_safe_admin_import_id(source_id) for source_id in source_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="来源 ID 无效")
+    if len(set(source_ids)) != len(source_ids):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="来源 ID 已存在")
+    known_ids = set(source_ids)
+    for source in sources:
+        source_id = str(source.get("source_id") or "").strip()
+        replacement = str(source.get("superseded_by") or "").strip()
+        if replacement and (replacement == source_id or replacement not in known_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="替代来源必须是台账中另一个已登记来源",
+            )
+        if source.get("source_status") == "superseded" and not replacement:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="标记为已替代时必须选择替代来源",
+            )
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+            temporary_path = Path(temporary_file.name)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _write_admin_sources(sources: list[dict[str, Any]]) -> None:
+    _validate_admin_source_registry(sources)
+    _atomic_write_text(
+        SOURCE_REGISTRY_PATH,
+        json.dumps(sources, ensure_ascii=False, indent=2) + "\n",
+    )
+    _clear_admin_source_caches()
+
+
+def _clear_admin_source_caches() -> None:
+    source_retriever._source_registry.cache_clear()
+    admin_display_resolver._source_registry_map.cache_clear()
+    _clear_retrieval_documents_cache()
+
+
+def _admin_source_by_id(source_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            source
+            for source in _load_admin_sources_raw()
+            if str(source.get("source_id") or "").strip() == source_id
+        ),
+        None,
+    )
 
 
 def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> dict[str, Any]:
@@ -2657,6 +2858,10 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
             required_tables=("admin_audit_events",),
         ),
         SQLiteReadinessTarget(
+            database_path=admin_asset_version_store.database_path,
+            required_tables=("admin_asset_versions",),
+        ),
+        SQLiteReadinessTarget(
             database_path=session_store.database_path,
             required_tables=("osce_sessions", "osce_session_event_outbox"),
         ),
@@ -2704,6 +2909,7 @@ def _initialize_readiness_persistence() -> None:
     auth_store._initialize()
     classroom_store._initialize()
     admin_audit_store._initialize()
+    admin_asset_version_store._initialize()
     session_service.session_store._initialize()
     session_service.report_store._initialize()
     session_service.training_event_store._initialize()
@@ -3052,6 +3258,99 @@ def _clear_admin_case_asset_caches() -> None:
     retrieval_index._retrieval_documents.cache_clear()
     source_retriever._case_payload.cache_clear()
     source_retriever._rubric_items.cache_clear()
+    admin_display_resolver._load_case_payload.cache_clear()
+    admin_display_resolver._load_rubric_payload.cache_clear()
+
+
+def _load_admin_case_assets(case_id: str) -> dict[str, Any] | None:
+    if not _is_safe_admin_import_id(case_id):
+        return None
+    case_path = CASES_DIR / f"{case_id}.json"
+    if not case_path.exists():
+        return None
+    case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+    if not isinstance(case_payload, dict):
+        return None
+    rubric_ref = case_payload.get("rubric_ref")
+    rubric_id = (
+        str(rubric_ref.get("rubric_id") or "").strip()
+        if isinstance(rubric_ref, dict)
+        else ""
+    )
+    rubric_payload = _load_admin_rubric(rubric_id) if rubric_id else None
+    if rubric_payload is None:
+        return None
+    return {"case": case_payload, "rubric": rubric_payload}
+
+
+def _validate_admin_case_assets(
+    case_id: str,
+    case_payload: dict[str, Any],
+    rubric_payload: dict[str, Any],
+) -> tuple[str, list[str]]:
+    errors: list[str] = []
+    if case_payload.get("case_id") != case_id:
+        errors.append("case_id 与路径不一致")
+    rubric_id = str(rubric_payload.get("rubric_id") or "").strip()
+    if not _is_safe_admin_import_id(rubric_id):
+        errors.append("rubric_id 无效")
+    case_model = None
+    rubric_model = None
+    try:
+        case_model = validate_case(case_payload)
+    except Exception as exc:
+        errors.append(str(exc))
+    try:
+        rubric_model = validate_rubric(rubric_payload)
+    except Exception as exc:
+        errors.append(str(exc))
+    if case_model is not None and rubric_model is not None:
+        try:
+            validate_case_rubric_pair(case_model, rubric_model)
+        except Exception as exc:
+            errors.append(str(exc))
+    return rubric_id, errors
+
+
+def _write_admin_case_assets(
+    case_id: str,
+    case_payload: dict[str, Any],
+    rubric_payload: dict[str, Any],
+) -> None:
+    rubric_id, errors = _validate_admin_case_assets(
+        case_id,
+        case_payload,
+        rubric_payload,
+    )
+    if errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "病例与评分表校验失败", "errors": errors},
+        )
+    case_path = CASES_DIR / f"{case_id}.json"
+    rubric_path = RUBRICS_DIR / f"{rubric_id}.yaml"
+    previous_case = case_path.read_text(encoding="utf-8") if case_path.exists() else None
+    previous_rubric = rubric_path.read_text(encoding="utf-8") if rubric_path.exists() else None
+    try:
+        _atomic_write_text(
+            case_path,
+            json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n",
+        )
+        _atomic_write_text(
+            rubric_path,
+            yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False),
+        )
+    except Exception:
+        if previous_case is None:
+            case_path.unlink(missing_ok=True)
+        else:
+            _atomic_write_text(case_path, previous_case)
+        if previous_rubric is None:
+            rubric_path.unlink(missing_ok=True)
+        else:
+            _atomic_write_text(rubric_path, previous_rubric)
+        raise
+    _clear_admin_case_asset_caches()
 
 
 def _build_admin_case_update_response(case_id: str, request: AdminCaseFieldUpdateRequest) -> dict[str, object]:
@@ -3561,8 +3860,238 @@ def update_admin_case_fields(
     request: AdminCaseFieldUpdateRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    before = _load_admin_case_assets(case_id)
+    if before is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=before,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    response = _build_admin_case_update_response(case_id, request)
+    if response.get("updated") is True:
+        after = _load_admin_case_assets(case_id)
+        if after is not None:
+            version = admin_asset_version_store.save_version(
+                asset_type="case",
+                asset_id=case_id,
+                payload=after,
+                actor_user_id=actor["user_id"],
+                actor_email=actor["email"],
+                change_note="更新病例基础字段",
+                review_status="unreviewed",
+                review_note="",
+            )
+            _record_admin_audit(
+                actor=actor,
+                action="case.updated",
+                resource_type="case",
+                resource_id=case_id,
+                summary=f"更新病例 {case_id} 的基础字段",
+                before=before,
+                after=after,
+                metadata={"version": version["version"]},
+            )
+    return response
+
+
+@app.get("/api/admin/cases/{case_id}/assets")
+def get_admin_case_assets(
+    case_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    assets = _load_admin_case_assets(case_id)
+    if assets is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    version = admin_asset_version_store.ensure_initial_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    return {**assets, "current_version": version}
+
+
+@app.put("/api/admin/cases/{case_id}/assets")
+def replace_admin_case_assets(
+    case_id: str,
+    request: AdminCaseAssetReplaceRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    previous = _load_admin_case_assets(case_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    previous_rubric_id = str(previous["rubric"].get("rubric_id") or "")
+    next_rubric_id = str(request.rubric.get("rubric_id") or "")
+    if next_rubric_id != previous_rubric_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="rubric_id 不允许在版本编辑中改名")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=previous,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    _write_admin_case_assets(case_id, request.case, request.rubric)
+    assets = {"case": deepcopy(request.case), "rubric": deepcopy(request.rubric)}
+    version = admin_asset_version_store.save_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note=request.change_note,
+        review_status=request.review_status,
+        review_note=request.medical_review_note,
+    )
+    _record_admin_audit(
+        actor=actor,
+        action="case.assets_updated",
+        resource_type="case",
+        resource_id=case_id,
+        summary=f"更新病例 {case_id} 的完整病例事实与评分表",
+        before=previous,
+        after=assets,
+        metadata={"version": version["version"], "review_status": request.review_status},
+    )
+    return {**assets, "current_version": version}
+
+
+@app.post("/api/admin/cases/{case_id}/review")
+def review_admin_case_assets(
+    case_id: str,
+    request: AdminAssetReviewRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    assets = _load_admin_case_assets(case_id)
+    if assets is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    version = admin_asset_version_store.save_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note="病例医学审核",
+        review_status=request.review_status,
+        review_note=request.medical_review_note,
+    )
+    _record_admin_audit(
+        actor=actor,
+        action=f"case.{request.review_status}",
+        resource_type="case",
+        resource_id=case_id,
+        summary=f"{request.review_status} 病例 {case_id}",
+        after=assets,
+        metadata={"version": version["version"], "review_note": request.medical_review_note},
+    )
+    return {"case_id": case_id, "current_version": version}
+
+
+@app.get("/api/admin/cases/{case_id}/versions")
+def list_admin_case_versions(
+    case_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
+    actor = _require_admin_user(auth_token)
+    assets = _load_admin_case_assets(case_id)
+    if assets is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    return admin_asset_version_store.list_versions(
+        asset_type="case",
+        asset_id=case_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/admin/cases/{case_id}/diff")
+def diff_admin_case_versions(
+    case_id: str,
+    from_version: int = Query(ge=1),
+    to_version: int = Query(ge=1),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
     _require_admin_user(auth_token)
-    return _build_admin_case_update_response(case_id, request)
+    diff = admin_asset_version_store.diff_versions(
+        asset_type="case",
+        asset_id=case_id,
+        from_version=from_version,
+        to_version=to_version,
+    )
+    if diff is None:
+        raise HTTPException(status_code=404, detail="病例版本不存在")
+    return diff
+
+
+@app.post("/api/admin/cases/{case_id}/rollback")
+def rollback_admin_case_assets(
+    case_id: str,
+    request: AdminAssetRollbackRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    previous = _load_admin_case_assets(case_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    target = admin_asset_version_store.get_version(
+        asset_type="case",
+        asset_id=case_id,
+        version=request.version,
+    )
+    if target is None or not isinstance(target.get("payload"), dict):
+        raise HTTPException(status_code=404, detail="病例版本不存在")
+    payload = target["payload"]
+    case_payload = payload.get("case")
+    rubric_payload = payload.get("rubric")
+    if not isinstance(case_payload, dict) or not isinstance(rubric_payload, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="病例版本快照不完整")
+    _write_admin_case_assets(case_id, case_payload, rubric_payload)
+    assets = {"case": deepcopy(case_payload), "rubric": deepcopy(rubric_payload)}
+    version = admin_asset_version_store.save_version(
+        asset_type="case",
+        asset_id=case_id,
+        payload=assets,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note=request.change_note or f"回滚到版本 {request.version}",
+        review_status=str(target.get("review_status") or "unreviewed"),
+        review_note=str(target.get("review_note") or ""),
+    )
+    _record_admin_audit(
+        actor=actor,
+        action="case.rolled_back",
+        resource_type="case",
+        resource_id=case_id,
+        summary=f"回滚病例 {case_id} 到版本 {request.version}",
+        before=previous,
+        after=assets,
+        metadata={"target_version": request.version, "version": version["version"]},
+    )
+    return {**assets, "current_version": version}
 
 
 @app.post("/api/admin/cases/validate")
@@ -3579,8 +4108,32 @@ def import_admin_case(
     request: AdminCaseImportRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_admin_user(auth_token)
-    return _build_admin_case_import_response(request)
+    actor = _require_admin_user(auth_token)
+    response = _build_admin_case_import_response(request)
+    if response.get("imported") is True:
+        case_id = str(response.get("case_id") or "")
+        assets = _load_admin_case_assets(case_id)
+        if assets is not None:
+            version = admin_asset_version_store.save_version(
+                asset_type="case",
+                asset_id=case_id,
+                payload=assets,
+                actor_user_id=actor["user_id"],
+                actor_email=actor["email"],
+                change_note="导入病例",
+                review_status="unreviewed",
+                review_note="",
+            )
+            _record_admin_audit(
+                actor=actor,
+                action="case.imported",
+                resource_type="case",
+                resource_id=case_id,
+                summary=f"导入病例 {case_id}",
+                after=assets,
+                metadata={"version": version["version"]},
+            )
+    return response
 
 
 @app.get("/api/admin/rubrics/{rubric_id}")
@@ -3602,8 +4155,44 @@ def update_admin_rubric_item(
     request: AdminRubricItemUpdateRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_admin_user(auth_token)
-    return _build_admin_rubric_item_update_response(rubric_id, item_id, request)
+    actor = _require_admin_user(auth_token)
+    rubric = _load_admin_rubric(rubric_id)
+    case_id = str(rubric.get("case_id") or "") if rubric else ""
+    before = _load_admin_case_assets(case_id) if case_id else None
+    if before is not None:
+        admin_asset_version_store.ensure_initial_version(
+            asset_type="case",
+            asset_id=case_id,
+            payload=before,
+            actor_user_id=actor["user_id"],
+            actor_email=actor["email"],
+        )
+    response = _build_admin_rubric_item_update_response(rubric_id, item_id, request)
+    if response.get("updated") is True and before is not None:
+        after = _load_admin_case_assets(case_id)
+        if after is not None:
+            version = admin_asset_version_store.save_version(
+                asset_type="case",
+                asset_id=case_id,
+                payload=after,
+                actor_user_id=actor["user_id"],
+                actor_email=actor["email"],
+                change_note=f"更新评分项 {item_id}",
+                review_status="unreviewed",
+                review_note="",
+            )
+            response["version"] = version
+            _record_admin_audit(
+                actor=actor,
+                action="rubric.updated",
+                resource_type="rubric",
+                resource_id=rubric_id,
+                summary=f"更新评分表 {rubric_id} 的评分项 {item_id}",
+                before=before,
+                after=after,
+                metadata={"case_id": case_id, "version": version["version"]},
+            )
+    return response
 
 
 @app.get("/api/admin/sources")
@@ -3616,6 +4205,284 @@ def list_admin_sources(
         "sources": sources,
         "freshness_summary": summarize_source_freshness(sources),
     }
+
+
+@app.post("/api/admin/sources", status_code=status.HTTP_201_CREATED)
+def create_admin_source(
+    request: AdminSourceUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    sources = _load_admin_sources_raw()
+    source = _normalize_admin_source_payload(request)
+    if any(item.get("source_id") == source["source_id"] for item in sources):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="来源 ID 已存在")
+    next_sources = [*sources, source]
+    _write_admin_sources(next_sources)
+    version = admin_asset_version_store.save_version(
+        asset_type="source",
+        asset_id=source["source_id"],
+        payload=source,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note=request.change_note or "创建来源",
+        review_status=("approved" if source.get("last_reviewed_at") and source.get("review_basis") else "unreviewed"),
+        review_note=request.medical_review_note,
+    )
+    enriched = enrich_source_freshness(source)
+    _record_admin_audit(
+        actor=actor,
+        action="source.created",
+        resource_type="source",
+        resource_id=source["source_id"],
+        summary=f"创建来源 {source['source_name']}",
+        after=enriched,
+        metadata={"version": version["version"]},
+    )
+    return {"source": enriched, "version": version}
+
+
+@app.put("/api/admin/sources/{source_id}")
+def update_admin_source(
+    source_id: str,
+    request: AdminSourceUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    if request.source_id != source_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="来源 ID 不允许改名")
+    sources = _load_admin_sources_raw()
+    index = next((index for index, item in enumerate(sources) if item.get("source_id") == source_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    previous = sources[index]
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=previous,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    source = _normalize_admin_source_payload(request)
+    next_sources = list(sources)
+    next_sources[index] = source
+    _write_admin_sources(next_sources)
+    version = admin_asset_version_store.save_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=source,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note=request.change_note or "更新来源",
+        review_status="unreviewed",
+        review_note=request.medical_review_note,
+    )
+    enriched = enrich_source_freshness(source)
+    _record_admin_audit(
+        actor=actor,
+        action="source.updated",
+        resource_type="source",
+        resource_id=source_id,
+        summary=f"更新来源 {source['source_name']}",
+        before=enrich_source_freshness(previous),
+        after=enriched,
+        metadata={"version": version["version"]},
+    )
+    return {"source": enriched, "version": version}
+
+
+@app.post("/api/admin/sources/{source_id}/review")
+def review_admin_source(
+    source_id: str,
+    request: AdminSourceReviewRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    sources = _load_admin_sources_raw()
+    index = next((index for index, item in enumerate(sources) if item.get("source_id") == source_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    previous = sources[index]
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=previous,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    source = {
+        **previous,
+        "last_reviewed_at": request.last_reviewed_at,
+        "review_interval_days": request.review_interval_days,
+        "review_basis": request.review_basis.strip(),
+        "source_status": request.source_status,
+        "superseded_by": request.superseded_by.strip(),
+    }
+    next_sources = list(sources)
+    next_sources[index] = source
+    _write_admin_sources(next_sources)
+    version = admin_asset_version_store.save_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=source,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note="来源复核",
+        review_status="approved",
+        review_note=request.medical_review_note,
+    )
+    enriched = enrich_source_freshness(source)
+    _record_admin_audit(
+        actor=actor,
+        action="source.reviewed",
+        resource_type="source",
+        resource_id=source_id,
+        summary=f"复核来源 {source.get('source_name') or source_id}",
+        before=enrich_source_freshness(previous),
+        after=enriched,
+        metadata={"version": version["version"]},
+    )
+    return {"source": enriched, "version": version}
+
+
+@app.delete("/api/admin/sources/{source_id}")
+def deactivate_admin_source(
+    source_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    sources = _load_admin_sources_raw()
+    index = next((index for index, item in enumerate(sources) if item.get("source_id") == source_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    previous = sources[index]
+    if previous.get("source_status") == "inactive":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="来源已停用")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=previous,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    source = {**previous, "source_status": "inactive", "superseded_by": ""}
+    next_sources = list(sources)
+    next_sources[index] = source
+    _write_admin_sources(next_sources)
+    version = admin_asset_version_store.save_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=source,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note="停用来源",
+        review_status="approved",
+        review_note="来源已从新病例和新知识的可选范围移除",
+    )
+    enriched = enrich_source_freshness(source)
+    _record_admin_audit(
+        actor=actor,
+        action="source.deactivated",
+        resource_type="source",
+        resource_id=source_id,
+        summary=f"停用来源 {source.get('source_name') or source_id}",
+        before=enrich_source_freshness(previous),
+        after=enriched,
+        metadata={"version": version["version"]},
+    )
+    return {"source": enriched, "version": version}
+
+
+@app.get("/api/admin/sources/{source_id}/versions")
+def list_admin_source_versions(
+    source_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
+    actor = _require_admin_user(auth_token)
+    source = _admin_source_by_id(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    admin_asset_version_store.ensure_initial_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=source,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+    )
+    return admin_asset_version_store.list_versions(
+        asset_type="source",
+        asset_id=source_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/admin/sources/{source_id}/diff")
+def diff_admin_source_versions(
+    source_id: str,
+    from_version: int = Query(ge=1),
+    to_version: int = Query(ge=1),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
+    _require_admin_user(auth_token)
+    diff = admin_asset_version_store.diff_versions(
+        asset_type="source",
+        asset_id=source_id,
+        from_version=from_version,
+        to_version=to_version,
+    )
+    if diff is None:
+        raise HTTPException(status_code=404, detail="来源版本不存在")
+    return diff
+
+
+@app.post("/api/admin/sources/{source_id}/rollback")
+def rollback_admin_source(
+    source_id: str,
+    request: AdminAssetRollbackRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    target = admin_asset_version_store.get_version(
+        asset_type="source",
+        asset_id=source_id,
+        version=request.version,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="来源版本不存在")
+    sources = _load_admin_sources_raw()
+    index = next((index for index, item in enumerate(sources) if item.get("source_id") == source_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    previous = sources[index]
+    restored = deepcopy(target["payload"])
+    next_sources = list(sources)
+    next_sources[index] = restored
+    _write_admin_sources(next_sources)
+    version = admin_asset_version_store.save_version(
+        asset_type="source",
+        asset_id=source_id,
+        payload=restored,
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        change_note=request.change_note or f"回滚到版本 {request.version}",
+        review_status=str(target.get("review_status") or "unreviewed"),
+        review_note=str(target.get("review_note") or ""),
+    )
+    enriched = enrich_source_freshness(restored)
+    _record_admin_audit(
+        actor=actor,
+        action="source.rolled_back",
+        resource_type="source",
+        resource_id=source_id,
+        summary=f"回滚来源 {source_id} 到版本 {request.version}",
+        before=enrich_source_freshness(previous),
+        after=enriched,
+        metadata={"target_version": request.version, "version": version["version"]},
+    )
+    return {"source": enriched, "version": version}
 
 
 @app.get("/api/admin/teaching-focus/patterns")

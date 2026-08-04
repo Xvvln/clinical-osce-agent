@@ -408,6 +408,64 @@ type AdminSourceSummary = Readonly<{
   source_status?: string;
   superseded_by?: string;
   selectable_for_new_knowledge?: boolean;
+  allowed_usage?: readonly string[];
+  transformation?: string;
+  attribution_required?: boolean;
+  risk_note?: string;
+  review_interval_days?: number;
+  review_basis?: string;
+  search_aliases?: readonly string[];
+}>;
+
+type AdminSourcePayload = Readonly<{
+  source_id: string;
+  source_name: string;
+  source_url: string;
+  license: string;
+  data_type: string;
+  allowed_usage: readonly string[];
+  transformation: string;
+  attribution_required: boolean;
+  risk_note: string;
+  source_version: string;
+  last_reviewed_at: string;
+  review_interval_days: number;
+  source_status: "active" | "superseded" | "inactive";
+  superseded_by: string;
+  review_basis: string;
+  search_aliases: readonly string[];
+  change_note: string;
+  medical_review_note: string;
+}>;
+
+type AdminAssetVersion = Readonly<{
+  asset_type: string;
+  asset_id: string;
+  version: number;
+  payload_hash: string;
+  change_note: string;
+  review_status: "unreviewed" | "approved" | "rejected" | string;
+  review_note: string;
+  actor_email: string;
+  created_at: string;
+}>;
+
+type AdminAssetDiff = Readonly<{
+  from_version: number;
+  to_version: number;
+  change_count: number;
+  changes: readonly Readonly<{
+    path: string;
+    change: string;
+    before: unknown;
+    after: unknown;
+  }>[];
+}>;
+
+type AdminCaseAssets = Readonly<{
+  case: AdminCaseRaw;
+  rubric: Record<string, unknown>;
+  current_version: AdminAssetVersion & Readonly<{ payload?: unknown }>;
 }>;
 
 type AdminRagDocument = Readonly<{
@@ -1147,6 +1205,93 @@ async function getAdminCaseRaw(caseId: string): Promise<AdminCaseRaw> {
   return payload.case;
 }
 
+async function getAdminCaseAssets(caseId: string): Promise<AdminCaseAssets> {
+  return fetchJson(`/api/admin/cases/${encodeURIComponent(caseId)}/assets`);
+}
+
+async function replaceAdminCaseAssets(
+  caseId: string,
+  payload: Readonly<{
+    case: AdminCaseRaw;
+    rubric: Record<string, unknown>;
+    change_note: string;
+    review_status: "unreviewed" | "approved" | "rejected";
+    medical_review_note: string;
+  }>,
+): Promise<AdminCaseAssets> {
+  return fetchJson(`/api/admin/cases/${encodeURIComponent(caseId)}/assets`, {
+    body: JSON.stringify(payload),
+    method: "PUT",
+  });
+}
+
+async function getAdminAssetVersions(assetPath: string): Promise<readonly AdminAssetVersion[]> {
+  const response = await fetchJson<{ versions: readonly AdminAssetVersion[] }>(`${assetPath}/versions?limit=50`);
+  return response.versions;
+}
+
+async function getAdminAssetDiff(assetPath: string, fromVersion: number, toVersion: number): Promise<AdminAssetDiff> {
+  return fetchJson(`${assetPath}/diff?from_version=${fromVersion}&to_version=${toVersion}`);
+}
+
+async function rollbackAdminAsset<T>(assetPath: string, version: number, changeNote: string): Promise<T> {
+  return fetchJson(`${assetPath}/rollback`, {
+    body: JSON.stringify({ version, change_note: changeNote }),
+    method: "POST",
+  });
+}
+
+async function reviewAdminCase(
+  caseId: string,
+  reviewStatus: "approved" | "rejected",
+  medicalReviewNote: string,
+): Promise<AdminAssetVersion> {
+  const response = await fetchJson<{ current_version: AdminAssetVersion }>(`/api/admin/cases/${encodeURIComponent(caseId)}/review`, {
+    body: JSON.stringify({ review_status: reviewStatus, medical_review_note: medicalReviewNote }),
+    method: "POST",
+  });
+  return response.current_version;
+}
+
+async function createOrUpdateAdminSource(
+  payload: AdminSourcePayload,
+  existingSourceId: string,
+): Promise<AdminSourceSummary> {
+  const path = existingSourceId
+    ? `/api/admin/sources/${encodeURIComponent(existingSourceId)}`
+    : "/api/admin/sources";
+  const response = await fetchJson<{ source: AdminSourceSummary }>(path, {
+    body: JSON.stringify(payload),
+    method: existingSourceId ? "PUT" : "POST",
+  });
+  return response.source;
+}
+
+async function reviewAdminSource(
+  sourceId: string,
+  payload: Readonly<{
+    last_reviewed_at: string;
+    review_interval_days: number;
+    review_basis: string;
+    source_status: "active" | "superseded" | "inactive";
+    superseded_by: string;
+    medical_review_note: string;
+  }>,
+): Promise<AdminSourceSummary> {
+  const response = await fetchJson<{ source: AdminSourceSummary }>(`/api/admin/sources/${encodeURIComponent(sourceId)}/review`, {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+  return response.source;
+}
+
+async function deactivateAdminSource(sourceId: string): Promise<AdminSourceSummary> {
+  const response = await fetchJson<{ source: AdminSourceSummary }>(`/api/admin/sources/${encodeURIComponent(sourceId)}`, {
+    method: "DELETE",
+  });
+  return response.source;
+}
+
 async function updateAdminCaseFields(caseId: string, payload: AdminCaseFieldUpdatePayload): Promise<AdminCaseRaw> {
   const response = await fetchJson<AdminCaseUpdateResponse>(`/api/admin/cases/${encodeURIComponent(caseId)}/raw`, {
     body: JSON.stringify(payload),
@@ -1616,6 +1761,18 @@ export function AdminV2Dashboard() {
       ...current,
       users: usersPayload.users,
       classrooms: classroomsPayload.classrooms,
+    }));
+  }
+
+  async function reloadResourceDirectory(): Promise<void> {
+    const [casesPayload, sourcesPayload] = await Promise.all([
+      fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"),
+      fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"),
+    ]);
+    setData((current) => ({
+      ...current,
+      cases: casesPayload.cases,
+      sources: sourcesPayload.sources,
     }));
   }
 
@@ -2142,6 +2299,7 @@ export function AdminV2Dashboard() {
               <ResourcesSection
                 data={data}
                 isDocumentBusy={isDocumentBusy}
+                onResourceDirectoryChanged={reloadResourceDirectory}
                 onOpenCaseCreation={() => setIsCaseCreationOpen(true)}
                 onSaveCaseFields={(caseId, payload) => handleUpdateCaseFields(caseId, payload)}
                 onSaveKnowledgeItem={(item) => handleSaveKnowledgeItem(item)}
@@ -3018,6 +3176,7 @@ function ResourcesSection({
   data,
   isDocumentBusy,
   onOpenCaseCreation,
+  onResourceDirectoryChanged,
   onReviewDocument,
   onReviewKnowledgeItem,
   onSaveCaseFields,
@@ -3029,6 +3188,7 @@ function ResourcesSection({
   data: DashboardData;
   isDocumentBusy: boolean;
   onOpenCaseCreation: () => void;
+  onResourceDirectoryChanged: () => Promise<void>;
   onReviewDocument: (documentId: string, decision: AdminRagReviewDecision, note: string) => Promise<void>;
   onReviewKnowledgeItem: (knowledgeId: string, decision: AdminRagReviewDecision, note: string) => Promise<AdminRagKnowledgeItem>;
   onSaveCaseFields: (caseId: string, payload: AdminCaseFieldUpdatePayload) => Promise<AdminCaseRaw>;
@@ -3041,6 +3201,7 @@ function ResourcesSection({
   const [openCaseDetail, setOpenCaseDetail] = useState<AdminCaseRaw | null>(null);
   const [editingCase, setEditingCase] = useState<AdminCaseRaw | null>(null);
   const [rubricDetail, setRubricDetail] = useState<AdminRubricDetail | null>(null);
+  const [versionedCaseId, setVersionedCaseId] = useState("");
   const [caseDetailErrorText, setCaseDetailErrorText] = useState("");
   const [loadingCaseId, setLoadingCaseId] = useState("");
   const [loadingRubricCaseId, setLoadingRubricCaseId] = useState("");
@@ -3144,6 +3305,9 @@ function ResourcesSection({
                       {loadingRubricCaseId === caseItem.case_id ? <Loader2 className="animate-spin" /> : null}
                       查看 Rubric
                     </Button>
+                    <Button onClick={() => setVersionedCaseId(caseItem.case_id)} size="sm" type="button" variant="secondary">
+                      完整版本
+                    </Button>
                   </div>
                 </div>
               </article>
@@ -3153,7 +3317,7 @@ function ResourcesSection({
           {data.cases.length === 0 ? <EmptyText>暂无病例。点击“新建病例”开始录入。</EmptyText> : null}
         </CardContent>
       </Card>
-      <SourceLedger sources={data.sources} />
+      <SourceLedger onChanged={onResourceDirectoryChanged} sources={data.sources} />
       <Card>
         <CardHeader>
           <CardTitle>知识库文档</CardTitle>
@@ -3268,21 +3432,220 @@ function ResourcesSection({
           rubric={rubricDetail}
         />
       ) : null}
+      {versionedCaseId ? (
+        <CaseAssetVersionModal
+          caseId={versionedCaseId}
+          onChanged={onResourceDirectoryChanged}
+          onClose={() => setVersionedCaseId("")}
+        />
+      ) : null}
     </div>
   );
 }
 
-function SourceLedger({ sources }: Readonly<{ sources: readonly AdminSourceSummary[] }>) {
+function buildAdminSourceDraft(source?: AdminSourceSummary): AdminSourcePayload {
+  return {
+    allowed_usage: source?.allowed_usage ?? [],
+    attribution_required: source?.attribution_required ?? true,
+    change_note: "",
+    data_type: source?.data_type ?? source?.source_type ?? "clinical_reference",
+    last_reviewed_at: source?.last_reviewed_at ?? new Date().toISOString().slice(0, 10),
+    license: source?.license ?? "",
+    medical_review_note: "",
+    review_basis: source?.review_basis ?? "",
+    review_interval_days: source?.review_interval_days ?? 365,
+    risk_note: source?.risk_note ?? "",
+    search_aliases: source?.search_aliases ?? [],
+    source_id: source?.source_id ?? "",
+    source_name: source?.source_name ?? source?.title ?? "",
+    source_status: (["active", "superseded", "inactive"].includes(source?.source_status ?? "")
+      ? source?.source_status
+      : "active") as AdminSourcePayload["source_status"],
+    source_url: source?.source_url ?? "",
+    source_version: source?.source_version ?? "",
+    superseded_by: source?.superseded_by ?? "",
+    transformation: source?.transformation ?? "",
+  };
+}
+
+function SourceLedger({
+  onChanged,
+  sources,
+}: Readonly<{
+  onChanged: () => Promise<void>;
+  sources: readonly AdminSourceSummary[];
+}>) {
   const currentCount = sources.filter((source) => source.freshness_status === "current").length;
   const reviewDueCount = sources.filter((source) => source.freshness_status === "review_due").length;
   const unverifiedCount = sources.filter((source) => source.freshness_status === "unverified").length;
   const supersededCount = sources.filter((source) => source.freshness_status === "superseded").length;
+  const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [draft, setDraft] = useState<AdminSourcePayload>(() => buildAdminSourceDraft());
+  const [searchText, setSearchText] = useState("");
+  const [versions, setVersions] = useState<readonly AdminAssetVersion[]>([]);
+  const [diff, setDiff] = useState<AdminAssetDiff | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const [localErrorText, setLocalErrorText] = useState("");
+  const [localStatusText, setLocalStatusText] = useState("");
+  const filteredSources = useMemo(() => {
+    const query = searchText.trim().toLocaleLowerCase("zh-CN");
+    if (!query) {
+      return sources;
+    }
+    return sources.filter((source) =>
+      [source.source_id, source.source_name ?? "", source.source_type ?? "", source.source_version ?? ""]
+        .join(" ")
+        .toLocaleLowerCase("zh-CN")
+        .includes(query),
+    );
+  }, [searchText, sources]);
+
+  function updateDraft<Key extends keyof AdminSourcePayload>(key: Key, value: AdminSourcePayload[Key]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function startNewSource() {
+    setSelectedSourceId("");
+    setDraft(buildAdminSourceDraft());
+    setVersions([]);
+    setDiff(null);
+    setLocalErrorText("");
+    setLocalStatusText("");
+  }
+
+  async function loadVersions(sourceId: string) {
+    const assetPath = `/api/admin/sources/${encodeURIComponent(sourceId)}`;
+    const nextVersions = await getAdminAssetVersions(assetPath);
+    setVersions(nextVersions);
+    if (nextVersions.length >= 2) {
+      setDiff(await getAdminAssetDiff(assetPath, nextVersions[1].version, nextVersions[0].version));
+    } else {
+      setDiff(null);
+    }
+  }
+
+  async function openSource(source: AdminSourceSummary) {
+    setSelectedSourceId(source.source_id);
+    setDraft(buildAdminSourceDraft(source));
+    setLocalErrorText("");
+    setLocalStatusText("");
+    setIsBusy(true);
+    try {
+      await loadVersions(source.source_id);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "读取来源版本失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!draft.source_id.trim() || !draft.source_name.trim() || !draft.data_type.trim()) {
+      setLocalErrorText("来源 ID、名称和类型不能为空。");
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    setLocalStatusText("");
+    try {
+      const saved = await createOrUpdateAdminSource(
+        {
+          ...draft,
+          source_id: draft.source_id.trim(),
+          source_name: draft.source_name.trim(),
+          data_type: draft.data_type.trim(),
+        },
+        selectedSourceId,
+      );
+      setSelectedSourceId(saved.source_id);
+      setDraft(buildAdminSourceDraft(saved));
+      await onChanged();
+      await loadVersions(saved.source_id);
+      setLocalStatusText(selectedSourceId ? "来源已更新，并生成新版本。" : "来源已创建并进入台账。");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "保存来源失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleReview() {
+    if (!selectedSourceId || !draft.review_basis.trim() || !draft.last_reviewed_at) {
+      setLocalErrorText("复核需要填写复核日期和依据。");
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    try {
+      const saved = await reviewAdminSource(selectedSourceId, {
+        last_reviewed_at: draft.last_reviewed_at,
+        medical_review_note: draft.medical_review_note,
+        review_basis: draft.review_basis,
+        review_interval_days: draft.review_interval_days,
+        source_status: draft.source_status,
+        superseded_by: draft.superseded_by,
+      });
+      setDraft(buildAdminSourceDraft(saved));
+      await onChanged();
+      await loadVersions(selectedSourceId);
+      setLocalStatusText("来源复核已记录。");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "来源复核失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDeactivate() {
+    if (!selectedSourceId || !window.confirm("确定停用该来源吗？它将不再可用于新病例或新知识，但历史引用仍保留。")) {
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    try {
+      const saved = await deactivateAdminSource(selectedSourceId);
+      setDraft(buildAdminSourceDraft(saved));
+      await onChanged();
+      await loadVersions(selectedSourceId);
+      setLocalStatusText("来源已停用，历史引用不受影响。");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "停用来源失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRollback(version: number) {
+    if (!selectedSourceId || !window.confirm(`确定把来源恢复到版本 ${version} 吗？当前状态会先保留在历史中。`)) {
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    try {
+      const response = await rollbackAdminAsset<{ source: AdminSourceSummary }>(
+        `/api/admin/sources/${encodeURIComponent(selectedSourceId)}`,
+        version,
+        `从管理端恢复到版本 ${version}`,
+      );
+      setDraft(buildAdminSourceDraft(response.source));
+      await onChanged();
+      await loadVersions(selectedSourceId);
+      setLocalStatusText(`已恢复到版本 ${version}，并生成新的回滚版本。`);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "来源回滚失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>来源台账与时效复核</CardTitle>
-        <CardDescription>“复核有效”表示项目已在记录日期核对来源版本、用途与风险边界；不等同于医学教师审定或真实临床有效性认证。</CardDescription>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>来源台账、复核与版本</CardTitle>
+          <CardDescription>可新增、修订、复核、停用、查看差异和回滚；“复核有效”仍不等同于真实临床有效性认证。</CardDescription>
+        </div>
+        <Button onClick={startNewSource} type="button" variant="secondary"><PlusCircle />新增来源</Button>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -3291,45 +3654,86 @@ function SourceLedger({ sources }: Readonly<{ sources: readonly AdminSourceSumma
           <MiniStat label="未记录复核" value={formatCount(unverifiedCount)} />
           <MiniStat label="已被新来源替代" value={formatCount(supersededCount)} />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
-              <tr className="border-b border-[#E7E0D4]">
-                <th className="py-3 pr-4">来源</th>
-                <th className="py-3 pr-4">类型</th>
-                <th className="py-3 pr-4">版本</th>
-                <th className="py-3 pr-4">最近复核</th>
-                <th className="py-3 pr-4">下次复核</th>
-                <th className="py-3 pr-4">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((source) => (
-                <tr className="border-b border-[#F0E8DC]" key={source.source_id}>
-                  <td className="py-3 pr-4">
-                    {source.source_url ? (
-                      <a className="font-medium text-[#8F4328] underline decoration-[#D9B19F] underline-offset-4" href={source.source_url} rel="noreferrer" target="_blank">
-                        {source.title || source.source_name || source.source_id}
-                      </a>
-                    ) : (
-                      <span className="font-medium">{source.title || source.source_name || source.source_id}</span>
-                    )}
-                    <p className="mt-1 text-xs text-[#8A7D6F]">{source.source_id}</p>
-                  </td>
-                  <td className="py-3 pr-4 text-[#6F6257]">{source.source_type || source.data_type || "未分类"}</td>
-                  <td className="max-w-[260px] py-3 pr-4 text-[#6F6257]">{source.source_version || "未记录"}</td>
-                  <td className="py-3 pr-4 text-[#6F6257]">{formatDateOnly(source.last_reviewed_at)}</td>
-                  <td className="py-3 pr-4 text-[#6F6257]">{formatDateOnly(source.review_due_at)}</td>
-                  <td className="py-3 pr-4">
+        <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+          <div className="grid content-start gap-3">
+            <Input onChange={(event) => setSearchText(event.target.value)} placeholder="搜索来源名称、ID、类型或版本" value={searchText} />
+            <div className="grid max-h-[42rem] gap-2 overflow-y-auto pr-1">
+              {filteredSources.map((source) => (
+                <button
+                  aria-pressed={selectedSourceId === source.source_id}
+                  className={cn("rounded-2xl border p-3 text-left", selectedSourceId === source.source_id ? "border-[#141413] bg-[#F7F4ED]" : "border-[#E7E0D4] bg-white hover:bg-[#FAF9F5]")}
+                  key={source.source_id}
+                  onClick={() => void openSource(source)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{source.title || source.source_name || source.source_id}</span>
+                      <span className="mt-1 block truncate text-xs text-[#8A7D6F]">{source.source_id} · {source.source_version || "未记录版本"}</span>
+                    </span>
                     <Badge variant={getSourceFreshnessBadgeVariant(source.freshness_status)}>{source.freshness_label || getSourceFreshnessLabel(source.freshness_status)}</Badge>
-                    {source.superseded_by ? <p className="mt-1 text-xs text-[#8A7D6F]">新来源：{source.superseded_by}</p> : null}
-                  </td>
-                </tr>
+                  </div>
+                </button>
               ))}
-            </tbody>
-          </table>
+              {filteredSources.length === 0 ? <EmptyText>暂无匹配来源。</EmptyText> : null}
+            </div>
+          </div>
+          <div className="grid content-start gap-4 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">{selectedSourceId ? "编辑来源" : "新增来源"}</h3>
+              {selectedSourceId ? <Badge variant="muted">{versions.length} 个版本</Badge> : null}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FormField label="来源 ID"><Input disabled={Boolean(selectedSourceId)} onChange={(event) => updateDraft("source_id", event.target.value)} value={draft.source_id} /></FormField>
+              <FormField label="来源名称"><Input onChange={(event) => updateDraft("source_name", event.target.value)} value={draft.source_name} /></FormField>
+              <FormField label="类型"><Input onChange={(event) => updateDraft("data_type", event.target.value)} value={draft.data_type} /></FormField>
+              <FormField label="来源版本"><Input onChange={(event) => updateDraft("source_version", event.target.value)} value={draft.source_version} /></FormField>
+              <FormField label="原始链接"><Input onChange={(event) => updateDraft("source_url", event.target.value)} value={draft.source_url} /></FormField>
+              <FormField label="许可"><Input onChange={(event) => updateDraft("license", event.target.value)} value={draft.license} /></FormField>
+              <FormField label="最近复核"><Input onChange={(event) => updateDraft("last_reviewed_at", event.target.value)} type="date" value={draft.last_reviewed_at} /></FormField>
+              <FormField label="复核周期（天）"><Input min={1} onChange={(event) => updateDraft("review_interval_days", Math.max(1, Number(event.target.value) || 365))} type="number" value={draft.review_interval_days} /></FormField>
+              <FormField label="状态">
+                <SelectInput optionLabels={{ active: "启用", inactive: "停用", superseded: "已被替代" }} options={["active", "superseded", "inactive"]} value={draft.source_status} onChange={(value) => updateDraft("source_status", value as AdminSourcePayload["source_status"])} />
+              </FormField>
+              <FormField label="替代来源">
+                <SelectInput optionLabels={{ "": "无", ...Object.fromEntries(sources.filter((source) => source.source_id !== draft.source_id).map((source) => [source.source_id, source.title || source.source_id])) }} options={["", ...sources.filter((source) => source.source_id !== draft.source_id).map((source) => source.source_id)]} value={draft.superseded_by} onChange={(value) => updateDraft("superseded_by", value)} />
+              </FormField>
+            </div>
+            <FormField label="允许用途（逗号分隔）"><Input onChange={(event) => updateDraft("allowed_usage", toTokenList(event.target.value))} value={draft.allowed_usage.join(", ")} /></FormField>
+            <FormField label="搜索别名（逗号分隔）"><Input onChange={(event) => updateDraft("search_aliases", toTokenList(event.target.value))} value={draft.search_aliases.join(", ")} /></FormField>
+            <FormField label="转换方式"><TextAreaInput onChange={(value) => updateDraft("transformation", value)} value={draft.transformation} /></FormField>
+            <FormField label="风险说明"><TextAreaInput onChange={(value) => updateDraft("risk_note", value)} value={draft.risk_note} /></FormField>
+            <FormField label="复核依据"><TextAreaInput onChange={(value) => updateDraft("review_basis", value)} value={draft.review_basis} /></FormField>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FormField label="变更说明"><Input onChange={(event) => updateDraft("change_note", event.target.value)} value={draft.change_note} /></FormField>
+              <FormField label="医学审核备注"><Input onChange={(event) => updateDraft("medical_review_note", event.target.value)} value={draft.medical_review_note} /></FormField>
+            </div>
+            <label className="flex items-center gap-2 text-sm"><input checked={draft.attribution_required} onChange={(event) => updateDraft("attribution_required", event.target.checked)} type="checkbox" />使用时必须标注来源</label>
+            {localErrorText ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{localErrorText}</p> : null}
+            {localStatusText ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{localStatusText}</p> : null}
+            <div className="flex flex-wrap justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                {selectedSourceId ? <Button disabled={isBusy || draft.source_status === "inactive"} onClick={() => void handleDeactivate()} type="button" variant="destructive">停用来源</Button> : null}
+                {selectedSourceId ? <Button disabled={isBusy} onClick={() => void handleReview()} type="button" variant="secondary">记录复核</Button> : null}
+              </div>
+              <Button disabled={isBusy} onClick={() => void handleSave()} type="button">{isBusy ? <Loader2 className="animate-spin" /> : <FileText />}{selectedSourceId ? "保存新版本" : "创建来源"}</Button>
+            </div>
+            {versions.length > 0 ? (
+              <details className="rounded-xl border border-[#E7E0D4] bg-white p-3">
+                <summary className="cursor-pointer text-sm font-semibold">版本历史与最近差异</summary>
+                <div className="mt-3 grid gap-2">
+                  {versions.map((version) => (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#F0E8DC] px-3 py-2 text-xs" key={version.version}>
+                      <span>v{version.version} · {version.change_note || "无说明"} · {version.actor_email} · {formatDateTime(version.created_at)}</span>
+                      <Button disabled={isBusy || version.version === versions[0]?.version} onClick={() => void handleRollback(version.version)} size="sm" type="button" variant="outline">恢复此版</Button>
+                    </div>
+                  ))}
+                  {diff ? <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-[#FAF9F5] p-3 text-[11px]">{diff.changes.map((change) => `${change.path}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`).join("\n") || "最近两个版本内容相同"}</pre> : null}
+                </div>
+              </details>
+            ) : null}
+          </div>
         </div>
-        {sources.length === 0 ? <EmptyText>暂无来源台账。</EmptyText> : null}
       </CardContent>
     </Card>
   );
@@ -3514,6 +3918,220 @@ function DocumentUploadPanel({
         {localStatusText ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{localStatusText}</p> : null}
       </div>
     </details>
+  );
+}
+
+function CaseAssetVersionModal({
+  caseId,
+  onChanged,
+  onClose,
+}: Readonly<{
+  caseId: string;
+  onChanged: () => Promise<void>;
+  onClose: () => void;
+}>) {
+  const [assets, setAssets] = useState<AdminCaseAssets | null>(null);
+  const [caseJson, setCaseJson] = useState("");
+  const [rubricJson, setRubricJson] = useState("");
+  const [versions, setVersions] = useState<readonly AdminAssetVersion[]>([]);
+  const [diff, setDiff] = useState<AdminAssetDiff | null>(null);
+  const [changeNote, setChangeNote] = useState("");
+  const [reviewStatus, setReviewStatus] = useState<"unreviewed" | "approved" | "rejected">("unreviewed");
+  const [medicalReviewNote, setMedicalReviewNote] = useState("");
+  const [isBusy, setIsBusy] = useState(true);
+  const [localErrorText, setLocalErrorText] = useState("");
+  const [localStatusText, setLocalStatusText] = useState("");
+  const assetPath = `/api/admin/cases/${encodeURIComponent(caseId)}`;
+
+  async function loadCaseVersionState() {
+    const [nextAssets, nextVersions] = await Promise.all([
+      getAdminCaseAssets(caseId),
+      getAdminAssetVersions(assetPath),
+    ]);
+    setAssets(nextAssets);
+    setCaseJson(JSON.stringify(nextAssets.case, null, 2));
+    setRubricJson(JSON.stringify(nextAssets.rubric, null, 2));
+    setVersions(nextVersions);
+    setReviewStatus(
+      ["approved", "rejected"].includes(nextAssets.current_version.review_status)
+        ? nextAssets.current_version.review_status as "approved" | "rejected"
+        : "unreviewed",
+    );
+    setMedicalReviewNote(nextAssets.current_version.review_note ?? "");
+    if (nextVersions.length >= 2) {
+      setDiff(await getAdminAssetDiff(assetPath, nextVersions[1].version, nextVersions[0].version));
+    } else {
+      setDiff(null);
+    }
+  }
+
+  useEffect(() => {
+    let isMounted = true;
+    setIsBusy(true);
+    setLocalErrorText("");
+    void loadCaseVersionState()
+      .catch((error) => {
+        if (isMounted) {
+          setLocalErrorText(error instanceof Error ? error.message : "读取病例版本失败");
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsBusy(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [caseId]);
+
+  async function handleSave() {
+    if (!changeNote.trim()) {
+      setLocalErrorText("保存完整病例前必须填写变更说明。");
+      return;
+    }
+    let parsedCase: unknown;
+    let parsedRubric: unknown;
+    try {
+      parsedCase = JSON.parse(caseJson);
+      parsedRubric = JSON.parse(rubricJson);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? `JSON 格式错误：${error.message}` : "JSON 格式错误");
+      return;
+    }
+    if (!parsedCase || typeof parsedCase !== "object" || Array.isArray(parsedCase) || !parsedRubric || typeof parsedRubric !== "object" || Array.isArray(parsedRubric)) {
+      setLocalErrorText("病例和 Rubric 都必须是 JSON 对象。");
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    setLocalStatusText("");
+    try {
+      await replaceAdminCaseAssets(caseId, {
+        case: parsedCase as AdminCaseRaw,
+        change_note: changeNote.trim(),
+        medical_review_note: medicalReviewNote.trim(),
+        review_status: reviewStatus,
+        rubric: parsedRubric as Record<string, unknown>,
+      });
+      await onChanged();
+      await loadCaseVersionState();
+      setChangeNote("");
+      setLocalStatusText("完整病例与 Rubric 已校验并保存为新版本。");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "保存完整病例失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleReview(nextStatus: "approved" | "rejected") {
+    if (!medicalReviewNote.trim()) {
+      setLocalErrorText("医学审核必须填写审核备注。");
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    try {
+      await reviewAdminCase(caseId, nextStatus, medicalReviewNote.trim());
+      await loadCaseVersionState();
+      setLocalStatusText(nextStatus === "approved" ? "医学审核已通过并留痕。" : "病例已退回并留痕。");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "病例审核失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRollback(version: number) {
+    if (!window.confirm(`确定恢复病例版本 ${version} 吗？当前内容会保留在版本历史中。`)) {
+      return;
+    }
+    setIsBusy(true);
+    setLocalErrorText("");
+    try {
+      await rollbackAdminAsset<AdminCaseAssets>(assetPath, version, `从管理端恢复到版本 ${version}`);
+      await onChanged();
+      await loadCaseVersionState();
+      setLocalStatusText(`已恢复版本 ${version}，并生成新的回滚版本。`);
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "病例回滚失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <div aria-label="完整病例版本管理" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog">
+      <div className="grid max-h-[94vh] w-full max-w-7xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-3xl border border-[#E7E0D4] bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-[#AE5630]">受控病例资产</p>
+            <h3 className="mt-1 text-2xl font-semibold">完整病例、Rubric 与版本</h3>
+            <p className="mt-2 text-sm text-[#6F6257]">{caseId} · 保存前后端会重新验证完整模型及 Case/Rubric 配对关系。</p>
+          </div>
+          <Button onClick={onClose} variant="secondary">关闭</Button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-6">
+          {isBusy && !assets ? <p className="flex items-center gap-2 text-sm text-[#6F6257]"><Loader2 className="animate-spin" />读取病例资产...</p> : null}
+          {assets ? (
+            <div className="grid gap-4">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <FormField label="完整病例 JSON">
+                  <textarea className="min-h-[32rem] w-full resize-y rounded-xl border border-[#E7E0D4] bg-[#111827] p-3 font-mono text-xs leading-5 text-[#E5E7EB] outline-none" onChange={(event) => setCaseJson(event.target.value)} spellCheck={false} value={caseJson} />
+                </FormField>
+                <FormField label="完整 Rubric JSON">
+                  <textarea className="min-h-[32rem] w-full resize-y rounded-xl border border-[#E7E0D4] bg-[#111827] p-3 font-mono text-xs leading-5 text-[#E5E7EB] outline-none" onChange={(event) => setRubricJson(event.target.value)} spellCheck={false} value={rubricJson} />
+                </FormField>
+              </div>
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">这是高级完整编辑入口，适合修改隐藏病史、查体/检查结果、诊断证据、评分维度和权重。后端验证失败时不会写入任一文件。</p>
+              <div className="grid gap-3 lg:grid-cols-[1fr_12rem_1fr]">
+                <FormField label="变更说明"><Input onChange={(event) => setChangeNote(event.target.value)} placeholder="说明为什么修改病例事实或评分" value={changeNote} /></FormField>
+                <FormField label="版本审核状态"><SelectInput optionLabels={{ approved: "已审核通过", rejected: "已退回", unreviewed: "待审核" }} options={["unreviewed", "approved", "rejected"]} value={reviewStatus} onChange={(value) => setReviewStatus(value as typeof reviewStatus)} /></FormField>
+                <FormField label="医学审核备注"><Input onChange={(event) => setMedicalReviewNote(event.target.value)} value={medicalReviewNote} /></FormField>
+              </div>
+              {localErrorText ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{localErrorText}</p> : null}
+              {localStatusText ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{localStatusText}</p> : null}
+              <div className="flex flex-wrap justify-between gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={isBusy || !medicalReviewNote.trim()} onClick={() => void handleReview("approved")} type="button" variant="secondary">审核通过</Button>
+                  <Button disabled={isBusy || !medicalReviewNote.trim()} onClick={() => void handleReview("rejected")} type="button" variant="outline">退回修订</Button>
+                </div>
+                <Button disabled={isBusy || !changeNote.trim()} onClick={() => void handleSave()} type="button">{isBusy ? <Loader2 className="animate-spin" /> : <FileText />}校验并保存新版本</Button>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+                <Card>
+                  <CardHeader><CardTitle>版本历史</CardTitle></CardHeader>
+                  <CardContent className="grid max-h-80 gap-2 overflow-y-auto">
+                    {versions.map((version) => (
+                      <div className="rounded-xl border border-[#E7E0D4] p-3 text-xs" key={version.version}>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <span><strong>v{version.version}</strong> · {getAdminAssetReviewLabel(version.review_status)}</span>
+                          <Button disabled={isBusy || version.version === versions[0]?.version} onClick={() => void handleRollback(version.version)} size="sm" type="button" variant="outline">恢复此版</Button>
+                        </div>
+                        <p className="mt-2 text-[#6F6257]">{version.change_note || "无变更说明"}</p>
+                        <p className="mt-1 text-[#8A7D6F]">{version.actor_email} · {formatDateTime(version.created_at)}</p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle>最近两个版本差异</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="max-h-80 overflow-auto rounded-xl bg-[#FAF9F5] p-3 font-mono text-[11px] leading-5">
+                      {diff?.changes.length ? diff.changes.map((change) => (
+                        <p className="border-b border-[#E7E0D4] py-2" key={`${change.path}-${change.change}`}><strong>{change.path}</strong><br />{JSON.stringify(change.before)} → {JSON.stringify(change.after)}</p>
+                      )) : "尚无可比较的版本差异。"}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex justify-end border-t border-[#E7E0D4] px-6 py-4"><Button onClick={onClose} variant="secondary">关闭</Button></div>
+      </div>
+    </div>
   );
 }
 
@@ -7241,6 +7859,14 @@ function getAdminAuditActionLabel(action: string): string {
     run: "运行",
     updated: "更新",
   }[actionName] ?? action;
+}
+
+function getAdminAssetReviewLabel(status: string): string {
+  return {
+    approved: "审核通过",
+    rejected: "已退回",
+    unreviewed: "待审核",
+  }[status] ?? status;
 }
 
 function formatDateOnly(value: string | undefined): string {

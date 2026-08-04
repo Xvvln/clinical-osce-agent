@@ -17,6 +17,7 @@ from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.admin_audit_store import AdminAuditStore
+from app.services.admin_asset_version_store import AdminAssetVersionStore
 from app.services.auth_store import AuthStore
 from app.services.api_call_log_service import ApiCallLogStore
 from app.services.classroom_store import ClassroomStore
@@ -54,6 +55,12 @@ def isolate_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None
         main,
         "admin_audit_store",
         AdminAuditStore(tmp_path / "admin_audit.sqlite3"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "admin_asset_version_store",
+        AdminAssetVersionStore(tmp_path / "admin_asset_versions.sqlite3"),
         raising=False,
     )
 
@@ -198,7 +205,15 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/insights"),
             unauthenticated_client.get("/api/admin/learning-analytics"),
             unauthenticated_client.get("/api/admin/users"),
+            unauthenticated_client.post(
+                "/api/admin/users",
+                json={"email": "new@example.test", "password": "safe-password", "display_name": "新用户"},
+            ),
+            unauthenticated_client.patch("/api/admin/users/missing-user", json={"status": "disabled"}),
+            unauthenticated_client.post("/api/admin/users/missing-user/reset-password", json={"password": "new-password"}),
+            unauthenticated_client.delete("/api/admin/users/missing-user"),
             unauthenticated_client.get("/api/admin/classrooms"),
+            unauthenticated_client.post("/api/admin/classrooms/import", json={"csv_text": "班级名称\n一班"}),
             unauthenticated_client.post(
                 "/api/admin/classrooms",
                 json={"name": "临床一班", "member_user_ids": []},
@@ -208,19 +223,53 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
                 json={"name": "临床一班", "member_user_ids": []},
             ),
             unauthenticated_client.delete("/api/admin/classrooms/missing-classroom"),
+            unauthenticated_client.post(
+                "/api/admin/classrooms/missing-classroom/members/transfer",
+                json={"target_classroom_id": "target", "member_user_ids": ["member"]},
+            ),
             unauthenticated_client.get("/api/admin/evaluations"),
             unauthenticated_client.get("/api/admin/evaluations/missing_batch"),
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             unauthenticated_client.get("/api/cases/appendicitis_001/raw"),
             unauthenticated_client.get("/api/admin/cases/appendicitis_001/raw"),
             unauthenticated_client.patch("/api/admin/cases/appendicitis_001/raw", json={"case_title": "演示病例"}),
+            unauthenticated_client.get("/api/admin/cases/appendicitis_001/assets"),
+            unauthenticated_client.put(
+                "/api/admin/cases/appendicitis_001/assets",
+                json={"case": {}, "rubric": {}, "change_note": "测试"},
+            ),
+            unauthenticated_client.post(
+                "/api/admin/cases/appendicitis_001/review",
+                json={"review_status": "approved", "medical_review_note": "测试"},
+            ),
+            unauthenticated_client.get("/api/admin/cases/appendicitis_001/versions"),
+            unauthenticated_client.get("/api/admin/cases/appendicitis_001/diff?from_version=1&to_version=2"),
+            unauthenticated_client.post("/api/admin/cases/appendicitis_001/rollback", json={"version": 1}),
             unauthenticated_client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
             unauthenticated_client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             unauthenticated_client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             unauthenticated_client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             unauthenticated_client.get("/api/admin/sources"),
+            unauthenticated_client.post(
+                "/api/admin/sources",
+                json={"source_id": "source_demo", "source_name": "来源", "data_type": "reference"},
+            ),
+            unauthenticated_client.put(
+                "/api/admin/sources/source_demo",
+                json={"source_id": "source_demo", "source_name": "来源", "data_type": "reference"},
+            ),
+            unauthenticated_client.post(
+                "/api/admin/sources/source_demo/review",
+                json={"last_reviewed_at": "2026-08-04", "review_basis": "测试"},
+            ),
+            unauthenticated_client.delete("/api/admin/sources/source_demo"),
+            unauthenticated_client.get("/api/admin/sources/source_demo/versions"),
+            unauthenticated_client.get("/api/admin/sources/source_demo/diff?from_version=1&to_version=2"),
+            unauthenticated_client.post("/api/admin/sources/source_demo/rollback", json={"version": 1}),
             unauthenticated_client.get("/api/admin/model-config"),
             unauthenticated_client.get("/api/admin/model-api-logs"),
+            unauthenticated_client.get("/api/admin/audit-events"),
+            unauthenticated_client.get("/api/admin/audit-events/export?format=json"),
             unauthenticated_client.get("/api/admin/retrieval-eval"),
             unauthenticated_client.get("/api/admin/rag/knowledge"),
             unauthenticated_client.post("/api/admin/rag/knowledge", json={}),
@@ -264,7 +313,15 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/insights"),
             client.get("/api/admin/learning-analytics"),
             client.get("/api/admin/users"),
+            client.post(
+                "/api/admin/users",
+                json={"email": "new@example.test", "password": "safe-password", "display_name": "新用户"},
+            ),
+            client.patch("/api/admin/users/missing-user", json={"status": "disabled"}),
+            client.post("/api/admin/users/missing-user/reset-password", json={"password": "new-password"}),
+            client.delete("/api/admin/users/missing-user"),
             client.get("/api/admin/classrooms"),
+            client.post("/api/admin/classrooms/import", json={"csv_text": "班级名称\n一班"}),
             client.post(
                 "/api/admin/classrooms",
                 json={"name": "临床一班", "member_user_ids": []},
@@ -274,19 +331,53 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
                 json={"name": "临床一班", "member_user_ids": []},
             ),
             client.delete("/api/admin/classrooms/missing-classroom"),
+            client.post(
+                "/api/admin/classrooms/missing-classroom/members/transfer",
+                json={"target_classroom_id": "target", "member_user_ids": ["member"]},
+            ),
             client.get("/api/admin/evaluations"),
             client.get("/api/admin/evaluations/missing_batch"),
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             client.get("/api/cases/appendicitis_001/raw"),
             client.get("/api/admin/cases/appendicitis_001/raw"),
             client.patch("/api/admin/cases/appendicitis_001/raw", json={"case_title": "演示病例"}),
+            client.get("/api/admin/cases/appendicitis_001/assets"),
+            client.put(
+                "/api/admin/cases/appendicitis_001/assets",
+                json={"case": {}, "rubric": {}, "change_note": "测试"},
+            ),
+            client.post(
+                "/api/admin/cases/appendicitis_001/review",
+                json={"review_status": "approved", "medical_review_note": "测试"},
+            ),
+            client.get("/api/admin/cases/appendicitis_001/versions"),
+            client.get("/api/admin/cases/appendicitis_001/diff?from_version=1&to_version=2"),
+            client.post("/api/admin/cases/appendicitis_001/rollback", json={"version": 1}),
             client.post("/api/admin/cases/validate", json={"case": {}, "rubric": {}}),
             client.post("/api/admin/cases/import", json={"case": {}, "rubric": {}}),
             client.get("/api/admin/rubrics/appendicitis_001_rubric"),
             client.patch("/api/admin/rubrics/appendicitis_001_rubric/items/ht_onset", json={"description": "追问起病时间"}),
             client.get("/api/admin/sources"),
+            client.post(
+                "/api/admin/sources",
+                json={"source_id": "source_demo", "source_name": "来源", "data_type": "reference"},
+            ),
+            client.put(
+                "/api/admin/sources/source_demo",
+                json={"source_id": "source_demo", "source_name": "来源", "data_type": "reference"},
+            ),
+            client.post(
+                "/api/admin/sources/source_demo/review",
+                json={"last_reviewed_at": "2026-08-04", "review_basis": "测试"},
+            ),
+            client.delete("/api/admin/sources/source_demo"),
+            client.get("/api/admin/sources/source_demo/versions"),
+            client.get("/api/admin/sources/source_demo/diff?from_version=1&to_version=2"),
+            client.post("/api/admin/sources/source_demo/rollback", json={"version": 1}),
             client.get("/api/admin/model-config"),
             client.get("/api/admin/model-api-logs"),
+            client.get("/api/admin/audit-events"),
+            client.get("/api/admin/audit-events/export?format=json"),
             client.get("/api/admin/retrieval-eval"),
             client.get("/api/admin/rag/knowledge"),
             client.post("/api/admin/rag/knowledge", json={}),
@@ -3068,6 +3159,187 @@ def test_admin_can_list_source_registry_entries(tmp_path, monkeypatch) -> None:
         "superseded": 4,
         "unverified": 0,
     }
+
+
+def test_admin_can_create_review_version_rollback_and_deactivate_source(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source_registry_path = tmp_path / "sources.json"
+    source_registry_path.write_text("[]\n", encoding="utf-8")
+    monkeypatch.setattr(main, "SOURCE_REGISTRY_PATH", source_registry_path, raising=False)
+    base_payload = {
+        "source_id": "clinical_guideline_demo_2026",
+        "source_name": "临床指南演示来源",
+        "source_url": "https://example.test/guideline",
+        "license": "CC BY 4.0",
+        "data_type": "clinical_guideline",
+        "allowed_usage": ["training_reference"],
+        "transformation": "人工结构化摘录",
+        "attribution_required": True,
+        "risk_note": "仅用于教学演示",
+        "source_version": "v1",
+        "last_reviewed_at": "2026-08-04",
+        "review_interval_days": 365,
+        "source_status": "active",
+        "superseded_by": "",
+        "review_basis": "核对原始指南页面",
+        "search_aliases": ["演示指南"],
+        "change_note": "创建演示来源",
+        "medical_review_note": "初次登记",
+    }
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        create_response = client.post("/api/admin/sources", json=base_payload)
+        assert create_response.status_code == 201
+        assert create_response.json()["version"]["version"] == 1
+
+        updated_payload = {
+            **base_payload,
+            "source_name": "临床指南演示来源（修订）",
+            "source_version": "v2",
+            "change_note": "更新来源版本",
+        }
+        update_response = client.put(
+            "/api/admin/sources/clinical_guideline_demo_2026",
+            json=updated_payload,
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["version"]["version"] == 2
+
+        review_response = client.post(
+            "/api/admin/sources/clinical_guideline_demo_2026/review",
+            json={
+                "last_reviewed_at": "2026-08-04",
+                "review_interval_days": 730,
+                "review_basis": "医学教师复核来源正文与许可",
+                "source_status": "active",
+                "superseded_by": "",
+                "medical_review_note": "可继续用于教学知识库",
+            },
+        )
+        assert review_response.status_code == 200
+        assert review_response.json()["version"]["version"] == 3
+
+        versions_response = client.get(
+            "/api/admin/sources/clinical_guideline_demo_2026/versions"
+        )
+        assert versions_response.status_code == 200
+        assert [item["version"] for item in versions_response.json()["versions"]] == [3, 2, 1]
+
+        diff_response = client.get(
+            "/api/admin/sources/clinical_guideline_demo_2026/diff?from_version=1&to_version=2"
+        )
+        assert diff_response.status_code == 200
+        assert {change["path"] for change in diff_response.json()["changes"]} >= {
+            "$.source_name",
+            "$.source_version",
+        }
+
+        rollback_response = client.post(
+            "/api/admin/sources/clinical_guideline_demo_2026/rollback",
+            json={"version": 1, "change_note": "恢复初始来源"},
+        )
+        assert rollback_response.status_code == 200
+        assert rollback_response.json()["source"]["source_name"] == "临床指南演示来源"
+        assert rollback_response.json()["version"]["version"] == 4
+
+        deactivate_response = client.delete(
+            "/api/admin/sources/clinical_guideline_demo_2026"
+        )
+        assert deactivate_response.status_code == 200
+        assert deactivate_response.json()["source"]["source_status"] == "inactive"
+        assert deactivate_response.json()["source"]["selectable_for_new_knowledge"] is False
+
+        audit_actions = {
+            event["action"]
+            for event in client.get("/api/admin/audit-events?limit=100").json()["events"]
+        }
+        assert audit_actions >= {
+            "source.created",
+            "source.updated",
+            "source.reviewed",
+            "source.rolled_back",
+            "source.deactivated",
+        }
+
+
+def test_admin_can_replace_review_diff_and_rollback_complete_case_assets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cases_dir, rubrics_dir = configure_case_import_directories(tmp_path, monkeypatch)
+    case_payload, rubric_payload = load_case_and_rubric_payload()
+    case_path = cases_dir / "appendicitis_001.json"
+    rubric_path = rubrics_dir / "appendicitis_001_rubric.yaml"
+    case_path.write_text(json.dumps(case_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rubric_path.write_text(yaml.safe_dump(rubric_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        initial_response = client.get("/api/admin/cases/appendicitis_001/assets")
+        assert initial_response.status_code == 200
+        assert initial_response.json()["current_version"]["version"] == 1
+
+        edited_case = deepcopy(case_payload)
+        edited_case["history"]["hidden_facts"][0]["canonical_answer"] = "昨晚九点左右开始疼。"
+        edited_rubric = deepcopy(rubric_payload)
+        edited_rubric["dimensions"][0]["weight"] = 19
+        edited_rubric["dimensions"][0]["items"][0]["max_score"] += 1
+        edited_rubric["dimensions"][1]["weight"] = 9
+        edited_rubric["dimensions"][1]["items"][-1]["max_score"] -= 1
+        replace_response = client.put(
+            "/api/admin/cases/appendicitis_001/assets",
+            json={
+                "case": edited_case,
+                "rubric": edited_rubric,
+                "change_note": "修订起病时间表达并调整维度权重",
+                "review_status": "unreviewed",
+                "medical_review_note": "等待教师复核",
+            },
+        )
+        assert replace_response.status_code == 200, replace_response.text
+        assert replace_response.json()["current_version"]["version"] == 2
+        assert json.loads(case_path.read_text(encoding="utf-8"))["history"]["hidden_facts"][0]["canonical_answer"] == "昨晚九点左右开始疼。"
+
+        diff_response = client.get(
+            "/api/admin/cases/appendicitis_001/diff?from_version=1&to_version=2"
+        )
+        assert diff_response.status_code == 200
+        changed_paths = {change["path"] for change in diff_response.json()["changes"]}
+        assert "$.case.history.hidden_facts[0].canonical_answer" in changed_paths
+        assert "$.rubric.dimensions[0].weight" in changed_paths
+
+        review_response = client.post(
+            "/api/admin/cases/appendicitis_001/review",
+            json={
+                "review_status": "approved",
+                "medical_review_note": "医学教师核对病例事实与评分权重后通过",
+            },
+        )
+        assert review_response.status_code == 200
+        assert review_response.json()["current_version"]["version"] == 3
+        assert review_response.json()["current_version"]["review_status"] == "approved"
+
+        rollback_response = client.post(
+            "/api/admin/cases/appendicitis_001/rollback",
+            json={"version": 1, "change_note": "恢复答辩基线"},
+        )
+        assert rollback_response.status_code == 200
+        assert rollback_response.json()["current_version"]["version"] == 4
+        restored_case = json.loads(case_path.read_text(encoding="utf-8"))
+        assert restored_case["history"]["hidden_facts"][0]["canonical_answer"] == case_payload["history"]["hidden_facts"][0]["canonical_answer"]
+
+        versions = client.get("/api/admin/cases/appendicitis_001/versions").json()["versions"]
+        assert [item["version"] for item in versions] == [4, 3, 2, 1]
+        audit_actions = {
+            event["action"]
+            for event in client.get("/api/admin/audit-events?limit=100").json()["events"]
+        }
+        assert audit_actions >= {
+            "case.assets_updated",
+            "case.approved",
+            "case.rolled_back",
+        }
 
 
 def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> None:
