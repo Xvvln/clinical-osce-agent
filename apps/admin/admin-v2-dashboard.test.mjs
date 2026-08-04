@@ -195,6 +195,13 @@ test("admin v2 explains evaluation, skill details, knowledge content, and API fa
     "历史模拟审计",
     "全局审核审计",
     "动态教学重点",
+    "教师智能体介入轨迹",
+    "保持静默",
+    "观察等待",
+    "发出提示",
+    "边界阻断",
+    "本轮未调用 Skill",
+    "资料来源",
     "来源台账与时效复核",
     "复核有效",
     "到期待复核",
@@ -218,6 +225,8 @@ test("admin v2 keeps details in modal surfaces and normalizes unstable backend a
   assert.match(dashboardSource, /ProcedureAuditList/);
   assert.match(dashboardSource, /TeachingFocusList/);
   assert.match(dashboardSource, /AuditEventList/);
+  assert.match(dashboardSource, /function getTeacherInterventionEvent/);
+  assert.match(dashboardSource, /teacher_intervention_decision/);
   assert.match(dashboardSource, /RetrievalEvalPanel/);
   assert.match(dashboardSource, /SourceLedger/);
   assert.match(dashboardSource, /getSelectableSources/);

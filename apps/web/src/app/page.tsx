@@ -302,6 +302,12 @@ type CollectedProcedureResults = Readonly<{
   auxiliary_tests: readonly CollectedAuxiliaryTestResult[];
 }>;
 
+type TeacherInterventionProjection = Readonly<{
+  mode: "silent" | "observe" | "hint" | "block" | string;
+  trigger_kind: string;
+  message: string;
+}>;
+
 type OsceSession = Readonly<{
   payload_schema_version: "student_session.v2";
   session_id: string;
@@ -330,6 +336,7 @@ type OsceSession = Readonly<{
   safety_flags: readonly string[];
   agent_turn_memory: readonly AgentTurnMemoryItem[];
   pedagogy_state: PedagogyState;
+  teacher_intervention?: TeacherInterventionProjection;
   reply?: string;
   current_intents?: readonly string[];
 }>;
@@ -988,6 +995,14 @@ function formatStage(stage: string | undefined): string {
 
 function formatIntentList(currentIntents: readonly string[] | undefined): string {
   return currentIntents && currentIntents.length > 0 ? currentIntents.join("、") : "未识别意图";
+}
+
+function formatTeacherInterventionStatus(session: OsceSession): string {
+  const intervention = session.teacher_intervention;
+  if (!intervention?.message || !["hint", "block"].includes(intervention.mode)) {
+    return "";
+  }
+  return ` 教师智能体：${intervention.message}`;
 }
 
 function getCoachMessageLabel(content: string): "安全边界" | "答题边界" | "问诊引导" | "过程提示" {
@@ -4204,7 +4219,7 @@ function HomeContent() {
         setPendingPatientMessage((currentMessage) => currentMessage?.id === pendingPatientReplyId ? null : currentMessage);
         setSession(updatedSession);
         setOptimisticHistoryMessage((currentMessage) => currentMessage?.id === optimisticQuestionId ? null : currentMessage);
-        setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
+        setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}${formatTeacherInterventionStatus(updatedSession)}`);
         return;
       }
       const patientReplyMessageIndex = replyMessageMetadata.apiMessageIndex;
@@ -4243,7 +4258,7 @@ function HomeContent() {
       if (requestContextEpoch !== trainingContextEpochRef.current) {
         return;
       }
-      setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}`);
+      setStatusText(`已收到${replyStatusLabel}：${formatIntentList(updatedSession.current_intents)}${formatTeacherInterventionStatus(updatedSession)}`);
       if (patientReplyModeRef.current === "voice") {
         void playPatientSpeech(patientReplySpeechMessage, {
           automatic: true,
@@ -4330,7 +4345,7 @@ function HomeContent() {
       const sequenceReminder = shouldShowPhysicalExamSequenceReminder
         ? " OSCE 通常建议先完成核心病史采集，再进入查体。"
         : "";
-      setStatusText(`已返回查体结果：${updatedSession.exam_name_cn}${sequenceReminder}`);
+      setStatusText(`已返回查体结果：${updatedSession.exam_name_cn}${sequenceReminder}${formatTeacherInterventionStatus(updatedSession)}`);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "请求查体失败。");
       setStatusText("查体请求失败，请确认后端仍在运行。");
@@ -4395,7 +4410,7 @@ function HomeContent() {
         ? " OSCE 通常建议先完成核心病史采集，再进入查体。"
         : "";
       const unavailableReminder = unavailableCount > 0 ? ` 其中 ${unavailableCount} 项当前病例未配置结果。` : "";
-      setStatusText(`已批量返回 ${updatedSession.exam_results.length} 项查体结果。${unavailableReminder}${sequenceReminder}`);
+      setStatusText(`已批量返回 ${updatedSession.exam_results.length} 项查体结果。${unavailableReminder}${sequenceReminder}${formatTeacherInterventionStatus(updatedSession)}`);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "请求查体失败。");
       setStatusText("查体请求失败，请查看错误详情。");
@@ -4438,7 +4453,7 @@ function HomeContent() {
       const sequenceReminder = shouldShowAuxiliaryTestSequenceReminder
         ? " 现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。"
         : "";
-      setStatusText(`已返回辅助检查结果：${updatedSession.test_name_cn}${sequenceReminder}`);
+      setStatusText(`已返回辅助检查结果：${updatedSession.test_name_cn}${sequenceReminder}${formatTeacherInterventionStatus(updatedSession)}`);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "申请辅助检查失败。");
       setStatusText("辅助检查申请失败，请确认后端仍在运行。");
@@ -4487,7 +4502,7 @@ function HomeContent() {
         ? " 现实 OSCE 中通常应先基于病史和查体形成初步判断，再选择辅助检查。"
         : "";
       const unavailableReminder = unavailableCount > 0 ? ` 其中 ${unavailableCount} 项当前病例未配置结果。` : "";
-      setStatusText(`已批量返回 ${updatedSession.test_results.length} 项辅助检查结果。${unavailableReminder}${sequenceReminder}`);
+      setStatusText(`已批量返回 ${updatedSession.test_results.length} 项辅助检查结果。${unavailableReminder}${sequenceReminder}${formatTeacherInterventionStatus(updatedSession)}`);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "申请辅助检查失败。");
       setStatusText("辅助检查申请失败，请查看错误详情。");
@@ -4556,7 +4571,7 @@ function HomeContent() {
       const unmatchedText = updatedSession.standardized_request.unmatched_requests.length > 0
         ? ` 未识别项目：${updatedSession.standardized_request.unmatched_requests.join("、")}。`
         : "";
-      setStatusText(`已解析申请并返回 ${updatedSession.matched_procedure_results.length} 项结果。${simulatedText}${unmatchedText}`);
+      setStatusText(`已解析申请并返回 ${updatedSession.matched_procedure_results.length} 项结果。${simulatedText}${unmatchedText}${formatTeacherInterventionStatus(updatedSession)}`);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "提交申请失败。");
       setStatusText("申请处理失败，请查看错误详情。");

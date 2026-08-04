@@ -188,6 +188,20 @@ type TrainingEventRecord = Readonly<{
   created_at?: string;
 }>;
 
+type TeacherInterventionEvent = Readonly<{
+  mode: string;
+  actionType: string;
+  triggerKind: string;
+  reasonCode: string;
+  reason: string;
+  hint: string;
+  hintEmitted: boolean;
+  selectedSkillIds: readonly string[];
+  sourceReferences: readonly string[];
+  processingStatus: string;
+  createdAt: string;
+}>;
+
 type TrainingSkillAutoApprovalSettings = Readonly<{
   auto_apply_enabled: boolean;
   approval_agent_id?: string;
@@ -3206,6 +3220,9 @@ function TrainingSection({
     ? selectedSession.stage === "feedback" || data.reports.some((report) => report.session_id === selectedSession.session_id)
     : false;
   const humanisticReportStats = selectedReport ? getHumanisticReportStats(selectedReport) : null;
+  const teacherInterventionEvents = selectedEvents
+    .map((event) => getTeacherInterventionEvent(event))
+    .filter((event): event is TeacherInterventionEvent => event !== null);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
@@ -3274,6 +3291,44 @@ function TrainingSection({
                     </div>
                   ) : null}
                   <CompactList items={(selectedReport.missed_item_labels ?? selectedReport.missed_items ?? []).slice(0, 5)} title="主要未覆盖项" />
+                </div>
+              ) : null}
+              {selectedEvents.length > 0 ? (
+                <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold">教师智能体介入轨迹</h4>
+                      <p className="mt-1 text-xs leading-5 text-[#6F6257]">展示何时静默、观察、提示或阻断，以及本轮实际调用的 Skill 和资料来源。</p>
+                    </div>
+                    <Badge variant="muted">{formatCount(teacherInterventionEvents.length)} 条决策</Badge>
+                  </div>
+                  {teacherInterventionEvents.length > 0 ? (
+                    <div className="mt-3 grid gap-2">
+                      {teacherInterventionEvents.slice(0, 10).map((decision, index) => (
+                        <article className="rounded-xl border border-[#E7E0D4] bg-[#FAF9F5] p-3" key={`${decision.createdAt}-${decision.actionType}-${index}`}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant={getTeacherInterventionBadgeVariant(decision.mode)}>{getTeacherInterventionModeLabel(decision.mode)}</Badge>
+                              <span className="text-sm font-semibold">{getTeacherActionTypeLabel(decision.actionType)}</span>
+                              <span className="text-xs text-[#8A7D6F]">{getProcessingStatusLabel(decision.processingStatus)}</span>
+                            </div>
+                            <span className="text-xs text-[#8A7D6F]">{formatDateTime(decision.createdAt)}</span>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-[#3F372F]">{decision.reason || "本轮已完成介入判断。"}</p>
+                          {decision.hintEmitted && decision.hint ? (
+                            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">可见提示：{decision.hint}</p>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6F6257]">
+                            {decision.selectedSkillIds.length > 0 ? <span>调用 Skill：{decision.selectedSkillIds.join("、")}</span> : <span>本轮未调用 Skill</span>}
+                            <span>资料来源：{formatCount(decision.sourceReferences.length)} 条</span>
+                            {decision.reasonCode ? <span>原因编码：{decision.reasonCode}</span> : null}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyText>日志中暂无教师智能体介入决策。</EmptyText>
+                  )}
                 </div>
               ) : null}
               {selectedEvents.length > 0 ? (
@@ -5847,6 +5902,7 @@ function getCallerLabel(log: ApiCallLog): string {
 
 function getEventTypeLabel(eventType: string): string {
   const labels: Record<string, string> = {
+    agent_decision_traced: "教师决策留痕",
     case_intro: "病例导入",
     diagnosis_submitted: "提交诊断",
     report_generated: "报告生成",
@@ -5856,6 +5912,76 @@ function getEventTypeLabel(eventType: string): string {
     training_skill_applied: "Skill 已应用",
   };
   return labels[eventType] ?? (eventType || "未记录");
+}
+
+function getTeacherInterventionEvent(event: TrainingEventRecord): TeacherInterventionEvent | null {
+  const decision = getRecordField(event.payload, "teacher_intervention_decision");
+  if (!decision) {
+    return null;
+  }
+  const mode = getStringField(decision, "mode", "");
+  if (!mode) {
+    return null;
+  }
+  return {
+    mode,
+    actionType: getStringField(decision, "action_type", "student_action"),
+    triggerKind: getStringField(decision, "trigger_kind", ""),
+    reasonCode: getStringField(decision, "reason_code", ""),
+    reason: getStringField(decision, "reason", ""),
+    hint: getStringField(decision, "hint", ""),
+    hintEmitted: decision.hint_emitted === true,
+    selectedSkillIds: toTextList(decision.selected_skill_ids),
+    sourceReferences: toTextList(decision.source_references),
+    processingStatus: getStringField(decision, "processing_status", "completed"),
+    createdAt: event.created_at ?? getStringField(decision, "created_at", ""),
+  };
+}
+
+function getTeacherInterventionModeLabel(mode: string): string {
+  const labels: Record<string, string> = {
+    silent: "保持静默",
+    observe: "观察等待",
+    hint: "发出提示",
+    block: "边界阻断",
+  };
+  return labels[mode] ?? (mode || "已判断");
+}
+
+function getTeacherInterventionBadgeVariant(mode: string): "success" | "muted" | "warning" | "danger" {
+  if (mode === "block") {
+    return "danger";
+  }
+  if (mode === "hint") {
+    return "warning";
+  }
+  if (mode === "silent") {
+    return "success";
+  }
+  return "muted";
+}
+
+function getTeacherActionTypeLabel(actionType: string): string {
+  const labels: Record<string, string> = {
+    student_utterance: "问诊交互",
+    physical_exam_requested: "查体申请",
+    auxiliary_test_requested: "辅助检查申请",
+    hypothesis_recorded: "诊断假设",
+    diagnosis_submitted: "诊断提交",
+    hint_requested: "主动求助",
+    answer_request_redirect: "索要答案",
+    safety_boundary: "安全边界",
+  };
+  return labels[actionType] ?? (actionType || "学生操作");
+}
+
+function getProcessingStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    completed: "处理完成",
+    fallback: "降级完成",
+    error: "处理异常",
+  };
+  return labels[status] ?? (status || "已记录");
 }
 
 function canReviewCandidate(candidate: TrainingSkillCandidateDetail): boolean {

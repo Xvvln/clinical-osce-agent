@@ -367,6 +367,18 @@ test("home procedure result modal shows the whole returned batch", () => {
   assert.doesNotMatch(pageSource, /setSelectedProcedureResult\(nextProcedureResults\[0\] \?\? null\);/);
 });
 
+test("home surfaces student-safe teacher intervention messages after real actions", () => {
+  assert.match(pageSource, /type TeacherInterventionProjection = Readonly<\{/);
+  assert.match(pageSource, /teacher_intervention\?: TeacherInterventionProjection;/);
+  assert.match(pageSource, /function formatTeacherInterventionStatus\(session: OsceSession\): string/);
+  assert.match(pageSource, /\["hint", "block"\]\.includes\(intervention\.mode\)/);
+  assert.match(pageSource, /教师智能体：\$\{intervention\.message\}/);
+  assert.ok(
+    pageSource.match(/formatTeacherInterventionStatus\(updatedSession\)/g)?.length >= 7,
+    "message and procedure outcomes should surface the safe teacher intervention projection",
+  );
+});
+
 test("home message failure status is not limited to backend downtime", () => {
   assert.match(pageSource, /setStatusText\("问诊未保存，请查看错误详情后重试。"\);/);
   assert.match(pageSource, /setStatusText\("本轮问诊结果暂时无法确认，当前问题已保留为待确认记录。"\);/);
@@ -1910,7 +1922,7 @@ test("home inquiry submit shows optimistic student message and neutral streaming
   assert.match(pageSource, /const completedTimeline = buildCompletedAgentProcessingTimeline\(updatedSession, replyText\);/);
   assert.match(pageSource, /processingTimeline: \{[\s\S]*?\.\.\.completedTimeline,[\s\S]*?elapsedMs: Math\.max\(completedTimeline\.elapsedMs \?\? 0, patientReplyProcessingElapsedMs\),[\s\S]*?\}/);
   assert.match(pageSource, /await animatePendingPatientReply\(pendingPatientReplyId, updatedSession\.reply \?\? ""\);/);
-  assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{formatIntentList\(updatedSession\.current_intents\)\}`\);/);
+  assert.match(pageSource, /setStatusText\(`已收到\$\{replyStatusLabel\}：\$\{formatIntentList\(updatedSession\.current_intents\)\}\$\{formatTeacherInterventionStatus\(updatedSession\)\}`\);/);
   assert.doesNotMatch(pageSource, /updatedSession\.current_intent(?!s)/);
   assert.ok(pageSource.indexOf("setOptimisticHistoryMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
   assert.ok(pageSource.indexOf("setPendingPatientMessage({") < pageSource.indexOf("sendHistoryMessage(activeSession.session_id, message)"));
