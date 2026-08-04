@@ -7,10 +7,19 @@ const STUDENT_PASSWORD = process.env.E2E_STUDENT_PASSWORD ?? "traceosce-e2e-stud
 const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "admin@e2e.test";
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "traceosce-e2e-admin-only";
 const CASE_ID = "appendicitis_001";
+const CONSENT_INTERVENTION_HINT = "进行查体前，请先向患者说明目的和可能的不适，并征得同意。";
 
 type TrainingActionResponse = Readonly<{
   session_id: string;
   reply?: string;
+}>;
+
+type ProcedureActionResponse = Readonly<{
+  teacher_intervention?: Readonly<{
+    mode: string;
+    trigger_kind: string;
+    message: string;
+  }>;
 }>;
 
 type LearningProfileResponse = Readonly<{
@@ -78,12 +87,19 @@ async function requestPhysicalExam(page: Page, sessionId: string): Promise<void>
     isSuccessfulApiResponse(response, new RegExp(`^/api/sessions/${sessionId}/physical-exam$`)),
   );
   await page.getByRole("button", { name: "McBurney 点压痛", exact: true }).click();
-  await responsePromise;
+  const payload = await (await responsePromise).json() as ProcedureActionResponse;
+
+  expect(payload.teacher_intervention).toEqual({
+    mode: "hint",
+    trigger_kind: "humanistic_issue_triggered",
+    message: CONSENT_INTERVENTION_HINT,
+  });
 
   await expect(page.getByRole("heading", { name: "查体：McBurney 点压痛", exact: true })).toBeVisible();
   const closeResultButton = page.getByRole("button", { name: "关闭查体检查结果" });
   await expect(closeResultButton).toBeVisible();
   await closeResultButton.click();
+  await expect(page.getByText(CONSENT_INTERVENTION_HINT, { exact: true })).toBeVisible();
 }
 
 async function requestBloodCount(page: Page, sessionId: string): Promise<void> {
@@ -142,6 +158,20 @@ async function loginAdminAndVerifySession(page: Page, sessionId: string): Promis
   await expect(page.getByRole("button", { name: "读取报告", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "读取报告", exact: true }).click();
   await expect(page.getByText("评分报告", { exact: true }).last()).toBeVisible();
+
+  const eventsResponse = page.waitForResponse((response) =>
+    isSuccessfulApiResponse(
+      response,
+      new RegExp(`^/api/admin/sessions/${sessionId}/events$`),
+      "GET",
+    ),
+  );
+  await page.getByRole("button", { name: "读取日志", exact: true }).click();
+  await eventsResponse;
+  await expect(page.getByRole("heading", { name: "教师智能体介入轨迹", exact: true })).toBeVisible();
+  await expect(page.getByText("发出提示", { exact: true })).toBeVisible();
+  await expect(page.getByText("查体申请", { exact: true })).toBeVisible();
+  await expect(page.getByText(`可见提示：${CONSENT_INTERVENTION_HINT}`, { exact: true })).toBeVisible();
 }
 
 async function verifyLearningProfile(page: Page, sessionId: string): Promise<void> {
@@ -181,7 +211,7 @@ test("学生完整训练可追踪到记录和管理端，且双端登录互不�
   await studentPage.goto(`${STUDENT_BASE_URL}/history`);
   await expect(studentPage.getByRole("heading", { name: "训练记录", exact: true })).toBeVisible();
   await expect(studentPage.getByText(sessionId, { exact: true })).toBeVisible();
-  await expect(studentPage.getByText("报告已生成", { exact: true })).toBeVisible();
+  await expect(studentPage.getByText("报告已生成", { exact: true }).first()).toBeVisible();
 
   await loginAdminAndVerifySession(adminPage, sessionId);
 
