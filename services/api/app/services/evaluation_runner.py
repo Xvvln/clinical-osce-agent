@@ -26,6 +26,16 @@ class EvaluationCase:
 
 
 @dataclass(frozen=True)
+class EvaluationThresholds:
+    maximum_score_delta: int = 0
+    minimum_batch_pass_rate: float = 1.0
+    minimum_rag_explanation_coverage_ratio: float = 1.0
+    minimum_rag_evidence_coverage_ratio: float = 1.0
+    require_rag_source_coverage: bool = True
+    maximum_case_duration_ms: int = 0
+
+
+@dataclass(frozen=True)
 class EvaluationResult:
     session_id: str
     actual_total_score: int
@@ -67,21 +77,35 @@ def load_evaluation_cases(file_path: Path) -> list[EvaluationCase]:
     return [_evaluation_case_from_payload(item) for item in payload]
 
 
-def run_evaluation_cases(evaluation_cases: list[EvaluationCase], service: OsceSessionService) -> EvaluationBatchResult:
-    results = [run_evaluation_case(evaluation_case, service) for evaluation_case in evaluation_cases]
+def run_evaluation_cases(
+    evaluation_cases: list[EvaluationCase],
+    service: OsceSessionService,
+    thresholds: EvaluationThresholds | None = None,
+) -> EvaluationBatchResult:
+    effective_thresholds = thresholds or EvaluationThresholds()
+    results = [
+        run_evaluation_case(evaluation_case, service, effective_thresholds)
+        for evaluation_case in evaluation_cases
+    ]
     passed_cases = sum(1 for result in results if result.passed)
     total_cases = len(results)
+    pass_rate = passed_cases / total_cases if total_cases else 0.0
     return EvaluationBatchResult(
         total_cases=total_cases,
         passed_cases=passed_cases,
         failed_cases=total_cases - passed_cases,
         results=results,
-        passed=passed_cases == total_cases,
+        passed=total_cases > 0 and pass_rate >= effective_thresholds.minimum_batch_pass_rate,
         total_duration_ms=sum(result.duration_ms for result in results),
     )
 
 
-def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionService) -> EvaluationResult:
+def run_evaluation_case(
+    evaluation_case: EvaluationCase,
+    service: OsceSessionService,
+    thresholds: EvaluationThresholds | None = None,
+) -> EvaluationResult:
+    effective_thresholds = thresholds or EvaluationThresholds()
     started_at = time.perf_counter()
     session = service.create_session(case_id=evaluation_case.case_id, student_id=evaluation_case.student_id)
     session_id = session["session_id"]
@@ -119,15 +143,24 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
     rag_agent_grounding_passed = not missing_agent_knowledge_references
     evaluation_text = f"{report} {evaluation_case.steps}"
     forbidden_term_violations = [term for term in evaluation_case.forbidden_terms if term in evaluation_text]
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    duration_passed = (
+        effective_thresholds.maximum_case_duration_ms <= 0
+        or duration_ms <= effective_thresholds.maximum_case_duration_ms
+    )
     passed = (
-        actual_total_score == evaluation_case.expected_total_score
+        abs(actual_total_score - evaluation_case.expected_total_score)
+        <= effective_thresholds.maximum_score_delta
         and not forbidden_term_violations
-        and rag_source_coverage_passed
-        and rag_explanation_coverage_passed
-        and rag_evidence_coverage_passed
+        and (rag_source_coverage_passed or not effective_thresholds.require_rag_source_coverage)
+        and rag_explanation_coverage_ratio
+        >= effective_thresholds.minimum_rag_explanation_coverage_ratio
+        and rag_evidence_coverage_ratio
+        >= effective_thresholds.minimum_rag_evidence_coverage_ratio
         and rag_knowledge_safety_passed
         and rag_score_isolation_passed
         and rag_agent_grounding_passed
+        and duration_passed
     )
     return EvaluationResult(
         session_id=session_id,
@@ -152,7 +185,7 @@ def run_evaluation_case(evaluation_case: EvaluationCase, service: OsceSessionSer
         rag_agent_grounding_passed=rag_agent_grounding_passed,
         missing_agent_knowledge_references=missing_agent_knowledge_references,
         passed=passed,
-        duration_ms=int((time.perf_counter() - started_at) * 1000),
+        duration_ms=duration_ms,
     )
 
 

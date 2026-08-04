@@ -17,9 +17,15 @@ class EvaluationResultStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
 
-    def save_batch_result(self, batch_id: str, batch_result: EvaluationBatchResult) -> None:
+    def save_batch_result(
+        self,
+        batch_id: str,
+        batch_result: EvaluationBatchResult,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         self._initialize()
-        payload = _serialize_batch_result(batch_id, batch_result)
+        payload = _serialize_batch_result(batch_id, batch_result, metadata=metadata)
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
                 """
@@ -47,8 +53,9 @@ class EvaluationResultStore:
             rows = connection.execute(
                 "SELECT result_json FROM evaluation_results ORDER BY id",
             ).fetchall()
-        return [
-            {
+        summaries: list[dict[str, Any]] = []
+        for result in (json.loads(row[0]) for row in rows):
+            summary = {
                 "batch_id": result["batch_id"],
                 "batch_label": batch_label(str(result["batch_id"])),
                 "total_cases": result["total_cases"],
@@ -56,8 +63,11 @@ class EvaluationResultStore:
                 "failed_cases": result["failed_cases"],
                 "passed": result["passed"],
             }
-            for result in (json.loads(row[0]) for row in rows)
-        ]
+            for field_name in ("suite_id", "suite_label", "triggered_by", "created_at"):
+                if result.get(field_name):
+                    summary[field_name] = result[field_name]
+            summaries.append(summary)
+        return summaries
 
     def _initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,8 +83,13 @@ class EvaluationResultStore:
             )
 
 
-def _serialize_batch_result(batch_id: str, batch_result: EvaluationBatchResult) -> dict[str, Any]:
-    return {"batch_id": batch_id, **asdict(batch_result)}
+def _serialize_batch_result(
+    batch_id: str,
+    batch_result: EvaluationBatchResult,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {"batch_id": batch_id, **asdict(batch_result), **(metadata or {})}
 
 
 def _normalize_batch_result(batch_result: dict[str, Any]) -> dict[str, Any]:

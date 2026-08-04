@@ -4,6 +4,7 @@ from app.graph.osce_graph import build_osce_graph
 from app.services.evaluation_runner import (
     EvaluationCase,
     EvaluationStep,
+    EvaluationThresholds,
     load_evaluation_cases,
     run_evaluation_case,
     run_evaluation_cases,
@@ -814,6 +815,30 @@ def test_run_evaluation_case_passes_when_agent_knowledge_reference_is_grounded()
     assert result.passed is True
     assert result.rag_agent_grounding_passed is True
     assert result.missing_agent_knowledge_references == []
+
+
+def test_run_evaluation_case_applies_configured_score_tolerance() -> None:
+    evaluation_case = EvaluationCase(
+        case_id="appendicitis_001",
+        student_id="eval_student",
+        steps=[EvaluationStep(kind="submit_diagnosis", value="急性阑尾炎", reasoning="转移性右下腹痛支持诊断。")],
+        expected_total_score=30,
+        forbidden_terms=[],
+    )
+
+    strict_result = run_evaluation_case(
+        evaluation_case,
+        ReportWithGroundedAgentKnowledgeReferenceService(),
+    )
+    tolerant_result = run_evaluation_case(
+        evaluation_case,
+        ReportWithGroundedAgentKnowledgeReferenceService(),
+        EvaluationThresholds(maximum_score_delta=2),
+    )
+
+    assert strict_result.actual_total_score == 32
+    assert strict_result.passed is False
+    assert tolerant_result.passed is True
 
 
 def test_run_evaluation_case_fails_when_session_agent_turn_reference_is_not_grounded() -> None:

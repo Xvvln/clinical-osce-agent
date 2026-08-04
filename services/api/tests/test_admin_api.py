@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 import base64
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from app.services import gemini_patient_responder as gemini_patient_responder_mo
 from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.admin_audit_store import AdminAuditStore
 from app.services.admin_asset_version_store import AdminAssetVersionStore
+from app.services.admin_evaluation_config_store import AdminEvaluationConfigStore
 from app.services.auth_store import AuthStore
 from app.services.api_call_log_service import ApiCallLogStore
 from app.services.classroom_store import ClassroomStore
@@ -61,6 +63,12 @@ def isolate_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None
         main,
         "admin_asset_version_store",
         AdminAssetVersionStore(tmp_path / "admin_asset_versions.sqlite3"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "admin_evaluation_config_store",
+        AdminEvaluationConfigStore(tmp_path / "admin_evaluation_config.sqlite3"),
         raising=False,
     )
 
@@ -229,6 +237,13 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             ),
             unauthenticated_client.get("/api/admin/evaluations"),
             unauthenticated_client.get("/api/admin/evaluations/missing_batch"),
+            unauthenticated_client.get("/api/admin/evaluation-config"),
+            unauthenticated_client.delete("/api/admin/evaluation-cases/custom_case"),
+            unauthenticated_client.delete("/api/admin/evaluation-suites/custom_suite"),
+            unauthenticated_client.patch(
+                "/api/admin/evaluation-schedule",
+                json={"enabled": False, "suite_id": "default_regression", "interval_minutes": 60},
+            ),
             unauthenticated_client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             unauthenticated_client.get("/api/cases/appendicitis_001/raw"),
             unauthenticated_client.get("/api/admin/cases/appendicitis_001/raw"),
@@ -340,6 +355,13 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             ),
             client.get("/api/admin/evaluations"),
             client.get("/api/admin/evaluations/missing_batch"),
+            client.get("/api/admin/evaluation-config"),
+            client.delete("/api/admin/evaluation-cases/custom_case"),
+            client.delete("/api/admin/evaluation-suites/custom_suite"),
+            client.patch(
+                "/api/admin/evaluation-schedule",
+                json={"enabled": False, "suite_id": "default_regression", "interval_minutes": 60},
+            ),
             client.post("/api/admin/evals/run", json={"batch_id": "batch_manual"}),
             client.get("/api/cases/appendicitis_001/raw"),
             client.get("/api/admin/cases/appendicitis_001/raw"),
@@ -997,6 +1019,7 @@ def test_admin_can_toggle_training_skill_auto_approval_settings(tmp_path, monkey
     assert updated_settings["updated_by"] == "admin@osce.test"
     assert isinstance(updated_settings["updated_at"], str)
     assert persisted_response.json()["settings"] == updated_settings
+    assert main.admin_audit_store.list_events()["events"][0]["action"] == "skill.auto_apply_enabled"
 
 
 def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding(tmp_path, monkeypatch) -> None:
@@ -3452,6 +3475,160 @@ def test_admin_can_list_evaluation_batch_summaries(tmp_path, monkeypatch) -> Non
     }
 
 
+def test_admin_can_manage_evaluation_cases_suites_thresholds_and_schedule(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        initial_config = client.get("/api/admin/evaluation-config")
+        assert initial_config.status_code == 200
+        assert [item["suite_id"] for item in initial_config.json()["suites"]] == [
+            "default_regression"
+        ]
+
+        case_response = client.put(
+            "/api/admin/evaluation-cases/pneumonia_communication",
+            json={
+                "case_key": "pneumonia_communication",
+                "label": "肺炎问诊与诊断链路",
+                "case_id": "pneumonia_001",
+                "steps": [
+                    {"kind": "message", "value": "什么时候开始发热和咳嗽？"},
+                    {
+                        "kind": "submit_diagnosis",
+                        "value": "社区获得性肺炎",
+                        "reasoning": "发热、咳嗽和胸痛支持肺炎。",
+                    },
+                ],
+                "expected_total_score": 18,
+                "forbidden_terms": ["抗生素剂量"],
+                "enabled": True,
+            },
+        )
+        assert case_response.status_code == 200, case_response.text
+
+        suite_response = client.put(
+            "/api/admin/evaluation-suites/respiratory_regression",
+            json={
+                "suite_id": "respiratory_regression",
+                "label": "呼吸系统回归套件",
+                "description": "验证肺炎问诊、诊断和 RAG 证据。",
+                "case_keys": ["pneumonia_communication"],
+                "thresholds": {
+                    "maximum_score_delta": 2,
+                    "minimum_batch_pass_rate": 0.8,
+                    "minimum_rag_explanation_coverage_ratio": 0.9,
+                    "minimum_rag_evidence_coverage_ratio": 0.9,
+                    "require_rag_source_coverage": True,
+                    "maximum_case_duration_ms": 120000,
+                },
+                "enabled": True,
+            },
+        )
+        assert suite_response.status_code == 200, suite_response.text
+        assert suite_response.json()["suite"]["case_keys"] == [
+            "pneumonia_communication"
+        ]
+
+        schedule_response = client.patch(
+            "/api/admin/evaluation-schedule",
+            json={
+                "enabled": True,
+                "suite_id": "respiratory_regression",
+                "interval_minutes": 60,
+            },
+        )
+        assert schedule_response.status_code == 200, schedule_response.text
+        assert schedule_response.json()["schedule"]["status"] == "scheduled"
+        assert schedule_response.json()["schedule"]["next_run_at"]
+
+        referenced_delete = client.delete(
+            "/api/admin/evaluation-cases/pneumonia_communication"
+        )
+        assert referenced_delete.status_code == 409
+
+        config = client.get("/api/admin/evaluation-config").json()
+        assert {item["case_key"] for item in config["evaluation_cases"]} == {
+            "appendicitis_complete_flow",
+            "pneumonia_communication",
+        }
+        assert {item["suite_id"] for item in config["suites"]} == {
+            "default_regression",
+            "respiratory_regression",
+        }
+        audit_actions = {
+            event["action"]
+            for event in client.get("/api/admin/audit-events?limit=100").json()["events"]
+        }
+        assert audit_actions >= {
+            "evaluation_case.created",
+            "evaluation_suite.created",
+            "evaluation_schedule.enabled",
+        }
+
+
+def test_due_evaluation_schedule_runs_persists_and_audits(tmp_path, monkeypatch) -> None:
+    evaluation_config_store = AdminEvaluationConfigStore(
+        tmp_path / "admin_evaluation_config.sqlite3"
+    )
+    evaluation_result_store = EvaluationResultStore(
+        tmp_path / "evaluation_results.sqlite3"
+    )
+    audit_store = AdminAuditStore(tmp_path / "admin_audit.sqlite3")
+    monkeypatch.setattr(
+        main,
+        "admin_evaluation_config_store",
+        evaluation_config_store,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "evaluation_result_store",
+        evaluation_result_store,
+        raising=False,
+    )
+    monkeypatch.setattr(main, "admin_audit_store", audit_store, raising=False)
+    main._ensure_admin_evaluation_config_defaults()
+    schedule = evaluation_config_store.update_schedule(
+        {
+            "enabled": True,
+            "suite_id": "default_regression",
+            "interval_minutes": 5,
+        },
+        updated_by="admin@example.com",
+    )
+
+    fake_result = EvaluationBatchResult(
+        total_cases=1,
+        passed_cases=1,
+        failed_cases=0,
+        results=[],
+        passed=True,
+        total_duration_ms=10,
+    )
+    monkeypatch.setattr(
+        main,
+        "_run_admin_evaluation_suite",
+        lambda suite_id: (
+            fake_result,
+            evaluation_config_store.get_suite(suite_id),
+        ),
+    )
+    due_at = datetime.fromisoformat(schedule["next_run_at"]) + timedelta(seconds=1)
+
+    result = main._run_due_admin_evaluation_schedule(due_at)
+
+    assert result is not None
+    assert result["passed"] is True
+    persisted = evaluation_result_store.get_batch_result(result["batch_id"])
+    assert persisted is not None
+    assert persisted["triggered_by"] == "schedule"
+    completed_schedule = evaluation_config_store.get_schedule()
+    assert completed_schedule["last_batch_id"] == result["batch_id"]
+    assert completed_schedule["status"] == "scheduled"
+    assert audit_store.list_events()["events"][0]["action"] == "evaluation.schedule_completed"
+
+
 def test_admin_can_paginate_and_filter_evaluation_batch_summaries(tmp_path, monkeypatch) -> None:
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
     evaluation_store.save_batch_result(
@@ -3602,7 +3779,7 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
     captured_case_ids: list[str] = []
     captured_service = None
 
-    def fake_run_evaluation_cases(evaluation_cases, service):
+    def fake_run_evaluation_cases(evaluation_cases, service, thresholds=None):
         nonlocal captured_service
         captured_case_ids.extend(evaluation_case.case_id for evaluation_case in evaluation_cases)
         captured_service = service
@@ -3678,8 +3855,18 @@ def test_admin_can_run_evaluation_batch(tmp_path, monkeypatch) -> None:
         "total_duration_ms": 42,
     }
     assert response.status_code == 200
-    assert response.json() == {"evaluation": expected_evaluation}
-    assert evaluation_store.get_batch_result("batch_admin_manual") == expected_evaluation
+    returned_evaluation = response.json()["evaluation"]
+    assert returned_evaluation["suite_id"] == "default_regression"
+    assert returned_evaluation["suite_label"] == "默认核心回归套件"
+    assert returned_evaluation["triggered_by"] == main._get_demo_admin_email()
+    assert returned_evaluation["created_at"]
+    assert returned_evaluation["thresholds"]["minimum_batch_pass_rate"] == 1.0
+    assert {
+        key: value
+        for key, value in returned_evaluation.items()
+        if key not in {"suite_id", "suite_label", "triggered_by", "created_at", "thresholds"}
+    } == expected_evaluation
+    assert evaluation_store.get_batch_result("batch_admin_manual") == returned_evaluation
     assert captured_case_ids == ["appendicitis_001"]
     assert isinstance(captured_service, OsceSessionService)
     assert captured_service is not osce_session_service
@@ -3773,7 +3960,7 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     captured_case_ids: list[str] = []
     captured_service = None
 
-    def fake_run_evaluation_cases(evaluation_cases, service):
+    def fake_run_evaluation_cases(evaluation_cases, service, thresholds=None):
         nonlocal captured_service
         captured_case_ids.extend(evaluation_case.case_id for evaluation_case in evaluation_cases)
         captured_service = service
@@ -3940,7 +4127,7 @@ def test_admin_auto_approval_agent_revises_and_enables_generated_skill(tmp_path,
     settings_store = TrainingSkillAutoApprovalSettingsStore(tmp_path / "training_skill_auto_approval.sqlite3")
     settings_store.update_settings(auto_apply_enabled=True, updated_by="admin@example.test")
 
-    def fake_run_evaluation_cases(evaluation_cases, service):
+    def fake_run_evaluation_cases(evaluation_cases, service, thresholds=None):
         return EvaluationBatchResult(
             total_cases=1,
             passed_cases=1,
@@ -4085,7 +4272,7 @@ def test_admin_generate_training_skill_candidates_does_not_overwrite_reviewed_ca
     )
     assert candidate_store.approve_candidate(reviewed_candidate_id, reviewer_id="teacher_demo") is True
 
-    def fake_run_evaluation_cases(evaluation_cases, service):
+    def fake_run_evaluation_cases(evaluation_cases, service, thresholds=None):
         return EvaluationBatchResult(
             total_cases=1,
             passed_cases=1,
@@ -4937,6 +5124,7 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
     }
     assert enabled_skill["memory_layer"] == "procedural_teaching_skill"
     assert enabled_skill["router_index"]["summary"] == "临床推理链纠偏提示：2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。"
+    assert main.admin_audit_store.list_events()["events"][0]["action"] == "skill.candidate_approved"
     audit_events = event_store.list_session_events("skill_candidate_reasoning_core")
     assert len(audit_events) == 1
     assert audit_events[0]["case_id"] == "reasoning_core"
@@ -5248,6 +5436,7 @@ def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, mo
         "candidate_id": "skill_candidate_reasoning_core",
         "reviewer_email": "admin@osce.test",
     }
+    assert main.admin_audit_store.list_events()["events"][0]["action"] == "skill.candidate_rejected"
 
 
 def test_admin_review_returns_404_for_missing_candidate(tmp_path, monkeypatch) -> None:

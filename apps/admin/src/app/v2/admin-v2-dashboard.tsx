@@ -364,6 +364,65 @@ type EvaluationBatchSummary = Readonly<{
   passed_cases: number;
   failed_cases: number;
   passed: boolean;
+  suite_id?: string;
+  suite_label?: string;
+  triggered_by?: string;
+  created_at?: string;
+}>;
+
+type AdminEvaluationStep = Readonly<{
+  kind: "message" | "physical_exam" | "auxiliary_test" | "submit_diagnosis";
+  value: string;
+  reasoning?: string;
+}>;
+
+type AdminEvaluationCaseConfig = Readonly<{
+  case_key: string;
+  label: string;
+  case_id: string;
+  steps: readonly AdminEvaluationStep[];
+  expected_total_score: number;
+  forbidden_terms: readonly string[];
+  enabled: boolean;
+  is_builtin?: boolean;
+  updated_at?: string;
+}>;
+
+type AdminEvaluationThresholds = Readonly<{
+  maximum_score_delta: number;
+  minimum_batch_pass_rate: number;
+  minimum_rag_explanation_coverage_ratio: number;
+  minimum_rag_evidence_coverage_ratio: number;
+  require_rag_source_coverage: boolean;
+  maximum_case_duration_ms: number;
+}>;
+
+type AdminEvaluationSuiteConfig = Readonly<{
+  suite_id: string;
+  label: string;
+  description: string;
+  case_keys: readonly string[];
+  thresholds: AdminEvaluationThresholds;
+  enabled: boolean;
+  is_builtin?: boolean;
+  updated_at?: string;
+}>;
+
+type AdminEvaluationSchedule = Readonly<{
+  enabled: boolean;
+  suite_id: string;
+  interval_minutes: number;
+  status: string;
+  next_run_at?: string;
+  last_completed_at?: string;
+  last_batch_id?: string;
+  last_error?: string;
+}>;
+
+type AdminEvaluationConfig = Readonly<{
+  evaluation_cases: readonly AdminEvaluationCaseConfig[];
+  suites: readonly AdminEvaluationSuiteConfig[];
+  schedule: AdminEvaluationSchedule;
 }>;
 
 type EvaluationCaseResult = Readonly<{
@@ -1019,6 +1078,7 @@ type DashboardData = Readonly<{
   candidatePagination: Pagination | null;
   evaluations: readonly EvaluationBatchSummary[];
   evaluationPagination: Pagination | null;
+  evaluationConfig: AdminEvaluationConfig | null;
   cases: readonly AdminCaseSummary[];
   sources: readonly AdminSourceSummary[];
   documents: readonly AdminRagDocument[];
@@ -1053,6 +1113,7 @@ const emptyDashboardData: DashboardData = {
   candidatePagination: null,
   evaluations: [],
   evaluationPagination: null,
+  evaluationConfig: null,
   cases: [],
   sources: [],
   documents: [],
@@ -1129,6 +1190,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     reportPayload,
     candidatePayload,
     evaluationPayload,
+    evaluationConfigPayload,
     casesPayload,
     sourcesPayload,
     documentsPayload,
@@ -1150,6 +1212,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ reports: readonly AdminReportSummary[]; pagination?: Pagination }>("/api/admin/reports?limit=20"),
     fetchJson<{ candidates: readonly TrainingSkillCandidateSummary[]; pagination?: Pagination }>("/api/admin/evolution/candidates?limit=20&review_status=all"),
     fetchJson<{ evaluations: readonly EvaluationBatchSummary[]; pagination?: Pagination }>("/api/admin/evaluations?limit=20"),
+    fetchJson<AdminEvaluationConfig>("/api/admin/evaluation-config"),
     fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"),
     fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"),
     fetchJson<{ documents: readonly AdminRagDocument[]; pagination?: Pagination }>("/api/admin/rag/documents?limit=12"),
@@ -1176,6 +1239,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     candidatePagination: candidatePayload.pagination ?? null,
     evaluations: evaluationPayload.evaluations,
     evaluationPagination: evaluationPayload.pagination ?? null,
+    evaluationConfig: evaluationConfigPayload,
     cases: casesPayload.cases,
     sources: sourcesPayload.sources,
     documents: documentsPayload.documents,
@@ -1322,6 +1386,48 @@ async function updateAdminRubricItemDescription(rubricId: string, itemId: string
 async function getEvaluationDetail(batchId: string): Promise<EvaluationBatchDetail> {
   const payload = await fetchJson<{ evaluation: EvaluationBatchDetail }>(`/api/admin/evaluations/${batchId}`);
   return payload.evaluation;
+}
+
+async function getAdminEvaluationConfig(): Promise<AdminEvaluationConfig> {
+  return fetchJson("/api/admin/evaluation-config");
+}
+
+async function saveAdminEvaluationCase(
+  evaluationCase: AdminEvaluationCaseConfig,
+): Promise<AdminEvaluationCaseConfig> {
+  const response = await fetchJson<{ evaluation_case: AdminEvaluationCaseConfig }>(
+    `/api/admin/evaluation-cases/${encodeURIComponent(evaluationCase.case_key)}`,
+    { body: JSON.stringify(evaluationCase), method: "PUT" },
+  );
+  return response.evaluation_case;
+}
+
+async function deleteAdminEvaluationCase(caseKey: string): Promise<void> {
+  await fetchJson(`/api/admin/evaluation-cases/${encodeURIComponent(caseKey)}`, { method: "DELETE" });
+}
+
+async function saveAdminEvaluationSuite(
+  suite: AdminEvaluationSuiteConfig,
+): Promise<AdminEvaluationSuiteConfig> {
+  const response = await fetchJson<{ suite: AdminEvaluationSuiteConfig }>(
+    `/api/admin/evaluation-suites/${encodeURIComponent(suite.suite_id)}`,
+    { body: JSON.stringify(suite), method: "PUT" },
+  );
+  return response.suite;
+}
+
+async function deleteAdminEvaluationSuite(suiteId: string): Promise<void> {
+  await fetchJson(`/api/admin/evaluation-suites/${encodeURIComponent(suiteId)}`, { method: "DELETE" });
+}
+
+async function saveAdminEvaluationSchedule(
+  schedule: Pick<AdminEvaluationSchedule, "enabled" | "suite_id" | "interval_minutes">,
+): Promise<AdminEvaluationSchedule> {
+  const response = await fetchJson<{ schedule: AdminEvaluationSchedule }>("/api/admin/evaluation-schedule", {
+    body: JSON.stringify(schedule),
+    method: "PATCH",
+  });
+  return response.schedule;
 }
 
 async function getCandidateDetail(candidateId: string): Promise<TrainingSkillCandidateDetail> {
@@ -1702,12 +1808,12 @@ export function AdminV2Dashboard() {
     setSelectedCandidateEvents([]);
   }
 
-  async function runEvaluation() {
+  async function runEvaluation(suiteId = "default_regression") {
     setIsMutating(true);
     setErrorText("");
     try {
       await fetchJson("/api/admin/evals/run", {
-        body: JSON.stringify({ batch_id: `admin_v2_manual_${Date.now()}` }),
+        body: JSON.stringify({ batch_id: `admin_v2_manual_${Date.now()}`, suite_id: suiteId }),
         method: "POST",
       });
       await refreshDashboard();
@@ -2461,7 +2567,7 @@ export function AdminV2Dashboard() {
                 isMutating={isMutating}
                 isRetrievalEvalBusy={isRetrievalEvalBusy}
                 onReadEvaluation={(batchId) => void readEvaluationDetail(batchId)}
-                onRunEvaluation={() => void runEvaluation()}
+                onRunEvaluation={(suiteId) => void runEvaluation(suiteId)}
                 onRunRetrievalEvaluation={() => void handleRunRetrievalEvaluation()}
                 selectedEvaluation={selectedEvaluation}
               />
@@ -6334,7 +6440,7 @@ function EvaluationSection({
   isMutating: boolean;
   isRetrievalEvalBusy: boolean;
   onReadEvaluation: (batchId: string) => void;
-  onRunEvaluation: () => void;
+  onRunEvaluation: (suiteId: string) => void;
   onRunRetrievalEvaluation: () => void;
   selectedEvaluation: EvaluationBatchDetail | null;
 }>) {
@@ -6343,6 +6449,9 @@ function EvaluationSection({
   const [evaluationQuery, setEvaluationQuery] = useState("");
   const [isEvaluationListLoading, setIsEvaluationListLoading] = useState(false);
   const [evaluationListError, setEvaluationListError] = useState("");
+  const [selectedRunSuiteId, setSelectedRunSuiteId] = useState(
+    data.evaluationConfig?.suites.find((suite) => suite.enabled)?.suite_id ?? "default_regression",
+  );
 
   useEffect(() => {
     setEvaluations(data.evaluations);
@@ -6370,10 +6479,22 @@ function EvaluationSection({
     <div className="grid gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <SectionIntro eyebrow="系统评测" title="系统质检和用例结果" description="自动回归测试，用来确认关键链路没有被最近改动破坏。" />
-        <Button disabled={isMutating} onClick={onRunEvaluation}>
-          {isMutating ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
-          运行系统评测
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <select
+            aria-label="选择评测套件"
+            className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm"
+            onChange={(event) => setSelectedRunSuiteId(event.target.value)}
+            value={selectedRunSuiteId}
+          >
+            {(data.evaluationConfig?.suites ?? []).filter((suite) => suite.enabled).map((suite) => (
+              <option key={suite.suite_id} value={suite.suite_id}>{suite.label}</option>
+            ))}
+          </select>
+          <Button disabled={isMutating || !selectedRunSuiteId} onClick={() => onRunEvaluation(selectedRunSuiteId)}>
+            {isMutating ? <Loader2 className="animate-spin" /> : <ClipboardCheck />}
+            运行所选套件
+          </Button>
+        </div>
       </div>
       <Card>
         <CardHeader>
@@ -6386,6 +6507,7 @@ function EvaluationSection({
           <InfoBlock title="Skill 闭环" value="自动回归测试会检查候选生成、审核、启用和后续训练注入是否还能跑通。" />
         </CardContent>
       </Card>
+      <EvaluationConfigurationPanel cases={data.cases} initialConfig={data.evaluationConfig} />
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<ClipboardCheck />} label="评测批次" value={formatCount(evaluationPagination?.total ?? evaluations.length)} helper="历史批次" />
         <MetricCard icon={<Gauge />} label="当前页通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
@@ -6462,6 +6584,271 @@ function EvaluationSection({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function EvaluationConfigurationPanel({
+  cases,
+  initialConfig,
+}: Readonly<{
+  cases: readonly AdminCaseSummary[];
+  initialConfig: AdminEvaluationConfig | null;
+}>) {
+  const emptyCase = useMemo<AdminEvaluationCaseConfig>(() => ({
+    case_key: "new_evaluation_case",
+    label: "",
+    case_id: cases[0]?.case_id ?? "",
+    steps: [{ kind: "submit_diagnosis", value: "", reasoning: "" }],
+    expected_total_score: 0,
+    forbidden_terms: [],
+    enabled: true,
+  }), [cases]);
+  const emptySuite = useMemo<AdminEvaluationSuiteConfig>(() => ({
+    suite_id: "new_evaluation_suite",
+    label: "",
+    description: "",
+    case_keys: [],
+    thresholds: {
+      maximum_score_delta: 0,
+      minimum_batch_pass_rate: 1,
+      minimum_rag_explanation_coverage_ratio: 1,
+      minimum_rag_evidence_coverage_ratio: 1,
+      require_rag_source_coverage: true,
+      maximum_case_duration_ms: 0,
+    },
+    enabled: true,
+  }), []);
+  const [config, setConfig] = useState<AdminEvaluationConfig | null>(initialConfig);
+  const [selectedCaseKey, setSelectedCaseKey] = useState(initialConfig?.evaluation_cases[0]?.case_key ?? "");
+  const [caseDraft, setCaseDraft] = useState<AdminEvaluationCaseConfig>(initialConfig?.evaluation_cases[0] ?? emptyCase);
+  const [stepsJson, setStepsJson] = useState(JSON.stringify(initialConfig?.evaluation_cases[0]?.steps ?? emptyCase.steps, null, 2));
+  const [forbiddenTermsText, setForbiddenTermsText] = useState((initialConfig?.evaluation_cases[0]?.forbidden_terms ?? []).join("、"));
+  const [selectedSuiteId, setSelectedSuiteId] = useState(initialConfig?.suites[0]?.suite_id ?? "");
+  const [suiteDraft, setSuiteDraft] = useState<AdminEvaluationSuiteConfig>(initialConfig?.suites[0] ?? emptySuite);
+  const [scheduleDraft, setScheduleDraft] = useState<Pick<AdminEvaluationSchedule, "enabled" | "suite_id" | "interval_minutes">>({
+    enabled: initialConfig?.schedule.enabled ?? false,
+    suite_id: initialConfig?.schedule.suite_id ?? initialConfig?.suites[0]?.suite_id ?? "default_regression",
+    interval_minutes: initialConfig?.schedule.interval_minutes ?? 1440,
+  });
+  const [isBusy, setIsBusy] = useState(false);
+  const [errorText, setErrorText] = useState("");
+  const [statusText, setStatusText] = useState("");
+
+  useEffect(() => {
+    if (initialConfig) setConfig(initialConfig);
+  }, [initialConfig]);
+
+  async function refreshConfig(): Promise<AdminEvaluationConfig> {
+    const nextConfig = await getAdminEvaluationConfig();
+    setConfig(nextConfig);
+    setScheduleDraft({
+      enabled: nextConfig.schedule.enabled,
+      suite_id: nextConfig.schedule.suite_id,
+      interval_minutes: nextConfig.schedule.interval_minutes,
+    });
+    return nextConfig;
+  }
+
+  function selectCase(caseKey: string) {
+    if (!caseKey) {
+      const draft = { ...emptyCase, case_key: `evaluation_case_${Date.now()}` };
+      setSelectedCaseKey("");
+      setCaseDraft(draft);
+      setStepsJson(JSON.stringify(draft.steps, null, 2));
+      setForbiddenTermsText("");
+      return;
+    }
+    const selected = config?.evaluation_cases.find((item) => item.case_key === caseKey);
+    if (!selected) return;
+    setSelectedCaseKey(caseKey);
+    setCaseDraft(selected);
+    setStepsJson(JSON.stringify(selected.steps, null, 2));
+    setForbiddenTermsText(selected.forbidden_terms.join("、"));
+  }
+
+  function selectSuite(suiteId: string) {
+    if (!suiteId) {
+      setSelectedSuiteId("");
+      setSuiteDraft({ ...emptySuite, suite_id: `evaluation_suite_${Date.now()}` });
+      return;
+    }
+    const selected = config?.suites.find((item) => item.suite_id === suiteId);
+    if (!selected) return;
+    setSelectedSuiteId(suiteId);
+    setSuiteDraft(selected);
+  }
+
+  async function handleSaveCase() {
+    setIsBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const parsedSteps = JSON.parse(stepsJson) as unknown;
+      if (!Array.isArray(parsedSteps) || parsedSteps.length === 0) throw new Error("评测步骤必须是非空 JSON 数组。");
+      const saved = await saveAdminEvaluationCase({
+        ...caseDraft,
+        steps: parsedSteps as AdminEvaluationStep[],
+        forbidden_terms: forbiddenTermsText.split(/[、,，\n]/).map((item) => item.trim()).filter(Boolean),
+      });
+      await refreshConfig();
+      setSelectedCaseKey(saved.case_key);
+      setCaseDraft(saved);
+      setStepsJson(JSON.stringify(saved.steps, null, 2));
+      setStatusText(`已保存评测场景：${saved.label}`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存评测场景失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDeleteCase() {
+    if (!selectedCaseKey || caseDraft.is_builtin || !window.confirm("确定删除这个评测场景吗？")) return;
+    setIsBusy(true);
+    setErrorText("");
+    try {
+      await deleteAdminEvaluationCase(selectedCaseKey);
+      const nextConfig = await refreshConfig();
+      const nextCase = nextConfig.evaluation_cases[0];
+      if (nextCase) {
+        setSelectedCaseKey(nextCase.case_key);
+        setCaseDraft(nextCase);
+        setStepsJson(JSON.stringify(nextCase.steps, null, 2));
+        setForbiddenTermsText(nextCase.forbidden_terms.join("、"));
+      } else {
+        selectCase("");
+      }
+      setStatusText("评测场景已删除。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除评测场景失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleSaveSuite() {
+    setIsBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const saved = await saveAdminEvaluationSuite(suiteDraft);
+      await refreshConfig();
+      setSelectedSuiteId(saved.suite_id);
+      setSuiteDraft(saved);
+      setStatusText(`已保存评测套件：${saved.label}`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存评测套件失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDeleteSuite() {
+    if (!selectedSuiteId || suiteDraft.is_builtin || !window.confirm("确定删除这个评测套件吗？")) return;
+    setIsBusy(true);
+    setErrorText("");
+    try {
+      await deleteAdminEvaluationSuite(selectedSuiteId);
+      const nextConfig = await refreshConfig();
+      const nextSuite = nextConfig.suites[0];
+      if (nextSuite) {
+        setSelectedSuiteId(nextSuite.suite_id);
+        setSuiteDraft(nextSuite);
+      } else {
+        selectSuite("");
+      }
+      setStatusText("评测套件已删除。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除评测套件失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleSaveSchedule() {
+    setIsBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const saved = await saveAdminEvaluationSchedule(scheduleDraft);
+      setConfig((current) => current ? { ...current, schedule: saved } : current);
+      setScheduleDraft({ enabled: saved.enabled, suite_id: saved.suite_id, interval_minutes: saved.interval_minutes });
+      setStatusText(saved.enabled ? `定时评测已启用，下次运行：${formatDateTime(saved.next_run_at || "")}` : "定时评测已停用。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "保存定时评测失败");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  if (!config) {
+    return <Card><CardContent><EmptyText>评测配置暂不可用。</EmptyText></CardContent></Card>;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>评测场景、套件与计划</CardTitle>
+        <CardDescription>把真实学生操作步骤配置成可复用场景，组合为套件并设定分数、RAG 覆盖和耗时阈值；计划任务会持久化并在服务重启后继续。</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <section className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div className="flex items-center justify-between gap-3"><h4 className="font-semibold">1. 评测场景</h4><Button onClick={() => selectCase("")} size="sm" variant="secondary">新建场景</Button></div>
+            <select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm" onChange={(event) => selectCase(event.target.value)} value={selectedCaseKey}>
+              <option value="">新场景</option>
+              {config.evaluation_cases.map((item) => <option key={item.case_key} value={item.case_key}>{item.label}</option>)}
+            </select>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm font-medium">场景 ID<Input disabled={Boolean(selectedCaseKey)} onChange={(event) => setCaseDraft((current) => ({ ...current, case_key: event.target.value }))} value={caseDraft.case_key} /></label>
+              <label className="grid gap-1 text-sm font-medium">场景名称<Input onChange={(event) => setCaseDraft((current) => ({ ...current, label: event.target.value }))} value={caseDraft.label} /></label>
+              <label className="grid gap-1 text-sm font-medium">训练病例<select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3" onChange={(event) => setCaseDraft((current) => ({ ...current, case_id: event.target.value }))} value={caseDraft.case_id}>{cases.map((item) => <option key={item.case_id} value={item.case_id}>{item.title || item.case_id}</option>)}</select></label>
+              <label className="grid gap-1 text-sm font-medium">期望总分<Input min={0} onChange={(event) => setCaseDraft((current) => ({ ...current, expected_total_score: Number(event.target.value) }))} type="number" value={caseDraft.expected_total_score} /></label>
+            </div>
+            <label className="grid gap-1 text-sm font-medium">禁止出现的内容（逗号分隔）<Input onChange={(event) => setForbiddenTermsText(event.target.value)} placeholder="治疗方案、用药剂量" value={forbiddenTermsText} /></label>
+            <label className="grid gap-1 text-sm font-medium">真实操作步骤（JSON 数组）<textarea className="min-h-48 rounded-2xl border border-[#E7E0D4] bg-white p-3 font-mono text-xs" onChange={(event) => setStepsJson(event.target.value)} value={stepsJson} /></label>
+            <label className="flex items-center gap-2 text-sm"><input checked={caseDraft.enabled} onChange={(event) => setCaseDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />启用该场景</label>
+            <div className="flex justify-end gap-2"><Button disabled={isBusy || caseDraft.is_builtin} onClick={() => void handleDeleteCase()} variant="destructive">删除</Button><Button disabled={isBusy} onClick={() => void handleSaveCase()}>保存场景</Button></div>
+          </section>
+
+          <section className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div className="flex items-center justify-between gap-3"><h4 className="font-semibold">2. 评测套件与阈值</h4><Button onClick={() => selectSuite("")} size="sm" variant="secondary">新建套件</Button></div>
+            <select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm" onChange={(event) => selectSuite(event.target.value)} value={selectedSuiteId}>
+              <option value="">新套件</option>
+              {config.suites.map((item) => <option key={item.suite_id} value={item.suite_id}>{item.label}</option>)}
+            </select>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm font-medium">套件 ID<Input disabled={Boolean(selectedSuiteId)} onChange={(event) => setSuiteDraft((current) => ({ ...current, suite_id: event.target.value }))} value={suiteDraft.suite_id} /></label>
+              <label className="grid gap-1 text-sm font-medium">套件名称<Input onChange={(event) => setSuiteDraft((current) => ({ ...current, label: event.target.value }))} value={suiteDraft.label} /></label>
+            </div>
+            <label className="grid gap-1 text-sm font-medium">说明<Input onChange={(event) => setSuiteDraft((current) => ({ ...current, description: event.target.value }))} value={suiteDraft.description} /></label>
+            <div className="grid gap-2 rounded-xl border border-[#E7E0D4] bg-white p-3"><p className="text-sm font-medium">包含场景</p>{config.evaluation_cases.map((item) => <label className="flex items-center gap-2 text-sm" key={item.case_key}><input checked={suiteDraft.case_keys.includes(item.case_key)} onChange={(event) => setSuiteDraft((current) => ({ ...current, case_keys: event.target.checked ? [...current.case_keys, item.case_key] : current.case_keys.filter((key) => key !== item.case_key) }))} type="checkbox" />{item.label}</label>)}</div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm font-medium">允许分数偏差<Input min={0} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, maximum_score_delta: Number(event.target.value) } }))} type="number" value={suiteDraft.thresholds.maximum_score_delta} /></label>
+              <label className="grid gap-1 text-sm font-medium">批次最低通过率（%）<Input max={100} min={0} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, minimum_batch_pass_rate: Number(event.target.value) / 100 } }))} type="number" value={Math.round(suiteDraft.thresholds.minimum_batch_pass_rate * 100)} /></label>
+              <label className="grid gap-1 text-sm font-medium">解释来源覆盖（%）<Input max={100} min={0} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, minimum_rag_explanation_coverage_ratio: Number(event.target.value) / 100 } }))} type="number" value={Math.round(suiteDraft.thresholds.minimum_rag_explanation_coverage_ratio * 100)} /></label>
+              <label className="grid gap-1 text-sm font-medium">证据来源覆盖（%）<Input max={100} min={0} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, minimum_rag_evidence_coverage_ratio: Number(event.target.value) / 100 } }))} type="number" value={Math.round(suiteDraft.thresholds.minimum_rag_evidence_coverage_ratio * 100)} /></label>
+              <label className="grid gap-1 text-sm font-medium">单场景最长耗时（毫秒，0 不限制）<Input min={0} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, maximum_case_duration_ms: Number(event.target.value) } }))} type="number" value={suiteDraft.thresholds.maximum_case_duration_ms} /></label>
+              <label className="flex items-end gap-2 pb-2 text-sm"><input checked={suiteDraft.thresholds.require_rag_source_coverage} onChange={(event) => setSuiteDraft((current) => ({ ...current, thresholds: { ...current.thresholds, require_rag_source_coverage: event.target.checked } }))} type="checkbox" />必须有 RAG 来源覆盖</label>
+            </div>
+            <label className="flex items-center gap-2 text-sm"><input checked={suiteDraft.enabled} onChange={(event) => setSuiteDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />启用该套件</label>
+            <div className="flex justify-end gap-2"><Button disabled={isBusy || suiteDraft.is_builtin} onClick={() => void handleDeleteSuite()} variant="destructive">删除</Button><Button disabled={isBusy} onClick={() => void handleSaveSuite()}>保存套件</Button></div>
+          </section>
+        </div>
+
+        <section className="grid gap-3 rounded-2xl border border-[#E7E0D4] bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="font-semibold">3. 定时评测</h4><p className="mt-1 text-xs text-[#6F6257]">最短 5 分钟；同一计划通过持久化租约避免重复执行。</p></div><Badge variant={config.schedule.enabled ? "success" : "muted"}>{config.schedule.enabled ? "已启用" : "未启用"}</Badge></div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-1 text-sm font-medium">运行套件<select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3" onChange={(event) => setScheduleDraft((current) => ({ ...current, suite_id: event.target.value }))} value={scheduleDraft.suite_id}>{config.suites.filter((item) => item.enabled).map((item) => <option key={item.suite_id} value={item.suite_id}>{item.label}</option>)}</select></label>
+            <label className="grid gap-1 text-sm font-medium">运行间隔（分钟）<Input max={10080} min={5} onChange={(event) => setScheduleDraft((current) => ({ ...current, interval_minutes: Number(event.target.value) }))} type="number" value={scheduleDraft.interval_minutes} /></label>
+            <label className="flex items-end gap-2 pb-2 text-sm"><input checked={scheduleDraft.enabled} onChange={(event) => setScheduleDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />启用定时运行</label>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-[#6F6257]">下次：{formatDateTime(config.schedule.next_run_at || "")} · 最近批次：{config.schedule.last_batch_id || "暂无"}{config.schedule.last_error ? ` · 最近错误：${config.schedule.last_error}` : ""}</p><Button disabled={isBusy} onClick={() => void handleSaveSchedule()}>保存计划</Button></div>
+        </section>
+        {errorText ? <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorText}</p> : null}
+        {statusText ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{statusText}</p> : null}
+      </CardContent>
+    </Card>
   );
 }
 

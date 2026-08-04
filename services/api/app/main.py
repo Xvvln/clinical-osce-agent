@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import csv
@@ -9,9 +10,9 @@ import os
 import re
 import tempfile
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from copy import deepcopy
-from datetime import date
+from datetime import UTC, date, datetime
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -51,6 +52,7 @@ from app.services.admin_display_resolver import (
 )
 from app.services.admin_audit_store import admin_audit_store
 from app.services.admin_asset_version_store import admin_asset_version_store
+from app.services.admin_evaluation_config_store import admin_evaluation_config_store
 from app.services.api_call_log_service import (
     api_call_log_store,
     normalize_api_call_session_id,
@@ -69,7 +71,13 @@ from app.services.derived_teaching_focus_service import (
     get_admin_teaching_focus_pattern,
 )
 from app.services.evaluation_result_store import evaluation_result_store
-from app.services.evaluation_runner import EvaluationBatchResult, EvaluationCase, EvaluationStep, run_evaluation_cases
+from app.services.evaluation_runner import (
+    EvaluationBatchResult,
+    EvaluationCase,
+    EvaluationStep,
+    EvaluationThresholds,
+    run_evaluation_cases,
+)
 from app.services.admin_learning_analytics_service import AdminLearningAnalyticsService
 from app.services.deployment_config import (
     ADMIN_EMAILS_ENV_NAME,
@@ -313,6 +321,184 @@ ADMIN_EVALUATION_CASES = [
         forbidden_terms=["用药剂量", "治疗方案", "手术方案", "处置建议"],
     ),
 ]
+ADMIN_DEFAULT_EVALUATION_CASE_KEY = "appendicitis_complete_flow"
+ADMIN_DEFAULT_EVALUATION_SUITE_ID = "default_regression"
+ADMIN_EVALUATION_SCHEDULER_POLL_SECONDS_ENV = "OSCE_ADMIN_EVALUATION_SCHEDULER_POLL_SECONDS"
+
+
+def _default_admin_evaluation_case_payload() -> dict[str, Any]:
+    evaluation_case = ADMIN_EVALUATION_CASES[0]
+    return {
+        "case_key": ADMIN_DEFAULT_EVALUATION_CASE_KEY,
+        "label": "急性阑尾炎完整训练链路",
+        "case_id": evaluation_case.case_id,
+        "steps": [
+            {"kind": step.kind, "value": step.value, "reasoning": step.reasoning}
+            for step in evaluation_case.steps
+        ],
+        "expected_total_score": evaluation_case.expected_total_score,
+        "forbidden_terms": evaluation_case.forbidden_terms,
+        "enabled": True,
+    }
+
+
+def _default_admin_evaluation_suite_payload() -> dict[str, Any]:
+    return {
+        "suite_id": ADMIN_DEFAULT_EVALUATION_SUITE_ID,
+        "label": "默认核心回归套件",
+        "description": "验证问诊、查体、检查、诊断、报告、RAG 来源和安全边界。",
+        "case_keys": [ADMIN_DEFAULT_EVALUATION_CASE_KEY],
+        "thresholds": {
+            "maximum_score_delta": 0,
+            "minimum_batch_pass_rate": 1.0,
+            "minimum_rag_explanation_coverage_ratio": 1.0,
+            "minimum_rag_evidence_coverage_ratio": 1.0,
+            "require_rag_source_coverage": True,
+            "maximum_case_duration_ms": 0,
+        },
+        "enabled": True,
+    }
+
+
+def _ensure_admin_evaluation_config_defaults() -> None:
+    admin_evaluation_config_store.ensure_defaults(
+        evaluation_case=_default_admin_evaluation_case_payload(),
+        suite=_default_admin_evaluation_suite_payload(),
+    )
+
+
+def _admin_evaluation_case_from_payload(payload: dict[str, Any]) -> EvaluationCase:
+    return EvaluationCase(
+        case_id=str(payload["case_id"]),
+        student_id=f"{ADMIN_EVALUATION_STUDENT_ID_PREFIX}{payload['case_key']}",
+        steps=[
+            EvaluationStep(
+                kind=str(step["kind"]),
+                value=str(step["value"]),
+                reasoning=str(step.get("reasoning") or ""),
+            )
+            for step in payload.get("steps", [])
+        ],
+        expected_total_score=int(payload["expected_total_score"]),
+        forbidden_terms=[str(term) for term in payload.get("forbidden_terms", [])],
+    )
+
+
+def _admin_evaluation_thresholds_from_suite(suite: dict[str, Any]) -> EvaluationThresholds:
+    thresholds = suite.get("thresholds", {})
+    return EvaluationThresholds(
+        maximum_score_delta=int(thresholds.get("maximum_score_delta", 0)),
+        minimum_batch_pass_rate=float(thresholds.get("minimum_batch_pass_rate", 1.0)),
+        minimum_rag_explanation_coverage_ratio=float(
+            thresholds.get("minimum_rag_explanation_coverage_ratio", 1.0)
+        ),
+        minimum_rag_evidence_coverage_ratio=float(
+            thresholds.get("minimum_rag_evidence_coverage_ratio", 1.0)
+        ),
+        require_rag_source_coverage=bool(
+            thresholds.get("require_rag_source_coverage", True)
+        ),
+        maximum_case_duration_ms=int(
+            thresholds.get("maximum_case_duration_ms", 0)
+        ),
+    )
+
+
+def _run_admin_evaluation_suite(
+    suite_id: str,
+) -> tuple[EvaluationBatchResult, dict[str, Any]]:
+    _ensure_admin_evaluation_config_defaults()
+    suite = admin_evaluation_config_store.get_suite(suite_id)
+    if suite is None or not suite.get("enabled", True):
+        raise ValueError("evaluation suite not found or disabled")
+    configured_cases: list[EvaluationCase] = []
+    for case_key in suite.get("case_keys", []):
+        evaluation_case = admin_evaluation_config_store.get_case(str(case_key))
+        if evaluation_case is None or not evaluation_case.get("enabled", True):
+            raise ValueError(f"evaluation case unavailable: {case_key}")
+        configured_cases.append(_admin_evaluation_case_from_payload(evaluation_case))
+    if not configured_cases:
+        raise ValueError("evaluation suite has no enabled cases")
+    return (
+        run_evaluation_cases(
+            configured_cases,
+            _build_admin_evaluation_service(),
+            _admin_evaluation_thresholds_from_suite(suite),
+        ),
+        suite,
+    )
+
+
+def _scheduled_evaluation_batch_id(suite_id: str, now: datetime) -> str:
+    safe_suite_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", suite_id).strip("_")
+    return f"scheduled_{safe_suite_id}_{now.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+
+
+def _run_due_admin_evaluation_schedule(now: datetime | None = None) -> dict[str, Any] | None:
+    current_time = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
+    claimed_schedule = admin_evaluation_config_store.claim_due_schedule(current_time)
+    if claimed_schedule is None:
+        return None
+    suite_id = str(claimed_schedule["suite_id"])
+    batch_id = _scheduled_evaluation_batch_id(suite_id, current_time)
+    try:
+        batch_result, suite = _run_admin_evaluation_suite(suite_id)
+        evaluation_result_store.save_batch_result(
+            batch_id,
+            batch_result,
+            metadata={
+                "suite_id": suite_id,
+                "suite_label": str(suite.get("label") or suite_id),
+                "thresholds": suite.get("thresholds", {}),
+                "triggered_by": "schedule",
+                "created_at": current_time.isoformat(),
+            },
+        )
+        admin_evaluation_config_store.complete_schedule_run(batch_id=batch_id)
+        admin_audit_store.record(
+            actor_user_id="system",
+            actor_email="system@local",
+            action="evaluation.schedule_completed",
+            resource_type="evaluation",
+            resource_id=batch_id,
+            summary=f"定时评测已完成：{suite.get('label') or suite_id}",
+            after={"batch_id": batch_id, "passed": batch_result.passed},
+            metadata={"suite_id": suite_id},
+        )
+        return {"batch_id": batch_id, "passed": batch_result.passed}
+    except Exception as exc:
+        admin_evaluation_config_store.complete_schedule_run(
+            batch_id=batch_id,
+            error=exc.__class__.__name__,
+        )
+        admin_audit_store.record(
+            actor_user_id="system",
+            actor_email="system@local",
+            action="evaluation.schedule_failed",
+            resource_type="evaluation",
+            resource_id=batch_id,
+            summary=f"定时评测失败：{suite_id}",
+            metadata={"suite_id": suite_id, "error_type": exc.__class__.__name__},
+        )
+        logger.error("scheduled admin evaluation failed (%s)", exc.__class__.__name__)
+        return {"batch_id": batch_id, "error": exc.__class__.__name__}
+
+
+async def _admin_evaluation_scheduler_loop() -> None:
+    raw_poll_seconds = os.getenv(ADMIN_EVALUATION_SCHEDULER_POLL_SECONDS_ENV, "30")
+    try:
+        poll_seconds = min(max(float(raw_poll_seconds), 1.0), 300.0)
+    except ValueError:
+        poll_seconds = 30.0
+    while True:
+        try:
+            await asyncio.to_thread(_run_due_admin_evaluation_schedule)
+        except Exception as exc:
+            logger.error(
+                "admin evaluation scheduler poll failed (%s)",
+                exc.__class__.__name__,
+            )
+        await asyncio.sleep(poll_seconds)
 
 
 def _canonical_admin_patient_responder(request: object) -> str:
@@ -523,7 +709,21 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "startup recovery failed (%s)",
                 exc.__class__.__name__,
             )
-    yield
+    scheduler_task: asyncio.Task[None] | None = None
+    scheduler_enabled = getattr(
+        application.state,
+        "admin_evaluation_scheduler_enabled",
+        application is app,
+    )
+    if scheduler_enabled and application.state.startup_persistence_ready:
+        scheduler_task = asyncio.create_task(_admin_evaluation_scheduler_loop())
+    try:
+        yield
+    finally:
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
 
 
 app = FastAPI(
@@ -1138,6 +1338,62 @@ class AdminRagKnowledgeReviewRequest(RequestModel):
 
 class AdminEvaluationRunRequest(RequestModel):
     batch_id: str = Field(max_length=IDENTIFIER_MAX_CHARS)
+    suite_id: str = Field(default=ADMIN_DEFAULT_EVALUATION_SUITE_ID, max_length=IDENTIFIER_MAX_CHARS)
+
+
+class AdminEvaluationStepRequest(RequestModel):
+    kind: Literal["message", "physical_exam", "auxiliary_test", "submit_diagnosis"]
+    value: str = Field(min_length=1, max_length=4096)
+    reasoning: str = Field(default="", max_length=4096)
+
+
+class AdminEvaluationCaseUpsertRequest(RequestModel):
+    case_key: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS, pattern=r"^[a-zA-Z0-9_-]+$")
+    label: str = Field(min_length=1, max_length=120)
+    case_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)
+    steps: list[AdminEvaluationStepRequest] = Field(min_length=1, max_length=40)
+    expected_total_score: int = Field(ge=0, le=1000)
+    forbidden_terms: list[str] = Field(default_factory=list, max_length=40)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_steps(self) -> "AdminEvaluationCaseUpsertRequest":
+        if sum(step.kind == "submit_diagnosis" for step in self.steps) != 1:
+            raise ValueError("evaluation case must contain exactly one submit_diagnosis step")
+        if any(not term.strip() or len(term) > 100 for term in self.forbidden_terms):
+            raise ValueError("forbidden terms must contain 1 to 100 characters")
+        return self
+
+
+class AdminEvaluationThresholdsRequest(RequestModel):
+    maximum_score_delta: int = Field(default=0, ge=0, le=1000)
+    minimum_batch_pass_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    minimum_rag_explanation_coverage_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    minimum_rag_evidence_coverage_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    require_rag_source_coverage: bool = True
+    maximum_case_duration_ms: int = Field(default=0, ge=0, le=3_600_000)
+
+
+class AdminEvaluationSuiteUpsertRequest(RequestModel):
+    suite_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS, pattern=r"^[a-zA-Z0-9_-]+$")
+    label: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    case_keys: list[str] = Field(min_length=1, max_length=100)
+    thresholds: AdminEvaluationThresholdsRequest = Field(default_factory=AdminEvaluationThresholdsRequest)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_case_keys(self) -> "AdminEvaluationSuiteUpsertRequest":
+        normalized = [case_key.strip() for case_key in self.case_keys]
+        if any(not case_key for case_key in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("evaluation suite case keys must be unique and non-empty")
+        return self
+
+
+class AdminEvaluationScheduleUpdateRequest(RequestModel):
+    enabled: bool
+    suite_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)
+    interval_minutes: int = Field(ge=5, le=10_080)
 
 
 def _validate_auth_request(email: str, password: str) -> None:
@@ -2898,6 +3154,14 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
             required_tables=("evaluation_results",),
         ),
         SQLiteReadinessTarget(
+            database_path=admin_evaluation_config_store.database_path,
+            required_tables=(
+                "admin_evaluation_cases",
+                "admin_evaluation_suites",
+                "admin_evaluation_schedule",
+            ),
+        ),
+        SQLiteReadinessTarget(
             database_path=training_skill_auto_approval_settings_store.database_path,
             required_tables=("training_skill_auto_approval_settings",),
         ),
@@ -2919,6 +3183,7 @@ def _initialize_readiness_persistence() -> None:
     user_model_config_store._initialize()
     rag_knowledge_store._initialize()
     evaluation_result_store._initialize()
+    _ensure_admin_evaluation_config_defaults()
     training_skill_auto_approval_settings_store._initialize()
 
 
@@ -5021,9 +5286,19 @@ def update_admin_training_skill_evolution_settings(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
+    before = training_skill_auto_approval_settings_store.get_settings()
     settings = training_skill_auto_approval_settings_store.update_settings(
         auto_apply_enabled=request.auto_apply_enabled,
         updated_by=reviewer["email"],
+    )
+    _record_admin_audit(
+        actor=reviewer,
+        action="skill.auto_apply_enabled" if settings["auto_apply_enabled"] else "skill.auto_apply_disabled",
+        resource_type="skill_settings",
+        resource_id="auto_approval",
+        summary="开启 Skill 自动应用" if settings["auto_apply_enabled"] else "关闭 Skill 自动应用",
+        before=before,
+        after=settings,
     )
     return {"settings": settings}
 
@@ -5115,7 +5390,7 @@ def generate_admin_training_skill_candidates(
                 },
             )
 
-    return {
+    response = {
         "generated_count": len(candidates),
         "saved_count": len(saved_candidate_summaries),
         "ready_for_review_count": ready_for_review_count,
@@ -5125,6 +5400,19 @@ def generate_admin_training_skill_candidates(
         "approval_agent_modified_count": approval_agent_modified_count,
         "candidates": saved_candidate_summaries,
     }
+    _record_admin_audit(
+        actor=reviewer,
+        action="skill.candidates_generated",
+        resource_type="skill_candidate_batch",
+        resource_id=ADMIN_SKILL_CANDIDATE_GENERATION_BATCH_ID,
+        summary=f"生成候选 Skill：保存 {len(saved_candidate_summaries)} 个",
+        after={
+            key: value
+            for key, value in response.items()
+            if key != "candidates"
+        },
+    )
+    return response
 
 
 @app.get("/api/admin/evolution/candidates/{candidate_id}")
@@ -5154,6 +5442,7 @@ def approve_admin_training_skill_candidate(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, str]:
     reviewer = _require_admin_user(auth_token)
+    before = training_skill_candidate_store.get_candidate(request.candidate_id)
     if not training_skill_candidate_store.approve_candidate(request.candidate_id, reviewer["email"]):
         raise HTTPException(status_code=404, detail="candidate not found or not ready for review")
     candidate = training_skill_candidate_store.get_candidate(request.candidate_id)
@@ -5170,6 +5459,16 @@ def approve_admin_training_skill_candidate(
             "skill_id": skill_id,
         },
     )
+    _record_admin_audit(
+        actor=reviewer,
+        action="skill.candidate_approved",
+        resource_type="skill_candidate",
+        resource_id=request.candidate_id,
+        summary=f"批准并启用候选 Skill：{candidate.get('title') or request.candidate_id}",
+        before=before,
+        after=training_skill_candidate_store.get_candidate(request.candidate_id),
+        metadata={"skill_id": skill_id},
+    )
     return {"candidate_id": request.candidate_id, "status": "approved", "skill_id": skill_id}
 
 
@@ -5179,6 +5478,7 @@ def reject_admin_training_skill_candidate(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, str]:
     reviewer = _require_admin_user(auth_token)
+    before = training_skill_candidate_store.get_candidate(request.candidate_id)
     if not training_skill_candidate_store.reject_candidate(request.candidate_id, reviewer["email"]):
         raise HTTPException(status_code=404, detail="candidate not found or not ready for review")
     candidate = training_skill_candidate_store.get_candidate(request.candidate_id)
@@ -5192,6 +5492,15 @@ def reject_admin_training_skill_candidate(
             "candidate_id": request.candidate_id,
             "reviewer_email": reviewer["email"],
         },
+    )
+    _record_admin_audit(
+        actor=reviewer,
+        action="skill.candidate_rejected",
+        resource_type="skill_candidate",
+        resource_id=request.candidate_id,
+        summary=f"拒绝候选 Skill：{candidate.get('title') or request.candidate_id}",
+        before=before,
+        after=training_skill_candidate_store.get_candidate(request.candidate_id),
     )
     return {"candidate_id": request.candidate_id, "status": "rejected"}
 
@@ -5272,6 +5581,163 @@ def list_admin_evaluations(
     )
 
 
+@app.get("/api/admin/evaluation-config")
+def get_admin_evaluation_config(
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    _ensure_admin_evaluation_config_defaults()
+    return {
+        "evaluation_cases": admin_evaluation_config_store.list_cases(),
+        "suites": admin_evaluation_config_store.list_suites(),
+        "schedule": admin_evaluation_config_store.get_schedule(
+            ADMIN_DEFAULT_EVALUATION_SUITE_ID
+        ),
+    }
+
+
+@app.put("/api/admin/evaluation-cases/{case_key}")
+def upsert_admin_evaluation_case(
+    case_key: str,
+    request: AdminEvaluationCaseUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    if case_key != request.case_key:
+        raise HTTPException(status_code=400, detail="case key does not match request path")
+    if request.case_id not in {
+        str(case_item.get("case_id")) for case_item in osce_session_service.list_cases()
+    }:
+        raise HTTPException(status_code=404, detail="training case not found")
+    _ensure_admin_evaluation_config_defaults()
+    before = admin_evaluation_config_store.get_case(case_key)
+    saved_case = admin_evaluation_config_store.upsert_case(
+        request.model_dump(),
+        updated_by=actor["email"],
+    )
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation_case.updated" if before else "evaluation_case.created",
+        resource_type="evaluation_case",
+        resource_id=case_key,
+        summary=f"{'更新' if before else '创建'}评测场景：{saved_case['label']}",
+        before=before,
+        after=saved_case,
+    )
+    return {"evaluation_case": saved_case}
+
+
+@app.delete("/api/admin/evaluation-cases/{case_key}")
+def delete_admin_evaluation_case(
+    case_key: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    _ensure_admin_evaluation_config_defaults()
+    try:
+        deleted_case = admin_evaluation_config_store.delete_case(case_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if deleted_case is None:
+        raise HTTPException(status_code=404, detail="evaluation case not found")
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation_case.deleted",
+        resource_type="evaluation_case",
+        resource_id=case_key,
+        summary=f"删除评测场景：{deleted_case.get('label') or case_key}",
+        before=deleted_case,
+    )
+    return {"deleted": True, "case_key": case_key}
+
+
+@app.put("/api/admin/evaluation-suites/{suite_id}")
+def upsert_admin_evaluation_suite(
+    suite_id: str,
+    request: AdminEvaluationSuiteUpsertRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    if suite_id != request.suite_id:
+        raise HTTPException(status_code=400, detail="suite id does not match request path")
+    _ensure_admin_evaluation_config_defaults()
+    before = admin_evaluation_config_store.get_suite(suite_id)
+    try:
+        saved_suite = admin_evaluation_config_store.upsert_suite(
+            request.model_dump(),
+            updated_by=actor["email"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation_suite.updated" if before else "evaluation_suite.created",
+        resource_type="evaluation_suite",
+        resource_id=suite_id,
+        summary=f"{'更新' if before else '创建'}评测套件：{saved_suite['label']}",
+        before=before,
+        after=saved_suite,
+    )
+    return {"suite": saved_suite}
+
+
+@app.delete("/api/admin/evaluation-suites/{suite_id}")
+def delete_admin_evaluation_suite(
+    suite_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    _ensure_admin_evaluation_config_defaults()
+    try:
+        deleted_suite = admin_evaluation_config_store.delete_suite(suite_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if deleted_suite is None:
+        raise HTTPException(status_code=404, detail="evaluation suite not found")
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation_suite.deleted",
+        resource_type="evaluation_suite",
+        resource_id=suite_id,
+        summary=f"删除评测套件：{deleted_suite.get('label') or suite_id}",
+        before=deleted_suite,
+    )
+    return {"deleted": True, "suite_id": suite_id}
+
+
+@app.patch("/api/admin/evaluation-schedule")
+def update_admin_evaluation_schedule(
+    request: AdminEvaluationScheduleUpdateRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    _ensure_admin_evaluation_config_defaults()
+    before = admin_evaluation_config_store.get_schedule(
+        ADMIN_DEFAULT_EVALUATION_SUITE_ID
+    )
+    try:
+        schedule = admin_evaluation_config_store.update_schedule(
+            request.model_dump(),
+            updated_by=actor["email"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation_schedule.enabled" if schedule["enabled"] else "evaluation_schedule.disabled",
+        resource_type="evaluation_schedule",
+        resource_id="default",
+        summary=(
+            f"启用定时评测：每 {schedule['interval_minutes']} 分钟运行 {schedule['suite_id']}"
+            if schedule["enabled"]
+            else "停用定时评测"
+        ),
+        before=before,
+        after=schedule,
+    )
+    return {"schedule": schedule}
+
+
 @app.post(
     "/api/admin/evals/run",
     dependencies=[
@@ -5282,10 +5748,39 @@ def run_admin_evaluation(
     request: AdminEvaluationRunRequest,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_admin_user(auth_token)
-    batch_result = _run_admin_evaluation_cases()
-    evaluation_result_store.save_batch_result(request.batch_id, batch_result)
-    return {"evaluation": evaluation_result_store.get_batch_result(request.batch_id)}
+    actor = _require_admin_user(auth_token)
+    try:
+        batch_result, suite = _run_admin_evaluation_suite(request.suite_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    created_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    evaluation_result_store.save_batch_result(
+        request.batch_id,
+        batch_result,
+        metadata={
+            "suite_id": request.suite_id,
+            "suite_label": str(suite.get("label") or request.suite_id),
+            "thresholds": suite.get("thresholds", {}),
+            "triggered_by": actor["email"],
+            "created_at": created_at,
+        },
+    )
+    evaluation = evaluation_result_store.get_batch_result(request.batch_id)
+    _record_admin_audit(
+        actor=actor,
+        action="evaluation.run",
+        resource_type="evaluation",
+        resource_id=request.batch_id,
+        summary=f"运行评测套件：{suite.get('label') or request.suite_id}",
+        after={
+            "batch_id": request.batch_id,
+            "suite_id": request.suite_id,
+            "passed": batch_result.passed,
+            "passed_cases": batch_result.passed_cases,
+            "total_cases": batch_result.total_cases,
+        },
+    )
+    return {"evaluation": evaluation}
 
 
 @app.get("/api/admin/evaluations/{batch_id}")
