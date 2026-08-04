@@ -1575,6 +1575,7 @@ def _session_payload_references_applied_skill_id(
             "agent_turn_memory",
             "pedagogy_state",
             "agent_decision_trace",
+            "teacher_decision_records",
         )
     )
 
@@ -1617,6 +1618,12 @@ def _session_payload_referenced_skill_ids(
             skill_ids=skill_ids,
         )
     )
+    referenced_skill_ids.update(
+        _nested_referenced_skill_ids(
+            payload.get("teacher_decision_records"),
+            skill_ids=skill_ids,
+        )
+    )
     return referenced_skill_ids
 
 
@@ -1654,7 +1661,7 @@ def _remove_skill_ids_from_session_payload(
                 next_context.get("selected_skills", [])
             )
         )
-    for field_name in ("agent_turn_memory", "agent_decision_trace"):
+    for field_name in ("agent_turn_memory", "agent_decision_trace", "teacher_decision_records"):
         items = sanitized.get(field_name)
         if not isinstance(items, list):
             continue

@@ -52,6 +52,12 @@ from app.services.skill_role_policy_service import (
     build_teacher_skill_role_projection,
 )
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
+from app.services.teacher_intervention_service import (
+    TeacherInterventionDecision,
+    TeacherInterventionMode,
+    append_teacher_decision_record,
+    resolve_teacher_intervention,
+)
 from app.services.turn_intent_agent import (
     TurnIntentRequest,
     classify_unknown_history_message,
@@ -162,6 +168,7 @@ class OsceGraphState(TypedDict, total=False):
     processing_progress_callback: Callable[[dict[str, Any]], None] | None
     pedagogy_state: dict[str, Any]
     agent_decision_trace: list[dict[str, Any]]
+    teacher_decision_records: list[dict[str, Any]]
     reflection_summary: dict[str, Any] | None
 
 
@@ -280,6 +287,13 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
         primary_intent=primary_intent,
         revealed_fact_id=None,
     ).strip()
+    intervention_decision = resolve_teacher_intervention(
+        state,
+        action_type="student_utterance",
+        action_label=student_message,
+        forced_hint=coach_hint,
+        forced_reason_code=f"unknown_history:{unknown_kind or 'unknown'}",
+    )
     messages = [*state.get("messages", [])]
     if student_message:
         messages.append({"role": "student", "content": student_message})
@@ -311,6 +325,10 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
         processing_trace=processing_trace,
     )
     if coach_hint:
+        coach_turn_analysis = {
+            **turn_analysis,
+            "teacher_intervention": _teacher_intervention_payload(intervention_decision),
+        }
         agent_turn_memory = _append_agent_turn_memory(
             {**dict(state), "agent_turn_memory": agent_turn_memory},
             student_message=student_message,
@@ -318,12 +336,17 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
             reply_role="coach",
             current_intents=current_intents,
             turn_policy="intent_short_circuit_hint",
-            turn_analysis=turn_analysis,
+            turn_analysis=coach_turn_analysis,
             agent_path=["input_router_node", "unknown_history_redirect_node"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
             processing_trace=processing_trace,
         )
+    teacher_decision_records = append_teacher_decision_record(
+        state.get("teacher_decision_records", []),
+        intervention_decision,
+        emitted_hint=coach_hint,
+    )
     return {
         "stage": "history_taking",
         "current_intents": current_intents,
@@ -333,6 +356,7 @@ def unknown_history_redirect_node(state: OsceGraphState) -> dict[str, Any]:
         "intent_history": [*state.get("intent_history", []), *(current_intents or [primary_intent])],
         "revealed_facts": list(state.get("revealed_facts", [])),
         "agent_turn_memory": agent_turn_memory,
+        "teacher_decision_records": teacher_decision_records,
         "processing_trace": processing_trace,
     }
 
@@ -532,8 +556,11 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         processing_trace=processing_trace,
     )
     patient_processing_trace = list(processing_trace)
-    messages, agent_turn_memory, processing_trace = _apply_passive_coach_review(
-        state,
+    messages, agent_turn_memory, processing_trace, teacher_decision_records = _apply_passive_coach_review(
+        {
+            **dict(state),
+            "patient_affect_state": patient_affect_state,
+        },
         case=case,
         coach_agent=coach_agent,
         student_message=student_message,
@@ -545,6 +572,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         agent_turn_memory=agent_turn_memory,
         turn_analysis=turn_analysis,
         processing_trace=processing_trace,
+        affect_transition=selected_patient_affect_transition,
     )
     _emit_processing_progress(state, "response", status="active")
     response_started_at, response_started_perf = _start_processing_step()
@@ -586,6 +614,7 @@ def patient_response_node(state: OsceGraphState, patient_responder: PatientRespo
         "intent_history": [*state.get("intent_history", []), *(current_intents or [primary_intent])],
         "revealed_facts": revealed_facts,
         "agent_turn_memory": agent_turn_memory,
+        "teacher_decision_records": teacher_decision_records,
         "action_timeline": action_timeline,
         "patient_affect_state": patient_affect_state,
         "processing_trace": processing_trace,
@@ -606,13 +635,13 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
                 source_ids=[exam.exam_code],
                 label_by_source={exam.exam_code: exam.exam_name_cn},
             )
-            patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+            patient_affect_state, action_timeline, affect_transition = _apply_patient_affect_process_action(
                 state,
                 action_type="physical_exam_requested",
                 action_label=exam.exam_name_cn,
                 action_timeline=action_timeline,
             )
-            return {
+            next_state = {
                 "stage": "physical_exam",
                 "exam_code": exam.exam_code,
                 "exam_name_cn": exam.exam_name_cn,
@@ -621,19 +650,29 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
                 "action_timeline": action_timeline,
                 "patient_affect_state": patient_affect_state,
             }
+            return {
+                **next_state,
+                **_procedure_teacher_intervention_update(
+                    state,
+                    next_state=next_state,
+                    action_type="physical_exam_requested",
+                    action_label=exam.exam_name_cn,
+                    affect_transition=affect_transition,
+                ),
+            }
     action_timeline = _append_action_timeline_events(
         state,
         action_type="physical_exam_requested",
         source_ids=[exam_code] if exam_code else [],
         label_by_source={exam_code: "未提供查体"} if exam_code else {},
     )
-    patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+    patient_affect_state, action_timeline, affect_transition = _apply_patient_affect_process_action(
         state,
         action_type="physical_exam_requested",
         action_label="未提供查体",
         action_timeline=action_timeline,
     )
-    return {
+    next_state = {
         "stage": "physical_exam",
         "exam_code": exam_code,
         "exam_name_cn": "未提供查体",
@@ -641,6 +680,16 @@ def physical_exam_node(state: OsceGraphState) -> dict[str, Any]:
         "requested_exams": requested_exams,
         "action_timeline": action_timeline,
         "patient_affect_state": patient_affect_state,
+    }
+    return {
+        **next_state,
+        **_procedure_teacher_intervention_update(
+            state,
+            next_state=next_state,
+            action_type="physical_exam_requested",
+            action_label="未提供查体",
+            affect_transition=affect_transition,
+        ),
     }
 
 
@@ -658,13 +707,13 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
                 source_ids=[test.test_code],
                 label_by_source={test.test_code: test.test_name_cn},
             )
-            patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+            patient_affect_state, action_timeline, affect_transition = _apply_patient_affect_process_action(
                 state,
                 action_type="auxiliary_test_requested",
                 action_label=test.test_name_cn,
                 action_timeline=action_timeline,
             )
-            return {
+            next_state = {
                 "stage": "auxiliary_test",
                 "test_code": test.test_code,
                 "test_name_cn": test.test_name_cn,
@@ -673,19 +722,29 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
                 "action_timeline": action_timeline,
                 "patient_affect_state": patient_affect_state,
             }
+            return {
+                **next_state,
+                **_procedure_teacher_intervention_update(
+                    state,
+                    next_state=next_state,
+                    action_type="auxiliary_test_requested",
+                    action_label=test.test_name_cn,
+                    affect_transition=affect_transition,
+                ),
+            }
     action_timeline = _append_action_timeline_events(
         state,
         action_type="auxiliary_test_requested",
         source_ids=[test_code] if test_code else [],
         label_by_source={test_code: "未提供检查"} if test_code else {},
     )
-    patient_affect_state, action_timeline = _apply_patient_affect_process_action(
+    patient_affect_state, action_timeline, affect_transition = _apply_patient_affect_process_action(
         state,
         action_type="auxiliary_test_requested",
         action_label="未提供检查",
         action_timeline=action_timeline,
     )
-    return {
+    next_state = {
         "stage": "auxiliary_test",
         "test_code": test_code,
         "test_name_cn": "未提供检查",
@@ -693,6 +752,16 @@ def auxiliary_test_node(state: OsceGraphState) -> dict[str, Any]:
         "requested_tests": requested_tests,
         "action_timeline": action_timeline,
         "patient_affect_state": patient_affect_state,
+    }
+    return {
+        **next_state,
+        **_procedure_teacher_intervention_update(
+            state,
+            next_state=next_state,
+            action_type="auxiliary_test_requested",
+            action_label="未提供检查",
+            affect_transition=affect_transition,
+        ),
     }
 
 
@@ -702,7 +771,7 @@ def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
     student_hypotheses = list(state.get("student_hypotheses", []))
     if len(student_hypotheses) < MAX_HYPOTHESIS_RECORDS_PER_SESSION:
         student_hypotheses.append(diagnosis)
-    return {
+    next_state = {
         "stage": "diagnosis_submission",
         "final_submission": {"diagnosis": diagnosis, "reasoning": reasoning},
         "student_hypotheses": student_hypotheses,
@@ -711,6 +780,18 @@ def diagnosis_submit_node(state: OsceGraphState) -> dict[str, Any]:
             action_type="diagnosis_submitted",
             source_ids=["final_submission"],
             label_by_source={"final_submission": "提交诊断"},
+        ),
+    }
+    decision = resolve_teacher_intervention(
+        {**dict(state), **next_state},
+        action_type="diagnosis_submitted",
+        action_label=diagnosis,
+    )
+    return {
+        **next_state,
+        "teacher_decision_records": append_teacher_decision_record(
+            state.get("teacher_decision_records", []),
+            decision,
         ),
     }
 
@@ -939,6 +1020,21 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
         response_step_started_perf,
         metadata={"reply_role": "coach"},
     )
+    intervention_decision = resolve_teacher_intervention(
+        state,
+        action_type="hint_requested",
+        action_label="请求提示",
+        explicit_hint=True,
+        forced_hint=coach_base_hint,
+    )
+    teacher_decision_records = append_teacher_decision_record(
+        state.get("teacher_decision_records", []),
+        intervention_decision,
+        emitted_hint=hint,
+        selected_skill_ids=selected_skill_ids,
+        source_references=[item["reference"] for item in retrieved_knowledge_context],
+        processing_status=coach_step_status,
+    )
     return {
         "stage": state.get("stage", "case_intro"),
         "hint": hint,
@@ -960,6 +1056,7 @@ def socratic_hint_node(state: OsceGraphState, coach_agent: CoachAgent) -> dict[s
             skill_context=selected_skill_context,
             processing_trace=processing_trace,
         ),
+        "teacher_decision_records": teacher_decision_records,
         "processing_trace": processing_trace,
     }
 
@@ -1070,6 +1167,13 @@ def answer_request_redirect_node(state: OsceGraphState, coach_agent: CoachAgent)
                 {"role": "coach", "content": reply},
             ]
         )
+    intervention_decision = resolve_teacher_intervention(
+        state,
+        action_type="student_utterance",
+        action_label=student_message,
+        boundary_kind="answer",
+        forced_hint=reply,
+    )
     return {
         "stage": state.get("stage") or "case_intro",
         "current_intents": ["answer_request_redirect"],
@@ -1086,6 +1190,11 @@ def answer_request_redirect_node(state: OsceGraphState, coach_agent: CoachAgent)
             agent_path=["answer_request_redirect_node"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
+        ),
+        "teacher_decision_records": append_teacher_decision_record(
+            state.get("teacher_decision_records", []),
+            intervention_decision,
+            emitted_hint=reply,
         ),
     }
 
@@ -1110,6 +1219,13 @@ def safety_guardrail_node(state: OsceGraphState, coach_agent: CoachAgent) -> dic
                 {"role": "coach", "content": reply},
             ]
         )
+    intervention_decision = resolve_teacher_intervention(
+        state,
+        action_type="student_utterance",
+        action_label=student_message,
+        boundary_kind="safety",
+        forced_hint=reply,
+    )
     safety_flags = list(state.get("safety_flags", []))
     if SAFETY_BOUNDARY_FLAG not in safety_flags:
         safety_flags.append(SAFETY_BOUNDARY_FLAG)
@@ -1130,6 +1246,11 @@ def safety_guardrail_node(state: OsceGraphState, coach_agent: CoachAgent) -> dic
             agent_path=["safety_guardrail_node"],
             revealed_fact_id=None,
             safety_flags=safety_flags,
+        ),
+        "teacher_decision_records": append_teacher_decision_record(
+            state.get("teacher_decision_records", []),
+            intervention_decision,
+            emitted_hint=reply,
         ),
     }
 
@@ -2524,21 +2645,49 @@ def _apply_passive_coach_review(
     agent_turn_memory: list[dict[str, Any]],
     turn_analysis: dict[str, Any],
     processing_trace: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    affect_transition: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     if not student_message:
-        return messages, agent_turn_memory, processing_trace
+        return messages, agent_turn_memory, processing_trace, list(state.get("teacher_decision_records", []))
     unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
+    base_hint = _build_passive_coach_hint(
+        state,
+        primary_intent=primary_intent,
+        revealed_fact_id=revealed_fact_id,
+    )
+    decision_state = {
+        **dict(state),
+        "current_intents": current_intents,
+        "turn_analysis": turn_analysis,
+        "messages": messages,
+    }
+    intervention_decision = resolve_teacher_intervention(
+        decision_state,
+        action_type="student_utterance",
+        action_label=student_message,
+        affect_transition=affect_transition,
+        forced_hint=base_hint,
+        forced_reason_code=f"passive_review:{unknown_kind or primary_intent}",
+    )
     if primary_intent == "unknown_history_intent" and unknown_kind in {
         "social_greeting",
         "patient_identity_unclear",
         "unclassified_input",
     }:
-        return messages, agent_turn_memory, processing_trace
+        return (
+            messages,
+            agent_turn_memory,
+            processing_trace,
+            append_teacher_decision_record(
+                state.get("teacher_decision_records", []),
+                intervention_decision,
+            ),
+        )
     forbidden_terms = [case.diagnosis.main_diagnosis, *case.diagnosis.main_diagnosis_synonyms]
-    base_hint = _build_passive_coach_hint(
-        state,
-        primary_intent=primary_intent,
-        revealed_fact_id=revealed_fact_id,
+    policy_base_hint = (
+        intervention_decision.hint
+        if intervention_decision.mode in {TeacherInterventionMode.HINT, TeacherInterventionMode.BLOCK}
+        else ""
     )
     pedagogy_state = build_pedagogy_state(
         {
@@ -2556,7 +2705,7 @@ def _apply_passive_coach_review(
         state={**dict(state), "messages": messages},
         case=case,
         pedagogy_state=pedagogy_state,
-        base_hint=base_hint,
+        base_hint=policy_base_hint,
         retrieved_knowledge_context=retrieved_knowledge_context,
     )
     _emit_processing_progress(state, "coach", status="active")
@@ -2570,7 +2719,7 @@ def _apply_passive_coach_review(
                     chief_complaint=case.chief_complaint,
                     stage=state.get("stage", "case_intro"),
                     prompt_kind="passive_turn_review",
-                    base_hint=base_hint,
+                    base_hint=policy_base_hint,
                     prior_messages=messages,
                     pedagogy_state={
                         **pedagogy_state,
@@ -2608,42 +2757,68 @@ def _apply_passive_coach_review(
             **turn_analysis,
             "coach_unavailable": True,
             "coach_error_type": exc.__class__.__name__,
+            "teacher_intervention": _teacher_intervention_payload(intervention_decision),
         }
-        return messages, _append_agent_turn_memory(
+        fallback_hint = (
+            sanitize_coach_hint(policy_base_hint, forbidden_terms)
+            if intervention_decision.mode in {TeacherInterventionMode.HINT, TeacherInterventionMode.BLOCK}
+            else ""
+        )
+        next_messages = [*messages]
+        if fallback_hint:
+            next_messages.append({"role": "coach", "content": fallback_hint})
+        next_turn_memory = _append_agent_turn_memory(
             {**dict(state), "agent_turn_memory": agent_turn_memory},
             student_message=student_message,
-            reply="",
+            reply=fallback_hint,
             reply_role="coach",
             current_intents=current_intents,
-            turn_policy="passive_review_unavailable",
+            turn_policy="proactive_teacher_hint_fallback" if fallback_hint else "passive_review_unavailable",
             turn_analysis=unavailable_turn_analysis,
             agent_path=[*passive_agent_path[:-1], "coach_agent_unavailable"],
             revealed_fact_id=None,
             safety_flags=list(state.get("safety_flags", [])),
             processing_trace=processing_trace,
-        ), processing_trace
-    forced_hint = base_hint.strip()
+        )
+        return (
+            next_messages,
+            next_turn_memory,
+            processing_trace,
+            append_teacher_decision_record(
+                state.get("teacher_decision_records", []),
+                intervention_decision,
+                emitted_hint=fallback_hint,
+                processing_status="fallback" if fallback_hint else "error",
+            ),
+        )
+    forced_hint = policy_base_hint.strip()
     response_hint = coach_response.hint.strip()
-    unknown_kind = _unknown_kind_from_turn_analysis(turn_analysis)
-    should_suppress_unforced_hint = (
-        revealed_fact_id is not None
-        or (primary_intent == "unknown_history_intent" and unknown_kind in {"social_greeting", "patient_identity_unclear"})
-    )
     should_emit = bool(
-        forced_hint or (not should_suppress_unforced_hint and coach_response.should_emit and response_hint)
+        intervention_decision.mode in {TeacherInterventionMode.HINT, TeacherInterventionMode.BLOCK}
+        and (forced_hint or (coach_response.should_emit and response_hint))
     )
     coach_hint = sanitize_coach_hint(response_hint or forced_hint, forbidden_terms) if should_emit else ""
     next_messages = [*messages]
     if should_emit:
         next_messages.append({"role": "coach", "content": coach_hint})
+    intervention_turn_analysis = {
+        **turn_analysis,
+        "teacher_intervention": _teacher_intervention_payload(intervention_decision),
+    }
     next_agent_turn_memory = _append_agent_turn_memory(
         {**dict(state), "agent_turn_memory": agent_turn_memory},
         student_message=student_message,
         reply=coach_hint,
         reply_role="coach",
         current_intents=current_intents,
-        turn_policy="passive_review_hint" if should_emit else "passive_review_silent",
-        turn_analysis=turn_analysis,
+        turn_policy=(
+            "proactive_teacher_hint"
+            if should_emit and intervention_decision.trigger_kind.startswith("humanistic_")
+            else "passive_review_hint"
+            if should_emit
+            else "passive_review_silent"
+        ),
+        turn_analysis=intervention_turn_analysis,
         agent_path=passive_agent_path,
         revealed_fact_id=None,
         safety_flags=list(state.get("safety_flags", [])),
@@ -2651,7 +2826,16 @@ def _apply_passive_coach_review(
         retrieved_knowledge_context=retrieved_knowledge_context if should_emit else [],
         processing_trace=processing_trace,
     )
-    return next_messages, next_agent_turn_memory, processing_trace
+    return (
+        next_messages,
+        next_agent_turn_memory,
+        processing_trace,
+        append_teacher_decision_record(
+            state.get("teacher_decision_records", []),
+            intervention_decision,
+            emitted_hint=coach_hint,
+        ),
+    )
 
 
 def _coach_reply_from_agent(
@@ -2802,7 +2986,7 @@ def _apply_patient_affect_process_action(
     action_type: str,
     action_label: str,
     action_timeline: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     patient_affect_state, transition = update_affect_before_patient_reply(
         state.get("patient_affect_state"),
         student_message=action_label,
@@ -2810,7 +2994,7 @@ def _apply_patient_affect_process_action(
         action_type=action_type,
     )
     if transition.get("event") != "emotion_ignored":
-        return patient_affect_state, action_timeline
+        return patient_affect_state, action_timeline, transition
     timeline = [dict(item) for item in action_timeline if isinstance(item, dict)]
     timeline.append(
         {
@@ -2822,7 +3006,58 @@ def _apply_patient_affect_process_action(
             "metadata": dict(transition),
         }
     )
-    return patient_affect_state, timeline
+    return patient_affect_state, timeline, transition
+
+
+def _procedure_teacher_intervention_update(
+    state: OsceGraphState,
+    *,
+    next_state: dict[str, Any],
+    action_type: str,
+    action_label: str,
+    affect_transition: dict[str, Any],
+) -> dict[str, Any]:
+    decision_state = {**dict(state), **next_state}
+    decision = resolve_teacher_intervention(
+        decision_state,
+        action_type=action_type,
+        action_label=action_label,
+        affect_transition=affect_transition,
+    )
+    messages = [*state.get("messages", [])]
+    agent_turn_memory = [*state.get("agent_turn_memory", [])]
+    emitted_hint = ""
+    if decision.mode == TeacherInterventionMode.HINT and decision.hint:
+        emitted_hint = decision.hint
+        messages.append({"role": "coach", "content": emitted_hint})
+        turn_analysis = {
+            "current_intents": [action_type],
+            "confidence": 1.0,
+            "is_off_topic": False,
+            "rationale": decision.reason,
+            "teacher_intervention": _teacher_intervention_payload(decision),
+        }
+        agent_turn_memory = _append_agent_turn_memory(
+            {**dict(state), "agent_turn_memory": agent_turn_memory},
+            student_message=action_label,
+            reply=emitted_hint,
+            reply_role="coach",
+            current_intents=[action_type],
+            turn_policy="proactive_teacher_hint",
+            turn_analysis=turn_analysis,
+            agent_path=[f"{action_type}_node", "teacher_intervention_policy"],
+            revealed_fact_id=None,
+            safety_flags=list(state.get("safety_flags", [])),
+        )
+    return {
+        "messages": messages,
+        "agent_turn_memory": agent_turn_memory,
+        "teacher_decision_records": append_teacher_decision_record(
+            state.get("teacher_decision_records", []),
+            decision,
+            emitted_hint=emitted_hint,
+        ),
+    }
 
 
 def _next_action_message_turn_index(state: OsceGraphState) -> int:
@@ -2981,6 +3216,17 @@ def _boundary_turn_analysis(intent: str, rationale: str) -> dict[str, Any]:
         "confidence": 1.0,
         "is_off_topic": False,
         "rationale": rationale,
+    }
+
+
+def _teacher_intervention_payload(decision: TeacherInterventionDecision) -> dict[str, Any]:
+    return {
+        "mode": decision.mode.value,
+        "trigger_kind": decision.trigger_kind,
+        "reason_code": decision.reason_code,
+        "reason": decision.reason,
+        "issue_id": decision.issue_id,
+        "resolved_issue_ids": list(decision.resolved_issue_ids),
     }
 
 

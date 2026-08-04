@@ -960,6 +960,81 @@ def test_osce_graph_injects_patient_affect_state_and_student_repair_into_patient
     assert result["patient_affect_state"]["unanswered_signal"] is False
     patient_turn = next(turn for turn in result["agent_turn_memory"] if turn.get("reply_role") == "patient")
     assert patient_turn["patient_affect_transition"]["event"] == "patient_relief_observed"
+    assert result["teacher_decision_records"][-1]["mode"] == "silent"
+    assert result["teacher_decision_records"][-1]["reason_code"] == "patient_affect_repaired"
+
+
+def test_osce_graph_proactively_hints_after_student_ignores_patient_worry() -> None:
+    def echo_base_hint_coach_agent(request: object) -> dict[str, object]:
+        return {
+            "should_emit": True,
+            "hint": str(getattr(request, "base_hint")),
+            "trigger_kind": "passive_review",
+        }
+
+    graph = build_osce_graph(
+        patient_responder=canonical_patient_responder,
+        coach_agent=echo_base_hint_coach_agent,
+    )
+
+    result = graph.invoke(
+        base_hint_state(
+            hint_requested=False,
+            student_message="有没有发热？",
+            patient_affect_state={
+                "current_emotion": "anxious",
+                "current_emotion_label": "担忧",
+                "intensity": 2,
+                "unanswered_signal": True,
+                "last_transition": "patient_signal_detected",
+                "trajectory": [],
+            },
+            messages=[
+                {"role": "student", "content": "你现在最担心什么？"},
+                {"role": "patient", "content": "我很害怕是不是要开刀。", "emotion": "担忧"},
+            ],
+            teacher_decision_records=[
+                {
+                    "decision_id": "teacher_decision:1",
+                    "mode": "observe",
+                    "issue_id": "humanistic:patient_affect_unanswered",
+                    "resolved_issue_ids": [],
+                }
+            ],
+        )
+    )
+
+    assert result["messages"][-1] == {
+        "role": "coach",
+        "content": "先暂停医学问诊或操作，回应患者刚才的担忧，确认其感受后再继续。",
+    }
+    assert result["teacher_decision_records"][-1]["mode"] == "hint"
+    assert result["teacher_decision_records"][-1]["reason_code"] == "patient_affect_ignored"
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "proactive_teacher_hint"
+
+
+def test_osce_graph_procedure_without_consent_emits_one_visible_teacher_hint() -> None:
+    graph = build_osce_graph(coach_agent=silent_coach_agent)
+
+    result = graph.invoke(
+        base_hint_state(
+            hint_requested=False,
+            exam_code="abd.palpation.rebound",
+            messages=[
+                {"role": "student", "content": "什么时候开始疼的？"},
+                {"role": "patient", "content": "24 小时前开始。"},
+            ],
+            revealed_facts=["appendicitis_001.hf_01"],
+        )
+    )
+
+    assert result["messages"][-1] == {
+        "role": "coach",
+        "content": "进行查体前，请先向患者说明目的和可能的不适，并征得同意。",
+    }
+    assert result["teacher_decision_records"][-1]["mode"] == "hint"
+    assert result["teacher_decision_records"][-1]["reason_code"] == "procedure_without_consent_evidence"
+    assert result["agent_turn_memory"][-1]["turn_policy"] == "proactive_teacher_hint"
 
 
 def test_osce_graph_routes_possible_missed_medical_unknown_kind_to_specific_hint() -> None:

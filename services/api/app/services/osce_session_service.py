@@ -66,6 +66,12 @@ from app.services.training_skill_candidate_store import (
     training_skill_candidate_store,
 )
 from app.services.student_profile_summary_service import build_skill_profile_summary
+from app.services.teacher_intervention_service import (
+    TeacherInterventionMode,
+    append_teacher_decision_record,
+    latest_student_safe_intervention,
+    resolve_teacher_intervention,
+)
 from app.services.training_skill_orchestrator_service import build_active_skill_context
 from app.services.training_skill_store import (
     TrainingSkillOwnershipError,
@@ -210,6 +216,7 @@ class OsceSession:
     patient_affect_state: dict[str, Any] = field(default_factory=build_initial_patient_affect_state)
     pedagogy_state: dict[str, Any] = field(default_factory=dict)
     agent_decision_trace: list[dict[str, Any]] = field(default_factory=list)
+    teacher_decision_records: list[dict[str, Any]] = field(default_factory=list)
     reflection_summary: dict[str, Any] | None = None
     procedure_simulation_audit_items: list[dict[str, Any]] = field(default_factory=list)
     student_turn_count: int = 0
@@ -429,6 +436,7 @@ class OsceSessionService:
             )
             session.pedagogy_state = {}
             session.agent_decision_trace = []
+            session.teacher_decision_records = []
             agent_update = _refresh_agent_state(session)
             selected_skill_ids = _selected_skill_ids(
                 session.active_skill_context
@@ -1191,6 +1199,11 @@ class OsceSessionService:
         working_session.student_hypotheses.append(hypothesis)
         working_session.hypothesis_record_count = hypothesis_record_count + 1
         self._refresh_active_skill_context(working_session)
+        _apply_session_teacher_intervention(
+            working_session,
+            action_type="hypothesis_recorded",
+            action_label=hypothesis,
+        )
         agent_update = _refresh_agent_state(working_session)
         self._commit_working_session(
             session,
@@ -2296,6 +2309,11 @@ class OsceSessionService:
         payload = {
             "latest_decision": latest_decision,
             "pedagogy_state": agent_update.get("pedagogy_state", session.pedagogy_state),
+            "teacher_intervention_decision": (
+                dict(session.teacher_decision_records[-1])
+                if session.teacher_decision_records
+                else {}
+            ),
         }
         if "reflection_summary" in agent_update:
             payload["reflection_summary"] = agent_update["reflection_summary"]
@@ -2463,6 +2481,7 @@ def _graph_state_from_session(
         "patient_affect_state": session.patient_affect_state,
         "pedagogy_state": session.pedagogy_state,
         "agent_decision_trace": session.agent_decision_trace,
+        "teacher_decision_records": session.teacher_decision_records,
         "reflection_summary": session.reflection_summary,
         "processing_progress_callback": processing_progress_callback,
     }
@@ -2489,6 +2508,10 @@ def _apply_graph_state(session: OsceSession, graph_state: dict[str, Any]) -> Non
     session.patient_affect_state = graph_state.get("patient_affect_state", session.patient_affect_state)
     session.pedagogy_state = graph_state.get("pedagogy_state", session.pedagogy_state)
     session.agent_decision_trace = graph_state.get("agent_decision_trace", session.agent_decision_trace)
+    session.teacher_decision_records = graph_state.get(
+        "teacher_decision_records",
+        session.teacher_decision_records,
+    )
     session.reflection_summary = graph_state.get("reflection_summary", session.reflection_summary)
 
 
@@ -2500,6 +2523,51 @@ def _refresh_agent_state(session: OsceSession, use_reflection: bool = False) -> 
     if "reflection_summary" in agent_update:
         session.reflection_summary = agent_update["reflection_summary"]
     return agent_update
+
+
+def _apply_session_teacher_intervention(
+    session: OsceSession,
+    *,
+    action_type: str,
+    action_label: str,
+) -> None:
+    decision = resolve_teacher_intervention(
+        _graph_state_from_session(session),
+        action_type=action_type,
+        action_label=action_label,
+    )
+    emitted_hint = decision.hint if decision.mode == TeacherInterventionMode.HINT else ""
+    if emitted_hint:
+        session.messages.append({"role": "coach", "content": emitted_hint})
+        session.agent_turn_memory.append(
+            {
+                "turn_id": f"turn:{len(session.agent_turn_memory) + 1}",
+                "student_message": action_label,
+                "reply": emitted_hint,
+                "reply_role": "coach",
+                "current_intents": [action_type],
+                "turn_policy": "proactive_teacher_hint",
+                "turn_analysis": {
+                    "current_intents": [action_type],
+                    "confidence": 1.0,
+                    "is_off_topic": False,
+                    "rationale": decision.reason,
+                    "teacher_intervention": {
+                        "mode": decision.mode.value,
+                        "trigger_kind": decision.trigger_kind,
+                        "reason_code": decision.reason_code,
+                        "issue_id": decision.issue_id,
+                    },
+                },
+                "agent_path": ["session_service", "teacher_intervention_policy"],
+                "safety_flags": list(session.safety_flags),
+            }
+        )
+    session.teacher_decision_records = append_teacher_decision_record(
+        session.teacher_decision_records,
+        decision,
+        emitted_hint=emitted_hint,
+    )
 
 
 def _personal_skill_payload_for_report(
@@ -2904,6 +2972,7 @@ def _initial_graph_state(case_id: str) -> dict[str, Any]:
         "patient_affect_state": build_initial_patient_affect_state(),
         "pedagogy_state": {},
         "agent_decision_trace": [],
+        "teacher_decision_records": [],
         "reflection_summary": None,
         "hint_request_count": 0,
     }
@@ -4233,6 +4302,7 @@ def _serialize_session(session: OsceSession, case: Case) -> dict[str, Any]:
         "safety_flags": session.safety_flags,
         "agent_turn_memory": _serialize_student_agent_turn_memory(session),
         "pedagogy_state": _serialize_student_pedagogy_state(session),
+        "teacher_intervention": latest_student_safe_intervention(session.teacher_decision_records),
     }
 
 

@@ -3973,6 +3973,11 @@ def test_osce_session_state_can_be_read_after_session_memory_is_cleared(tmp_path
     assert message_response.status_code == 200
     assert exam_response.status_code == 200
     assert hypothesis_response.status_code == 200
+    assert exam_response.json()["teacher_intervention"] == {
+        "mode": "hint",
+        "trigger_kind": "humanistic_issue_triggered",
+        "message": "进行查体前，请先向患者说明目的和可能的不适，并征得同意。",
+    }
 
     osce_session_service._sessions.clear()
     loaded_response = client.get(f"/api/sessions/{session_id}")
@@ -3980,10 +3985,15 @@ def test_osce_session_state_can_be_read_after_session_memory_is_cleared(tmp_path
     assert loaded_response.status_code == 200
     payload = loaded_response.json()
     assert payload["session_id"] == session_id
-    assert payload["messages"] == message_response.json()["messages"]
+    assert payload["messages"] == hypothesis_response.json()["messages"]
+    assert payload["messages"][-1] == {
+        "role": "coach",
+        "content": "进行查体前，请先向患者说明目的和可能的不适，并征得同意。",
+    }
     assert payload["revealed_facts"] == ["appendicitis_001.hf_01"]
     assert payload["requested_exams"] == ["abd.palpation.rebound"]
     assert payload["student_hypotheses"] == ["先考虑急腹症，需要继续查体和检查验证。"]
+    assert payload["teacher_intervention"]["mode"] in {"silent", "observe"}
 
 
 def test_osce_session_records_training_events(tmp_path, authenticated_user: dict[str, str]) -> None:
