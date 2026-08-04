@@ -492,7 +492,14 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
     created_item = create_response.json()["knowledge_item"]
     assert created_item == {
         **payload,
+        "char_count": len(payload["text"]),
         "case_title": "右下腹痛教学病例",
+        "quality_warnings": ["short_chunk"],
+        "review_note": "",
+        "review_status": "approved",
+        "reviewed_at": "",
+        "reviewed_by": "",
+        "risk_flags": [],
         "source_title": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
         "stage_scope_labels": ["问诊阶段"],
         "updated_by": "admin@osce.test",
@@ -785,6 +792,172 @@ def test_admin_rag_document_upload_persists_chunk_quality_metadata(tmp_path, mon
     assert saved_item["quality_warnings"] == ["low_value_section"]
     assert saved_item["risk_flags"] == ["references_section"]
     assert saved_item["char_count"] == 34
+    assert saved_item["review_status"] == "pending_review"
+    assert response.json()["document"]["pending_review_chunk_count"] == 1
+    assert response.json()["document"]["indexable_chunk_count"] == 0
+
+
+def test_rag_risk_review_blocks_pre_submit_answers_and_preserves_chunk_metadata_on_edit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store, raising=False)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    def fake_chunk_rag_document(**kwargs):
+        return [
+            RagDocumentChunk(
+                document_id=kwargs["document_id"],
+                chunk_index=0,
+                text="最终诊断为急性阑尾炎，本段只能在提交后用于复盘。",
+                section_title="诊断复盘",
+                page_number=2,
+                source_location="review.pdf · 第 2 页 · 诊断复盘 · 片段 1",
+                chunking_strategy="local_pdf_page_window",
+                chunk_categories=["OCRText"],
+                quality_warnings=["short_chunk"],
+                risk_flags=["diagnosis_answer_content"],
+                char_count=29,
+            )
+        ]
+
+    monkeypatch.setattr(main, "chunk_rag_document", fake_chunk_rag_document, raising=False)
+    mock_vector_rag_hits_for_store(monkeypatch, store)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        upload_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "case_id": "appendicitis_001",
+                "file_name": "review.pdf",
+                "content_base64": base64.b64encode(b"pretend-pdf").decode("ascii"),
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach"],
+            },
+        )
+        uploaded_item = upload_response.json()["knowledge_items"][0]
+        blocked_approval = client.patch(
+            f"/api/admin/rag/knowledge/{uploaded_item['knowledge_id']}/review",
+            json={"decision": "approved", "note": "训练前不应批准"},
+        )
+        edit_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={
+                "knowledge_id": uploaded_item["knowledge_id"],
+                "scope": "case",
+                "case_id": "appendicitis_001",
+                "content_kind": "document_chunk",
+                "visibility": "post_submit_review",
+                "allowed_agents": ["reflection"],
+                "stage_scope": ["feedback"],
+                "source_id": "",
+                "title": "诊断复盘",
+                "text": uploaded_item["text"],
+                "tags": ["review"],
+                "version": 2,
+            },
+        )
+        edited_item = edit_response.json()["knowledge_item"]
+        approval_response = client.patch(
+            f"/api/admin/rag/knowledge/{uploaded_item['knowledge_id']}/review",
+            json={"decision": "approved", "note": "仅用于提交后复盘"},
+        )
+
+    assert upload_response.status_code == 200
+    assert uploaded_item["review_status"] == "pending_review"
+    assert blocked_approval.status_code == 409
+    assert "pre-submit" in blocked_approval.json()["detail"]
+    assert (
+        retrieve_agent_context(
+            agent_role="coach",
+            case_ids=["appendicitis_001"],
+            query_terms=["最终诊断"],
+            allowed_visibilities={"pre_submit_safe"},
+            store=store,
+        )
+        == []
+    )
+
+    assert edit_response.status_code == 200
+    assert edited_item["document_id"] == uploaded_item["document_id"]
+    assert edited_item["source_location"] == "review.pdf · 第 2 页 · 诊断复盘 · 片段 1"
+    assert edited_item["chunk_categories"] == ["OCRText"]
+    assert edited_item["risk_flags"] == ["diagnosis_answer_content"]
+    assert edited_item["review_status"] == "pending_review"
+
+    assert approval_response.status_code == 200
+    approved_item = approval_response.json()["knowledge_item"]
+    assert approved_item["review_status"] == "approved"
+    assert approved_item["reviewed_by"] == "admin@osce.test"
+    assert approved_item["review_note"] == "仅用于提交后复盘"
+    assert approval_response.json()["document"]["approved_chunk_count"] == 1
+    approved_context = retrieve_agent_context(
+        agent_role="reflection",
+        case_ids=["appendicitis_001"],
+        query_terms=["最终诊断"],
+        allowed_visibilities={"post_submit_review"},
+        stage_scope=["feedback"],
+        store=store,
+    )
+    assert approved_context
+    assert approved_context[0]["knowledge_id"] == uploaded_item["knowledge_id"]
+
+
+def test_admin_can_reject_all_pending_chunks_in_document(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+
+    def fake_chunk_rag_document(**kwargs):
+        return [
+            RagDocumentChunk(
+                document_id=kwargs["document_id"],
+                chunk_index=0,
+                text="References\nSmith J.",
+                section_title="References",
+                page_number=5,
+                source_location="paper.pdf · 第 5 页",
+                risk_flags=["references_section"],
+            ),
+            RagDocumentChunk(
+                document_id=kwargs["document_id"],
+                chunk_index=1,
+                text="问诊时应先建立疼痛时间线。",
+                section_title="病史采集",
+                page_number=1,
+                source_location="paper.pdf · 第 1 页",
+            ),
+        ]
+
+    monkeypatch.setattr(main, "chunk_rag_document", fake_chunk_rag_document, raising=False)
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        upload_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "scope": "global",
+                "file_name": "paper.pdf",
+                "content_base64": base64.b64encode(b"pretend-pdf").decode("ascii"),
+            },
+        )
+        document = upload_response.json()["document"]
+        review_response = client.patch(
+            f"/api/admin/rag/documents/{document['document_id']}/review",
+            json={"decision": "rejected", "note": "参考文献段不入库"},
+        )
+
+    assert document["approved_chunk_count"] == 1
+    assert document["pending_review_chunk_count"] == 1
+    assert review_response.status_code == 200
+    reviewed_document = review_response.json()["document"]
+    assert reviewed_document["review_status"] == "mixed"
+    assert reviewed_document["approved_chunk_count"] == 1
+    assert reviewed_document["rejected_chunk_count"] == 1
+    assert reviewed_document["pending_review_chunk_count"] == 0
+    assert {item["review_status"] for item in review_response.json()["knowledge_items"]} == {
+        "approved",
+        "rejected",
+    }
 
 
 def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypatch) -> None:

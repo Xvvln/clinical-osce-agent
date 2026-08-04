@@ -419,6 +419,34 @@ def test_search_retrieval_documents_includes_admin_managed_safe_knowledge(tmp_pa
     assert all(result.source_type != "rag_knowledge" for result in hidden_results)
 
 
+def test_retrieval_index_excludes_unapproved_managed_knowledge(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    for review_status in ["pending_review", "rejected"]:
+        store.upsert_item(
+            {
+                "knowledge_id": f"global:review:{review_status}",
+                "scope": "global",
+                "case_id": "",
+                "content_kind": "teaching_note",
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach"],
+                "source_id": "",
+                "title": review_status,
+                "text": f"不应进入索引 {review_status}",
+                "tags": ["review"],
+                "review_status": review_status,
+            },
+            updated_by="admin@example.test",
+        )
+    monkeypatch.setattr(retrieval_index_module, "rag_knowledge_store", store)
+    retrieval_index_module._retrieval_documents.cache_clear()
+
+    references = {document.reference for document in retrieval_index_module._retrieval_documents()}
+
+    assert "rag_knowledge:global:review:pending_review" not in references
+    assert "rag_knowledge:global:review:rejected" not in references
+
+
 def test_chroma_source_documents_include_admin_managed_knowledge_in_manifest(tmp_path, monkeypatch) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
     store.upsert_item(

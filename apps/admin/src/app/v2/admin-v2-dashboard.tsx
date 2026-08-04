@@ -292,6 +292,13 @@ type AdminRagDocument = Readonly<{
   allowed_agents?: readonly string[];
   stage_scope?: readonly string[];
   stage_scope_labels?: readonly string[];
+  review_status?: string;
+  approved_chunk_count?: number;
+  pending_review_chunk_count?: number;
+  rejected_chunk_count?: number;
+  indexable_chunk_count?: number;
+  quality_warnings?: readonly string[];
+  risk_flags?: readonly string[];
   updated_at?: string;
 }>;
 
@@ -318,7 +325,16 @@ type AdminRagKnowledgeItem = Readonly<{
   section_title?: string;
   page_number?: number | null;
   source_location?: string;
+  chunking_strategy?: string;
+  chunk_categories?: readonly string[];
+  quality_warnings?: readonly string[];
+  risk_flags?: readonly string[];
+  char_count?: number | null;
   enabled?: boolean;
+  review_status?: string;
+  review_note?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
   updated_at?: string;
 }>;
 
@@ -354,6 +370,18 @@ type AdminRagDocumentUploadResponse = Readonly<{
   document: AdminRagDocument;
   knowledge_items?: readonly AdminRagKnowledgeItem[];
 }>;
+
+type AdminRagKnowledgeMutationResponse = Readonly<{
+  knowledge_item: AdminRagKnowledgeItem;
+  document?: AdminRagDocument;
+}>;
+
+type AdminRagDocumentReviewResponse = Readonly<{
+  document: AdminRagDocument;
+  knowledge_items: readonly AdminRagKnowledgeItem[];
+}>;
+
+type AdminRagReviewDecision = "approved" | "rejected";
 
 type AdminCaseCreationPayload = Readonly<{
   case: Record<string, unknown>;
@@ -990,12 +1018,33 @@ async function setRagDocumentEnabled(documentId: string, enabled: boolean): Prom
   return payload.document;
 }
 
-async function upsertRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload): Promise<AdminRagKnowledgeItem> {
-  const response = await fetchJson<{ knowledge_item: AdminRagKnowledgeItem }>("/api/admin/rag/knowledge", {
+async function upsertRagKnowledgeItem(payload: AdminRagKnowledgeItemPayload): Promise<AdminRagKnowledgeMutationResponse> {
+  return fetchJson<AdminRagKnowledgeMutationResponse>("/api/admin/rag/knowledge", {
     body: JSON.stringify(payload),
     method: "POST",
   });
-  return response.knowledge_item;
+}
+
+async function reviewRagKnowledgeItem(
+  knowledgeId: string,
+  decision: AdminRagReviewDecision,
+  note: string,
+): Promise<AdminRagKnowledgeMutationResponse> {
+  return fetchJson<AdminRagKnowledgeMutationResponse>(`/api/admin/rag/knowledge/${encodeURIComponent(knowledgeId)}/review`, {
+    body: JSON.stringify({ decision, note }),
+    method: "PATCH",
+  });
+}
+
+async function reviewRagDocument(
+  documentId: string,
+  decision: AdminRagReviewDecision,
+  note: string,
+): Promise<AdminRagDocumentReviewResponse> {
+  return fetchJson<AdminRagDocumentReviewResponse>(`/api/admin/rag/documents/${encodeURIComponent(documentId)}/review`, {
+    body: JSON.stringify({ decision, note }),
+    method: "PATCH",
+  });
 }
 
 async function uploadRagDocument(payload: AdminRagDocumentUploadPayload): Promise<AdminRagDocumentUploadResponse> {
@@ -1305,11 +1354,15 @@ export function AdminV2Dashboard() {
     setErrorText("");
     setStatusText("");
     try {
-      const savedItem = await upsertRagKnowledgeItem(buildRagKnowledgePayload(item));
+      const response = await upsertRagKnowledgeItem(buildRagKnowledgePayload(item));
+      const savedItem = response.knowledge_item;
       setData((current) => {
         const exists = current.knowledgeItems.some((currentItem) => currentItem.knowledge_id === savedItem.knowledge_id);
         return {
           ...current,
+          documents: response.document
+            ? current.documents.map((document) => (document.document_id === response.document?.document_id ? response.document : document))
+            : current.documents,
           knowledgeItems: exists
             ? current.knowledgeItems.map((currentItem) => (currentItem.knowledge_id === savedItem.knowledge_id ? savedItem : currentItem))
             : [savedItem, ...current.knowledgeItems],
@@ -1319,6 +1372,65 @@ export function AdminV2Dashboard() {
       return savedItem;
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "保存知识库内容失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleReviewKnowledgeItem(
+    knowledgeId: string,
+    decision: AdminRagReviewDecision,
+    note: string,
+  ): Promise<AdminRagKnowledgeItem> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const response = await reviewRagKnowledgeItem(knowledgeId, decision, note);
+      setData((current) => ({
+        ...current,
+        documents: response.document
+          ? current.documents.map((document) => (document.document_id === response.document?.document_id ? response.document : document))
+          : current.documents,
+        knowledgeItems: current.knowledgeItems.map((item) =>
+          item.knowledge_id === response.knowledge_item.knowledge_id ? response.knowledge_item : item,
+        ),
+      }));
+      setStatusText(decision === "approved" ? "知识片段已批准并允许进入检索。" : "知识片段已拒绝，不会进入检索。");
+      return response.knowledge_item;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : decision === "approved" ? "批准知识片段失败" : "拒绝知识片段失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleReviewDocument(
+    documentId: string,
+    decision: AdminRagReviewDecision,
+    note: string,
+  ): Promise<void> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const response = await reviewRagDocument(documentId, decision, note);
+      const reviewedKnowledgeIds = new Set(response.knowledge_items.map((item) => item.knowledge_id));
+      setData((current) => ({
+        ...current,
+        documents: current.documents.map((document) =>
+          document.document_id === response.document.document_id ? response.document : document,
+        ),
+        knowledgeItems: [
+          ...response.knowledge_items,
+          ...current.knowledgeItems.filter((item) => !reviewedKnowledgeIds.has(item.knowledge_id)),
+        ],
+      }));
+      setStatusText(decision === "approved" ? "文档中的待审片段已批准。" : "文档中的待审片段已拒绝。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : decision === "approved" ? "批准文档失败" : "拒绝文档失败");
       throw error;
     } finally {
       setIsDocumentBusy(false);
@@ -1532,6 +1644,8 @@ export function AdminV2Dashboard() {
                 onOpenCaseCreation={() => setIsCaseCreationOpen(true)}
                 onSaveCaseFields={(caseId, payload) => handleUpdateCaseFields(caseId, payload)}
                 onSaveKnowledgeItem={(item) => handleSaveKnowledgeItem(item)}
+                onReviewDocument={(documentId, decision, note) => handleReviewDocument(documentId, decision, note)}
+                onReviewKnowledgeItem={(knowledgeId, decision, note) => handleReviewKnowledgeItem(knowledgeId, decision, note)}
                 onSaveRubricItem={(rubricId, itemId, description) => handleUpdateRubricItem(rubricId, itemId, description)}
                 onSetDocumentEnabled={(documentId, enabled) => void handleSetDocumentEnabled(documentId, enabled)}
                 onUploadDocument={(payload) => handleUploadRagDocument(payload)}
@@ -1642,6 +1756,8 @@ function ResourcesSection({
   data,
   isDocumentBusy,
   onOpenCaseCreation,
+  onReviewDocument,
+  onReviewKnowledgeItem,
   onSaveCaseFields,
   onSaveKnowledgeItem,
   onSaveRubricItem,
@@ -1651,6 +1767,8 @@ function ResourcesSection({
   data: DashboardData;
   isDocumentBusy: boolean;
   onOpenCaseCreation: () => void;
+  onReviewDocument: (documentId: string, decision: AdminRagReviewDecision, note: string) => Promise<void>;
+  onReviewKnowledgeItem: (knowledgeId: string, decision: AdminRagReviewDecision, note: string) => Promise<AdminRagKnowledgeItem>;
   onSaveCaseFields: (caseId: string, payload: AdminCaseFieldUpdatePayload) => Promise<AdminCaseRaw>;
   onSaveKnowledgeItem: (item: AdminRagKnowledgeItem) => Promise<AdminRagKnowledgeItem>;
   onSaveRubricItem: (rubricId: string, itemId: string, description: string) => Promise<AdminRubricDetail>;
@@ -1727,7 +1845,12 @@ function ResourcesSection({
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<BookOpen />} label="病例" value={formatCount(data.cases.length)} helper="学生可训练病例" />
         <MetricCard icon={<FileText />} label="来源" value={formatCount(data.sources.length)} helper="来源台账" />
-        <MetricCard icon={<Brain />} label="知识库文档" value={formatCount(data.documents.length)} helper={`${data.documents.filter((document) => document.enabled).length} 份已启用`} />
+        <MetricCard
+          icon={<Brain />}
+          label="知识库文档"
+          value={formatCount(data.documents.length)}
+          helper={`${data.documents.reduce((total, document) => total + (document.pending_review_chunk_count ?? 0), 0)} 个片段待审`}
+        />
       </div>
       <Card>
         <CardHeader>
@@ -1771,7 +1894,7 @@ function ResourcesSection({
       <Card>
         <CardHeader>
           <CardTitle>知识库文档</CardTitle>
-          <CardDescription>教师上传的全局或病例知识库，启用后进入所选 Agent 的 RAG 检索。</CardDescription>
+          <CardDescription>教师上传的全局或病例知识库；只有“已启用 + 已批准”的片段才会进入 Agent 检索。</CardDescription>
         </CardHeader>
         <CardContent>
           <DocumentUploadPanel
@@ -1803,7 +1926,13 @@ function ResourcesSection({
                     <td className="py-3 pr-4 text-[#6F6257]">{joinText(document.stage_scope_labels ?? document.stage_scope, "全部训练阶段")}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.chunk_count ?? "-"}</td>
                     <td className="py-3 pr-4">
-                      <Badge variant={document.enabled ? "success" : "muted"}>{document.enabled ? "已启用" : "未启用"}</Badge>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={document.enabled ? "success" : "muted"}>{document.enabled ? "已启用" : "未启用"}</Badge>
+                        <Badge variant={getKnowledgeReviewBadgeVariant(document.review_status)}>{getKnowledgeReviewStatusLabel(document.review_status)}</Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-[#8A7D6F]">
+                        可检索 {document.indexable_chunk_count ?? 0} · 待审 {document.pending_review_chunk_count ?? 0} · 已拒绝 {document.rejected_chunk_count ?? 0}
+                      </p>
                     </td>
                     <td className="py-3 pr-4">
                       <div className="flex flex-wrap gap-2">
@@ -1813,6 +1942,26 @@ function ResourcesSection({
                         <Button disabled={isDocumentBusy} onClick={() => onSetDocumentEnabled(document.document_id, !document.enabled)} size="sm" variant={document.enabled ? "outline" : "secondary"}>
                           {document.enabled ? "停用文档" : "启用文档"}
                         </Button>
+                        {(document.pending_review_chunk_count ?? 0) > 0 ? (
+                          <>
+                            <Button
+                              disabled={isDocumentBusy}
+                              onClick={() => void onReviewDocument(document.document_id, "approved", "整份文档批量审核")}
+                              size="sm"
+                              variant="secondary"
+                            >
+                              批准待审片段
+                            </Button>
+                            <Button
+                              disabled={isDocumentBusy}
+                              onClick={() => void onReviewDocument(document.document_id, "rejected", "整份文档批量退回")}
+                              size="sm"
+                              variant="outline"
+                            >
+                              退回待审片段
+                            </Button>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1829,6 +1978,7 @@ function ResourcesSection({
           isSaving={isDocumentBusy}
           items={openDocumentItems}
           onClose={() => setOpenDocumentId("")}
+          onReviewKnowledgeItem={onReviewKnowledgeItem}
           onSaveKnowledgeItem={onSaveKnowledgeItem}
         />
       ) : null}
@@ -2395,18 +2545,21 @@ function KnowledgeContentModal({
   isSaving,
   items,
   onClose,
+  onReviewKnowledgeItem,
   onSaveKnowledgeItem,
 }: Readonly<{
   document: AdminRagDocument;
   isSaving: boolean;
   items: readonly AdminRagKnowledgeItem[];
   onClose: () => void;
+  onReviewKnowledgeItem: (knowledgeId: string, decision: AdminRagReviewDecision, note: string) => Promise<AdminRagKnowledgeItem>;
   onSaveKnowledgeItem: (item: AdminRagKnowledgeItem) => Promise<AdminRagKnowledgeItem>;
 }>) {
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState(items[0]?.knowledge_id ?? "");
   const selectedItem = items.find((item) => item.knowledge_id === selectedKnowledgeId) ?? items[0] ?? null;
   const [draftTitle, setDraftTitle] = useState(selectedItem?.title || selectedItem?.section_title || "");
   const [draftText, setDraftText] = useState(selectedItem?.text || "");
+  const [reviewNote, setReviewNote] = useState(selectedItem?.review_note || "");
   const [localErrorText, setLocalErrorText] = useState("");
 
   useEffect(() => {
@@ -2416,6 +2569,7 @@ function KnowledgeContentModal({
   useEffect(() => {
     setDraftTitle(selectedItem?.title || selectedItem?.section_title || "");
     setDraftText(selectedItem?.text || "");
+    setReviewNote(selectedItem?.review_note || "");
     setLocalErrorText("");
   }, [selectedItem?.knowledge_id, selectedItem?.section_title, selectedItem?.text, selectedItem?.title]);
 
@@ -2443,6 +2597,20 @@ function KnowledgeContentModal({
       setLocalErrorText("");
     } catch (error) {
       setLocalErrorText(error instanceof Error ? error.message : "保存失败");
+    }
+  }
+
+  async function handleReview(decision: AdminRagReviewDecision) {
+    if (!selectedItem) {
+      return;
+    }
+    try {
+      const reviewedItem = await onReviewKnowledgeItem(selectedItem.knowledge_id, decision, reviewNote.trim());
+      setSelectedKnowledgeId(reviewedItem.knowledge_id);
+      setReviewNote(reviewedItem.review_note || "");
+      setLocalErrorText("");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "审核失败");
     }
   }
 
@@ -2479,6 +2647,7 @@ function KnowledgeContentModal({
                   >
                     <span className="block font-semibold">{item.section_title || item.title || `片段 ${index + 1}`}</span>
                     <span className={cn("mt-1 block text-xs", isActive ? "text-white/70" : "text-[#8A7D6F]")}>{item.chunk_index != null ? `第 ${item.chunk_index + 1} 段` : "知识条目"}</span>
+                    <span className={cn("mt-1 block text-xs", isActive ? "text-white/70" : "text-[#8A7D6F]")}>{getKnowledgeReviewStatusLabel(item.review_status)}</span>
                   </button>
                 );
               })}
@@ -2488,11 +2657,32 @@ function KnowledgeContentModal({
           <section className="min-h-0 overflow-y-auto p-5">
             {selectedItem ? (
               <div className="grid gap-4">
-                <div className="grid gap-3 md:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-5">
                   <MiniStat label="可见性" value={getKnowledgeVisibilityLabel(selectedItem.visibility)} />
                   <MiniStat label="可用模块" value={joinText(toTokenList(selectedItem.allowed_agents), "未配置")} />
                   <MiniStat label="适用阶段" value={joinText(selectedItem.stage_scope_labels ?? selectedItem.stage_scope, "全部训练阶段")} />
+                  <MiniStat label="准入状态" value={getKnowledgeReviewStatusLabel(selectedItem.review_status)} />
                   <MiniStat label="更新时间" value={formatDateTime(selectedItem.updated_at ?? "")} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+                    <p className="text-sm font-semibold">质量提示</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {toTextList(selectedItem.quality_warnings).map((warning) => (
+                        <Badge key={warning} variant="muted">{getKnowledgeQualityLabel(warning)}</Badge>
+                      ))}
+                      {toTextList(selectedItem.quality_warnings).length === 0 ? <Badge variant="success">无质量警告</Badge> : null}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+                    <p className="text-sm font-semibold">风险标记</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {toTextList(selectedItem.risk_flags).map((risk) => (
+                        <Badge key={risk} variant="warning">{getKnowledgeRiskLabel(risk)}</Badge>
+                      ))}
+                      {toTextList(selectedItem.risk_flags).length === 0 ? <Badge variant="success">未发现风险</Badge> : null}
+                    </div>
+                  </div>
                 </div>
                 <label className="grid gap-2 text-sm font-semibold">
                   标题
@@ -2507,10 +2697,31 @@ function KnowledgeContentModal({
                     onChange={(event) => setDraftText(event.target.value)}
                   />
                 </label>
+                <label className="grid gap-2 text-sm font-semibold">
+                  审核说明
+                  <textarea
+                    className="min-h-24 resize-y rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] px-4 py-3 text-sm leading-6 outline-none transition focus:border-[#AE5630] focus:bg-white"
+                    maxLength={1000}
+                    onChange={(event) => setReviewNote(event.target.value)}
+                    placeholder="说明批准用途或退回原因"
+                    value={reviewNote}
+                  />
+                </label>
+                {selectedItem.reviewed_by ? (
+                  <p className="text-xs text-[#6F6257]">
+                    最近审核：{selectedItem.reviewed_by} · {formatDateTime(selectedItem.reviewed_at || "")}
+                  </p>
+                ) : null}
                 {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button onClick={onClose} variant="secondary">
                     取消
+                  </Button>
+                  <Button disabled={isSaving} onClick={() => void handleReview("rejected")} variant="outline">
+                    退回片段
+                  </Button>
+                  <Button disabled={isSaving} onClick={() => void handleReview("approved")} variant="secondary">
+                    批准片段
                   </Button>
                   <Button disabled={isSaving} onClick={() => void handleSave()}>
                     {isSaving ? <Loader2 className="animate-spin" /> : <FileText />}
@@ -5422,6 +5633,48 @@ function getKnowledgeVisibilityLabel(visibility: string | undefined): string {
     secret_scoring_only: "仅评分结构使用",
   };
   return labels[visibility || ""] ?? (visibility || "未记录");
+}
+
+function getKnowledgeReviewStatusLabel(reviewStatus: string | undefined): string {
+  const labels: Record<string, string> = {
+    approved: "已批准",
+    mixed: "部分通过",
+    pending_review: "待审核",
+    rejected: "已拒绝",
+  };
+  return labels[reviewStatus || ""] ?? (reviewStatus || "已批准");
+}
+
+function getKnowledgeReviewBadgeVariant(
+  reviewStatus: string | undefined,
+): "danger" | "muted" | "success" | "warning" {
+  if (reviewStatus === "approved") {
+    return "success";
+  }
+  if (reviewStatus === "rejected") {
+    return "danger";
+  }
+  return reviewStatus === "pending_review" ? "warning" : "muted";
+}
+
+function getKnowledgeQualityLabel(value: string): string {
+  const labels: Record<string, string> = {
+    low_value_section: "低价值章节",
+    missing_section_title: "缺少章节标题",
+    over_max_chars: "片段过长",
+    short_chunk: "片段较短",
+    short_table_chunk: "表格片段较短",
+  };
+  return labels[value] ?? value;
+}
+
+function getKnowledgeRiskLabel(value: string): string {
+  const labels: Record<string, string> = {
+    diagnosis_answer_content: "含诊断答案",
+    references_section: "参考文献段",
+    treatment_or_dose_content: "含治疗或剂量",
+  };
+  return labels[value] ?? value;
 }
 
 function getOperationLabel(operation: string): string {

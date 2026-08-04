@@ -367,6 +367,8 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
     for item in rag_knowledge_store.list_items():
         if item.get("enabled") is False:
             continue
+        if item.get("review_status", "approved") != "approved":
+            continue
         visibility = str(item.get("visibility", "")).strip()
         if visibility not in INDEXABLE_RAG_KNOWLEDGE_VISIBILITIES:
             continue

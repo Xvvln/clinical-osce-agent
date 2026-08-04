@@ -59,6 +59,57 @@ def test_rag_knowledge_store_persists_and_filters_items(tmp_path) -> None:
     assert not store.delete_item("case:appendicitis_001:teaching:history_migration")
 
 
+def test_rag_knowledge_store_persists_review_audit_and_document_counts(tmp_path) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    document_id = "kbdoc:global:risk-review"
+    for chunk_index, review_status in enumerate(["approved", "pending_review"]):
+        store.upsert_item(
+            {
+                "knowledge_id": f"{document_id}:chunk:{chunk_index:04d}",
+                "scope": "global",
+                "case_id": "",
+                "content_kind": "document_chunk",
+                "visibility": "post_submit_review",
+                "allowed_agents": ["reflection"],
+                "source_id": "",
+                "title": f"片段 {chunk_index + 1}",
+                "text": "教学复盘内容",
+                "tags": ["review"],
+                "document_id": document_id,
+                "document_name": "review.md",
+                "chunk_index": chunk_index,
+                "chunk_count": 2,
+                "review_status": review_status,
+                "enabled": True,
+            },
+            updated_by="admin@example.test",
+        )
+
+    before_review = store.list_documents()[0]
+    assert before_review["review_status"] == "pending_review"
+    assert before_review["approved_chunk_count"] == 1
+    assert before_review["pending_review_chunk_count"] == 1
+    assert before_review["indexable_chunk_count"] == 1
+
+    reviewed_document = store.set_document_review_status(
+        document_id,
+        review_status="rejected",
+        review_note="内容不适合入库",
+        reviewed_by="reviewer@example.test",
+    )
+
+    assert reviewed_document is not None
+    assert reviewed_document["review_status"] == "mixed"
+    assert reviewed_document["approved_chunk_count"] == 1
+    assert reviewed_document["rejected_chunk_count"] == 1
+    rejected_item = store.get_item(f"{document_id}:chunk:0001")
+    assert rejected_item is not None
+    assert rejected_item["review_status"] == "rejected"
+    assert rejected_item["review_note"] == "内容不适合入库"
+    assert rejected_item["reviewed_by"] == "reviewer@example.test"
+    assert rejected_item["reviewed_at"]
+
+
 def test_rag_knowledge_store_can_seed_public_appendicitis_teaching_items(tmp_path) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
 

@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 import yaml
@@ -123,6 +123,7 @@ from app.services.osce_session_store import (
 )
 from app.services.patient_voice_policy_service import PatientSpeechProfile, build_patient_speech_profile
 from app.services.rag_knowledge_store import (
+    RAG_KNOWLEDGE_REVIEW_STATUSES,
     RAG_KNOWLEDGE_STAGE_SCOPES,
     normalize_rag_stage_scope,
     rag_knowledge_store,
@@ -130,6 +131,7 @@ from app.services.rag_knowledge_store import (
 )
 from app.services.rag_document_ingestion_service import (
     RagDocumentParseError,
+    assess_rag_text,
     chunk_rag_document,
     generate_rag_document_id,
 )
@@ -940,6 +942,13 @@ class AdminRagDocumentEnabledRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class AdminRagKnowledgeReviewRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approved", "rejected"]
+    note: str = Field(default="", max_length=1000)
 
 
 class AdminEvaluationRunRequest(RequestModel):
@@ -1798,8 +1807,38 @@ def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> di
     if not knowledge_id:
         knowledge_id = _generate_admin_rag_knowledge_id(item)
     item["knowledge_id"] = knowledge_id
+    existing_item = rag_knowledge_store.get_item(knowledge_id)
+    if existing_item is not None:
+        item = {**existing_item, **item}
+    assessment = assess_rag_text(
+        item["text"],
+        section_title=str(item.get("section_title") or item["title"]),
+        categories=[str(value) for value in item.get("chunk_categories", []) if str(value)],
+    )
+    item["quality_warnings"] = assessment["quality_warnings"]
+    item["risk_flags"] = assessment["risk_flags"]
+    item["char_count"] = assessment["char_count"]
+    if existing_item is None or _rag_knowledge_exposure_changed(existing_item, item):
+        item["review_status"] = "pending_review" if item["risk_flags"] else "approved"
+        item["review_note"] = ""
+        item["reviewed_by"] = ""
+        item["reviewed_at"] = ""
     _validate_admin_rag_knowledge_item(item)
     return item
+
+
+def _rag_knowledge_exposure_changed(existing_item: dict[str, Any], next_item: dict[str, Any]) -> bool:
+    safety_fields = {
+        "title",
+        "text",
+        "visibility",
+        "allowed_agents",
+        "stage_scope",
+        "case_id",
+        "scope",
+        "source_id",
+    }
+    return any(existing_item.get(field) != next_item.get(field) for field in safety_fields)
 
 
 def _generate_admin_rag_knowledge_id(item: dict[str, Any]) -> str:
@@ -1914,6 +1953,10 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
             "risk_flags": chunk.risk_flags,
             "char_count": chunk.char_count,
             "enabled": request.enabled,
+            "review_status": "pending_review" if chunk.risk_flags else "approved",
+            "review_note": "",
+            "reviewed_by": "",
+            "reviewed_at": "",
         }
         for chunk in chunks
     ]
@@ -2874,6 +2917,39 @@ def set_admin_rag_document_enabled(
     return {"document": enrich_rag_document(document)}
 
 
+@app.patch("/api/admin/rag/documents/{document_id:path}/review")
+def review_admin_rag_document(
+    document_id: str,
+    request: AdminRagKnowledgeReviewRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    items = rag_knowledge_store.list_document_items(document_id)
+    if not items:
+        raise HTTPException(status_code=404, detail="rag document not found")
+    pending_items = [item for item in items if item.get("review_status") == "pending_review"]
+    if request.decision == "approved":
+        for item in pending_items:
+            _validate_rag_knowledge_approval(item)
+    document = rag_knowledge_store.set_document_review_status(
+        document_id,
+        review_status=request.decision,
+        review_note=request.note,
+        reviewed_by=reviewer["email"],
+        pending_only=True,
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="rag document not found")
+    _clear_retrieval_documents_cache()
+    return {
+        "document": enrich_rag_document(document),
+        "knowledge_items": [
+            enrich_rag_knowledge_item(item)
+            for item in rag_knowledge_store.list_document_items(document_id)
+        ],
+    }
+
+
 @app.post("/api/admin/rag/knowledge")
 def upsert_admin_rag_knowledge_item(
     request: AdminRagKnowledgeItemRequest,
@@ -2883,7 +2959,67 @@ def upsert_admin_rag_knowledge_item(
     item = _build_admin_rag_knowledge_item(request)
     saved_item = rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
     _clear_retrieval_documents_cache()
-    return {"knowledge_item": enrich_rag_knowledge_item(saved_item)}
+    response: dict[str, object] = {"knowledge_item": enrich_rag_knowledge_item(saved_item)}
+    document_id = str(saved_item.get("document_id", "")).strip()
+    if document_id:
+        documents = rag_knowledge_store.list_documents()
+        document = next((item for item in documents if item["document_id"] == document_id), None)
+        if document is not None:
+            response["document"] = enrich_rag_document(document)
+    return response
+
+
+@app.patch("/api/admin/rag/knowledge/{knowledge_id:path}/review")
+def review_admin_rag_knowledge_item(
+    knowledge_id: str,
+    request: AdminRagKnowledgeReviewRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    reviewer = _require_admin_user(auth_token)
+    item = rag_knowledge_store.get_item(knowledge_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="knowledge item not found")
+    if request.decision == "approved":
+        _validate_rag_knowledge_approval(item)
+    saved_item = rag_knowledge_store.set_item_review_status(
+        knowledge_id,
+        review_status=request.decision,
+        review_note=request.note,
+        reviewed_by=reviewer["email"],
+    )
+    if saved_item is None:
+        raise HTTPException(status_code=404, detail="knowledge item not found")
+    _clear_retrieval_documents_cache()
+    response: dict[str, object] = {"knowledge_item": enrich_rag_knowledge_item(saved_item)}
+    document_id = str(saved_item.get("document_id", "")).strip()
+    if document_id:
+        documents = rag_knowledge_store.list_documents()
+        document = next((entry for entry in documents if entry["document_id"] == document_id), None)
+        if document is not None:
+            response["document"] = enrich_rag_document(document)
+    return response
+
+
+def _validate_rag_knowledge_approval(item: dict[str, Any]) -> None:
+    review_status = str(item.get("review_status", "")).strip()
+    if review_status and review_status not in RAG_KNOWLEDGE_REVIEW_STATUSES:
+        raise HTTPException(status_code=409, detail="knowledge item has an invalid review status")
+    blocking_flags = {"diagnosis_answer_content", "treatment_or_dose_content"}.intersection(
+        str(flag) for flag in item.get("risk_flags", [])
+    )
+    allowed_agents = {str(agent) for agent in item.get("allowed_agents", [])}
+    if (
+        blocking_flags
+        and str(item.get("visibility", "")) == "pre_submit_safe"
+        and allowed_agents.intersection(RAG_GENERATIVE_AGENT_ROLES)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "pre-submit generative knowledge contains diagnosis or treatment content; "
+                "change visibility to post_submit_review or remove the risky content before approval"
+            ),
+        )
 
 
 @app.get("/api/admin/rag/knowledge/{knowledge_id:path}")

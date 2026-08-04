@@ -57,7 +57,7 @@ def retrieve_agent_context(
         )
     }
     selected_items: list[dict[str, Any]] = []
-    if query_text:
+    if query_text and eligible_items_by_reference:
         for result in search_retrieval_documents(
             query_text,
             limit=limit,
@@ -85,6 +85,8 @@ def _agent_can_read_knowledge_item(
     requested_stage_scope: set[str],
 ) -> bool:
     if item.get("enabled") is False:
+        return False
+    if item.get("review_status", "approved") != "approved":
         return False
     visibility = str(item.get("visibility", "")).strip()
     if visibility not in allowed_visibilities:

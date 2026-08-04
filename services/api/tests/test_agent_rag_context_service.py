@@ -130,6 +130,43 @@ def test_retrieve_agent_context_filters_visibility_agent_case_and_sanitizes_forb
     assert "标准诊断" in results[0]["snippet"]
 
 
+def test_retrieve_agent_context_excludes_pending_and_rejected_items_before_search(tmp_path, monkeypatch) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    for review_status in ["pending_review", "rejected"]:
+        store.upsert_item(
+            {
+                "knowledge_id": f"case:appendicitis_001:coach:{review_status}",
+                "scope": "case",
+                "case_id": "appendicitis_001",
+                "content_kind": "coach_hint_note",
+                "visibility": "pre_submit_safe",
+                "allowed_agents": ["coach"],
+                "source_id": "",
+                "title": review_status,
+                "text": "未审核内容不应进入 Coach 上下文。",
+                "tags": ["review"],
+                "review_status": review_status,
+            },
+            updated_by="admin@example.test",
+        )
+
+    def fail_search(*args, **kwargs):
+        raise AssertionError("search must not run without approved eligible references")
+
+    monkeypatch.setattr(agent_rag_context_module, "search_retrieval_documents", fail_search)
+
+    assert (
+        retrieve_agent_context(
+            agent_role="coach",
+            case_ids=["appendicitis_001"],
+            query_terms=["未审核内容"],
+            allowed_visibilities={"pre_submit_safe"},
+            store=store,
+        )
+        == []
+    )
+
+
 def test_retrieve_agent_context_filters_by_training_stage_and_normalizes_aliases(
     tmp_path,
     monkeypatch,

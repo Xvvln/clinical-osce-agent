@@ -87,6 +87,8 @@ test("admin v2 reads the existing backend APIs without adding a new backend cont
     "/api/admin/procedure-simulation-audits?limit=20",
     "/api/admin/evolution/events?limit=20",
     "/api/admin/rag/documents/${encodeURIComponent(documentId)}/enabled",
+    "/api/admin/rag/documents/${encodeURIComponent(documentId)}/review",
+    "/api/admin/rag/knowledge/${encodeURIComponent(knowledgeId)}/review",
     "/api/admin/insights",
     "/api/admin/evolution/skill-effects",
     "/api/admin/evals/run",
@@ -112,6 +114,13 @@ test("admin uploads and editable resources enforce API limits locally", () => {
   assert.match(uploadHandler, /stage_scope: stageScope/);
   assert.match(dashboardSource, /const RAG_STAGE_OPTIONS = \["any", "case_intro", "history_taking", "physical_exam", "auxiliary_test", "diagnosis_submission", "feedback"\]/);
   assert.match(dashboardSource, /stage_scope: toTokenList\(item\.stage_scope\)/);
+  assert.match(dashboardSource, /review_status\?: string/);
+  assert.match(dashboardSource, /pending_review_chunk_count\?: number/);
+  assert.match(dashboardSource, /quality_warnings\?: readonly string\[\]/);
+  assert.match(dashboardSource, /risk_flags\?: readonly string\[\]/);
+  for (const label of ["只有“已启用 + 已批准”", "批准待审片段", "退回待审片段", "质量提示", "风险标记", "审核说明"]) {
+    assert.ok(dashboardSource.includes(label));
+  }
   assert.match(dashboardSource, /maxLength=\{RAG_TITLE_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{RAG_TEXT_MAX_CHARS\}/);
   assert.match(dashboardSource, /maxLength=\{CASE_TITLE_MAX_CHARS\}/);

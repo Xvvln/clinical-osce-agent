@@ -10,6 +10,8 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "rag_knowledge.sqlite3"
 DEFAULT_SEED_PATH = ROOT_DIR / "data" / "rag_knowledge" / "default_items.json"
 DEFAULT_SEED_UPDATED_BY = "system:default_rag_knowledge_seed"
+RAG_KNOWLEDGE_REVIEW_STATUSES = frozenset({"approved", "pending_review", "rejected"})
+DEFAULT_RAG_KNOWLEDGE_REVIEW_STATUS = "approved"
 RAG_KNOWLEDGE_STAGE_SCOPES = frozenset(
     {
         "any",
@@ -168,6 +170,66 @@ class RagKnowledgeStore:
                 )
         return _summarize_document_items(self.list_document_items(document_id))
 
+    def set_item_review_status(
+        self,
+        knowledge_id: str,
+        *,
+        review_status: str,
+        review_note: str,
+        reviewed_by: str,
+    ) -> dict[str, Any] | None:
+        self._initialize()
+        item = self.get_item(knowledge_id)
+        if item is None:
+            return None
+        normalized_status = _normalize_review_status(review_status)
+        reviewed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        item.update(
+            {
+                "review_status": normalized_status,
+                "review_note": review_note.strip(),
+                "reviewed_by": reviewed_by,
+                "reviewed_at": reviewed_at,
+                "updated_by": reviewed_by,
+                "updated_at": reviewed_at,
+            }
+        )
+        with sqlite3.connect(self.database_path) as connection:
+            _update_stored_item(connection, item)
+        return _hydrate_item(item)
+
+    def set_document_review_status(
+        self,
+        document_id: str,
+        *,
+        review_status: str,
+        review_note: str,
+        reviewed_by: str,
+        pending_only: bool = True,
+    ) -> dict[str, Any] | None:
+        self._initialize()
+        items = self.list_document_items(document_id)
+        if not items:
+            return None
+        normalized_status = _normalize_review_status(review_status)
+        reviewed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        with sqlite3.connect(self.database_path) as connection:
+            for item in items:
+                if pending_only and item.get("review_status") != "pending_review":
+                    continue
+                item.update(
+                    {
+                        "review_status": normalized_status,
+                        "review_note": review_note.strip(),
+                        "reviewed_by": reviewed_by,
+                        "reviewed_at": reviewed_at,
+                        "updated_by": reviewed_by,
+                        "updated_at": reviewed_at,
+                    }
+                )
+                _update_stored_item(connection, item)
+        return _summarize_document_items(self.list_document_items(document_id))
+
     def delete_document(self, document_id: str) -> int:
         self._initialize()
         normalized_document_id = document_id.strip()
@@ -289,6 +351,13 @@ def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
         "text": str(item["text"]).strip(),
         "tags": _string_list(item.get("tags", [])),
         "version": int(item.get("version") or 1),
+        "quality_warnings": _string_list(item.get("quality_warnings", [])),
+        "risk_flags": _string_list(item.get("risk_flags", [])),
+        "char_count": _optional_int(item.get("char_count")),
+        "review_status": _normalize_review_status(item.get("review_status")),
+        "review_note": str(item.get("review_note") or "").strip(),
+        "reviewed_by": str(item.get("reviewed_by") or "").strip(),
+        "reviewed_at": str(item.get("reviewed_at") or "").strip(),
         "updated_by": updated_by,
         "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
     }
@@ -305,9 +374,6 @@ def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:
                 "source_location": str(item.get("source_location") or "").strip(),
                 "chunking_strategy": str(item.get("chunking_strategy") or "").strip(),
                 "chunk_categories": _string_list(item.get("chunk_categories", [])),
-                "quality_warnings": _string_list(item.get("quality_warnings", [])),
-                "risk_flags": _string_list(item.get("risk_flags", [])),
-                "char_count": _optional_int(item.get("char_count")),
                 "enabled": bool(item.get("enabled", True)),
             }
         )
@@ -349,7 +415,18 @@ def _hydrate_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         **item,
         "stage_scope": normalize_rag_stage_scope(item.get("stage_scope")),
+        "quality_warnings": _string_list(item.get("quality_warnings", [])),
+        "risk_flags": _string_list(item.get("risk_flags", [])),
+        "review_status": _normalize_review_status(item.get("review_status")),
+        "review_note": str(item.get("review_note") or "").strip(),
+        "reviewed_by": str(item.get("reviewed_by") or "").strip(),
+        "reviewed_at": str(item.get("reviewed_at") or "").strip(),
     }
+
+
+def _normalize_review_status(value: Any) -> str:
+    normalized = str(value or DEFAULT_RAG_KNOWLEDGE_REVIEW_STATUS).strip()
+    return normalized if normalized in RAG_KNOWLEDGE_REVIEW_STATUSES else "pending_review"
 
 
 def _optional_int(value: Any) -> int | None:
@@ -364,6 +441,11 @@ def _optional_int(value: Any) -> int | None:
 def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     sorted_items = sorted(items, key=lambda item: int(item.get("chunk_index") or 0))
     first_item = sorted_items[0]
+    review_status_counts = {
+        status: sum(1 for item in sorted_items if item.get("review_status") == status)
+        for status in sorted(RAG_KNOWLEDGE_REVIEW_STATUSES)
+    }
+    review_status = _summarize_review_status(review_status_counts, item_count=len(sorted_items))
     return {
         "document_id": str(first_item.get("document_id", "")).strip(),
         "file_name": str(first_item.get("document_name", "")).strip(),
@@ -371,6 +453,16 @@ def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "case_id": str(first_item.get("case_id", "")).strip(),
         "chunk_count": len(sorted_items),
         "enabled": all(bool(item.get("enabled", True)) for item in sorted_items),
+        "review_status": review_status,
+        "review_status_counts": review_status_counts,
+        "approved_chunk_count": review_status_counts["approved"],
+        "pending_review_chunk_count": review_status_counts["pending_review"],
+        "rejected_chunk_count": review_status_counts["rejected"],
+        "indexable_chunk_count": sum(
+            1
+            for item in sorted_items
+            if bool(item.get("enabled", True)) and item.get("review_status") == "approved"
+        ),
         "visibility": str(first_item.get("visibility", "")).strip(),
         "allowed_agents": _string_list(first_item.get("allowed_agents", [])),
         "stage_scope": normalize_rag_stage_scope(first_item.get("stage_scope")),
@@ -404,6 +496,32 @@ def _summarize_document_items(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _latest_updated_at(items: list[dict[str, Any]]) -> str:
     return max((str(item.get("updated_at", "")).strip() for item in items), default="")
+
+
+def _summarize_review_status(counts: dict[str, int], *, item_count: int) -> str:
+    if counts["pending_review"]:
+        return "pending_review"
+    if counts["approved"] == item_count:
+        return "approved"
+    if counts["rejected"] == item_count:
+        return "rejected"
+    return "mixed"
+
+
+def _update_stored_item(connection: sqlite3.Connection, item: dict[str, Any]) -> None:
+    connection.execute(
+        """
+        UPDATE rag_knowledge_items
+        SET item_json = ?,
+            updated_at = ?
+        WHERE knowledge_id = ?
+        """,
+        (
+            json.dumps(item, ensure_ascii=False),
+            str(item.get("updated_at", "")),
+            str(item.get("knowledge_id", "")),
+        ),
+    )
 
 
 rag_knowledge_store = RagKnowledgeStore(seed_defaults=True)

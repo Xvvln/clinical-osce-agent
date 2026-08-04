@@ -65,6 +65,27 @@ class RagDocumentChunk:
     char_count: int = 0
 
 
+def assess_rag_text(
+    text: str,
+    *,
+    section_title: str = "",
+    categories: list[str] | None = None,
+    max_chars: int = 900,
+) -> dict[str, list[str] | int]:
+    normalized_text = text.strip()
+    normalized_categories = _unique_strings(categories or ["NarrativeText"])
+    return {
+        "quality_warnings": _quality_warnings(
+            normalized_text,
+            section_title=section_title,
+            categories=normalized_categories,
+            max_chars=max_chars,
+        ),
+        "risk_flags": _risk_flags(normalized_text, section_title=section_title),
+        "char_count": len(normalized_text),
+    }
+
+
 def generate_rag_document_id(*, case_id: str, file_name: str, content_bytes: bytes) -> str:
     safe_case_id = _safe_identifier(case_id)
     file_digest = hashlib.sha1(
