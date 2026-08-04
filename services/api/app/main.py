@@ -4618,37 +4618,55 @@ def list_admin_rag_knowledge_items(
     scope: str = Query(default=""),
     case_id: str = Query(default=""),
     visibility: str = Query(default=""),
+    document_id: str = Query(default="", max_length=IDENTIFIER_MAX_CHARS * 4),
+    q: str = Query(default="", max_length=200),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {
-        "knowledge_items": [
-            enrich_rag_knowledge_item(item)
-            for item in rag_knowledge_store.list_items(
-                scope=scope.strip(),
-                case_id=case_id.strip(),
-                visibility=visibility.strip(),
-            )
-        ]
-    }
+    items = [
+        enrich_rag_knowledge_item(item)
+        for item in rag_knowledge_store.list_items(
+            scope=scope.strip(),
+            case_id=case_id.strip(),
+            visibility=visibility.strip(),
+        )
+        if not document_id.strip()
+        or str(item.get("document_id") or "").strip() == document_id.strip()
+    ]
+    return _build_paginated_admin_payload(
+        "knowledge_items",
+        items,
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.get("/api/admin/rag/documents")
 def list_admin_rag_documents(
     case_id: str = Query(default=""),
     scope: str = Query(default=""),
+    q: str = Query(default="", max_length=200),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     normalized_scope = scope.strip()
     if normalized_scope and normalized_scope not in {"global", "case"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported document scope")
-    return {
-        "documents": [
+    return _build_paginated_admin_payload(
+        "documents",
+        [
             enrich_rag_document(document)
             for document in rag_knowledge_store.list_documents(scope=normalized_scope, case_id=case_id.strip())
-        ]
-    }
+        ],
+        limit,
+        offset,
+        q,
+    )
 
 
 @app.post("/api/admin/rag/documents")
@@ -4658,6 +4676,7 @@ def upload_admin_rag_document(
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
     document_id, items = _build_admin_rag_document_items(request)
+    previous_items = rag_knowledge_store.list_document_items(document_id)
     rag_knowledge_store.delete_document(document_id)
     saved_items = [
         rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
@@ -4668,8 +4687,19 @@ def upload_admin_rag_document(
     document = next((item for item in documents if item["document_id"] == document_id), None)
     if document is None:
         raise HTTPException(status_code=500, detail="rag document was not persisted")
+    enriched_document = enrich_rag_document(document)
+    _record_admin_audit(
+        actor=reviewer,
+        action="rag_document.uploaded",
+        resource_type="rag_document",
+        resource_id=document_id,
+        summary=f"上传知识文档 {request.file_name}",
+        before=[enrich_rag_knowledge_item(item) for item in previous_items] or None,
+        after=enriched_document,
+        metadata={"chunk_count": len(saved_items), "replaced_existing": bool(previous_items)},
+    )
     return {
-        "document": enrich_rag_document(document),
+        "document": enriched_document,
         "knowledge_items": [enrich_rag_knowledge_item(item) for item in saved_items],
     }
 
@@ -4681,6 +4711,14 @@ def set_admin_rag_document_enabled(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
+    previous = next(
+        (
+            document
+            for document in rag_knowledge_store.list_documents()
+            if document.get("document_id") == document_id
+        ),
+        None,
+    )
     document = rag_knowledge_store.set_document_enabled(
         document_id,
         enabled=request.enabled,
@@ -4689,7 +4727,17 @@ def set_admin_rag_document_enabled(
     if document is None:
         raise HTTPException(status_code=404, detail="rag document not found")
     _clear_retrieval_documents_cache()
-    return {"document": enrich_rag_document(document)}
+    enriched = enrich_rag_document(document)
+    _record_admin_audit(
+        actor=reviewer,
+        action="rag_document.enabled" if request.enabled else "rag_document.disabled",
+        resource_type="rag_document",
+        resource_id=document_id,
+        summary=f"{'启用' if request.enabled else '停用'}知识文档 {document_id}",
+        before=enrich_rag_document(previous) if previous else None,
+        after=enriched,
+    )
+    return {"document": enriched}
 
 
 @app.patch("/api/admin/rag/documents/{document_id:path}/review")
@@ -4716,13 +4764,22 @@ def review_admin_rag_document(
     if document is None:
         raise HTTPException(status_code=404, detail="rag document not found")
     _clear_retrieval_documents_cache()
-    return {
-        "document": enrich_rag_document(document),
-        "knowledge_items": [
+    enriched_items = [
             enrich_rag_knowledge_item(item)
             for item in rag_knowledge_store.list_document_items(document_id)
-        ],
-    }
+        ]
+    enriched_document = enrich_rag_document(document)
+    _record_admin_audit(
+        actor=reviewer,
+        action=f"rag_document.{request.decision}",
+        resource_type="rag_document",
+        resource_id=document_id,
+        summary=f"批量{request.decision}知识文档 {document_id} 的待审片段",
+        before=[enrich_rag_knowledge_item(item) for item in items],
+        after=enriched_items,
+        metadata={"review_note": request.note},
+    )
+    return {"document": enriched_document, "knowledge_items": enriched_items}
 
 
 @app.post("/api/admin/rag/knowledge")
@@ -4732,6 +4789,7 @@ def upsert_admin_rag_knowledge_item(
 ) -> dict[str, object]:
     reviewer = _require_admin_user(auth_token)
     item = _build_admin_rag_knowledge_item(request)
+    previous_item = rag_knowledge_store.get_item(item["knowledge_id"])
     saved_item = rag_knowledge_store.upsert_item(item, updated_by=reviewer["email"])
     _clear_retrieval_documents_cache()
     response: dict[str, object] = {"knowledge_item": enrich_rag_knowledge_item(saved_item)}
@@ -4741,6 +4799,15 @@ def upsert_admin_rag_knowledge_item(
         document = next((item for item in documents if item["document_id"] == document_id), None)
         if document is not None:
             response["document"] = enrich_rag_document(document)
+    _record_admin_audit(
+        actor=reviewer,
+        action="rag_knowledge.updated" if previous_item else "rag_knowledge.created",
+        resource_type="rag_knowledge",
+        resource_id=str(saved_item["knowledge_id"]),
+        summary=f"{'更新' if previous_item else '创建'}知识片段 {saved_item.get('title') or saved_item['knowledge_id']}",
+        before=enrich_rag_knowledge_item(previous_item) if previous_item else None,
+        after=response["knowledge_item"],
+    )
     return response
 
 
@@ -4772,6 +4839,16 @@ def review_admin_rag_knowledge_item(
         document = next((entry for entry in documents if entry["document_id"] == document_id), None)
         if document is not None:
             response["document"] = enrich_rag_document(document)
+    _record_admin_audit(
+        actor=reviewer,
+        action=f"rag_knowledge.{request.decision}",
+        resource_type="rag_knowledge",
+        resource_id=knowledge_id,
+        summary=f"{request.decision}知识片段 {item.get('title') or knowledge_id}",
+        before=enrich_rag_knowledge_item(item),
+        after=response["knowledge_item"],
+        metadata={"review_note": request.note},
+    )
     return response
 
 
@@ -4809,15 +4886,47 @@ def get_admin_rag_knowledge_item(
     return {"knowledge_item": enrich_rag_knowledge_item(item)}
 
 
+@app.delete("/api/admin/rag/documents/{document_id:path}")
+def delete_admin_rag_document(
+    document_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    items = rag_knowledge_store.list_document_items(document_id)
+    if not items:
+        raise HTTPException(status_code=404, detail="rag document not found")
+    deleted_count = rag_knowledge_store.delete_document(document_id)
+    _clear_retrieval_documents_cache()
+    _record_admin_audit(
+        actor=actor,
+        action="rag_document.deleted",
+        resource_type="rag_document",
+        resource_id=document_id,
+        summary=f"删除知识文档 {document_id} 及其 {deleted_count} 个片段",
+        before=[enrich_rag_knowledge_item(item) for item in items],
+        metadata={"deleted_chunk_count": deleted_count},
+    )
+    return {"document_id": document_id, "deleted": True, "deleted_chunk_count": deleted_count}
+
+
 @app.delete("/api/admin/rag/knowledge/{knowledge_id:path}")
 def delete_admin_rag_knowledge_item(
     knowledge_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_admin_user(auth_token)
+    actor = _require_admin_user(auth_token)
+    item = rag_knowledge_store.get_item(knowledge_id)
     deleted = rag_knowledge_store.delete_item(knowledge_id)
     if deleted:
         _clear_retrieval_documents_cache()
+        _record_admin_audit(
+            actor=actor,
+            action="rag_knowledge.deleted",
+            resource_type="rag_knowledge",
+            resource_id=knowledge_id,
+            summary=f"删除知识片段 {item.get('title') if item else knowledge_id}",
+            before=enrich_rag_knowledge_item(item) if item else None,
+        )
     return {"knowledge_id": knowledge_id, "deleted": deleted}
 
 
@@ -5201,15 +5310,84 @@ def list_admin_reports(
     _require_admin_user(auth_token)
     return _build_paginated_admin_payload(
         "reports",
-        [
-            enrich_report(report)
-            for report in osce_session_service.report_store.list_reports()
-            if not _is_deleted_admin_session(report.get("session_id"))
-        ],
+        _list_enriched_admin_reports(),
         limit,
         offset,
         q,
     )
+
+
+def _list_enriched_admin_reports() -> list[dict[str, Any]]:
+    return [
+        enrich_report(report)
+        for report in osce_session_service.report_store.list_reports()
+        if not _is_deleted_admin_session(report.get("session_id"))
+    ]
+
+
+@app.get("/api/admin/reports/export")
+def export_admin_reports(
+    export_format: Literal["json", "csv"] = Query(default="json", alias="format"),
+    q: str = Query(default="", max_length=200),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> Response:
+    _require_admin_user(auth_token)
+    reports = _filter_admin_items(_list_enriched_admin_reports(), q)
+    if export_format == "json":
+        return Response(
+            content=json.dumps(reports, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="admin-reports.json"'},
+        )
+    output = StringIO()
+    fieldnames = [
+        "report_id",
+        "session_id",
+        "student_id",
+        "case_id",
+        "case_title",
+        "total_score",
+        "missed_item_labels",
+        "generation_warnings",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for report in reports:
+        writer.writerow(
+            {
+                field: (
+                    json.dumps(report.get(field), ensure_ascii=False)
+                    if field in {"missed_item_labels", "generation_warnings"}
+                    else _csv_safe_cell(report.get(field))
+                )
+                for field in fieldnames
+            }
+        )
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="admin-reports.csv"'},
+    )
+
+
+@app.get("/api/admin/reports/{report_id}")
+def get_admin_report(
+    report_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    _require_admin_user(auth_token)
+    report = next(
+        (
+            item
+            for item in _list_enriched_admin_reports()
+            if str(item.get("report_id") or "") == report_id
+            or str(item.get("session_id") or "") == report_id
+        ),
+        None,
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return {"report": report}
 
 
 @app.get("/api/admin/sessions")

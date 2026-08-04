@@ -276,9 +276,12 @@ def test_admin_endpoints_require_login(tmp_path, monkeypatch) -> None:
             unauthenticated_client.get("/api/admin/rag/documents"),
             unauthenticated_client.post("/api/admin/rag/documents", json={}),
             unauthenticated_client.patch("/api/admin/rag/documents/missing_document/enabled", json={"enabled": False}),
+            unauthenticated_client.delete("/api/admin/rag/documents/missing_document"),
             unauthenticated_client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             unauthenticated_client.get("/api/admin/reports"),
+            unauthenticated_client.get("/api/admin/reports/export?format=json"),
+            unauthenticated_client.get("/api/admin/reports/missing_report"),
             unauthenticated_client.get("/api/admin/sessions"),
             unauthenticated_client.get("/api/admin/procedure-simulation-audits"),
             unauthenticated_client.get("/api/admin/sessions/missing_session/report"),
@@ -384,9 +387,12 @@ def test_admin_endpoints_reject_authenticated_non_admin_user(tmp_path, monkeypat
             client.get("/api/admin/rag/documents"),
             client.post("/api/admin/rag/documents", json={}),
             client.patch("/api/admin/rag/documents/missing_document/enabled", json={"enabled": False}),
+            client.delete("/api/admin/rag/documents/missing_document"),
             client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration"),
             client.get("/api/admin/reports"),
+            client.get("/api/admin/reports/export?format=json"),
+            client.get("/api/admin/reports/missing_report"),
             client.get("/api/admin/sessions"),
             client.get("/api/admin/procedure-simulation-audits"),
             client.get("/api/admin/sessions/missing_session/report"),
@@ -1013,10 +1019,14 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
 
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         create_response = client.post("/api/admin/rag/knowledge", json=payload)
-        list_response = client.get("/api/admin/rag/knowledge?case_id=appendicitis_001&visibility=pre_submit_safe")
+        list_response = client.get("/api/admin/rag/knowledge?case_id=appendicitis_001&visibility=pre_submit_safe&q=疼痛迁移&limit=1")
         detail_response = client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
         delete_response = client.delete("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
         empty_detail_response = client.get("/api/admin/rag/knowledge/case:appendicitis_001:teaching:history_migration")
+        audit_actions = {
+            event["action"]
+            for event in client.get("/api/admin/audit-events?limit=100").json()["events"]
+        }
 
     assert create_response.status_code == 200
     created_item = create_response.json()["knowledge_item"]
@@ -1039,6 +1049,7 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
 
     assert list_response.status_code == 200
     assert list_response.json()["knowledge_items"] == [created_item]
+    assert list_response.json()["pagination"] == {"limit": 1, "offset": 0, "total": 1}
 
     assert detail_response.status_code == 200
     assert detail_response.json()["knowledge_item"] == created_item
@@ -1049,6 +1060,7 @@ def test_admin_can_manage_rag_knowledge_items_with_visibility_and_source_binding
         "deleted": True,
     }
     assert empty_detail_response.status_code == 404
+    assert audit_actions >= {"rag_knowledge.created", "rag_knowledge.deleted"}
 
 
 def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkeypatch) -> None:
@@ -1176,6 +1188,65 @@ def test_admin_can_upload_toggle_and_retrieve_case_rag_document(tmp_path, monkey
         )
         == []
     )
+
+
+def test_admin_can_search_paginate_and_delete_complete_rag_document(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    monkeypatch.setattr(main, "rag_knowledge_store", store, raising=False)
+    document_text = "# 医患沟通知识\n\n" + ("开放式提问、复述确认与共情回应可帮助学生修复沟通。\n" * 40)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        upload_response = client.post(
+            "/api/admin/rag/documents",
+            json={
+                "case_id": "",
+                "scope": "global",
+                "file_name": "communication_teaching.md",
+                "content_base64": base64.b64encode(document_text.encode("utf-8")).decode("ascii"),
+                "visibility": "post_submit_review",
+                "allowed_agents": ["reflection", "skill_generation"],
+                "stage_scope": ["feedback"],
+                "source_id": "",
+                "tags": ["communication"],
+            },
+        )
+        assert upload_response.status_code == 200, upload_response.text
+        document = upload_response.json()["document"]
+
+        list_response = client.get(
+            "/api/admin/rag/documents",
+            params={"q": "communication_teaching", "limit": 1, "offset": 0},
+        )
+        assert list_response.status_code == 200
+        assert list_response.json()["documents"] == [document]
+        assert list_response.json()["pagination"] == {"limit": 1, "offset": 0, "total": 1}
+
+        item_response = client.get(
+            "/api/admin/rag/knowledge",
+            params={"document_id": document["document_id"], "limit": 500},
+        )
+        assert item_response.status_code == 200
+        assert len(item_response.json()["knowledge_items"]) == document["chunk_count"]
+        assert {
+            item["document_id"] for item in item_response.json()["knowledge_items"]
+        } == {document["document_id"]}
+
+        delete_response = client.delete(
+            f"/api/admin/rag/documents/{document['document_id']}"
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["deleted_chunk_count"] == document["chunk_count"]
+        assert store.list_document_items(document["document_id"]) == []
+        assert client.get("/api/admin/rag/documents").json()["documents"] == []
+
+        audit_actions = {
+            event["action"]
+            for event in client.get("/api/admin/audit-events?limit=100").json()["events"]
+        }
+        assert audit_actions >= {"rag_document.uploaded", "rag_document.deleted"}
 
 
 def test_admin_rag_document_upload_defaults_apply_to_all_generative_agents(tmp_path, monkeypatch) -> None:
@@ -4074,6 +4145,9 @@ def test_admin_can_list_session_reports(tmp_path, monkeypatch) -> None:
 
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.get("/api/admin/reports")
+        detail_response = client.get("/api/admin/reports/report_session_second")
+        csv_response = client.get("/api/admin/reports/export?format=csv&q=student_second")
+        json_response = client.get("/api/admin/reports/export?format=json&q=student_second")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -4091,6 +4165,14 @@ def test_admin_can_list_session_reports(tmp_path, monkeypatch) -> None:
         ],
         "pagination": {"limit": 2, "offset": 0, "total": 2},
     }
+    assert detail_response.status_code == 200
+    assert detail_response.json()["report"]["report_id"] == "report_session_second"
+    assert csv_response.status_code == 200
+    assert "report_session_second" in csv_response.text
+    assert "report_session_first" not in csv_response.text
+    assert csv_response.headers["content-disposition"] == 'attachment; filename="admin-reports.csv"'
+    assert json_response.status_code == 200
+    assert [report["report_id"] for report in json_response.json()] == ["report_session_second"]
 
 
 

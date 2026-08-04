@@ -1022,7 +1022,9 @@ type DashboardData = Readonly<{
   cases: readonly AdminCaseSummary[];
   sources: readonly AdminSourceSummary[];
   documents: readonly AdminRagDocument[];
+  documentPagination: Pagination | null;
   knowledgeItems: readonly AdminRagKnowledgeItem[];
+  knowledgePagination: Pagination | null;
   insights: TrainingInsights | null;
   learningAnalytics: AdminLearningAnalytics | null;
   procedureAudits: readonly ProcedureSimulationAuditItem[];
@@ -1054,7 +1056,9 @@ const emptyDashboardData: DashboardData = {
   cases: [],
   sources: [],
   documents: [],
+  documentPagination: null,
   knowledgeItems: [],
+  knowledgePagination: null,
   insights: null,
   learningAnalytics: null,
   procedureAudits: [],
@@ -1148,8 +1152,8 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ evaluations: readonly EvaluationBatchSummary[]; pagination?: Pagination }>("/api/admin/evaluations?limit=20"),
     fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"),
     fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"),
-    fetchJson<{ documents: readonly AdminRagDocument[] }>("/api/admin/rag/documents"),
-    fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[] }>("/api/admin/rag/knowledge"),
+    fetchJson<{ documents: readonly AdminRagDocument[]; pagination?: Pagination }>("/api/admin/rag/documents?limit=12"),
+    fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[]; pagination?: Pagination }>("/api/admin/rag/knowledge?limit=50"),
     fetchJson<{ insights: TrainingInsights }>("/api/admin/insights"),
     fetchJson<{ learning_analytics: AdminLearningAnalytics }>("/api/admin/learning-analytics"),
     fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
@@ -1175,7 +1179,9 @@ async function loadDashboardData(): Promise<DashboardData> {
     cases: casesPayload.cases,
     sources: sourcesPayload.sources,
     documents: documentsPayload.documents,
+    documentPagination: documentsPayload.pagination ?? null,
     knowledgeItems: knowledgePayload.knowledge_items,
+    knowledgePagination: knowledgePayload.pagination ?? null,
     insights: insightsPayload.insights,
     learningAnalytics: learningAnalyticsPayload.learning_analytics,
     procedureAudits: procedureAuditPayload.procedure_simulation_audits,
@@ -1371,6 +1377,69 @@ async function uploadRagDocument(payload: AdminRagDocumentUploadPayload): Promis
     method: "POST",
   });
   return response;
+}
+
+async function getAdminRagDocuments(
+  query: string,
+  offset = 0,
+): Promise<Readonly<{ documents: readonly AdminRagDocument[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "12", offset: String(offset) });
+  if (query.trim()) {
+    parameters.set("q", query.trim());
+  }
+  return fetchJson(`/api/admin/rag/documents?${parameters.toString()}`);
+}
+
+async function getAdminRagDocumentItems(documentId: string): Promise<readonly AdminRagKnowledgeItem[]> {
+  const parameters = new URLSearchParams({ document_id: documentId, limit: "500" });
+  const response = await fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[] }>(
+    `/api/admin/rag/knowledge?${parameters.toString()}`,
+  );
+  return response.knowledge_items;
+}
+
+async function deleteAdminRagDocument(documentId: string): Promise<void> {
+  await fetchJson(`/api/admin/rag/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+}
+
+async function deleteAdminRagKnowledgeItem(knowledgeId: string): Promise<void> {
+  await fetchJson(`/api/admin/rag/knowledge/${encodeURIComponent(knowledgeId)}`, { method: "DELETE" });
+}
+
+async function getAdminSessionsPage(
+  query: string,
+  offset = 0,
+): Promise<Readonly<{ sessions: readonly AdminSessionSummary[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "20", offset: String(offset) });
+  if (query.trim()) parameters.set("q", query.trim());
+  return fetchJson(`/api/admin/sessions?${parameters.toString()}`);
+}
+
+async function getAdminReportsPage(
+  query: string,
+  offset = 0,
+): Promise<Readonly<{ reports: readonly AdminReportSummary[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "20", offset: String(offset) });
+  if (query.trim()) parameters.set("q", query.trim());
+  return fetchJson(`/api/admin/reports?${parameters.toString()}`);
+}
+
+async function getAdminCandidatesPage(
+  query: string,
+  offset = 0,
+): Promise<Readonly<{ candidates: readonly TrainingSkillCandidateSummary[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "20", offset: String(offset), review_status: "all" });
+  if (query.trim()) parameters.set("q", query.trim());
+  return fetchJson(`/api/admin/evolution/candidates?${parameters.toString()}`);
+}
+
+async function getAdminEvaluationsPage(
+  query: string,
+  offset = 0,
+): Promise<Readonly<{ evaluations: readonly EvaluationBatchSummary[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "20", offset: String(offset) });
+  if (query.trim()) parameters.set("q", query.trim());
+  return fetchJson(`/api/admin/evaluations?${parameters.toString()}`);
 }
 
 async function validateAdminCaseCreation(payload: AdminCaseCreationPayload): Promise<AdminCaseImportStatus> {
@@ -2108,6 +2177,51 @@ export function AdminV2Dashboard() {
     }
   }
 
+  async function handleDeleteRagDocument(documentId: string): Promise<void> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      await deleteAdminRagDocument(documentId);
+      setData((current) => ({
+        ...current,
+        documents: current.documents.filter((document) => document.document_id !== documentId),
+        documentPagination: current.documentPagination
+          ? { ...current.documentPagination, total: Math.max(0, current.documentPagination.total - 1) }
+          : null,
+        knowledgeItems: current.knowledgeItems.filter((item) => item.document_id !== documentId),
+      }));
+      setStatusText("知识库文档及其片段已删除，检索缓存已同步清理。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除知识库文档失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
+  async function handleDeleteRagKnowledgeItem(knowledgeId: string): Promise<void> {
+    setIsDocumentBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      await deleteAdminRagKnowledgeItem(knowledgeId);
+      setData((current) => ({
+        ...current,
+        knowledgeItems: current.knowledgeItems.filter((item) => item.knowledge_id !== knowledgeId),
+        knowledgePagination: current.knowledgePagination
+          ? { ...current.knowledgePagination, total: Math.max(0, current.knowledgePagination.total - 1) }
+          : null,
+      }));
+      setStatusText("知识片段已删除，后续检索不会再命中该内容。");
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除知识片段失败");
+      throw error;
+    } finally {
+      setIsDocumentBusy(false);
+    }
+  }
+
   async function handleUpdateCaseFields(caseId: string, payload: AdminCaseFieldUpdatePayload): Promise<AdminCaseRaw> {
     setIsDocumentBusy(true);
     setErrorText("");
@@ -2299,6 +2413,8 @@ export function AdminV2Dashboard() {
               <ResourcesSection
                 data={data}
                 isDocumentBusy={isDocumentBusy}
+                onDeleteDocument={(documentId) => handleDeleteRagDocument(documentId)}
+                onDeleteKnowledgeItem={(knowledgeId) => handleDeleteRagKnowledgeItem(knowledgeId)}
                 onResourceDirectoryChanged={reloadResourceDirectory}
                 onOpenCaseCreation={() => setIsCaseCreationOpen(true)}
                 onSaveCaseFields={(caseId, payload) => handleUpdateCaseFields(caseId, payload)}
@@ -3175,6 +3291,8 @@ function ClassroomSection({
 function ResourcesSection({
   data,
   isDocumentBusy,
+  onDeleteDocument,
+  onDeleteKnowledgeItem,
   onOpenCaseCreation,
   onResourceDirectoryChanged,
   onReviewDocument,
@@ -3187,6 +3305,8 @@ function ResourcesSection({
 }: Readonly<{
   data: DashboardData;
   isDocumentBusy: boolean;
+  onDeleteDocument: (documentId: string) => Promise<void>;
+  onDeleteKnowledgeItem: (knowledgeId: string) => Promise<void>;
   onOpenCaseCreation: () => void;
   onResourceDirectoryChanged: () => Promise<void>;
   onReviewDocument: (documentId: string, decision: AdminRagReviewDecision, note: string) => Promise<void>;
@@ -3198,6 +3318,12 @@ function ResourcesSection({
   onUploadDocument: (payload: AdminRagDocumentUploadPayload) => Promise<AdminRagDocumentUploadResponse>;
 }>) {
   const [openDocumentId, setOpenDocumentId] = useState("");
+  const [openDocumentItems, setOpenDocumentItems] = useState<readonly AdminRagKnowledgeItem[]>([]);
+  const [visibleDocuments, setVisibleDocuments] = useState<readonly AdminRagDocument[]>(data.documents);
+  const [documentPagination, setDocumentPagination] = useState<Pagination | null>(data.documentPagination);
+  const [documentQuery, setDocumentQuery] = useState("");
+  const [isDocumentListLoading, setIsDocumentListLoading] = useState(false);
+  const [documentListError, setDocumentListError] = useState("");
   const [openCaseDetail, setOpenCaseDetail] = useState<AdminCaseRaw | null>(null);
   const [editingCase, setEditingCase] = useState<AdminCaseRaw | null>(null);
   const [rubricDetail, setRubricDetail] = useState<AdminRubricDetail | null>(null);
@@ -3206,13 +3332,56 @@ function ResourcesSection({
   const [loadingCaseId, setLoadingCaseId] = useState("");
   const [loadingRubricCaseId, setLoadingRubricCaseId] = useState("");
   const activeDocumentId = openDocumentId;
-  const openDocument = data.documents.find((document) => document.document_id === openDocumentId) ?? null;
-  const openDocumentItems = data.knowledgeItems
-    .filter((item) => item.document_id === openDocumentId)
-    .sort((left, right) => (left.chunk_index ?? 0) - (right.chunk_index ?? 0));
+  const openDocument = visibleDocuments.find((document) => document.document_id === openDocumentId)
+    ?? data.documents.find((document) => document.document_id === openDocumentId)
+    ?? null;
 
-  function handleOpenDocument(documentId: string) {
+  useEffect(() => {
+    setVisibleDocuments(data.documents);
+    setDocumentPagination(data.documentPagination);
+  }, [data.documentPagination, data.documents]);
+
+  async function loadDocumentPage(offset: number, query = documentQuery) {
+    setIsDocumentListLoading(true);
+    setDocumentListError("");
+    try {
+      const response = await getAdminRagDocuments(query, offset);
+      setVisibleDocuments(response.documents);
+      setDocumentPagination(response.pagination);
+      setOpenDocumentId("");
+      setOpenDocumentItems([]);
+    } catch (error) {
+      setDocumentListError(error instanceof Error ? error.message : "读取知识库文档失败");
+    } finally {
+      setIsDocumentListLoading(false);
+    }
+  }
+
+  async function handleOpenDocument(documentId: string) {
     setOpenDocumentId(documentId);
+    setOpenDocumentItems([]);
+    setDocumentListError("");
+    try {
+      const items = await getAdminRagDocumentItems(documentId);
+      setOpenDocumentItems([...items].sort((left, right) => (left.chunk_index ?? 0) - (right.chunk_index ?? 0)));
+    } catch (error) {
+      setOpenDocumentId("");
+      setDocumentListError(error instanceof Error ? error.message : "读取文档片段失败");
+    }
+  }
+
+  async function handleDeleteDocument(documentId: string) {
+    if (!window.confirm("确定删除这份知识库文档及全部片段吗？该操作会留下审计记录。")) return;
+    await onDeleteDocument(documentId);
+    const currentOffset = documentPagination?.offset ?? 0;
+    const fallbackOffset = visibleDocuments.length === 1 ? Math.max(0, currentOffset - 12) : currentOffset;
+    await loadDocumentPage(fallbackOffset);
+  }
+
+  async function handleDeleteKnowledgeItem(knowledgeId: string) {
+    if (!window.confirm("确定删除该知识片段吗？删除后不再参与检索。")) return;
+    await onDeleteKnowledgeItem(knowledgeId);
+    setOpenDocumentItems((current) => current.filter((item) => item.knowledge_id !== knowledgeId));
   }
 
   async function handleOpenCaseDetail(caseId: string) {
@@ -3271,8 +3440,8 @@ function ResourcesSection({
         <MetricCard
           icon={<Brain />}
           label="知识库文档"
-          value={formatCount(data.documents.length)}
-          helper={`${data.documents.reduce((total, document) => total + (document.pending_review_chunk_count ?? 0), 0)} 个片段待审`}
+          value={formatCount(data.documentPagination?.total ?? data.documents.length)}
+          helper={`${visibleDocuments.reduce((total, document) => total + (document.pending_review_chunk_count ?? 0), 0)} 个当前页片段待审`}
         />
       </div>
       <Card>
@@ -3326,11 +3495,29 @@ function ResourcesSection({
         <CardContent>
           <DocumentUploadPanel
             cases={data.cases}
-            documents={data.documents}
+            documents={visibleDocuments}
             isSaving={isDocumentBusy}
             onUploadDocument={onUploadDocument}
             sources={data.sources}
           />
+          <form
+            className="mb-3 flex flex-col gap-2 sm:flex-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void loadDocumentPage(0);
+            }}
+          >
+            <Input
+              aria-label="搜索知识库文档"
+              onChange={(event) => setDocumentQuery(event.target.value)}
+              placeholder="按标题、文件名、病例或来源搜索"
+              value={documentQuery}
+            />
+            <Button disabled={isDocumentListLoading} type="submit" variant="secondary">
+              {isDocumentListLoading ? <Loader2 className="animate-spin" /> : null}
+              搜索
+            </Button>
+          </form>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
@@ -3345,7 +3532,7 @@ function ResourcesSection({
                 </tr>
               </thead>
               <tbody>
-                {data.documents.slice(0, 12).map((document) => (
+                {visibleDocuments.map((document) => (
                   <tr className="border-b border-[#F0E8DC]" key={document.document_id}>
                     <td className="py-3 pr-4 font-medium">{document.title || document.filename || document.document_id}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.scope === "case" ? "病例知识库" : "全局知识库"}</td>
@@ -3363,7 +3550,7 @@ function ResourcesSection({
                     </td>
                     <td className="py-3 pr-4">
                       <div className="flex flex-wrap gap-2">
-                        <Button onClick={() => handleOpenDocument(document.document_id)} size="sm" variant={activeDocumentId === document.document_id ? "default" : "secondary"}>
+                        <Button onClick={() => void handleOpenDocument(document.document_id)} size="sm" variant={activeDocumentId === document.document_id ? "default" : "secondary"}>
                           查看内容
                         </Button>
                         <Button disabled={isDocumentBusy} onClick={() => onSetDocumentEnabled(document.document_id, !document.enabled)} size="sm" variant={document.enabled ? "outline" : "secondary"}>
@@ -3389,6 +3576,15 @@ function ResourcesSection({
                             </Button>
                           </>
                         ) : null}
+                        <Button
+                          disabled={isDocumentBusy}
+                          onClick={() => void handleDeleteDocument(document.document_id)}
+                          size="sm"
+                          variant="destructive"
+                        >
+                          <Trash2 />
+                          删除
+                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -3396,7 +3592,13 @@ function ResourcesSection({
               </tbody>
             </table>
           </div>
-          {data.documents.length === 0 ? <EmptyText>暂无知识库文档。</EmptyText> : null}
+          {documentListError ? <p className="mt-3 text-sm text-red-700">{documentListError}</p> : null}
+          {visibleDocuments.length === 0 ? <EmptyText>暂无匹配的知识库文档。</EmptyText> : null}
+          <PaginationControls
+            isLoading={isDocumentListLoading}
+            onPageChange={(offset) => void loadDocumentPage(offset)}
+            pagination={documentPagination}
+          />
         </CardContent>
       </Card>
       {openDocument ? (
@@ -3405,8 +3607,17 @@ function ResourcesSection({
           isSaving={isDocumentBusy}
           items={openDocumentItems}
           onClose={() => setOpenDocumentId("")}
-          onReviewKnowledgeItem={onReviewKnowledgeItem}
-          onSaveKnowledgeItem={onSaveKnowledgeItem}
+          onDeleteKnowledgeItem={handleDeleteKnowledgeItem}
+          onReviewKnowledgeItem={async (knowledgeId, decision, note) => {
+            const updated = await onReviewKnowledgeItem(knowledgeId, decision, note);
+            setOpenDocumentItems((current) => current.map((item) => (item.knowledge_id === knowledgeId ? updated : item)));
+            return updated;
+          }}
+          onSaveKnowledgeItem={async (item) => {
+            const updated = await onSaveKnowledgeItem(item);
+            setOpenDocumentItems((current) => current.map((currentItem) => (currentItem.knowledge_id === updated.knowledge_id ? updated : currentItem)));
+            return updated;
+          }}
         />
       ) : null}
       {openCaseDetail ? <CaseDetailModal casePayload={openCaseDetail} onClose={() => setOpenCaseDetail(null)} /> : null}
@@ -4490,6 +4701,7 @@ function KnowledgeContentModal({
   isSaving,
   items,
   onClose,
+  onDeleteKnowledgeItem,
   onReviewKnowledgeItem,
   onSaveKnowledgeItem,
 }: Readonly<{
@@ -4497,6 +4709,7 @@ function KnowledgeContentModal({
   isSaving: boolean;
   items: readonly AdminRagKnowledgeItem[];
   onClose: () => void;
+  onDeleteKnowledgeItem: (knowledgeId: string) => Promise<void>;
   onReviewKnowledgeItem: (knowledgeId: string, decision: AdminRagReviewDecision, note: string) => Promise<AdminRagKnowledgeItem>;
   onSaveKnowledgeItem: (item: AdminRagKnowledgeItem) => Promise<AdminRagKnowledgeItem>;
 }>) {
@@ -4556,6 +4769,18 @@ function KnowledgeContentModal({
       setLocalErrorText("");
     } catch (error) {
       setLocalErrorText(error instanceof Error ? error.message : "审核失败");
+    }
+  }
+
+  async function handleDelete() {
+    if (!selectedItem) return;
+    const deletedId = selectedItem.knowledge_id;
+    try {
+      await onDeleteKnowledgeItem(deletedId);
+      setSelectedKnowledgeId(items.find((item) => item.knowledge_id !== deletedId)?.knowledge_id ?? "");
+      setLocalErrorText("");
+    } catch (error) {
+      setLocalErrorText(error instanceof Error ? error.message : "删除失败");
     }
   }
 
@@ -4659,6 +4884,10 @@ function KnowledgeContentModal({
                 ) : null}
                 {localErrorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{localErrorText}</p> : null}
                 <div className="flex flex-wrap justify-end gap-2">
+                  <Button disabled={isSaving} onClick={() => void handleDelete()} variant="destructive">
+                    <Trash2 />
+                    删除片段
+                  </Button>
                   <Button onClick={onClose} variant="secondary">
                     取消
                   </Button>
@@ -5062,13 +5291,65 @@ function TrainingSection({
   selectedReport: AdminSessionReport | null;
   onSelectSession: (sessionId: string) => void;
 }>) {
-  const hasSelectedReport = selectedSession
-    ? selectedSession.stage === "feedback" || data.reports.some((report) => report.session_id === selectedSession.session_id)
+  const [sessions, setSessions] = useState<readonly AdminSessionSummary[]>(data.sessions);
+  const [sessionPagination, setSessionPagination] = useState<Pagination | null>(data.sessionPagination);
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [reports, setReports] = useState<readonly AdminReportSummary[]>(data.reports);
+  const [reportPagination, setReportPagination] = useState<Pagination | null>(data.reportPagination);
+  const [reportQuery, setReportQuery] = useState("");
+  const [activeSessionId, setActiveSessionId] = useState(selectedSession?.session_id ?? "");
+  const [isListLoading, setIsListLoading] = useState(false);
+  const [listError, setListError] = useState("");
+
+  useEffect(() => {
+    setSessions(data.sessions);
+    setSessionPagination(data.sessionPagination);
+    setReports(data.reports);
+    setReportPagination(data.reportPagination);
+  }, [data.reportPagination, data.reports, data.sessionPagination, data.sessions]);
+
+  const activeSession = sessions.find((session) => session.session_id === activeSessionId)
+    ?? (selectedSession?.session_id === activeSessionId ? selectedSession : null)
+    ?? sessions[0]
+    ?? null;
+  const hasSelectedReport = activeSession
+    ? activeSession.stage === "feedback" || reports.some((report) => report.session_id === activeSession.session_id)
     : false;
   const humanisticReportStats = selectedReport ? getHumanisticReportStats(selectedReport) : null;
   const teacherInterventionEvents = selectedEvents
     .map((event) => getTeacherInterventionEvent(event))
     .filter((event): event is TeacherInterventionEvent => event !== null);
+
+  async function loadSessions(offset: number, query = sessionQuery) {
+    setIsListLoading(true);
+    setListError("");
+    try {
+      const response = await getAdminSessionsPage(query, offset);
+      setSessions(response.sessions);
+      setSessionPagination(response.pagination);
+      const firstSessionId = response.sessions[0]?.session_id ?? "";
+      setActiveSessionId(firstSessionId);
+      if (firstSessionId) onSelectSession(firstSessionId);
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "读取训练记录失败");
+    } finally {
+      setIsListLoading(false);
+    }
+  }
+
+  async function loadReports(offset: number, query = reportQuery) {
+    setIsListLoading(true);
+    setListError("");
+    try {
+      const response = await getAdminReportsPage(query, offset);
+      setReports(response.reports);
+      setReportPagination(response.pagination);
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "读取报告中心失败");
+    } finally {
+      setIsListLoading(false);
+    }
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
@@ -5078,7 +5359,19 @@ function TrainingSection({
           <CardDescription>表格化展示训练证据，点击一行查看详情。</CardDescription>
         </CardHeader>
         <CardContent>
-          <SessionTable onSelectSession={onSelectSession} selectedSessionId={selectedSession?.session_id ?? ""} sessions={data.sessions} />
+          <form className="mb-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void loadSessions(0); }}>
+            <Input aria-label="搜索训练记录" onChange={(event) => setSessionQuery(event.target.value)} placeholder="搜索病例、学生、阶段或 Session ID" value={sessionQuery} />
+            <Button disabled={isListLoading} type="submit" variant="secondary">搜索</Button>
+          </form>
+          <SessionTable
+            onSelectSession={(sessionId) => {
+              setActiveSessionId(sessionId);
+              onSelectSession(sessionId);
+            }}
+            selectedSessionId={activeSession?.session_id ?? ""}
+            sessions={sessions}
+          />
+          <PaginationControls isLoading={isListLoading} onPageChange={(offset) => void loadSessions(offset)} pagination={sessionPagination} />
         </CardContent>
       </Card>
       <Card>
@@ -5087,19 +5380,19 @@ function TrainingSection({
           <CardDescription>选择左侧 Session 后读取报告、日志和 Skill 应用证据。</CardDescription>
         </CardHeader>
         <CardContent>
-          {selectedSession ? (
+          {activeSession ? (
             <div className="grid gap-4">
               <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
-                <p className="text-xs font-semibold text-[#AE5630]">{selectedSession.stage_label ?? selectedSession.stage}</p>
-                <h3 className="mt-1 text-xl font-semibold">{selectedSession.case_title || selectedSession.case_id}</h3>
-                <p className="mt-2 text-sm text-[#6F6257]">学员：{selectedSession.student_id}</p>
-                <p className="mt-1 text-sm text-[#6F6257]">更新：{formatDateTime(selectedSession.updated_at)}</p>
+                <p className="text-xs font-semibold text-[#AE5630]">{activeSession.stage_label ?? activeSession.stage}</p>
+                <h3 className="mt-1 text-xl font-semibold">{activeSession.case_title || activeSession.case_id}</h3>
+                <p className="mt-2 text-sm text-[#6F6257]">学员：{activeSession.student_id}</p>
+                <p className="mt-1 text-sm text-[#6F6257]">更新：{formatDateTime(activeSession.updated_at)}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button disabled={isDetailBusy || !hasSelectedReport} onClick={() => onReadReport(selectedSession.session_id)} size="sm">
+                  <Button disabled={isDetailBusy || !hasSelectedReport} onClick={() => onReadReport(activeSession.session_id)} size="sm">
                     {isDetailBusy ? <Loader2 className="animate-spin" /> : <FileText />}
                     {hasSelectedReport ? "读取报告" : "暂无报告"}
                   </Button>
-                  <Button disabled={isDetailBusy} onClick={() => onReadEvents(selectedSession.session_id)} size="sm" variant="secondary">
+                  <Button disabled={isDetailBusy} onClick={() => onReadEvents(activeSession.session_id)} size="sm" variant="secondary">
                     {isDetailBusy ? <Loader2 className="animate-spin" /> : <Activity />}
                     读取日志
                   </Button>
@@ -5192,18 +5485,62 @@ function TrainingSection({
               ) : null}
               <div className="grid gap-2">
                 <h4 className="text-sm font-semibold">Skill 跳过原因</h4>
-                {(selectedSession.active_skill_context?.skipped_reasons ?? []).slice(0, 4).map((reason) => (
+                {(activeSession.active_skill_context?.skipped_reasons ?? []).slice(0, 4).map((reason) => (
                   <div className="rounded-xl border border-[#E7E0D4] bg-white p-3 text-sm" key={`${reason.skill_id}-${reason.reason}`}>
                     <p className="font-medium">{reason.reason_label || reason.reason}</p>
                     <p className="mt-1 text-xs leading-5 text-[#6F6257]">{reason.reason_description || "暂无说明"}</p>
                   </div>
                 ))}
-                {(selectedSession.active_skill_context?.skipped_reasons ?? []).length === 0 ? <EmptyText>本轮暂无 Skill 跳过记录。</EmptyText> : null}
+                {(activeSession.active_skill_context?.skipped_reasons ?? []).length === 0 ? <EmptyText>本轮暂无 Skill 跳过记录。</EmptyText> : null}
               </div>
             </div>
           ) : (
             <EmptyText>暂无可查看的训练 Session。</EmptyText>
           )}
+        </CardContent>
+      </Card>
+      <Card className="xl:col-span-2">
+        <CardHeader className="flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>报告中心</CardTitle>
+            <CardDescription>集中检索训练报告、打开完整报告，并按当前查询范围导出 JSON 或 CSV。</CardDescription>
+          </div>
+          <Badge variant="muted">{formatCount(reportPagination?.total ?? reports.length)} 份</Badge>
+        </CardHeader>
+        <CardContent>
+          <form className="mb-3 flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); void loadReports(0); }}>
+            <Input aria-label="搜索训练报告" onChange={(event) => setReportQuery(event.target.value)} placeholder="搜索病例、学生、报告或 Session ID" value={reportQuery} />
+            <Button disabled={isListLoading} type="submit" variant="secondary">搜索报告</Button>
+            <Button onClick={() => window.location.assign(`/api/admin/reports/export?format=csv&q=${encodeURIComponent(reportQuery.trim())}`)} type="button" variant="secondary">导出 CSV</Button>
+            <Button onClick={() => window.location.assign(`/api/admin/reports/export?format=json&q=${encodeURIComponent(reportQuery.trim())}`)} type="button" variant="outline">导出 JSON</Button>
+          </form>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
+                <tr className="border-b border-[#E7E0D4]">
+                  <th className="py-3 pr-4">病例</th>
+                  <th className="py-3 pr-4">学生</th>
+                  <th className="py-3 pr-4">总分</th>
+                  <th className="py-3 pr-4">训练缺口</th>
+                  <th className="py-3 pr-4">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((report) => (
+                  <tr className="border-b border-[#F0E8DC]" key={report.report_id || report.session_id}>
+                    <td className="py-3 pr-4"><p className="font-semibold">{report.case_title || report.case_id}</p><p className="mt-1 text-xs text-[#8A7D6F]">{report.session_id}</p></td>
+                    <td className="py-3 pr-4 text-[#6F6257]">{report.student_id}</td>
+                    <td className="py-3 pr-4"><Badge variant="success">{report.total_score} 分</Badge></td>
+                    <td className="py-3 pr-4 text-[#6F6257]">{report.missed_item_labels?.slice(0, 3).join("、") || "未记录"}</td>
+                    <td className="py-3 pr-4"><Button disabled={isDetailBusy} onClick={() => { setActiveSessionId(report.session_id); onSelectSession(report.session_id); onReadReport(report.session_id); }} size="sm" variant="secondary">查看完整报告</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {reports.length === 0 ? <EmptyText>暂无匹配的训练报告。</EmptyText> : null}
+          {listError ? <p className="mt-3 text-sm text-red-700">{listError}</p> : null}
+          <PaginationControls isLoading={isListLoading} onPageChange={(offset) => void loadReports(offset)} pagination={reportPagination} />
         </CardContent>
       </Card>
       <ProcedureAuditList audits={data.procedureAudits} className="xl:col-span-2" summary={data.procedureAuditSummary} />
@@ -5790,6 +6127,30 @@ function SkillSection({
   selectedCandidateEvents: readonly TrainingEventRecord[];
 }>) {
   const autoApplyEnabled = data.autoApprovalSettings?.auto_apply_enabled ?? false;
+  const [candidates, setCandidates] = useState<readonly TrainingSkillCandidateSummary[]>(data.candidates);
+  const [candidatePagination, setCandidatePagination] = useState<Pagination | null>(data.candidatePagination);
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const [isCandidateListLoading, setIsCandidateListLoading] = useState(false);
+  const [candidateListError, setCandidateListError] = useState("");
+
+  useEffect(() => {
+    setCandidates(data.candidates);
+    setCandidatePagination(data.candidatePagination);
+  }, [data.candidatePagination, data.candidates]);
+
+  async function loadCandidates(offset: number, query = candidateQuery) {
+    setIsCandidateListLoading(true);
+    setCandidateListError("");
+    try {
+      const response = await getAdminCandidatesPage(query, offset);
+      setCandidates(response.candidates);
+      setCandidatePagination(response.pagination);
+    } catch (error) {
+      setCandidateListError(error instanceof Error ? error.message : "读取候选 Skill 失败");
+    } finally {
+      setIsCandidateListLoading(false);
+    }
+  }
   return (
     <div className="grid gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -5805,7 +6166,7 @@ function SkillSection({
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard icon={<Sparkles />} label="候选 Skill" value={formatCount(data.candidatePagination?.total ?? data.candidates.length)} helper="来自训练日志" />
+        <MetricCard icon={<Sparkles />} label="候选 Skill" value={formatCount(candidatePagination?.total ?? candidates.length)} helper="来自训练日志" />
         <MetricCard icon={<GraduationCap />} label="效果状态" value={data.skillEffects?.label || getSkillEffectStatusLabel(data.skillEffects?.status)} helper="样本不足不伪造提升" />
         <MetricCard icon={<Brain />} label="支持样本要求" value={formatCount(data.skillEffects?.min_sessions_per_group ?? 0)} helper="每组最低样本数" />
       </div>
@@ -5815,6 +6176,10 @@ function SkillSection({
           <CardDescription>只显示审核判断需要的字段：标题、状态、来源报告、支持次数和回归结果。</CardDescription>
         </CardHeader>
         <CardContent>
+          <form className="mb-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void loadCandidates(0); }}>
+            <Input aria-label="搜索候选 Skill" onChange={(event) => setCandidateQuery(event.target.value)} placeholder="搜索标题、病例、训练点或状态" value={candidateQuery} />
+            <Button disabled={isCandidateListLoading} type="submit" variant="secondary">搜索</Button>
+          </form>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
@@ -5828,7 +6193,7 @@ function SkillSection({
                 </tr>
               </thead>
               <tbody>
-                {data.candidates.map((candidate) => (
+                {candidates.map((candidate) => (
                   <tr className="border-b border-[#F0E8DC]" key={candidate.candidate_id}>
                     <td className="py-3 pr-4">
                       <p className="font-semibold">{candidate.title}</p>
@@ -5850,7 +6215,9 @@ function SkillSection({
               </tbody>
             </table>
           </div>
-          {data.candidates.length === 0 ? <EmptyText>暂无候选 Skill。</EmptyText> : null}
+          {candidates.length === 0 ? <EmptyText>暂无候选 Skill。</EmptyText> : null}
+          {candidateListError ? <p className="mt-3 text-sm text-red-700">{candidateListError}</p> : null}
+          <PaginationControls isLoading={isCandidateListLoading} onPageChange={(offset) => void loadCandidates(offset)} pagination={candidatePagination} />
         </CardContent>
       </Card>
       <Card>
@@ -5971,8 +6338,33 @@ function EvaluationSection({
   onRunRetrievalEvaluation: () => void;
   selectedEvaluation: EvaluationBatchDetail | null;
 }>) {
-  const totalCases = data.evaluations.reduce((sum, evaluation) => sum + evaluation.total_cases, 0);
-  const passedCases = data.evaluations.reduce((sum, evaluation) => sum + evaluation.passed_cases, 0);
+  const [evaluations, setEvaluations] = useState<readonly EvaluationBatchSummary[]>(data.evaluations);
+  const [evaluationPagination, setEvaluationPagination] = useState<Pagination | null>(data.evaluationPagination);
+  const [evaluationQuery, setEvaluationQuery] = useState("");
+  const [isEvaluationListLoading, setIsEvaluationListLoading] = useState(false);
+  const [evaluationListError, setEvaluationListError] = useState("");
+
+  useEffect(() => {
+    setEvaluations(data.evaluations);
+    setEvaluationPagination(data.evaluationPagination);
+  }, [data.evaluationPagination, data.evaluations]);
+
+  async function loadEvaluations(offset: number, query = evaluationQuery) {
+    setIsEvaluationListLoading(true);
+    setEvaluationListError("");
+    try {
+      const response = await getAdminEvaluationsPage(query, offset);
+      setEvaluations(response.evaluations);
+      setEvaluationPagination(response.pagination);
+    } catch (error) {
+      setEvaluationListError(error instanceof Error ? error.message : "读取评测批次失败");
+    } finally {
+      setIsEvaluationListLoading(false);
+    }
+  }
+
+  const totalCases = evaluations.reduce((sum, evaluation) => sum + evaluation.total_cases, 0);
+  const passedCases = evaluations.reduce((sum, evaluation) => sum + evaluation.passed_cases, 0);
   const passRate = totalCases > 0 ? Math.round((passedCases / totalCases) * 100) : 0;
   return (
     <div className="grid gap-4">
@@ -5995,9 +6387,9 @@ function EvaluationSection({
         </CardContent>
       </Card>
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard icon={<ClipboardCheck />} label="评测批次" value={formatCount(data.evaluationPagination?.total ?? data.evaluations.length)} helper="历史批次" />
-        <MetricCard icon={<Gauge />} label="总通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
-        <MetricCard icon={<Wrench />} label="失败用例" value={formatCount(data.evaluations.reduce((sum, evaluation) => sum + evaluation.failed_cases, 0))} helper="需要排查" />
+        <MetricCard icon={<ClipboardCheck />} label="评测批次" value={formatCount(evaluationPagination?.total ?? evaluations.length)} helper="历史批次" />
+        <MetricCard icon={<Gauge />} label="当前页通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
+        <MetricCard icon={<Wrench />} label="当前页失败用例" value={formatCount(evaluations.reduce((sum, evaluation) => sum + evaluation.failed_cases, 0))} helper="需要排查" />
       </div>
       <RetrievalEvalPanel
         isLoading={isRetrievalEvalBusy}
@@ -6010,8 +6402,12 @@ function EvaluationSection({
           <CardDescription>最新批次优先，点击批次查看用例结果。</CardDescription>
         </CardHeader>
         <CardContent>
+          <form className="mb-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void loadEvaluations(0); }}>
+            <Input aria-label="搜索评测批次" onChange={(event) => setEvaluationQuery(event.target.value)} placeholder="搜索批次名称或批次 ID" value={evaluationQuery} />
+            <Button disabled={isEvaluationListLoading} type="submit" variant="secondary">搜索</Button>
+          </form>
           <div className="grid gap-2">
-            {data.evaluations.map((evaluation) => (
+            {evaluations.map((evaluation) => (
               <article className="flex flex-col gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4 sm:flex-row sm:items-center sm:justify-between" key={evaluation.batch_id}>
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-semibold">{evaluation.batch_label || evaluation.batch_id}</h3>
@@ -6025,8 +6421,10 @@ function EvaluationSection({
                 </div>
               </article>
             ))}
-            {data.evaluations.length === 0 ? <EmptyText>暂无评测批次。</EmptyText> : null}
+            {evaluations.length === 0 ? <EmptyText>暂无评测批次。</EmptyText> : null}
           </div>
+          {evaluationListError ? <p className="mt-3 text-sm text-red-700">{evaluationListError}</p> : null}
+          <PaginationControls isLoading={isEvaluationListLoading} onPageChange={(offset) => void loadEvaluations(offset)} pagination={evaluationPagination} />
         </CardContent>
       </Card>
       <Card>
@@ -6508,6 +6906,45 @@ function MiniStat({ label, value }: Readonly<{ label: string; value: string }>) 
     <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
       <p className="text-xs text-[#8A7D6F]">{label}</p>
       <p className="mt-2 text-xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function PaginationControls({
+  isLoading,
+  onPageChange,
+  pagination,
+}: Readonly<{
+  isLoading: boolean;
+  onPageChange: (offset: number) => void;
+  pagination: Pagination | null;
+}>) {
+  if (!pagination || pagination.total <= pagination.limit) return null;
+  const firstItem = pagination.total === 0 ? 0 : pagination.offset + 1;
+  const lastItem = Math.min(pagination.total, pagination.offset + pagination.limit);
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#E7E0D4] pt-4">
+      <p className="text-xs text-[#6F6257]">
+        第 {firstItem}-{lastItem} 条，共 {pagination.total} 条
+      </p>
+      <div className="flex gap-2">
+        <Button
+          disabled={isLoading || pagination.offset <= 0}
+          onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
+          size="sm"
+          variant="secondary"
+        >
+          上一页
+        </Button>
+        <Button
+          disabled={isLoading || pagination.offset + pagination.limit >= pagination.total}
+          onClick={() => onPageChange(pagination.offset + pagination.limit)}
+          size="sm"
+          variant="secondary"
+        >
+          下一页
+        </Button>
+      </div>
     </div>
   );
 }
