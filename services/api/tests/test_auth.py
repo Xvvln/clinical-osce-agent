@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 import pytest
 from fastapi import Response
 from fastapi.testclient import TestClient
@@ -417,3 +418,98 @@ def test_demo_student_email_in_admin_allowlist_remains_non_admin(
     assert current_user_response.json()["user"]["is_admin"] is False
     assert admin_response.status_code == 403
     assert admin_response.json() == {"detail": "admin access required"}
+
+
+def test_admin_provisioned_account_can_login_in_local_mode(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLINICAL_OSCE_DEPLOYMENT_MODE", "local-demo")
+    user = main.auth_store.create_user(
+        "teacher@example.test",
+        "teacher-password",
+        "带教老师",
+        role="teacher",
+    )
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "teacher@example.test", "password": "teacher-password"},
+    )
+
+    assert user is not None
+    assert response.status_code == 200
+    assert response.json()["user"]["role"] == "teacher"
+    assert response.json()["user"]["is_admin"] is False
+
+
+def test_auth_store_account_lifecycle_revokes_sessions_and_preserves_role(tmp_path) -> None:
+    database_path = tmp_path / "auth.sqlite3"
+    store = AuthStore(database_path)
+    user = store.create_user(
+        "student@example.test",
+        "initial-password",
+        "学生甲",
+        role="student",
+    )
+    assert user is not None
+    token = store.create_session(user["user_id"])
+
+    teacher = store.update_user(
+        user["user_id"],
+        display_name="实习教师",
+        role="teacher",
+    )
+    assert teacher is not None
+    assert teacher["role"] == "teacher"
+    assert AuthStore(database_path).get_user_by_id(user["user_id"])["role"] == "teacher"
+
+    disabled = store.update_user(user["user_id"], status="disabled")
+    assert disabled is not None
+    assert disabled["status"] == "disabled"
+    assert store.get_user_by_session_token(token) is None
+    assert store.authenticate_user("student@example.test", "initial-password") is None
+
+    active = store.update_user(user["user_id"], status="active")
+    assert active is not None
+    reset = store.reset_password(user["user_id"], "rotated-password")
+    assert reset is not None
+    assert store.authenticate_user("student@example.test", "initial-password") is None
+    assert store.authenticate_user("student@example.test", "rotated-password") is not None
+
+    deleted = store.delete_user(user["user_id"])
+    assert deleted is not None
+    assert deleted["status"] == "deleted"
+    assert store.authenticate_user("student@example.test", "rotated-password") is None
+
+
+def test_auth_store_migrates_existing_user_table(tmp_path) -> None:
+    database_path = tmp_path / "legacy-auth.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE users (
+                user_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO users VALUES (
+                'legacy-user', 'legacy@example.test', '旧账号',
+                'hash', 'salt', '2026-01-01T00:00:00+00:00'
+            )
+            """
+        )
+
+    user = AuthStore(database_path).get_user_by_id("legacy-user")
+
+    assert user is not None
+    assert user["role"] == "student"
+    assert user["status"] == "active"
+    assert user["updated_at"] == "2026-01-01T00:00:00+00:00"

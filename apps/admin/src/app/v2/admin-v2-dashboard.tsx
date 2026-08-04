@@ -84,12 +84,33 @@ type AuthUser = Readonly<{
   display_name?: string;
   created_at?: string;
   is_admin: boolean;
+  role?: "student" | "teacher" | "admin";
+  status?: "active" | "disabled" | "deleted";
 }>;
 
 type AdminManagedUser = AuthUser &
   Readonly<{
     eligible_for_classroom: boolean;
+    eligible_as_teacher: boolean;
+    managed_by_environment: boolean;
+    role: "student" | "teacher" | "admin";
+    status: "active" | "disabled" | "deleted";
+    updated_at?: string;
   }>;
+
+type AdminUserCreatePayload = Readonly<{
+  email: string;
+  password: string;
+  display_name: string;
+  role: AdminManagedUser["role"];
+}>;
+
+type AdminUserUpdatePayload = Readonly<{
+  email?: string;
+  display_name?: string;
+  role?: AdminManagedUser["role"];
+  status?: "active" | "disabled";
+}>;
 
 type AdminClassroom = Readonly<{
   classroom_id: string;
@@ -102,12 +123,31 @@ type AdminClassroom = Readonly<{
   created_at: string;
   updated_by: string;
   updated_at: string;
+  teacher_user_id: string;
+  teacher?: AdminManagedUser | null;
+  status: "active" | "archived";
 }>;
 
 type AdminClassroomPayload = Readonly<{
   name: string;
   description: string;
   member_user_ids: readonly string[];
+  teacher_user_id: string;
+  status: AdminClassroom["status"];
+}>;
+
+type AdminAuditEvent = Readonly<{
+  event_id: string;
+  actor_user_id?: string;
+  actor_email?: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  summary: string;
+  before?: unknown;
+  after?: unknown;
+  metadata?: unknown;
+  created_at: string;
 }>;
 
 type Pagination = Readonly<{
@@ -931,6 +971,8 @@ type DashboardData = Readonly<{
   procedureAuditSummary: ProcedureSimulationAuditSummary | null;
   teachingFocusPatterns: readonly AdminTeachingFocusPattern[];
   auditEvents: readonly TrainingEventRecord[];
+  adminAuditEvents: readonly AdminAuditEvent[];
+  adminAuditPagination: Pagination | null;
   retrievalEval: AdminRetrievalEval | null;
   skillEffects: TrainingSkillEffects | null;
   autoApprovalSettings: TrainingSkillAutoApprovalSettings | null;
@@ -961,6 +1003,8 @@ const emptyDashboardData: DashboardData = {
   procedureAuditSummary: null,
   teachingFocusPatterns: [],
   auditEvents: [],
+  adminAuditEvents: [],
+  adminAuditPagination: null,
   retrievalEval: null,
   skillEffects: null,
   autoApprovalSettings: null,
@@ -974,8 +1018,23 @@ const sections: readonly Readonly<{ id: AdminSectionId; label: string; icon: typ
   { id: "insights", label: "教学洞察", icon: Brain },
   { id: "skill", label: "Skill 进化", icon: Sparkles },
   { id: "evaluation", label: "系统评测", icon: ClipboardCheck },
-  { id: "logs", label: "调用日志", icon: Activity },
+  { id: "logs", label: "审计与调用日志", icon: Activity },
 ];
+
+function formatApiErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === "object") {
+    const payload = detail as { message?: unknown; errors?: unknown };
+    const message = typeof payload.message === "string" ? payload.message : fallback;
+    const errors = Array.isArray(payload.errors)
+      ? payload.errors.filter((item): item is string => typeof item === "string")
+      : [];
+    return errors.length > 0 ? `${message}：${errors.slice(0, 5).join("；")}` : message;
+  }
+  return fallback;
+}
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -988,8 +1047,8 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `${response.status}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail || detail;
+      const payload = (await response.json()) as { detail?: unknown };
+      detail = formatApiErrorDetail(payload.detail, detail);
     } catch {
       detail = response.statusText || detail;
     }
@@ -1017,6 +1076,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     procedureAuditPayload,
     teachingFocusPayload,
     auditEventsPayload,
+    adminAuditPayload,
     skillEffectsPayload,
     autoApprovalSettingsPayload,
   ] = await Promise.all([
@@ -1037,6 +1097,7 @@ async function loadDashboardData(): Promise<DashboardData> {
     fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
     fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"),
     fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"),
+    fetchJson<{ events: readonly AdminAuditEvent[]; pagination?: Pagination }>("/api/admin/audit-events?limit=50"),
     fetchJson<{ skill_effects: TrainingSkillEffects }>("/api/admin/evolution/skill-effects"),
     fetchJson<{ settings: TrainingSkillAutoApprovalSettings }>("/api/admin/evolution/settings"),
   ]);
@@ -1063,6 +1124,8 @@ async function loadDashboardData(): Promise<DashboardData> {
     procedureAuditSummary: procedureAuditPayload.summary ?? null,
     teachingFocusPatterns: teachingFocusPayload.patterns,
     auditEvents: auditEventsPayload.events,
+    adminAuditEvents: adminAuditPayload.events,
+    adminAuditPagination: adminAuditPayload.pagination ?? null,
     retrievalEval: null,
     skillEffects: skillEffectsPayload.skill_effects,
     autoApprovalSettings: autoApprovalSettingsPayload.settings,
@@ -1194,6 +1257,37 @@ async function reviewCandidate(candidateId: string, action: "approve" | "reject"
   });
 }
 
+async function createAdminUser(payload: AdminUserCreatePayload): Promise<AdminManagedUser> {
+  const response = await fetchJson<{ user: AdminManagedUser }>("/api/admin/users", {
+    body: JSON.stringify(payload),
+    method: "POST",
+  });
+  return response.user;
+}
+
+async function updateAdminUser(userId: string, payload: AdminUserUpdatePayload): Promise<AdminManagedUser> {
+  const response = await fetchJson<{ user: AdminManagedUser }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    body: JSON.stringify(payload),
+    method: "PATCH",
+  });
+  return response.user;
+}
+
+async function resetAdminUserPassword(userId: string, password: string): Promise<AdminManagedUser> {
+  const response = await fetchJson<{ user: AdminManagedUser }>(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    body: JSON.stringify({ password }),
+    method: "POST",
+  });
+  return response.user;
+}
+
+async function deleteAdminUser(userId: string): Promise<AdminManagedUser> {
+  const response = await fetchJson<{ user: AdminManagedUser }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+  return response.user;
+}
+
 async function createClassroom(payload: AdminClassroomPayload): Promise<AdminClassroom> {
   const response = await fetchJson<{ classroom: AdminClassroom }>("/api/admin/classrooms", {
     body: JSON.stringify(payload),
@@ -1214,6 +1308,41 @@ async function deleteClassroom(classroomId: string): Promise<void> {
   await fetchJson(`/api/admin/classrooms/${encodeURIComponent(classroomId)}`, {
     method: "DELETE",
   });
+}
+
+async function importClassrooms(csvText: string, mode: "merge" | "replace"): Promise<readonly AdminClassroom[]> {
+  const response = await fetchJson<{ classrooms: readonly AdminClassroom[] }>("/api/admin/classrooms/import", {
+    body: JSON.stringify({ csv_text: csvText, mode }),
+    method: "POST",
+  });
+  return response.classrooms;
+}
+
+async function transferClassroomMembers(
+  sourceClassroomId: string,
+  targetClassroomId: string,
+  memberUserIds: readonly string[],
+  mode: "copy" | "move",
+): Promise<Readonly<{ source_classroom: AdminClassroom; target_classroom: AdminClassroom }>> {
+  return fetchJson(`/api/admin/classrooms/${encodeURIComponent(sourceClassroomId)}/members/transfer`, {
+    body: JSON.stringify({ target_classroom_id: targetClassroomId, member_user_ids: memberUserIds, mode }),
+    method: "POST",
+  });
+}
+
+async function getAdminAuditEvents(
+  query: string,
+  resourceType: string,
+  offset = 0,
+): Promise<Readonly<{ events: readonly AdminAuditEvent[]; pagination: Pagination }>> {
+  const parameters = new URLSearchParams({ limit: "50", offset: String(offset) });
+  if (query.trim()) {
+    parameters.set("q", query.trim());
+  }
+  if (resourceType) {
+    parameters.set("resource_type", resourceType);
+  }
+  return fetchJson(`/api/admin/audit-events?${parameters.toString()}`);
 }
 
 async function getClassroomLearningAnalytics(classroomId: string): Promise<AdminLearningAnalytics> {
@@ -1247,6 +1376,7 @@ export function AdminV2Dashboard() {
   const [isSkillBusy, setIsSkillBusy] = useState(false);
   const [isDocumentBusy, setIsDocumentBusy] = useState(false);
   const [isClassroomBusy, setIsClassroomBusy] = useState(false);
+  const [isUserBusy, setIsUserBusy] = useState(false);
   const [isRetrievalEvalBusy, setIsRetrievalEvalBusy] = useState(false);
   const [isCaseCreationBusy, setIsCaseCreationBusy] = useState(false);
   const [isCaseCreationOpen, setIsCaseCreationOpen] = useState(false);
@@ -1477,6 +1607,84 @@ export function AdminV2Dashboard() {
     }
   }
 
+  async function reloadAdminDirectory(): Promise<void> {
+    const [usersPayload, classroomsPayload] = await Promise.all([
+      fetchJson<{ users: readonly AdminManagedUser[] }>("/api/admin/users"),
+      fetchJson<{ classrooms: readonly AdminClassroom[] }>("/api/admin/classrooms"),
+    ]);
+    setData((current) => ({
+      ...current,
+      users: usersPayload.users,
+      classrooms: classroomsPayload.classrooms,
+    }));
+  }
+
+  async function handleCreateAdminUser(payload: AdminUserCreatePayload): Promise<AdminManagedUser> {
+    setIsUserBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const savedUser = await createAdminUser(payload);
+      await reloadAdminDirectory();
+      setStatusText(`已创建${getAdminUserRoleLabel(savedUser.role)}账号：${savedUser.email}`);
+      return savedUser;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "创建账号失败");
+      throw error;
+    } finally {
+      setIsUserBusy(false);
+    }
+  }
+
+  async function handleUpdateAdminUser(userId: string, payload: AdminUserUpdatePayload): Promise<AdminManagedUser> {
+    setIsUserBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const savedUser = await updateAdminUser(userId, payload);
+      await reloadAdminDirectory();
+      setStatusText(`已更新账号：${savedUser.email}`);
+      return savedUser;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "更新账号失败");
+      throw error;
+    } finally {
+      setIsUserBusy(false);
+    }
+  }
+
+  async function handleResetAdminUserPassword(userId: string, password: string): Promise<AdminManagedUser> {
+    setIsUserBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const savedUser = await resetAdminUserPassword(userId, password);
+      setStatusText(`已重置 ${savedUser.email} 的密码，并注销该账号已有会话。`);
+      return savedUser;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "重置密码失败");
+      throw error;
+    } finally {
+      setIsUserBusy(false);
+    }
+  }
+
+  async function handleDeleteAdminUser(userId: string): Promise<void> {
+    setIsUserBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const deletedUser = await deleteAdminUser(userId);
+      await reloadAdminDirectory();
+      setStatusText(`已撤销 ${deletedUser.email} 的登录权限；历史训练和审计证据仍保留。`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "删除账号失败");
+      throw error;
+    } finally {
+      setIsUserBusy(false);
+    }
+  }
+
   async function handleSaveClassroom(
     classroomId: string,
     payload: AdminClassroomPayload,
@@ -1535,6 +1743,55 @@ export function AdminV2Dashboard() {
       setStatusText("班级已删除，学生账号和训练记录未受影响。");
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "删除班级失败");
+      throw error;
+    } finally {
+      setIsClassroomBusy(false);
+    }
+  }
+
+  async function handleImportClassrooms(csvText: string, mode: "merge" | "replace"): Promise<readonly AdminClassroom[]> {
+    setIsClassroomBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const imported = await importClassrooms(csvText, mode);
+      await reloadAdminDirectory();
+      setStatusText(`已导入或更新 ${imported.length} 个班级。`);
+      return imported;
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "导入班级失败");
+      throw error;
+    } finally {
+      setIsClassroomBusy(false);
+    }
+  }
+
+  async function handleTransferClassroomMembers(
+    sourceClassroomId: string,
+    targetClassroomId: string,
+    memberUserIds: readonly string[],
+    mode: "copy" | "move",
+  ): Promise<void> {
+    setIsClassroomBusy(true);
+    setErrorText("");
+    setStatusText("");
+    try {
+      const result = await transferClassroomMembers(sourceClassroomId, targetClassroomId, memberUserIds, mode);
+      setData((current) => ({
+        ...current,
+        classrooms: current.classrooms.map((classroom) => {
+          if (classroom.classroom_id === result.source_classroom.classroom_id) {
+            return result.source_classroom;
+          }
+          if (classroom.classroom_id === result.target_classroom.classroom_id) {
+            return result.target_classroom;
+          }
+          return classroom;
+        }),
+      }));
+      setStatusText(`已${mode === "move" ? "移动" : "复制"} ${memberUserIds.length} 名学生到 ${result.target_classroom.name}。`);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "调班失败");
       throw error;
     } finally {
       setIsClassroomBusy(false);
@@ -1865,9 +2122,19 @@ export function AdminV2Dashboard() {
             {activeSectionId === "classes" ? (
               <ClassroomSection
                 classrooms={data.classrooms}
+                currentUserId={authUser.user_id}
                 isBusy={isClassroomBusy}
+                isUserBusy={isUserBusy}
+                onCreateUser={(payload) => handleCreateAdminUser(payload)}
                 onDeleteClassroom={(classroomId) => handleDeleteClassroom(classroomId)}
+                onDeleteUser={(userId) => handleDeleteAdminUser(userId)}
+                onImportClassrooms={(csvText, mode) => handleImportClassrooms(csvText, mode)}
+                onResetUserPassword={(userId, nextPassword) => handleResetAdminUserPassword(userId, nextPassword)}
                 onSaveClassroom={(classroomId, payload) => handleSaveClassroom(classroomId, payload)}
+                onTransferMembers={(sourceClassroomId, targetClassroomId, memberUserIds, mode) =>
+                  handleTransferClassroomMembers(sourceClassroomId, targetClassroomId, memberUserIds, mode)
+                }
+                onUpdateUser={(userId, payload) => handleUpdateAdminUser(userId, payload)}
                 users={data.users}
               />
             ) : null}
@@ -1997,27 +2264,329 @@ function OverviewSection({
   );
 }
 
+function AccountManagementPanel({
+  currentUserId,
+  isBusy,
+  onCreateUser,
+  onDeleteUser,
+  onResetUserPassword,
+  onUpdateUser,
+  users,
+}: Readonly<{
+  currentUserId: string;
+  isBusy: boolean;
+  onCreateUser: (payload: AdminUserCreatePayload) => Promise<AdminManagedUser>;
+  onDeleteUser: (userId: string) => Promise<void>;
+  onResetUserPassword: (userId: string, password: string) => Promise<AdminManagedUser>;
+  onUpdateUser: (userId: string, payload: AdminUserUpdatePayload) => Promise<AdminManagedUser>;
+  users: readonly AdminManagedUser[];
+}>) {
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [emailAddress, setEmailAddress] = useState("");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [role, setRole] = useState<AdminManagedUser["role"]>("student");
+  const [accountStatus, setAccountStatus] = useState<"active" | "disabled">("active");
+  const [searchText, setSearchText] = useState("");
+  const [validationText, setValidationText] = useState("");
+  const selectedUser = users.find((user) => user.user_id === selectedUserId) ?? null;
+  const filteredUsers = useMemo(() => {
+    const query = searchText.trim().toLocaleLowerCase("zh-CN");
+    if (!query) {
+      return users;
+    }
+    return users.filter((user) =>
+      [user.display_name ?? "", user.email, getAdminUserRoleLabel(user.role), getAdminUserStatusLabel(user.status)]
+        .join(" ")
+        .toLocaleLowerCase("zh-CN")
+        .includes(query),
+    );
+  }, [searchText, users]);
+
+  useEffect(() => {
+    if (selectedUserId && !users.some((user) => user.user_id === selectedUserId)) {
+      startNewUser();
+    }
+  }, [selectedUserId, users]);
+
+  function startNewUser() {
+    setSelectedUserId("");
+    setDisplayName("");
+    setEmailAddress("");
+    setPasswordValue("");
+    setRole("student");
+    setAccountStatus("active");
+    setValidationText("");
+  }
+
+  function openUser(user: AdminManagedUser) {
+    setSelectedUserId(user.user_id);
+    setDisplayName(user.display_name ?? "");
+    setEmailAddress(user.email);
+    setPasswordValue("");
+    setRole(user.role);
+    setAccountStatus(user.status === "disabled" ? "disabled" : "active");
+    setValidationText("");
+  }
+
+  async function handleSave() {
+    const normalizedName = displayName.trim();
+    const normalizedEmail = emailAddress.trim().toLocaleLowerCase("en-US");
+    if (!normalizedName || !normalizedEmail.includes("@")) {
+      setValidationText("请填写有效邮箱和姓名。");
+      return;
+    }
+    if (!selectedUserId && passwordValue.length < 8) {
+      setValidationText("新账号初始密码至少 8 位。");
+      return;
+    }
+    setValidationText("");
+    try {
+      const savedUser = selectedUserId
+        ? await onUpdateUser(selectedUserId, {
+            display_name: normalizedName,
+            email: normalizedEmail,
+            role,
+            status: accountStatus,
+          })
+        : await onCreateUser({
+            display_name: normalizedName,
+            email: normalizedEmail,
+            password: passwordValue,
+            role,
+          });
+      openUser(savedUser);
+    } catch {
+      // The parent dashboard owns API error rendering.
+    }
+  }
+
+  async function handlePasswordReset() {
+    if (!selectedUser || passwordValue.length < 8) {
+      setValidationText("新密码至少 8 位。");
+      return;
+    }
+    if (!window.confirm(`确定重置 ${selectedUser.email} 的密码并注销其全部登录会话吗？`)) {
+      return;
+    }
+    setValidationText("");
+    try {
+      await onResetUserPassword(selectedUser.user_id, passwordValue);
+      setPasswordValue("");
+    } catch {
+      // The parent dashboard owns API error rendering.
+    }
+  }
+
+  async function handleDelete() {
+    if (!selectedUser || !window.confirm(`确定撤销 ${selectedUser.email} 的登录权限吗？历史训练证据仍会保留。`)) {
+      return;
+    }
+    try {
+      await onDeleteUser(selectedUser.user_id);
+      startNewUser();
+    } catch {
+      // The parent dashboard owns API error rendering.
+    }
+  }
+
+  const isCurrentUser = selectedUser?.user_id === currentUserId;
+  const isEnvironmentManaged = selectedUser?.managed_by_environment === true;
+  const lockedIdentity = Boolean(isCurrentUser || isEnvironmentManaged);
+  const roleCounts = users.reduce<Record<AdminManagedUser["role"], number>>(
+    (counts, user) => ({ ...counts, [user.role]: counts[user.role] + 1 }),
+    { admin: 0, student: 0, teacher: 0 },
+  );
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>账号与角色</CardTitle>
+          <CardDescription>管理员可创建学生、教师或管理员账号，并执行禁用、密码重置和登录权限撤销。</CardDescription>
+        </div>
+        <Button onClick={startNewUser} type="button" variant="secondary">
+          <PlusCircle />
+          新建账号
+        </Button>
+      </CardHeader>
+      <CardContent className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="grid content-start gap-3">
+          <div className="grid grid-cols-3 gap-2">
+            <MiniStat label="学生" value={formatCount(roleCounts.student)} />
+            <MiniStat label="教师" value={formatCount(roleCounts.teacher)} />
+            <MiniStat label="管理员" value={formatCount(roleCounts.admin)} />
+          </div>
+          <Input
+            aria-label="搜索管理账号"
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="搜索姓名、邮箱、角色或状态"
+            value={searchText}
+          />
+          <div className="grid max-h-[28rem] gap-2 overflow-y-auto pr-1">
+            {filteredUsers.map((user) => (
+              <button
+                aria-pressed={selectedUserId === user.user_id}
+                className={cn(
+                  "rounded-2xl border p-3 text-left transition",
+                  selectedUserId === user.user_id
+                    ? "border-[#141413] bg-[#F7F4ED]"
+                    : "border-[#E7E0D4] bg-white hover:bg-[#FAF9F5]",
+                )}
+                key={user.user_id}
+                onClick={() => openUser(user)}
+                type="button"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold">{user.display_name || user.email}</span>
+                    <span className="mt-1 block truncate text-xs text-[#8A7D6F]">{user.email}</span>
+                  </span>
+                  <span className="flex flex-wrap justify-end gap-1">
+                    <Badge variant="muted">{getAdminUserRoleLabel(user.role)}</Badge>
+                    <Badge variant={user.status === "active" ? "success" : "warning"}>{getAdminUserStatusLabel(user.status)}</Badge>
+                  </span>
+                </div>
+              </button>
+            ))}
+            {filteredUsers.length === 0 ? <EmptyText>没有匹配账号。</EmptyText> : null}
+          </div>
+        </div>
+        <div className="grid content-start gap-4 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold">{selectedUser ? "编辑账号" : "创建账号"}</h3>
+              <p className="mt-1 text-xs text-[#6F6257]">
+                {isEnvironmentManaged ? "该演示账号由运行环境托管，页面只读。" : isCurrentUser ? "当前账号只能修改显示姓名，避免自锁。" : "账号角色决定可进入的管理或教学范围。"}
+              </p>
+            </div>
+            {selectedUser?.managed_by_environment ? <Badge variant="warning">环境托管</Badge> : null}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-2 text-sm font-medium">
+              姓名
+              <Input disabled={isEnvironmentManaged} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} value={displayName} />
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              邮箱
+              <Input disabled={lockedIdentity} maxLength={AUTH_EMAIL_MAX_CHARS} onChange={(event) => setEmailAddress(event.target.value)} type="email" value={emailAddress} />
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              角色
+              <select
+                className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none disabled:opacity-60"
+                disabled={lockedIdentity}
+                onChange={(event) => setRole(event.target.value as AdminManagedUser["role"])}
+                value={role}
+              >
+                <option value="student">学生</option>
+                <option value="teacher">教师</option>
+                <option value="admin">管理员</option>
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              状态
+              <select
+                className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none disabled:opacity-60"
+                disabled={!selectedUser || lockedIdentity}
+                onChange={(event) => setAccountStatus(event.target.value as "active" | "disabled")}
+                value={accountStatus}
+              >
+                <option value="active">启用</option>
+                <option value="disabled">禁用</option>
+              </select>
+            </label>
+          </div>
+          <label className="grid gap-2 text-sm font-medium">
+            {selectedUser ? "新密码（仅重置时使用）" : "初始密码"}
+            <Input
+              disabled={isEnvironmentManaged || Boolean(isCurrentUser)}
+              maxLength={AUTH_PASSWORD_MAX_CHARS}
+              onChange={(event) => setPasswordValue(event.target.value)}
+              placeholder="至少 8 位"
+              type="password"
+              value={passwordValue}
+            />
+          </label>
+          {validationText ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{validationText}</p> : null}
+          <div className="flex flex-wrap justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {selectedUser && !lockedIdentity ? (
+                <Button disabled={isBusy} onClick={() => void handleDelete()} type="button" variant="destructive">
+                  <Trash2 />
+                  撤销登录权限
+                </Button>
+              ) : null}
+              {selectedUser && !lockedIdentity ? (
+                <Button disabled={isBusy || passwordValue.length < 8} onClick={() => void handlePasswordReset()} type="button" variant="secondary">
+                  重置密码
+                </Button>
+              ) : null}
+            </div>
+            <Button disabled={isBusy || isEnvironmentManaged || !displayName.trim() || !emailAddress.trim()} onClick={() => void handleSave()} type="button">
+              {isBusy ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+              {selectedUser ? "保存账号" : "创建账号"}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ClassroomSection({
   classrooms,
+  currentUserId,
   isBusy,
+  isUserBusy,
+  onCreateUser,
   onDeleteClassroom,
+  onDeleteUser,
+  onImportClassrooms,
+  onResetUserPassword,
   onSaveClassroom,
+  onTransferMembers,
+  onUpdateUser,
   users,
 }: Readonly<{
   classrooms: readonly AdminClassroom[];
+  currentUserId: string;
   isBusy: boolean;
+  isUserBusy: boolean;
+  onCreateUser: (payload: AdminUserCreatePayload) => Promise<AdminManagedUser>;
   onDeleteClassroom: (classroomId: string) => Promise<void>;
+  onDeleteUser: (userId: string) => Promise<void>;
+  onImportClassrooms: (csvText: string, mode: "merge" | "replace") => Promise<readonly AdminClassroom[]>;
+  onResetUserPassword: (userId: string, password: string) => Promise<AdminManagedUser>;
   onSaveClassroom: (classroomId: string, payload: AdminClassroomPayload) => Promise<AdminClassroom>;
+  onTransferMembers: (
+    sourceClassroomId: string,
+    targetClassroomId: string,
+    memberUserIds: readonly string[],
+    mode: "copy" | "move",
+  ) => Promise<void>;
+  onUpdateUser: (userId: string, payload: AdminUserUpdatePayload) => Promise<AdminManagedUser>;
   users: readonly AdminManagedUser[];
 }>) {
   const [editingClassroomId, setEditingClassroomId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<readonly string[]>([]);
+  const [teacherUserId, setTeacherUserId] = useState("");
+  const [classroomStatus, setClassroomStatus] = useState<AdminClassroom["status"]>("active");
   const [userSearchText, setUserSearchText] = useState("");
   const [validationText, setValidationText] = useState("");
+  const [csvText, setCsvText] = useState("班级名称,班级说明,负责教师邮箱,学生邮箱,状态\n");
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+  const [transferMemberIds, setTransferMemberIds] = useState<readonly string[]>([]);
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferMode, setTransferMode] = useState<"copy" | "move">("move");
   const eligibleUsers = useMemo(
     () => users.filter((user) => user.eligible_for_classroom && !user.is_admin),
+    [users],
+  );
+  const eligibleTeachers = useMemo(
+    () => users.filter((user) => user.eligible_as_teacher),
     [users],
   );
   const filteredUsers = useMemo(() => {
@@ -2042,6 +2611,10 @@ function ClassroomSection({
     setName("");
     setDescription("");
     setSelectedMemberIds([]);
+    setTeacherUserId("");
+    setClassroomStatus("active");
+    setTransferMemberIds([]);
+    setTransferTargetId("");
     setUserSearchText("");
     setValidationText("");
   }
@@ -2051,6 +2624,10 @@ function ClassroomSection({
     setName(classroom.name);
     setDescription(classroom.description);
     setSelectedMemberIds(classroom.member_user_ids);
+    setTeacherUserId(classroom.teacher_user_id || "");
+    setClassroomStatus(classroom.status || "active");
+    setTransferMemberIds([]);
+    setTransferTargetId("");
     setUserSearchText("");
     setValidationText("");
   }
@@ -2075,6 +2652,8 @@ function ClassroomSection({
         description: description.trim(),
         member_user_ids: selectedMemberIds,
         name: normalizedName,
+        status: classroomStatus,
+        teacher_user_id: teacherUserId,
       });
       openClassroom(savedClassroom);
     } catch {
@@ -2100,11 +2679,56 @@ function ClassroomSection({
     }
   }
 
+  async function handleImport() {
+    if (!csvText.trim()) {
+      setValidationText("请粘贴带表头的班级 CSV。");
+      return;
+    }
+    setValidationText("");
+    try {
+      await onImportClassrooms(csvText, importMode);
+    } catch {
+      // The parent dashboard owns API error rendering.
+    }
+  }
+
+  function toggleTransferMember(userId: string) {
+    setTransferMemberIds((current) =>
+      current.includes(userId) ? current.filter((item) => item !== userId) : [...current, userId],
+    );
+  }
+
+  async function handleTransfer() {
+    if (!editingClassroomId || !transferTargetId || transferMemberIds.length === 0) {
+      setValidationText("请选择源班级成员和目标班级。");
+      return;
+    }
+    setValidationText("");
+    try {
+      await onTransferMembers(editingClassroomId, transferTargetId, transferMemberIds, transferMode);
+      if (transferMode === "move") {
+        setSelectedMemberIds((current) => current.filter((userId) => !transferMemberIds.includes(userId)));
+      }
+      setTransferMemberIds([]);
+    } catch {
+      // The parent dashboard owns API error rendering.
+    }
+  }
+
   return (
     <div className="grid gap-4">
+      <AccountManagementPanel
+        currentUserId={currentUserId}
+        isBusy={isUserBusy}
+        onCreateUser={onCreateUser}
+        onDeleteUser={onDeleteUser}
+        onResetUserPassword={onResetUserPassword}
+        onUpdateUser={onUpdateUser}
+        users={users}
+      />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <SectionIntro
-          description="创建真实教学班，从现有学生账号中选择成员；一个学生可以进入多个训练班。"
+          description="创建真实教学班，指定负责教师、纳入学生、归档旧班级，并支持 CSV 导入和批量调班。"
           eyebrow="教学组织"
           title="班级与成员"
         />
@@ -2113,9 +2737,10 @@ function ClassroomSection({
           新建班级
         </Button>
       </div>
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <MetricCard icon={<School />} label="班级" value={formatCount(classrooms.length)} helper="可持续编辑" />
         <MetricCard icon={<UsersRound />} label="可选学生" value={formatCount(eligibleUsers.length)} helper="管理员账号已排除" />
+        <MetricCard icon={<GraduationCap />} label="可选教师" value={formatCount(eligibleTeachers.length)} helper="可设置班级负责人" />
         <MetricCard icon={<GraduationCap />} label="成员关系" value={formatCount(assignedMembershipCount)} helper="支持学生加入多个班" />
       </div>
       <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
@@ -2146,9 +2771,16 @@ function ClassroomSection({
                         {classroom.description || "未填写班级说明"}
                       </p>
                     </div>
-                    <Badge variant="muted">{formatCount(classroom.member_count)} 人</Badge>
+                    <span className="flex flex-wrap justify-end gap-1">
+                      <Badge variant={classroom.status === "active" ? "success" : "warning"}>
+                        {classroom.status === "active" ? "进行中" : "已归档"}
+                      </Badge>
+                      <Badge variant="muted">{formatCount(classroom.member_count)} 人</Badge>
+                    </span>
                   </div>
-                  <p className="mt-3 text-xs text-[#8A7D6F]">更新于 {formatDateTime(classroom.updated_at)}</p>
+                  <p className="mt-3 text-xs text-[#8A7D6F]">
+                    负责人：{classroom.teacher?.display_name || classroom.teacher?.email || "未指定"} · 更新于 {formatDateTime(classroom.updated_at)}
+                  </p>
                 </button>
               ))}
               {classrooms.length === 0 ? <EmptyText>暂无班级。点击“新建班级”开始设置。</EmptyText> : null}
@@ -2185,6 +2817,34 @@ function ClassroomSection({
                 value={description}
               />
             </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-2 text-sm font-medium">
+                负责教师
+                <select
+                  className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none"
+                  onChange={(event) => setTeacherUserId(event.target.value)}
+                  value={teacherUserId}
+                >
+                  <option value="">暂不指定</option>
+                  {eligibleTeachers.map((teacher) => (
+                    <option key={teacher.user_id} value={teacher.user_id}>
+                      {teacher.display_name || teacher.email}（{teacher.email}）
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                班级状态
+                <select
+                  className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none"
+                  onChange={(event) => setClassroomStatus(event.target.value as AdminClassroom["status"])}
+                  value={classroomStatus}
+                >
+                  <option value="active">进行中</option>
+                  <option value="archived">已归档</option>
+                </select>
+              </label>
+            </div>
             <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -2256,6 +2916,100 @@ function ClassroomSection({
           </CardContent>
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>批量导入与调班</CardTitle>
+          <CardDescription>CSV 会先完整校验再一次性写入；调班只改变成员关系，不影响学生账号和历史训练。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 xl:grid-cols-2">
+          <div className="grid content-start gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">CSV 导入</h3>
+                <p className="mt-1 text-xs text-[#6F6257]">支持中文表头；同名班级可合并或替换成员。</p>
+              </div>
+              <select
+                className="h-9 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none"
+                onChange={(event) => setImportMode(event.target.value as "merge" | "replace")}
+                value={importMode}
+              >
+                <option value="merge">合并现有成员</option>
+                <option value="replace">替换现有成员</option>
+              </select>
+            </div>
+            <textarea
+              className="min-h-52 w-full resize-y rounded-xl border border-[#E7E0D4] bg-white px-3 py-2 font-mono text-xs leading-5 outline-none"
+              onChange={(event) => setCsvText(event.target.value)}
+              spellCheck={false}
+              value={csvText}
+            />
+            <Button disabled={isBusy || !csvText.trim()} onClick={() => void handleImport()} type="button">
+              {isBusy ? <Loader2 className="animate-spin" /> : <FileText />}
+              校验并导入
+            </Button>
+          </div>
+          <div className="grid content-start gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
+            <div>
+              <h3 className="text-sm font-semibold">批量调班</h3>
+              <p className="mt-1 text-xs text-[#6F6257]">
+                {editingClassroomId ? `当前源班级：${name}` : "请先从班级列表选择源班级。"}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-2 text-sm font-medium">
+                目标班级
+                <select
+                  className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none disabled:opacity-60"
+                  disabled={!editingClassroomId}
+                  onChange={(event) => setTransferTargetId(event.target.value)}
+                  value={transferTargetId}
+                >
+                  <option value="">请选择</option>
+                  {classrooms
+                    .filter((classroom) => classroom.classroom_id !== editingClassroomId)
+                    .map((classroom) => (
+                      <option key={classroom.classroom_id} value={classroom.classroom_id}>{classroom.name}</option>
+                    ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                操作方式
+                <select
+                  className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none disabled:opacity-60"
+                  disabled={!editingClassroomId}
+                  onChange={(event) => setTransferMode(event.target.value as "copy" | "move")}
+                  value={transferMode}
+                >
+                  <option value="move">移动（离开源班）</option>
+                  <option value="copy">复制（保留源班）</option>
+                </select>
+              </label>
+            </div>
+            <div className="grid max-h-48 gap-2 overflow-y-auto pr-1">
+              {(classrooms.find((classroom) => classroom.classroom_id === editingClassroomId)?.members ?? []).map((member) => (
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#E7E0D4] bg-white px-3 py-2" key={member.user_id}>
+                  <input
+                    checked={transferMemberIds.includes(member.user_id)}
+                    className="size-4 accent-[#141413]"
+                    onChange={() => toggleTransferMember(member.user_id)}
+                    type="checkbox"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm">{member.display_name || member.email}</span>
+                </label>
+              ))}
+              {editingClassroomId && selectedMemberIds.length === 0 ? <EmptyText>源班级暂无可调成员。</EmptyText> : null}
+            </div>
+            <Button
+              disabled={isBusy || !editingClassroomId || !transferTargetId || transferMemberIds.length === 0}
+              onClick={() => void handleTransfer()}
+              type="button"
+            >
+              {isBusy ? <Loader2 className="animate-spin" /> : <UsersRound />}
+              {transferMode === "move" ? "移动" : "复制"} {transferMemberIds.length} 名学生
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -4764,6 +5518,130 @@ function RetrievalEvalPanel({
   );
 }
 
+function AdminAuditEventPanel({
+  initialEvents,
+  initialPagination,
+}: Readonly<{
+  initialEvents: readonly AdminAuditEvent[];
+  initialPagination: Pagination | null;
+}>) {
+  const [events, setEvents] = useState(initialEvents);
+  const [pagination, setPagination] = useState(initialPagination);
+  const [query, setQuery] = useState("");
+  const [resourceType, setResourceType] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorText, setErrorText] = useState("");
+
+  useEffect(() => {
+    setEvents(initialEvents);
+    setPagination(initialPagination);
+  }, [initialEvents, initialPagination]);
+
+  async function loadEvents(offset = 0) {
+    setIsLoading(true);
+    setErrorText("");
+    try {
+      const payload = await getAdminAuditEvents(query, resourceType, offset);
+      setEvents(payload.events);
+      setPagination(payload.pagination);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "读取管理审计失败");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  const exportParameters = new URLSearchParams();
+  if (query.trim()) {
+    exportParameters.set("q", query.trim());
+  }
+  if (resourceType) {
+    exportParameters.set("resource_type", resourceType);
+  }
+  const exportSuffix = exportParameters.toString() ? `&${exportParameters.toString()}` : "";
+  const offset = pagination?.offset ?? 0;
+  const limit = pagination?.limit ?? 50;
+  const total = pagination?.total ?? events.length;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>管理员操作审计</CardTitle>
+          <CardDescription>记录操作者、动作、对象、改动前后和时间；支持筛选、翻页与 CSV/JSON 导出。</CardDescription>
+        </div>
+        <Badge variant="muted">{formatCount(total)} 条</Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-2 lg:grid-cols-[1fr_12rem_auto_auto]">
+          <Input onChange={(event) => setQuery(event.target.value)} placeholder="搜索操作者、对象或摘要" value={query} />
+          <select
+            className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3 text-sm outline-none"
+            onChange={(event) => setResourceType(event.target.value)}
+            value={resourceType}
+          >
+            <option value="">全部对象</option>
+            <option value="user">账号</option>
+            <option value="classroom">班级</option>
+            <option value="source">来源</option>
+            <option value="case">病例</option>
+            <option value="rubric">评分表</option>
+            <option value="rag_document">知识文档</option>
+            <option value="rag_knowledge">知识片段</option>
+            <option value="evaluation">系统评测</option>
+            <option value="skill">Skill</option>
+          </select>
+          <Button disabled={isLoading} onClick={() => void loadEvents(0)} type="button" variant="secondary">
+            {isLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            查询
+          </Button>
+          <div className="flex gap-2">
+            <Button asChild size="sm" variant="outline">
+              <a href={`/api/admin/audit-events/export?format=csv${exportSuffix}`}>导出 CSV</a>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <a href={`/api/admin/audit-events/export?format=json${exportSuffix}`}>导出 JSON</a>
+            </Button>
+          </div>
+        </div>
+        {errorText ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorText}</p> : null}
+        <div className="grid gap-2">
+          {events.map((event) => (
+            <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={event.event_id}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="muted">{getAdminAuditActionLabel(event.action)}</Badge>
+                    <Badge variant="muted">{getAdminAuditResourceLabel(event.resource_type)}</Badge>
+                    <span className="text-xs text-[#8A7D6F]">{formatDateTime(event.created_at)}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold">{event.summary || event.action}</p>
+                  <p className="mt-1 text-xs text-[#6F6257]">操作者：{event.actor_email || event.actor_user_id || "系统"}</p>
+                </div>
+                <code className="max-w-full truncate rounded-lg bg-white px-2 py-1 text-[11px] text-[#8A7D6F]">{event.resource_id}</code>
+              </div>
+              {event.metadata && Object.keys(event.metadata as object).length > 0 ? (
+                <details className="mt-3 text-xs text-[#6F6257]">
+                  <summary className="cursor-pointer font-medium">查看审计元数据</summary>
+                  <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-xl border border-[#E7E0D4] bg-white p-3">{JSON.stringify(event.metadata, null, 2)}</pre>
+                </details>
+              ) : null}
+            </article>
+          ))}
+          {events.length === 0 ? <EmptyText>当前筛选条件下没有管理员操作记录。</EmptyText> : null}
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-[#8A7D6F]">第 {total === 0 ? 0 : offset + 1}–{Math.min(offset + events.length, total)} 条，共 {total} 条</p>
+          <div className="flex gap-2">
+            <Button disabled={isLoading || offset <= 0} onClick={() => void loadEvents(Math.max(0, offset - limit))} size="sm" type="button" variant="secondary">上一页</Button>
+            <Button disabled={isLoading || offset + limit >= total} onClick={() => void loadEvents(offset + limit)} size="sm" type="button" variant="secondary">下一页</Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
   const chartData = useMemo(
     () => buildModelApiChartData(data.apiLogs?.logs ?? [], data.apiLogs?.summary_by_provider ?? []),
@@ -4772,7 +5650,8 @@ function LogsSection({ data }: Readonly<{ data: DashboardData }>) {
 
   return (
     <div className="grid gap-4">
-      <SectionIntro eyebrow="模型调用" title="API 成功率和最近错误" description="用于排查模型中转、embedding、TeacherAgent 和审批 Agent 的调用稳定性。" />
+      <SectionIntro eyebrow="运行留痕" title="管理审计与模型调用" description="管理动作可追溯、可筛选和导出；模型配置保持只读，只展示调用稳定性。" />
+      <AdminAuditEventPanel initialEvents={data.adminAuditEvents} initialPagination={data.adminAuditPagination} />
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<Activity />} label="总调用" value={formatCount(data.apiLogs?.summary.total_calls ?? 0)} helper="最近日志窗口" />
         <MetricCard icon={<Gauge />} label="成功率" value={`${Math.round((data.apiLogs?.summary.success_rate ?? 0) * 100)}%`} helper={`平均 ${data.apiLogs?.summary.avg_duration_ms ?? 0} ms`} />
@@ -6321,6 +7200,47 @@ function formatDateTime(value: string): string {
     minute: "2-digit",
     month: "2-digit",
   }).format(date);
+}
+
+function getAdminUserRoleLabel(role: AdminManagedUser["role"]): string {
+  return { admin: "管理员", student: "学生", teacher: "教师" }[role];
+}
+
+function getAdminUserStatusLabel(status: AdminManagedUser["status"]): string {
+  return { active: "启用", deleted: "已撤销", disabled: "禁用" }[status];
+}
+
+function getAdminAuditResourceLabel(resourceType: string): string {
+  return ({
+    case: "病例",
+    classroom: "班级",
+    evaluation: "系统评测",
+    rag_document: "知识文档",
+    rag_knowledge: "知识片段",
+    rubric: "评分表",
+    skill: "Skill",
+    source: "来源",
+    user: "账号",
+  }[resourceType] ?? resourceType) || "其他";
+}
+
+function getAdminAuditActionLabel(action: string): string {
+  const actionName = action.split(".").at(-1) ?? action;
+  return {
+    approved: "通过",
+    archived: "归档",
+    created: "创建",
+    deleted: "撤销/删除",
+    imported: "批量导入",
+    members_copy: "复制成员",
+    members_move: "移动成员",
+    password_reset: "重置密码",
+    rejected: "拒绝",
+    reviewed: "审核",
+    rolled_back: "回滚",
+    run: "运行",
+    updated: "更新",
+  }[actionName] ?? action;
 }
 
 function formatDateOnly(value: string | undefined): string {

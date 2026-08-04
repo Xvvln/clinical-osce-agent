@@ -1,5 +1,6 @@
 import base64
 import binascii
+import csv
 import hashlib
 import json
 import logging
@@ -9,7 +10,7 @@ import re
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -46,6 +47,7 @@ from app.services.admin_display_resolver import (
     reference_labels,
     rubric_item_labels,
 )
+from app.services.admin_audit_store import admin_audit_store
 from app.services.api_call_log_service import (
     api_call_log_store,
     normalize_api_call_session_id,
@@ -53,7 +55,7 @@ from app.services.api_call_log_service import (
     set_api_call_context,
     use_api_call_session_context,
 )
-from app.services.auth_store import auth_store
+from app.services.auth_store import AUTH_USER_ROLES, auth_store
 from app.services.browser_origin_policy import browser_state_change_request_rejection_reason
 from app.services.classroom_store import (
     ClassroomNameConflictError,
@@ -257,6 +259,9 @@ IDENTIFIER_MAX_CHARS = 128
 CLASSROOM_NAME_MAX_CHARS = 80
 CLASSROOM_DESCRIPTION_MAX_CHARS = 500
 CLASSROOM_MEMBER_MAX_ITEMS = 500
+CLASSROOM_IMPORT_MAX_CHARS = 256 * 1024
+CLASSROOM_IMPORT_MAX_ROWS = 2_000
+ADMIN_AUDIT_SUMMARY_MAX_CHARS = 500
 PROCEDURE_CODE_MAX_CHARS = 64
 PROCEDURE_BATCH_MAX_ITEMS = 64
 QUESTION_MAX_CHARS = 500
@@ -345,6 +350,11 @@ def _filter_admin_items(items: list[dict[str, Any]], query: str) -> list[dict[st
         for item in items
         if normalized_query in json.dumps(item, ensure_ascii=False, sort_keys=True).lower()
     ]
+
+
+def _csv_safe_cell(value: object) -> str:
+    cell = str(value or "")
+    return f"'{cell}" if cell.startswith(("=", "+", "-", "@")) else cell
 
 
 def _build_paginated_admin_payload(
@@ -788,6 +798,53 @@ class AuthLoginRequest(RequestModel):
     password: str = Field(max_length=AUTH_PASSWORD_MAX_CHARS)
 
 
+class AdminUserCreateRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=AUTH_EMAIL_MAX_CHARS)
+    password: str = Field(min_length=8, max_length=AUTH_PASSWORD_MAX_CHARS)
+    display_name: str = Field(min_length=1, max_length=DISPLAY_NAME_MAX_CHARS)
+    role: Literal["student", "teacher", "admin"] = "student"
+
+    @model_validator(mode="after")
+    def validate_admin_created_user(self) -> "AdminUserCreateRequest":
+        if "@" not in self.email or not self.display_name.strip():
+            raise ValueError("valid email and display name are required")
+        return self
+
+
+class AdminUserUpdateRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str | None = Field(default=None, min_length=3, max_length=AUTH_EMAIL_MAX_CHARS)
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=DISPLAY_NAME_MAX_CHARS,
+    )
+    role: Literal["student", "teacher", "admin"] | None = None
+    status: Literal["active", "disabled"] | None = None
+
+    @model_validator(mode="after")
+    def validate_admin_user_update(self) -> "AdminUserUpdateRequest":
+        if not any(
+            value is not None
+            for value in (self.email, self.display_name, self.role, self.status)
+        ):
+            raise ValueError("at least one user field is required")
+        if self.email is not None and "@" not in self.email:
+            raise ValueError("valid email is required")
+        if self.display_name is not None and not self.display_name.strip():
+            raise ValueError("display name is required")
+        return self
+
+
+class AdminUserPasswordResetRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=8, max_length=AUTH_PASSWORD_MAX_CHARS)
+
+
 class CreateSessionRequest(RequestModel):
     case_id: str = Field(max_length=IDENTIFIER_MAX_CHARS)
     student_id: str = Field(default="anonymous", max_length=IDENTIFIER_MAX_CHARS)
@@ -870,12 +927,31 @@ class AdminClassroomUpsertRequest(RequestModel):
     member_user_ids: list[
         Annotated[str, Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)]
     ] = Field(default_factory=list, max_length=CLASSROOM_MEMBER_MAX_ITEMS)
+    teacher_user_id: str = Field(default="", max_length=IDENTIFIER_MAX_CHARS)
+    status: Literal["active", "archived"] = "active"
 
     @model_validator(mode="after")
     def validate_classroom_name(self) -> "AdminClassroomUpsertRequest":
         if not self.name.strip():
             raise ValueError("classroom name is required")
         return self
+
+
+class AdminClassroomMemberTransferRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_classroom_id: str = Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)
+    member_user_ids: list[
+        Annotated[str, Field(min_length=1, max_length=IDENTIFIER_MAX_CHARS)]
+    ] = Field(min_length=1, max_length=CLASSROOM_MEMBER_MAX_ITEMS)
+    mode: Literal["copy", "move"] = "move"
+
+
+class AdminClassroomImportRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    csv_text: str = Field(min_length=1, max_length=CLASSROOM_IMPORT_MAX_CHARS)
+    mode: Literal["merge", "replace"] = "merge"
 
 
 class AdminCaseValidationRequest(RequestModel):
@@ -1407,22 +1483,56 @@ def _get_demo_student_password() -> str:
     return os.environ.get(DEMO_STUDENT_PASSWORD_ENV_NAME, "")
 
 
+def _is_fixed_demo_account(email: str) -> bool:
+    normalized_email = email.strip().lower()
+    return normalized_email in {
+        configured_email
+        for configured_email in (
+            _get_demo_admin_email() if _is_demo_admin_enabled() else "",
+            _get_demo_student_email() if _is_demo_student_enabled() else "",
+        )
+        if configured_email
+    }
+
+
+def _effective_user_role(user: dict[str, str]) -> str:
+    email = user.get("email", "").strip().lower()
+    if _is_demo_student_enabled() and email == _get_demo_student_email():
+        return "student"
+    stored_role = user.get("role", "student").strip().lower()
+    if stored_role == "admin" or is_admin_email_allowed(email):
+        return "admin"
+    return stored_role if stored_role in AUTH_USER_ROLES else "student"
+
+
 def _build_auth_user_payload(user: dict[str, str]) -> dict[str, object]:
+    role = _effective_user_role(user)
     return {
         **user,
-        "is_admin": is_admin_email_allowed(user["email"]),
+        "role": role,
+        "status": user.get("status", "active"),
+        "is_admin": role == "admin",
+    }
+
+
+def _build_admin_user_payload(user: dict[str, str]) -> dict[str, object]:
+    payload = _build_auth_user_payload(user)
+    return {
+        **payload,
+        "eligible_for_classroom": (
+            payload.get("role") == "student" and payload.get("status") == "active"
+        ),
+        "eligible_as_teacher": (
+            payload.get("role") == "teacher" and payload.get("status") == "active"
+        ),
+        "managed_by_environment": _is_fixed_demo_account(
+            str(payload.get("email") or "")
+        ),
     }
 
 
 def _admin_user_directory() -> list[dict[str, object]]:
-    users = [_build_auth_user_payload(user) for user in auth_store.list_users()]
-    return [
-        {
-            **user,
-            "eligible_for_classroom": not bool(user.get("is_admin")),
-        }
-        for user in users
-    ]
+    return [_build_admin_user_payload(user) for user in auth_store.list_users()]
 
 
 def _validated_classroom_member_user_ids(
@@ -1438,14 +1548,188 @@ def _validated_classroom_member_user_ids(
     invalid_user_ids = [
         user_id
         for user_id in normalized_user_ids
-        if user_id not in users_by_id or bool(users_by_id[user_id].get("is_admin"))
+        if user_id not in users_by_id
+        or users_by_id[user_id].get("role") != "student"
+        or users_by_id[user_id].get("status") != "active"
     ]
     if invalid_user_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="班级成员必须是已存在的非管理员账号",
+            detail="班级成员必须是已存在且启用中的学生账号",
         )
     return normalized_user_ids
+
+
+def _validated_classroom_teacher_user_id(teacher_user_id: str) -> str:
+    normalized_teacher_user_id = teacher_user_id.strip()
+    if not normalized_teacher_user_id:
+        return ""
+    users_by_id = {
+        str(user["user_id"]): user
+        for user in _admin_user_directory()
+    }
+    teacher = users_by_id.get(normalized_teacher_user_id)
+    if (
+        teacher is None
+        or teacher.get("role") != "teacher"
+        or teacher.get("status") != "active"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="班级负责人必须是已存在且启用中的教师账号",
+        )
+    return normalized_teacher_user_id
+
+
+def _classroom_import_value(
+    row: dict[str, str | None],
+    *field_names: str,
+) -> str:
+    normalized_row = {
+        str(key or "").strip().lstrip("\ufeff").lower(): str(value or "").strip()
+        for key, value in row.items()
+    }
+    for field_name in field_names:
+        value = normalized_row.get(field_name.lower(), "")
+        if value:
+            return value
+    return ""
+
+
+def _split_classroom_import_emails(value: str) -> list[str]:
+    return list(
+        dict.fromkeys(
+            email.strip().lower()
+            for email in re.split(r"[;,，、\n]+", value)
+            if email.strip()
+        )
+    )
+
+
+def _parse_admin_classroom_import(
+    request: AdminClassroomImportRequest,
+) -> list[dict[str, Any]]:
+    reader = csv.DictReader(StringIO(request.csv_text.lstrip("\ufeff")))
+    if reader.fieldnames is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="班级 CSV 缺少表头",
+        )
+    rows = list(reader)
+    if len(rows) > CLASSROOM_IMPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"班级 CSV 不能超过 {CLASSROOM_IMPORT_MAX_ROWS} 行",
+        )
+    users_by_email = {
+        str(user["email"]).lower(): user
+        for user in _admin_user_directory()
+    }
+    existing_by_name = {
+        str(classroom["name"]).casefold(): classroom
+        for classroom in classroom_store.list_classrooms()
+    }
+    grouped: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for row_number, row in enumerate(rows, start=2):
+        name = _classroom_import_value(row, "classroom_name", "name", "班级名称")
+        if not name:
+            if any(str(value or "").strip() for value in row.values()):
+                errors.append(f"第 {row_number} 行缺少班级名称")
+            continue
+        key = name.casefold()
+        existing = existing_by_name.get(key)
+        record = grouped.setdefault(
+            key,
+            {
+                "name": name,
+                "description": (
+                    str(existing.get("description") or "")
+                    if request.mode == "merge" and existing
+                    else ""
+                ),
+                "teacher_user_id": (
+                    str(existing.get("teacher_user_id") or "")
+                    if request.mode == "merge" and existing
+                    else ""
+                ),
+                "status": (
+                    str(existing.get("status") or "active")
+                    if request.mode == "merge" and existing
+                    else "active"
+                ),
+                "member_user_ids": list(
+                    existing.get("member_user_ids", [])
+                    if request.mode == "merge" and existing
+                    else []
+                ),
+            },
+        )
+        description = _classroom_import_value(
+            row,
+            "description",
+            "班级说明",
+        )
+        if description:
+            record["description"] = description
+        status_value = _classroom_import_value(row, "status", "状态")
+        if status_value:
+            normalized_status = {
+                "启用": "active",
+                "活动": "active",
+                "归档": "archived",
+            }.get(status_value, status_value.lower())
+            if normalized_status not in {"active", "archived"}:
+                errors.append(f"第 {row_number} 行班级状态无效")
+            else:
+                record["status"] = normalized_status
+        teacher_email = _classroom_import_value(
+            row,
+            "teacher_email",
+            "负责教师邮箱",
+            "教师邮箱",
+        ).lower()
+        if teacher_email:
+            teacher = users_by_email.get(teacher_email)
+            if (
+                teacher is None
+                or teacher.get("role") != "teacher"
+                or teacher.get("status") != "active"
+            ):
+                errors.append(f"第 {row_number} 行教师账号不存在或未启用")
+            else:
+                record["teacher_user_id"] = teacher["user_id"]
+        student_value = _classroom_import_value(
+            row,
+            "student_email",
+            "member_email",
+            "学生邮箱",
+            "学生邮箱列表",
+        )
+        for student_email in _split_classroom_import_emails(student_value):
+            student = users_by_email.get(student_email)
+            if (
+                student is None
+                or student.get("role") != "student"
+                or student.get("status") != "active"
+            ):
+                errors.append(
+                    f"第 {row_number} 行学生 {student_email} 不存在或未启用"
+                )
+                continue
+            if student["user_id"] not in record["member_user_ids"]:
+                record["member_user_ids"].append(student["user_id"])
+    if errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "班级 CSV 校验失败", "errors": errors[:50]},
+        )
+    if not grouped:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="班级 CSV 没有可导入的数据",
+        )
+    return list(grouped.values())
 
 
 def _build_admin_classroom_payload(
@@ -1464,11 +1748,13 @@ def _build_admin_classroom_payload(
         for user_id in member_user_ids
         if user_id in users_by_id
     ]
+    teacher_user_id = str(classroom.get("teacher_user_id") or "")
     return {
         **classroom,
         "member_user_ids": member_user_ids,
         "member_count": len(member_user_ids),
         "members": members,
+        "teacher": users_by_id.get(teacher_user_id),
     }
 
 
@@ -1492,8 +1778,33 @@ def _eligible_classroom_member_user_ids(
             for value in classroom.get("member_user_ids", [])
         )
         if user_id in effective_users_by_id
-        and not bool(effective_users_by_id[user_id].get("is_admin"))
+        and effective_users_by_id[user_id].get("role") == "student"
+        and effective_users_by_id[user_id].get("status") == "active"
     ]
+
+
+def _record_admin_audit(
+    *,
+    actor: dict[str, str],
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    summary: str,
+    before: Any = None,
+    after: Any = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return admin_audit_store.record(
+        actor_user_id=actor["user_id"],
+        actor_email=actor["email"],
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        summary=summary[:ADMIN_AUDIT_SUMMARY_MAX_CHARS],
+        before=before,
+        after=after,
+        metadata=metadata,
+    )
 
 
 def _matches_demo_admin_credentials(email: str, password: str) -> bool:
@@ -1528,7 +1839,7 @@ def _authenticate_fixed_demo_user(email: str, password: str) -> dict[str, str] |
 
 def _require_admin_user(auth_token: str | None) -> dict[str, str]:
     user = _require_current_user(auth_token)
-    if not is_admin_email_allowed(user["email"]):
+    if _effective_user_role(user) != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
     return user
 
@@ -2280,10 +2591,10 @@ def register(request: AuthRegisterRequest, response: Response) -> dict[str, obje
 def login(request: AuthLoginRequest, response: Response) -> dict[str, object]:
     _validate_auth_request(request.email, request.password)
     user = _authenticate_fixed_demo_user(request.email, request.password)
-    if user is None and is_production_deployment_mode():
-        # Production never auto-provisions fixed demo accounts.  Administrators
-        # and students explicitly provisioned in the persistent auth database
-        # can still authenticate.
+    if user is None:
+        # Admin-provisioned accounts authenticate in every deployment mode.
+        # Fixed demo accounts are still only auto-provisioned by explicit local
+        # demo configuration above.
         user = auth_store.authenticate_user(request.email, request.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
@@ -2342,6 +2653,10 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
             required_tables=("classroom_memberships", "classrooms"),
         ),
         SQLiteReadinessTarget(
+            database_path=admin_audit_store.database_path,
+            required_tables=("admin_audit_events",),
+        ),
+        SQLiteReadinessTarget(
             database_path=session_store.database_path,
             required_tables=("osce_sessions", "osce_session_event_outbox"),
         ),
@@ -2388,6 +2703,7 @@ def _initialize_readiness_persistence() -> None:
     session_service = osce_session_service
     auth_store._initialize()
     classroom_store._initialize()
+    admin_audit_store._initialize()
     session_service.session_store._initialize()
     session_service.report_store._initialize()
     session_service.training_event_store._initialize()
@@ -2895,6 +3211,149 @@ def list_admin_users(
     return {"users": _admin_user_directory()}
 
 
+@app.post("/api/admin/users", status_code=status.HTTP_201_CREATED)
+def create_admin_user(
+    request: AdminUserCreateRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    _validate_auth_request(request.email, request.password)
+    user = auth_store.create_user(
+        request.email,
+        request.password,
+        request.display_name,
+        role=request.role,
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="账号邮箱已存在",
+        )
+    payload = _build_admin_user_payload(user)
+    _record_admin_audit(
+        actor=actor,
+        action="user.created",
+        resource_type="user",
+        resource_id=user["user_id"],
+        summary=f"创建账号 {user['email']}",
+        after=payload,
+    )
+    return {"user": payload}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def update_admin_user(
+    user_id: str,
+    request: AdminUserUpdateRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    current = auth_store.get_user_by_id(user_id)
+    if current is None or current.get("status") == "deleted":
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if _is_fixed_demo_account(current["email"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="演示账号由运行环境配置管理",
+        )
+    if actor["user_id"] == user_id and (
+        request.email is not None
+        or request.role not in {None, "admin"}
+        or request.status not in {None, "active"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能修改当前管理员自己的邮箱、角色或启用状态",
+        )
+    updated = auth_store.update_user(
+        user_id,
+        email=request.email,
+        display_name=request.display_name,
+        role=request.role,
+        status=request.status,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="账号更新失败，邮箱可能已被占用",
+        )
+    before_payload = _build_auth_user_payload(current)
+    after_payload = _build_admin_user_payload(updated)
+    _record_admin_audit(
+        actor=actor,
+        action="user.updated",
+        resource_type="user",
+        resource_id=user_id,
+        summary=f"更新账号 {updated['email']}",
+        before=before_payload,
+        after=after_payload,
+    )
+    return {"user": after_payload}
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def reset_admin_user_password(
+    user_id: str,
+    request: AdminUserPasswordResetRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    current = auth_store.get_user_by_id(user_id)
+    if current is None or current.get("status") == "deleted":
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if _is_fixed_demo_account(current["email"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="演示账号密码由运行环境配置管理",
+        )
+    updated = auth_store.reset_password(user_id, request.password)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    _record_admin_audit(
+        actor=actor,
+        action="user.password_reset",
+        resource_type="user",
+        resource_id=user_id,
+        summary=f"重置账号 {updated['email']} 的密码并注销旧会话",
+        metadata={"revoked_existing_sessions": True},
+    )
+    return {"user": _build_admin_user_payload(updated), "sessions_revoked": True}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def delete_admin_user(
+    user_id: str,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    current = auth_store.get_user_by_id(user_id)
+    if current is None or current.get("status") == "deleted":
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if actor["user_id"] == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能删除当前登录的管理员账号",
+        )
+    if _is_fixed_demo_account(current["email"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="演示账号由运行环境配置管理",
+        )
+    deleted = auth_store.delete_user(user_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    _record_admin_audit(
+        actor=actor,
+        action="user.deleted",
+        resource_type="user",
+        resource_id=user_id,
+        summary=f"删除账号 {current['email']} 的登录权限，保留历史训练证据",
+        before=_build_auth_user_payload(current),
+        after=_build_auth_user_payload(deleted),
+    )
+    return {"deleted": True, "user": _build_admin_user_payload(deleted)}
+
+
 @app.get("/api/admin/classrooms")
 def list_admin_classrooms(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -2908,6 +3367,33 @@ def list_admin_classrooms(
     }
 
 
+@app.post("/api/admin/classrooms/import")
+def import_admin_classrooms(
+    request: AdminClassroomImportRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    records = _parse_admin_classroom_import(request)
+    imported = classroom_store.import_classrooms(
+        records,
+        actor_user_id=actor["user_id"],
+    )
+    payloads = [
+        _build_admin_classroom_payload(classroom)
+        for classroom in imported
+    ]
+    _record_admin_audit(
+        actor=actor,
+        action="classroom.imported",
+        resource_type="classroom",
+        resource_id="bulk-import",
+        summary=f"批量导入或更新 {len(payloads)} 个班级",
+        after=payloads,
+        metadata={"mode": request.mode},
+    )
+    return {"classrooms": payloads, "imported_count": len(payloads)}
+
+
 @app.post("/api/admin/classrooms", status_code=status.HTTP_201_CREATED)
 def create_admin_classroom(
     request: AdminClassroomUpsertRequest,
@@ -2917,19 +3403,33 @@ def create_admin_classroom(
     member_user_ids = _validated_classroom_member_user_ids(
         request.member_user_ids
     )
+    teacher_user_id = _validated_classroom_teacher_user_id(
+        request.teacher_user_id
+    )
     try:
         classroom = classroom_store.create_classroom(
             name=request.name,
             description=request.description,
             member_user_ids=member_user_ids,
             actor_user_id=admin_user["user_id"],
+            teacher_user_id=teacher_user_id,
+            status=request.status,
         )
     except ClassroomNameConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="班级名称已存在",
         ) from exc
-    return {"classroom": _build_admin_classroom_payload(classroom)}
+    payload = _build_admin_classroom_payload(classroom)
+    _record_admin_audit(
+        actor=admin_user,
+        action="classroom.created",
+        resource_type="classroom",
+        resource_id=classroom["classroom_id"],
+        summary=f"创建班级 {classroom['name']}",
+        after=payload,
+    )
+    return {"classroom": payload}
 
 
 @app.put("/api/admin/classrooms/{classroom_id}")
@@ -2939,8 +3439,14 @@ def update_admin_classroom(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     admin_user = _require_admin_user(auth_token)
+    previous = classroom_store.get_classroom(classroom_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="班级不存在")
     member_user_ids = _validated_classroom_member_user_ids(
         request.member_user_ids
+    )
+    teacher_user_id = _validated_classroom_teacher_user_id(
+        request.teacher_user_id
     )
     try:
         classroom = classroom_store.update_classroom(
@@ -2949,6 +3455,8 @@ def update_admin_classroom(
             description=request.description,
             member_user_ids=member_user_ids,
             actor_user_id=admin_user["user_id"],
+            teacher_user_id=teacher_user_id,
+            status=request.status,
         )
     except ClassroomNameConflictError as exc:
         raise HTTPException(
@@ -2957,7 +3465,17 @@ def update_admin_classroom(
         ) from exc
     if classroom is None:
         raise HTTPException(status_code=404, detail="班级不存在")
-    return {"classroom": _build_admin_classroom_payload(classroom)}
+    payload = _build_admin_classroom_payload(classroom)
+    _record_admin_audit(
+        actor=admin_user,
+        action="classroom.updated",
+        resource_type="classroom",
+        resource_id=classroom_id,
+        summary=f"更新班级 {classroom['name']}",
+        before=_build_admin_classroom_payload(previous),
+        after=payload,
+    )
+    return {"classroom": payload}
 
 
 @app.delete("/api/admin/classrooms/{classroom_id}")
@@ -2965,10 +3483,67 @@ def delete_admin_classroom(
     classroom_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_admin_user(auth_token)
+    actor = _require_admin_user(auth_token)
+    previous = classroom_store.get_classroom(classroom_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="班级不存在")
     if not classroom_store.delete_classroom(classroom_id):
         raise HTTPException(status_code=404, detail="班级不存在")
+    _record_admin_audit(
+        actor=actor,
+        action="classroom.deleted",
+        resource_type="classroom",
+        resource_id=classroom_id,
+        summary=f"删除班级 {previous['name']}",
+        before=_build_admin_classroom_payload(previous),
+    )
     return {"deleted": True, "classroom_id": classroom_id}
+
+
+@app.post("/api/admin/classrooms/{classroom_id}/members/transfer")
+def transfer_admin_classroom_members(
+    classroom_id: str,
+    request: AdminClassroomMemberTransferRequest,
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, object]:
+    actor = _require_admin_user(auth_token)
+    member_user_ids = _validated_classroom_member_user_ids(
+        request.member_user_ids
+    )
+    try:
+        result = classroom_store.transfer_members(
+            source_classroom_id=classroom_id,
+            target_classroom_id=request.target_classroom_id,
+            member_user_ids=member_user_ids,
+            move=request.mode == "move",
+            actor_user_id=actor["user_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="调班成员必须属于源班级，且目标班级必须不同",
+        ) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="源班级或目标班级不存在")
+    source, target = result
+    source_payload = _build_admin_classroom_payload(source)
+    target_payload = _build_admin_classroom_payload(target)
+    _record_admin_audit(
+        actor=actor,
+        action=f"classroom.members_{request.mode}",
+        resource_type="classroom",
+        resource_id=classroom_id,
+        summary=(
+            f"{'移动' if request.mode == 'move' else '复制'} "
+            f"{len(member_user_ids)} 名学生到 {target['name']}"
+        ),
+        after={"source": source_payload, "target": target_payload},
+        metadata={
+            "target_classroom_id": request.target_classroom_id,
+            "member_user_ids": member_user_ids,
+        },
+    )
+    return {"source_classroom": source_payload, "target_classroom": target_payload}
 
 
 @app.get("/api/admin/cases/{case_id}/raw")
@@ -3078,6 +3653,84 @@ def get_admin_model_api_logs(
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
     return api_call_log_store.build_admin_payload(limit=limit)
+
+
+@app.get("/api/admin/audit-events")
+def list_admin_audit_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default="", max_length=200),
+    resource_type: str = Query(default="", max_length=64),
+    action: str = Query(default="", max_length=128),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, Any]:
+    _require_admin_user(auth_token)
+    return admin_audit_store.list_events(
+        limit=limit,
+        offset=offset,
+        query=q,
+        resource_type=resource_type,
+        action=action,
+    )
+
+
+@app.get("/api/admin/audit-events/export")
+def export_admin_audit_events(
+    export_format: Literal["json", "csv"] = Query(default="json", alias="format"),
+    q: str = Query(default="", max_length=200),
+    resource_type: str = Query(default="", max_length=64),
+    action: str = Query(default="", max_length=128),
+    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> Response:
+    _require_admin_user(auth_token)
+    events = admin_audit_store.list_events(
+        limit=10_000,
+        offset=0,
+        query=q,
+        resource_type=resource_type,
+        action=action,
+    )["events"]
+    if export_format == "json":
+        return Response(
+            content=json.dumps(events, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": 'attachment; filename="admin-audit-events.json"'
+            },
+        )
+    output = StringIO()
+    fieldnames = [
+        "event_id",
+        "created_at",
+        "actor_email",
+        "action",
+        "resource_type",
+        "resource_id",
+        "summary",
+        "before",
+        "after",
+        "metadata",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for event in events:
+        writer.writerow(
+            {
+                field: (
+                    json.dumps(event.get(field), ensure_ascii=False)
+                    if field in {"before", "after", "metadata"}
+                    else _csv_safe_cell(event.get(field))
+                )
+                for field in fieldnames
+            }
+        )
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="admin-audit-events.csv"'
+        },
+    )
 
 
 @app.get(

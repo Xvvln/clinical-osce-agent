@@ -16,6 +16,7 @@ from app.services import training_skill_auto_approval_service as auto_approval_m
 from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.agent_rag_context_service import retrieve_agent_context
+from app.services.admin_audit_store import AdminAuditStore
 from app.services.auth_store import AuthStore
 from app.services.api_call_log_service import ApiCallLogStore
 from app.services.classroom_store import ClassroomStore
@@ -47,6 +48,12 @@ def isolate_training_skill_auto_approval_settings(tmp_path, monkeypatch) -> None
         main,
         "classroom_store",
         ClassroomStore(tmp_path / "classrooms.sqlite3"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "admin_audit_store",
+        AdminAuditStore(tmp_path / "admin_audit.sqlite3"),
         raising=False,
     )
 
@@ -469,6 +476,226 @@ def test_classroom_excludes_member_who_later_becomes_an_admin(
     assert classroom["member_count"] == 0
     assert classroom["member_user_ids"] == []
     assert analytics["summary"]["student_count"] == 0
+
+
+def test_admin_manages_user_lifecycle_roles_and_audit_exports(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        teacher_response = client.post(
+            "/api/admin/users",
+            json={
+                "email": "teacher@example.test",
+                "password": "teacher-password",
+                "display_name": "王老师",
+                "role": "teacher",
+            },
+        )
+        second_admin_response = client.post(
+            "/api/admin/users",
+            json={
+                "email": "second-admin@example.test",
+                "password": "second-admin-password",
+                "display_name": "第二管理员",
+                "role": "admin",
+            },
+        )
+        assert teacher_response.status_code == 201
+        assert second_admin_response.status_code == 201
+        teacher = teacher_response.json()["user"]
+        second_admin = second_admin_response.json()["user"]
+        assert teacher["role"] == "teacher"
+        assert second_admin["is_admin"] is True
+
+        duplicate = client.post(
+            "/api/admin/users",
+            json={
+                "email": "TEACHER@example.test",
+                "password": "another-password",
+                "display_name": "重复老师",
+                "role": "teacher",
+            },
+        )
+        assert duplicate.status_code == 409
+
+        disabled_response = client.patch(
+            f"/api/admin/users/{teacher['user_id']}",
+            json={"status": "disabled", "display_name": "王老师（停用）"},
+        )
+        assert disabled_response.status_code == 200
+        assert disabled_response.json()["user"]["status"] == "disabled"
+        assert main.auth_store.authenticate_user(
+            "teacher@example.test",
+            "teacher-password",
+        ) is None
+
+        reenabled_response = client.patch(
+            f"/api/admin/users/{teacher['user_id']}",
+            json={"status": "active"},
+        )
+        reset_response = client.post(
+            f"/api/admin/users/{teacher['user_id']}/reset-password",
+            json={"password": "rotated-teacher-password"},
+        )
+        assert reenabled_response.status_code == 200
+        assert reset_response.status_code == 200
+        assert main.auth_store.authenticate_user(
+            "teacher@example.test",
+            "rotated-teacher-password",
+        ) is not None
+
+        with TestClient(main.app) as second_admin_client:
+            login_response = second_admin_client.post(
+                "/api/auth/login",
+                json={
+                    "email": "second-admin@example.test",
+                    "password": "second-admin-password",
+                },
+            )
+            assert login_response.status_code == 200
+            assert second_admin_client.get("/api/admin/users").status_code == 200
+            self_demotion = second_admin_client.patch(
+                f"/api/admin/users/{second_admin['user_id']}",
+                json={"role": "student"},
+            )
+            assert self_demotion.status_code == 400
+
+        delete_response = client.delete(
+            f"/api/admin/users/{teacher['user_id']}"
+        )
+        assert delete_response.status_code == 200
+        assert delete_response.json()["user"]["status"] == "deleted"
+
+        audit_response = client.get("/api/admin/audit-events?limit=100")
+        json_export = client.get("/api/admin/audit-events/export?format=json")
+        csv_export = client.get("/api/admin/audit-events/export?format=csv")
+
+    assert audit_response.status_code == 200
+    actions = {event["action"] for event in audit_response.json()["events"]}
+    assert {
+        "user.created",
+        "user.updated",
+        "user.password_reset",
+        "user.deleted",
+    } <= actions
+    assert json_export.status_code == 200
+    assert "attachment;" in json_export.headers["content-disposition"]
+    assert csv_export.status_code == 200
+    assert csv_export.text.startswith("\ufeffevent_id,created_at")
+
+
+def test_admin_assigns_teacher_archives_imports_and_moves_class_members(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        teacher = client.post(
+            "/api/admin/users",
+            json={
+                "email": "teacher@example.test",
+                "password": "teacher-password",
+                "display_name": "带教老师",
+                "role": "teacher",
+            },
+        ).json()["user"]
+        student_a = client.post(
+            "/api/admin/users",
+            json={
+                "email": "student-a@example.test",
+                "password": "student-a-password",
+                "display_name": "学生甲",
+                "role": "student",
+            },
+        ).json()["user"]
+        student_b = client.post(
+            "/api/admin/users",
+            json={
+                "email": "student-b@example.test",
+                "password": "student-b-password",
+                "display_name": "学生乙",
+                "role": "student",
+            },
+        ).json()["user"]
+
+        source_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "临床一班",
+                "description": "第一轮训练",
+                "member_user_ids": [student_a["user_id"], student_b["user_id"]],
+                "teacher_user_id": teacher["user_id"],
+                "status": "active",
+            },
+        )
+        target_response = client.post(
+            "/api/admin/classrooms",
+            json={
+                "name": "临床二班",
+                "member_user_ids": [],
+                "teacher_user_id": teacher["user_id"],
+                "status": "active",
+            },
+        )
+        assert source_response.status_code == 201
+        source = source_response.json()["classroom"]
+        target = target_response.json()["classroom"]
+        assert source["teacher"]["display_name"] == "带教老师"
+
+        transfer_response = client.post(
+            f"/api/admin/classrooms/{source['classroom_id']}/members/transfer",
+            json={
+                "target_classroom_id": target["classroom_id"],
+                "member_user_ids": [student_b["user_id"]],
+                "mode": "move",
+            },
+        )
+        archive_response = client.put(
+            f"/api/admin/classrooms/{source['classroom_id']}",
+            json={
+                "name": "临床一班",
+                "description": "已结课",
+                "member_user_ids": [student_a["user_id"]],
+                "teacher_user_id": teacher["user_id"],
+                "status": "archived",
+            },
+        )
+        assert transfer_response.status_code == 200
+        assert transfer_response.json()["source_classroom"]["member_count"] == 1
+        assert transfer_response.json()["target_classroom"]["member_count"] == 1
+        assert archive_response.status_code == 200
+        assert archive_response.json()["classroom"]["status"] == "archived"
+
+        import_response = client.post(
+            "/api/admin/classrooms/import",
+            json={
+                "mode": "merge",
+                "csv_text": (
+                    "班级名称,班级说明,负责教师邮箱,学生邮箱,状态\n"
+                    "临床三班,周五训练,teacher@example.test,student-a@example.test,启用\n"
+                    "临床三班,周五训练,teacher@example.test,student-b@example.test,启用\n"
+                ),
+            },
+        )
+        assert import_response.status_code == 200
+        imported = import_response.json()["classrooms"][0]
+        assert imported["name"] == "临床三班"
+        assert imported["member_count"] == 2
+        assert imported["teacher"]["user_id"] == teacher["user_id"]
+
+        invalid_import = client.post(
+            "/api/admin/classrooms/import",
+            json={
+                "mode": "replace",
+                "csv_text": (
+                    "班级名称,学生邮箱\n"
+                    "错误班级,missing@example.test\n"
+                ),
+            },
+        )
+
+    assert invalid_import.status_code == 400
+    assert "CSV 校验失败" in invalid_import.text
 
 
 def test_admin_can_read_model_api_logs(tmp_path, monkeypatch) -> None:
