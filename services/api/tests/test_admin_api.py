@@ -12,6 +12,7 @@ import yaml
 from app import main
 from app.graph.osce_graph import build_osce_graph
 from app.services import agent_rag_context_service as agent_rag_context_module
+from app.services import training_skill_auto_approval_service as auto_approval_module
 from app.services import retrieval_index as retrieval_index_module
 from app.services import gemini_patient_responder as gemini_patient_responder_module
 from app.services.agent_rag_context_service import retrieve_agent_context
@@ -1921,7 +1922,7 @@ def test_admin_can_filter_training_skill_candidates_by_review_status(tmp_path, m
     assert blocked_payload["pagination"]["total"] == 1
     assert blocked_payload["candidates"][0]["trigger_item_labels"] == ["鉴别诊断：异位妊娠（历史字段）"]
     assert blocked_payload["candidates"][0]["related_recommendation_labels"] == [
-        "评分项：提出输尿管结石并说明排除依据",
+        "评分项：提出当前病例诊断假设并说明排除依据",
         "评分项：鉴别诊断：异位妊娠（历史字段）",
     ]
 
@@ -1972,14 +1973,18 @@ def test_admin_enriches_skill_candidate_labels_from_related_references(tmp_path,
     assert list_response.status_code == 200
     candidate_summary = list_response.json()["candidates"][0]
     assert candidate_summary["case_titles"] == ["右下腹痛教学病例"]
-    assert candidate_summary["trigger_item_labels"] == ["提出输尿管结石并说明排除依据"]
-    assert candidate_summary["related_recommendation_labels"] == ["评分项：提出输尿管结石并说明排除依据"]
+    assert candidate_summary["trigger_item_labels"] == ["提出当前病例诊断假设并说明排除依据"]
+    assert candidate_summary["related_recommendation_labels"] == [
+        "评分项：提出当前病例诊断假设并说明排除依据"
+    ]
 
     assert detail_response.status_code == 200
     detail_candidate = detail_response.json()["candidate"]
     assert detail_candidate["case_titles"] == ["右下腹痛教学病例"]
-    assert detail_candidate["trigger_item_labels"] == ["提出输尿管结石并说明排除依据"]
-    assert detail_candidate["related_recommendation_labels"] == ["评分项：提出输尿管结石并说明排除依据"]
+    assert detail_candidate["trigger_item_labels"] == ["提出当前病例诊断假设并说明排除依据"]
+    assert detail_candidate["related_recommendation_labels"] == [
+        "评分项：提出当前病例诊断假设并说明排除依据"
+    ]
 
 
 def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> None:
@@ -4166,6 +4171,21 @@ def test_admin_can_approve_candidate_and_enable_training_skill(tmp_path, monkeyp
 
 
 def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_path, monkeypatch) -> None:
+    class LeakingSkillCandidateGenerator:
+        def __init__(self) -> None:
+            self.raw_candidate: dict[str, object] | None = None
+
+        def generate_candidate(self, context):
+            candidate = TemplateTrainingSkillCandidateGenerator().generate_candidate(context)
+            candidate["title"] = "急性阑尾炎用药剂量训练"
+            candidate["description"] = "错误泄漏：开始在上腹部，大约 8 小时前转移并固定到右下腹。"
+            candidate["suggested_strategy"] = "直接告诉学生急性阑尾炎，并给出阿莫西林 500mg q8h 处方。"
+            candidate["teacher_analysis_context"] = {
+                "unsafe_generated_summary": "围绕急性阑尾炎和阿莫西林 500mg q8h 教学。",
+            }
+            self.raw_candidate = deepcopy(candidate)
+            return candidate
+
     auth_store = AuthStore(tmp_path / "auth.sqlite3")
     event_store = TrainingEventStore(tmp_path / "training_events.sqlite3")
     session_service = OsceSessionService(
@@ -4176,13 +4196,62 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
     )
     candidate_store = TrainingSkillCandidateStore(tmp_path / "training_skill_candidates.sqlite3")
     evaluation_store = EvaluationResultStore(tmp_path / "evaluation_results.sqlite3")
-    candidate_service = TrainingSkillCandidateService(generator=TemplateTrainingSkillCandidateGenerator())
+    leaking_generator = LeakingSkillCandidateGenerator()
+    candidate_service = TrainingSkillCandidateService(generator=leaking_generator)
+    rag_store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3")
+    rag_store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:skill_review:real_scene",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "skill_review_note",
+            "visibility": "post_submit_review",
+            "allowed_agents": ["skill_approval"],
+            "source_id": "real_scene_teacher_note",
+            "title": "证据链 Skill 审批原则",
+            "text": "审批时只保留证据类别和教学步骤，不得直接透露急性阑尾炎。",
+            "tags": ["skill_review", "reasoning"],
+            "version": 1,
+        },
+        updated_by="real-scene-teacher@example.test",
+    )
+    rag_store.upsert_item(
+        {
+            "knowledge_id": "case:appendicitis_001:secret:real_scene",
+            "scope": "case",
+            "case_id": "appendicitis_001",
+            "content_kind": "internal_answer",
+            "visibility": "secret_scoring_only",
+            "allowed_agents": ["scoring"],
+            "source_id": "",
+            "title": "真实场景隐藏答案",
+            "text": "急性阑尾炎；开始在上腹部，大约 8 小时前转移并固定到右下腹。",
+            "tags": ["internal"],
+            "version": 1,
+        },
+        updated_by="real-scene-teacher@example.test",
+    )
 
     monkeypatch.setattr(main, "auth_store", auth_store, raising=False)
     monkeypatch.setattr(main, "osce_session_service", session_service, raising=False)
     monkeypatch.setattr(main, "training_skill_candidate_store", candidate_store, raising=False)
     monkeypatch.setattr(main, "training_skill_candidate_service", candidate_service, raising=False)
     monkeypatch.setattr(main, "evaluation_result_store", evaluation_store, raising=False)
+    monkeypatch.setattr(auto_approval_module, "rag_knowledge_store", rag_store, raising=False)
+    monkeypatch.setattr(
+        agent_rag_context_module,
+        "search_retrieval_documents",
+        lambda query, limit, *, allowed_references=None: [
+            RetrievalDocument(
+                reference="rag_knowledge:case:appendicitis_001:skill_review:real_scene",
+                source_type="rag_knowledge",
+                title="real scene approval hit",
+                snippet="real scene approval hit",
+                score=0.99,
+            )
+        ],
+        raising=False,
+    )
 
     with TestClient(main.app) as client:
         student_login = client.post("/api/auth/login", json={"email": "student@osce.test", "password": "student"})
@@ -4226,6 +4295,35 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
         assert candidate["support_count"] == 2
         assert candidate["review"]["status"] == "ready_for_review"
         assert candidate["review"]["regression_passed"] is True
+        assert leaking_generator.raw_candidate is not None
+        for protected_field in auto_approval_module.PROTECTED_CANDIDATE_FIELDS:
+            if protected_field in leaking_generator.raw_candidate:
+                assert candidate[protected_field] == leaking_generator.raw_candidate[protected_field]
+        candidate_text = str(candidate)
+        for leaked_text in [
+            "急性阑尾炎",
+            "输尿管结石",
+            "克罗恩病",
+            "急性胃肠炎",
+            "开始在上腹部，大约 8 小时前转移并固定到右下腹。",
+            "阿莫西林",
+            "500mg",
+            "q8h",
+        ]:
+            assert leaked_text not in candidate_text
+        approval_review = candidate["approval_agent_review"]
+        assert approval_review["decision"] == "ready_for_human_review"
+        assert approval_review["quality_review"]["passed"] is True
+        assert approval_review["role_policy"]["passed"] is True
+        assert approval_review["knowledge_references"] == [
+            "rag_knowledge:case:appendicitis_001:skill_review:real_scene"
+        ]
+        assert approval_review["retrieved_knowledge_context"][0]["visibility"] == "post_submit_review"
+        assert approval_review["regression_gate"]["passed"] is True
+        assert approval_review["regression_gate"]["evaluation_total_cases"] == 1
+        assert {
+            change["field"] for change in approval_review["changed_fields"]
+        } >= {"title", "description", "suggested_strategy", "teacher_analysis_context", "intervention"}
 
         approve_response = client.post("/api/admin/evolution/approve", json={"candidate_id": candidate_id})
         assert approve_response.status_code == 200
@@ -4295,6 +4393,28 @@ def test_http_training_skill_loop_applies_reviewed_skill_to_later_training(tmp_p
             for event in later_business_events
         )
         assert any(event["event_type"] == "agent_decision_traced" for event in later_events)
+
+        candidate_events_response = client.get(f"/api/admin/evolution/candidates/{candidate_id}/events")
+        assert candidate_events_response.status_code == 200
+        assert [event["event_type"] for event in candidate_events_response.json()["events"]] == [
+            "admin_skill_candidate_generated",
+            "admin_skill_candidate_agent_reviewed",
+            "admin_skill_candidate_approved",
+        ]
+        enabled_skill = session_service.training_skill_store.get_skill(skill_id)
+        assert enabled_skill is not None
+        assert all(
+            leaked_text not in str(enabled_skill)
+            for leaked_text in [
+                "急性阑尾炎",
+                "输尿管结石",
+                "克罗恩病",
+                "急性胃肠炎",
+                "阿莫西林",
+                "500mg",
+                "q8h",
+            ]
+        )
 
 
 def test_admin_can_reject_candidate_without_enabling_training_skill(tmp_path, monkeypatch) -> None:

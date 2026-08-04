@@ -157,7 +157,7 @@ def test_training_skill_approval_agent_rewrites_protected_diagnosis_without_answ
 
     assert "急性阑尾炎" not in reviewed_text
     assert "本病例标准答案" not in reviewed_text
-    assert "当前主要诊断假设" in reviewed_text
+    assert "当前病例诊断假设" in reviewed_text
 
 
 def test_training_skill_approval_agent_derives_and_removes_hidden_case_facts() -> None:
@@ -280,7 +280,7 @@ def test_training_skill_approval_agent_sanitizes_memory_and_analysis_fields() ->
 
     assert "急性阑尾炎" not in reviewed_text
     assert "本病例标准答案" not in reviewed_text
-    assert "当前主要诊断假设" in reviewed_text
+    assert "当前病例诊断假设" in reviewed_text
 
 
 def test_training_skill_approval_agent_records_filtered_rag_knowledge_context(tmp_path, monkeypatch) -> None:

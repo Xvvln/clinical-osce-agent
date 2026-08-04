@@ -1265,11 +1265,11 @@ def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_me
     assert "suggested_strategy" not in candidate["router_index"]
     assert candidate["intervention"]["coach_strategy"] == candidate["suggested_strategy"]
     assert candidate["intervention"]["focus_points"] == [
-        "提出克罗恩病并说明排除依据",
+        "提出当前病例诊断假设并说明排除依据",
         "推理表达：核心证据链",
     ]
     assert candidate["intervention"]["hint_ladder"] == [
-        "先让学生列出当前主诊断假设之外还需要排除的方向，重点围绕提出克罗恩病并说明排除依据、推理表达：核心证据链。",
+        "先让学生列出当前主诊断假设之外还需要排除的方向，重点围绕提出当前病例诊断假设并说明排除依据、推理表达：核心证据链。",
         "再引导学生为每个鉴别方向补齐支持证据、反对证据和必要检查，而不是只写一个诊断名。",
         "最后让学生说明新增证据如何改变诊断排序，并明确哪些依据仍然不足。",
     ]
@@ -1280,7 +1280,7 @@ def test_skill_candidate_clusters_multiple_items_into_one_pattern_with_policy_me
     assert teaching_sop["completion_signal"] == "学生能说明新增证据如何改变诊断排序，并指出仍缺的依据。"
     assert len(teaching_sop["teacher_moves"]) == 3
     assert teaching_sop["teacher_moves"][0]["prompt_style"] == "socratic_question"
-    assert "提出克罗恩病并说明排除依据" in teaching_sop["teacher_moves"][0]["move"]
+    assert "提出当前病例诊断假设并说明排除依据" in teaching_sop["teacher_moves"][0]["move"]
     assert "不得透露标准诊断" in " ".join(teaching_sop["safety_guardrails"])
     generated_memory_text = _json_text(
         {

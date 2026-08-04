@@ -12,11 +12,15 @@ from app.services.agent_rag_context_service import retrieve_agent_context
 from app.services.admin_display_resolver import trigger_item_labels as resolve_trigger_item_labels
 from app.services.rag_knowledge_store import rag_knowledge_store
 from app.services.skill_role_policy_service import build_approval_skill_role_policy
+from app.services.training_skill_content_safety import (
+    PROTECTED_DIAGNOSIS_PLACEHOLDER,
+    candidate_case_ids,
+    case_protected_terms,
+)
 from app.services.training_skill_policy import build_skill_memory_fields, build_teaching_action_plan
 from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_PATTERNS, FORBIDDEN_CANDIDATE_TERMS
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
-CASES_DIR = ROOT_DIR / "data" / "cases"
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skill_auto_approval.sqlite3"
 AUTO_APPROVAL_AGENT_ID = "skill_auto_approval_agent"
 
@@ -64,9 +68,6 @@ MEMORY_FIELD_KEYS = [
 
 SAFETY_SUFFIX = "仅提示训练步骤和证据链复盘，不透露病例答案或隐藏事实，不提供真实诊疗信息。"
 SKILL_APPROVAL_RAG_VISIBILITIES = {"pre_submit_safe", "post_submit_review"}
-PROTECTED_DIAGNOSIS_PLACEHOLDER = "当前主要诊断假设"
-
-
 class TrainingSkillAutoApprovalSettingsStore:
     def __init__(self, database_path: Path = DEFAULT_DATABASE_PATH) -> None:
         self.database_path = database_path
@@ -290,75 +291,10 @@ def _changed_mutable_fields(
 def _effective_protected_terms(candidate: dict[str, Any], explicit_terms: list[str]) -> list[str]:
     terms = {
         term
-        for raw_term in [*explicit_terms, *_case_protected_terms(candidate)]
+        for raw_term in [*explicit_terms, *case_protected_terms(candidate_case_ids(candidate))]
         if (term := str(raw_term).strip())
     }
     return sorted(terms, key=lambda term: (-len(term), term))
-
-
-def _case_protected_terms(candidate: dict[str, Any]) -> list[str]:
-    protected_terms: list[str] = []
-    for case_id in _candidate_case_ids(candidate):
-        case_path = CASES_DIR / f"{case_id}.json"
-        if not case_path.is_file():
-            continue
-        try:
-            case_payload = json.loads(case_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        diagnosis = _dict(case_payload.get("diagnosis"))
-        _append_protected_text(protected_terms, diagnosis.get("main_diagnosis"))
-        for synonym in diagnosis.get("main_diagnosis_synonyms") or []:
-            _append_protected_text(protected_terms, synonym)
-        for reasoning_point in diagnosis.get("reasoning_points") or []:
-            if isinstance(reasoning_point, dict):
-                _append_protected_text(protected_terms, reasoning_point.get("statement"))
-
-        history = _dict(case_payload.get("history"))
-        for hidden_fact in history.get("hidden_facts") or []:
-            if not isinstance(hidden_fact, dict):
-                continue
-            _append_protected_text(protected_terms, hidden_fact.get("canonical_answer"))
-            for variant in hidden_fact.get("variants") or []:
-                _append_protected_text(protected_terms, variant)
-
-        _append_result_terms(protected_terms, case_payload.get("physical_exam"))
-        _append_result_terms(protected_terms, case_payload.get("auxiliary_tests"))
-    return protected_terms
-
-
-def _candidate_case_ids(candidate: dict[str, Any]) -> list[str]:
-    case_ids = {
-        str(case_id).strip()
-        for case_id in candidate.get("case_ids", [])
-        if str(case_id).strip()
-    }
-    applies_when = candidate.get("applies_when")
-    if isinstance(applies_when, dict):
-        case_ids.update(
-            str(case_id).strip()
-            for case_id in applies_when.get("case_ids", [])
-            if str(case_id).strip()
-        )
-    return sorted(case_ids)
-
-
-def _append_result_terms(protected_terms: list[str], section: Any) -> None:
-    if not isinstance(section, dict):
-        return
-    for list_value in section.values():
-        if not isinstance(list_value, list):
-            continue
-        for item in list_value:
-            if isinstance(item, dict):
-                _append_protected_text(protected_terms, item.get("result"))
-
-
-def _append_protected_text(protected_terms: list[str], value: Any) -> None:
-    normalized = str(value or "").strip()
-    if len(normalized) >= 3 and normalized not in protected_terms:
-        protected_terms.append(normalized)
 
 
 def _ensure_safety_suffix(text: str) -> str:

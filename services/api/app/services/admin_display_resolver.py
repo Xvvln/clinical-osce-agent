@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 import yaml
 
+from app.services.training_skill_content_safety import sanitize_case_protected_text
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 CASES_DIR = ROOT_DIR / "data" / "cases"
 RUBRICS_DIR = ROOT_DIR / "data" / "rubrics"
@@ -306,13 +308,13 @@ def trigger_item_label(trigger_item_id: str, case_ids: Iterable[str] = ()) -> st
     normalized_trigger = str(trigger_item_id or "").strip()
     if not normalized_trigger:
         return "未记录触发项"
-    if normalized_trigger in TRIGGER_ITEM_LABELS:
-        return TRIGGER_ITEM_LABELS[normalized_trigger]
     case_id_list = list(case_ids)
+    if normalized_trigger in TRIGGER_ITEM_LABELS:
+        return sanitize_case_protected_text(TRIGGER_ITEM_LABELS[normalized_trigger], case_id_list)
     label = rubric_item_label(normalized_trigger, case_id_list)
     if case_id_list and label == normalized_trigger:
         return f"未收录评分项：{normalized_trigger}"
-    return label
+    return sanitize_case_protected_text(label, case_id_list)
 
 
 def trigger_item_labels(trigger_item_ids: Iterable[str], case_ids: Iterable[str] = ()) -> list[str]:
@@ -420,7 +422,10 @@ def enrich_training_skill_candidate(candidate: dict[str, Any]) -> dict[str, Any]
         "skill_type_label": skill_type_label(str(candidate.get("skill_type", ""))),
         "stage_scope_labels": stage_scope_labels(stage_scope),
         "effect_status_label": effect_status_label(str(candidate.get("effect_status", ""))),
-        "related_recommendation_labels": reference_labels(candidate.get("related_recommendations", [])),
+        "related_recommendation_labels": [
+            sanitize_case_protected_text(label, case_ids)
+            for label in reference_labels(candidate.get("related_recommendations", []))
+        ],
         "teaching_action_plan": [
             _enrich_training_skill_teaching_action(action, case_ids)
             for action in candidate.get("teaching_action_plan", [])
