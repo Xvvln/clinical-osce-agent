@@ -129,14 +129,34 @@ class FakeGenAIEmbeddingClient:
         )()
 
 
-def test_search_retrieval_documents_returns_empty_without_embedding_client_even_for_exact_keyword_match(
+def test_search_retrieval_documents_uses_lexical_fallback_without_embedding_client(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(retrieval_index_module, "build_vertex_embedding_client_from_environment", lambda: None)
+    monkeypatch.setattr(retrieval_index_module, "build_local_embedding_client_from_environment", lambda: None)
 
     results = search_retrieval_documents("右下腹痛", limit=3)
 
-    assert results == []
+    assert results
+    assert results[0].reference == "case:appendicitis_001"
+    assert results[0].retrieval_methods == ("lexical",)
+    assert results[0].lexical_score is not None
+
+
+def test_lexical_fallback_applies_allowed_references_before_ranking(monkeypatch) -> None:
+    allowed_reference = "rubric:appendicitis_001_rubric.item.pe_rebound"
+    monkeypatch.setattr(retrieval_index_module, "build_vertex_embedding_client_from_environment", lambda: None)
+    monkeypatch.setattr(retrieval_index_module, "build_local_embedding_client_from_environment", lambda: None)
+    monkeypatch.setattr(retrieval_index_module, "_build_dashscope_reranker", lambda: None)
+
+    results = search_retrieval_documents(
+        "反跳痛和腹膜刺激征怎么查",
+        limit=3,
+        allowed_references={allowed_reference},
+    )
+
+    assert [result.reference for result in results] == [allowed_reference]
+    assert results[0].retrieval_methods == ("lexical",)
 
 
 def test_search_retrieval_documents_returns_case_for_clinical_query(monkeypatch) -> None:
@@ -315,7 +335,9 @@ def test_search_retrieval_documents_skips_unavailable_local_embedding_client(mon
 
     results = search_retrieval_documents("右下腹痛", limit=3)
 
-    assert results == []
+    assert results
+    assert results[0].reference == "case:appendicitis_001"
+    assert results[0].retrieval_methods == ("lexical",)
 
 
 def test_search_retrieval_documents_returns_rubric_item_for_exam_query(monkeypatch) -> None:
@@ -504,7 +526,8 @@ def test_search_retrieval_documents_with_embeddings_can_recall_semantic_source_w
     assert results
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert results[0].source_type == "knowledge"
-    assert results[0].score > 0.99
+    assert results[0].score > 0.9
+    assert results[0].retrieval_methods == ("vector", "lexical")
 
 
 def test_chroma_retrieval_index_persists_vectors_between_clients(tmp_path) -> None:
@@ -729,7 +752,7 @@ def test_chroma_retrieval_index_recovers_when_embedding_dimension_changes(tmp_pa
 
     assert results
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
-    assert results[0].score > 0.99
+    assert results[0].score > 0.9
 
 
 def test_chroma_retrieval_index_removes_stale_documents_when_source_set_changes(tmp_path) -> None:
@@ -1008,7 +1031,8 @@ def test_search_retrieval_documents_uses_chroma_when_enabled(tmp_path, monkeypat
     assert results
     assert results[0].reference == "knowledge:appendicitis_001.rp_03"
     assert results[0].source_type == "knowledge"
-    assert results[0].score > 0.99
+    assert results[0].score > 0.9
+    assert results[0].retrieval_methods == ("vector", "lexical")
 
 
 def test_search_retrieval_documents_uses_batch_fallback_once_when_chroma_fails(
@@ -1140,6 +1164,51 @@ def test_search_retrieval_documents_filters_allowed_references_before_rerank(
 
     assert captured_limits == [len(retrieval_index_module.get_chroma_source_documents())]
     assert [result.reference for result in results] == [allowed_reference]
+
+
+def test_search_retrieval_documents_drops_stale_chroma_references(monkeypatch) -> None:
+    class StaleChromaIndex:
+        def search_batch(
+            self,
+            queries: list[str],
+            *,
+            limit: int,
+        ) -> list[list[ChromaRetrievalResult]]:
+            return [
+                [
+                    ChromaRetrievalResult(
+                        reference="rag_knowledge:deleted:stale_chunk",
+                        source_type="rag_knowledge",
+                        title="已删除的旧片段",
+                        snippet="这条旧索引内容不应继续被召回。",
+                        score=0.99,
+                    )
+                ]
+                for _ in queries
+            ]
+
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_vertex_embedding_client_from_environment",
+        lambda: ExactPhraseFakeEmbeddingClient("右下腹痛"),
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_local_embedding_client_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "build_chroma_retrieval_index_from_environment",
+        lambda **_: StaleChromaIndex(),
+    )
+    monkeypatch.setattr(retrieval_index_module, "_build_dashscope_reranker", lambda: None)
+
+    results = search_retrieval_documents("右下腹痛", limit=3)
+
+    assert results
+    assert all(result.reference != "rag_knowledge:deleted:stale_chunk" for result in results)
+    assert results[0].reference == "case:appendicitis_001"
 
 
 def test_vertex_embedding_client_uses_runtime_vertex_adc_without_embedding_env(monkeypatch) -> None:

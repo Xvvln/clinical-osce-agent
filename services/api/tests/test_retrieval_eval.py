@@ -48,6 +48,8 @@ def test_retrieval_eval_metrics_compute_correctly() -> None:
     assert metrics["mrr_at_5"] == 0.75
     assert metrics["ndcg_at_5"] == pytest.approx(0.7753, abs=0.0001)
     assert metrics["source_coverage"] == 1.0
+    assert metrics["hit_rate_at_5"] == 1.0
+    assert metrics["zero_hit_query_count"] == 0
 
 
 def test_default_gold_queries_deepen_appendicitis_flagship_case() -> None:
@@ -124,6 +126,12 @@ def test_retrieval_eval_uses_batch_search_once_for_gold_queries(tmp_path) -> Non
 
     assert calls == [(["腹痛迁移", "反跳痛"], 5)]
     assert result["metrics"]["recall_at_5"] == 1.0
+    assert result["results"][0]["expanded_query"] == "腹痛迁移"
+    assert result["results"][0]["retrieved_items"][0] == {
+        "reference": "case:appendicitis_001",
+        "score": 0.9,
+        "retrieval_methods": [],
+    }
 
 
 def test_rag_never_enters_scoring_judgement(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -24,6 +24,12 @@ from app.services.model_call_policy import (
     ModelProviderTimeoutError,
 )
 from app.services.rag_knowledge_store import normalize_rag_stage_scope, rag_knowledge_store
+from app.services.rag_hybrid_retrieval_service import (
+    RankedReference,
+    expand_retrieval_query,
+    fuse_ranked_references,
+    rank_lexical_documents,
+)
 from app.services.vertex_embedding_retriever import (
     DEFAULT_VERTEX_EMBEDDING_MODEL,
     build_vertex_embedding_client_from_environment,
@@ -53,6 +59,9 @@ class RetrievalDocument:
     visibility: str = ""
     allowed_agents: tuple[str, ...] = ()
     stage_scope: tuple[str, ...] = ()
+    retrieval_methods: tuple[str, ...] = ()
+    vector_score: float | None = None
+    lexical_score: float | None = None
 
 
 def search_retrieval_documents(
@@ -90,13 +99,30 @@ def search_retrieval_documents_batch(
     if limit <= 0 or not active_queries or reference_filter == frozenset():
         return results_by_query
 
+    reranker = _build_dashscope_reranker()
+    retrieval_limit = _hybrid_candidate_limit(limit, reranker)
+    eligible_documents = _eligible_retrieval_documents(reference_filter)
+    eligible_references = frozenset(document.reference for document in eligible_documents)
+    lexical_results_by_query = {
+        original_index: _search_lexical_retrieval_documents(
+            query,
+            documents=eligible_documents,
+            limit=retrieval_limit,
+        )
+        for original_index, query in active_queries
+    }
     embedding_clients = _build_embedding_clients_from_environment()
     if not embedding_clients:
-        LOGGER.warning("RAG vector retrieval skipped because no embedding client is configured")
+        LOGGER.info("RAG vector retrieval skipped because no embedding client is configured; using lexical retrieval")
+        for original_index, query in active_queries:
+            results_by_query[original_index] = _apply_dashscope_rerank(
+                query,
+                lexical_results_by_query[original_index],
+                limit=limit,
+                reranker=reranker,
+            )
         return results_by_query
 
-    reranker = _build_dashscope_reranker()
-    retrieval_limit = _rerank_candidate_limit(limit, reranker)
     source_documents = get_chroma_source_documents()
     chroma_candidate_limit = (
         len(source_documents)
@@ -114,7 +140,7 @@ def search_retrieval_documents_batch(
             )
             if chroma_index is not None:
                 chroma_results_by_query = chroma_index.search_batch(
-                    [query for _, query in active_queries],
+                    [expand_retrieval_query(query) for _, query in active_queries],
                     limit=chroma_candidate_limit,
                 )
                 for (original_index, _), chroma_results in zip(active_queries, chroma_results_by_query):
@@ -125,13 +151,17 @@ def search_retrieval_documents_batch(
                             title=result.title,
                             snippet=result.snippet,
                             score=result.score,
+                            retrieval_methods=("vector",),
+                            vector_score=result.score,
                         )
                         for result in chroma_results
-                        if reference_filter is None or result.reference in reference_filter
+                        if result.reference in eligible_references
                     ]
-                    results_by_query[original_index] = _apply_dashscope_rerank(
+                    results_by_query[original_index] = _fuse_retrieval_documents(
                         normalized_queries[original_index],
-                        vector_results[:retrieval_limit],
+                        documents=eligible_documents,
+                        vector_results=vector_results[:retrieval_limit],
+                        lexical_results=lexical_results_by_query[original_index],
                         limit=limit,
                         reranker=reranker,
                     )
@@ -171,7 +201,14 @@ def search_retrieval_documents_batch(
         except Exception as exc:
             LOGGER.warning("RAG vector retrieval failed for embedding model %s: %s", embedding_model, exc)
             continue
-    LOGGER.warning("RAG vector retrieval failed for every configured embedding client; returning no retrieval results")
+    LOGGER.warning("RAG vector retrieval failed for every configured embedding client; using lexical retrieval")
+    for original_index, query in active_queries:
+        results_by_query[original_index] = _apply_dashscope_rerank(
+            query,
+            lexical_results_by_query[original_index],
+            limit=limit,
+            reranker=reranker,
+        )
     return results_by_query
 
 
@@ -236,7 +273,7 @@ def search_retrieval_documents_with_embeddings_batch(
         return results_by_query
 
     reranker = reranker if reranker is not None else _build_dashscope_reranker()
-    retrieval_limit = _rerank_candidate_limit(limit, reranker)
+    retrieval_limit = _hybrid_candidate_limit(limit, reranker)
     reference_filter = (
         frozenset(str(reference).strip() for reference in allowed_references if str(reference).strip())
         if allowed_references is not None
@@ -250,7 +287,7 @@ def search_retrieval_documents_with_embeddings_batch(
     if not documents:
         return results_by_query
     query_vectors = embedding_client.embed_texts(
-        [query for _, query in active_queries],
+        [expand_retrieval_query(query) for _, query in active_queries],
         task_type="RETRIEVAL_QUERY",
     )
     if len(query_vectors) != len(active_queries):
@@ -264,24 +301,32 @@ def search_retrieval_documents_with_embeddings_batch(
         raise ValueError("embedding client must return one vector for each retrieval document")
 
     for (original_index, _), query_vector in zip(active_queries, query_vectors):
-        scored_documents = [
-            RetrievalDocument(
-                reference=document.reference,
-                source_type=document.source_type,
-                title=document.title,
-                snippet=document.snippet,
-                score=_cosine_similarity(query_vector, document_vector),
+        scored_documents: list[RetrievalDocument] = []
+        for document, document_vector in zip(documents, document_vectors):
+            vector_score = _cosine_similarity(query_vector, document_vector)
+            scored_documents.append(
+                replace(
+                    document,
+                    score=vector_score,
+                    retrieval_methods=("vector",),
+                    vector_score=vector_score,
+                )
             )
-            for document, document_vector in zip(documents, document_vectors)
-        ]
         vector_results = [
             document
             for document in sorted(scored_documents, key=lambda item: (-item.score, item.source_type, item.reference))
             if document.score > 0
         ][:retrieval_limit]
-        results_by_query[original_index] = _apply_dashscope_rerank(
+        lexical_results = _search_lexical_retrieval_documents(
             normalized_queries[original_index],
-            vector_results,
+            documents=documents,
+            limit=retrieval_limit,
+        )
+        results_by_query[original_index] = _fuse_retrieval_documents(
+            normalized_queries[original_index],
+            documents=documents,
+            vector_results=vector_results,
+            lexical_results=lexical_results,
             limit=limit,
             reranker=reranker,
         )
@@ -467,6 +512,85 @@ def _document_embedding_text(document: RetrievalDocument) -> str:
     return f"{document.source_type}\n{document.reference}\n{document.title}\n{document.snippet}"
 
 
+def _eligible_retrieval_documents(
+    reference_filter: frozenset[str] | None,
+) -> list[RetrievalDocument]:
+    return [
+        document
+        for document in _retrieval_documents()
+        if reference_filter is None or document.reference in reference_filter
+    ]
+
+
+def _search_lexical_retrieval_documents(
+    query: str,
+    *,
+    documents: Sequence[RetrievalDocument],
+    limit: int,
+) -> list[RetrievalDocument]:
+    documents_by_reference = {document.reference: document for document in documents}
+    return [
+        replace(
+            documents_by_reference[result.reference],
+            score=result.score,
+            retrieval_methods=("lexical",),
+            lexical_score=result.score,
+        )
+        for result in rank_lexical_documents(query, documents, limit=limit)
+        if result.reference in documents_by_reference
+    ]
+
+
+def _fuse_retrieval_documents(
+    query: str,
+    *,
+    documents: Sequence[RetrievalDocument],
+    vector_results: Sequence[RetrievalDocument],
+    lexical_results: Sequence[RetrievalDocument],
+    limit: int,
+    reranker: DashScopeReranker | None,
+) -> list[RetrievalDocument]:
+    documents_by_reference = {document.reference: document for document in documents}
+    vector_by_reference = {document.reference: document for document in vector_results}
+    lexical_by_reference = {document.reference: document for document in lexical_results}
+    candidate_limit = _hybrid_candidate_limit(limit, reranker)
+    fused_references = fuse_ranked_references(
+        vector_results=[
+            RankedReference(reference=document.reference, score=document.score)
+            for document in vector_results
+        ],
+        lexical_results=[
+            RankedReference(reference=document.reference, score=document.score)
+            for document in lexical_results
+        ],
+        limit=candidate_limit,
+    )
+    fused_documents: list[RetrievalDocument] = []
+    for fused_reference in fused_references:
+        base_document = (
+            documents_by_reference.get(fused_reference.reference)
+            or vector_by_reference.get(fused_reference.reference)
+            or lexical_by_reference.get(fused_reference.reference)
+        )
+        if base_document is None:
+            continue
+        fused_documents.append(
+            replace(
+                base_document,
+                score=fused_reference.score,
+                retrieval_methods=fused_reference.retrieval_methods,
+                vector_score=fused_reference.vector_score,
+                lexical_score=fused_reference.lexical_score,
+            )
+        )
+    return _apply_dashscope_rerank(
+        query,
+        fused_documents,
+        limit=limit,
+        reranker=reranker,
+    )
+
+
 def _build_dashscope_reranker() -> DashScopeReranker | None:
     try:
         return build_dashscope_reranker_from_environment()
@@ -479,6 +603,11 @@ def _rerank_candidate_limit(result_limit: int, reranker: DashScopeReranker | Non
     if reranker is None:
         return result_limit
     return reranker.candidate_limit(result_limit)
+
+
+def _hybrid_candidate_limit(result_limit: int, reranker: DashScopeReranker | None) -> int:
+    fusion_limit = min(50, max(result_limit, result_limit * 4))
+    return max(fusion_limit, _rerank_candidate_limit(result_limit, reranker))
 
 
 def _apply_dashscope_rerank(

@@ -12,6 +12,7 @@ from app.services.retrieval_index import (
     search_retrieval_documents,
     search_retrieval_documents_batch,
 )
+from app.services.rag_hybrid_retrieval_service import expand_retrieval_query
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 DEFAULT_RETRIEVAL_GOLD_PATH = ROOT_DIR / "services" / "api" / "evals" / "retrieval" / "gold_queries.json"
@@ -56,6 +57,15 @@ def run_retrieval_eval(
                 "query": gold_query.query,
                 "expected_references": gold_query.expected_references,
                 "retrieved_references": retrieved_references,
+                "expanded_query": expand_retrieval_query(gold_query.query),
+                "retrieved_items": [
+                    {
+                        "reference": document.reference,
+                        "score": document.score,
+                        "retrieval_methods": list(document.retrieval_methods),
+                    }
+                    for document in retrieved_documents[:5]
+                ],
                 "hits_at_5": [
                     reference for reference in retrieved_references[:5]
                     if reference in set(gold_query.expected_references)
@@ -72,7 +82,7 @@ def run_retrieval_eval(
         "results": results,
         "boundary": {
             "rag_usage": "feedback_explanation_learning_recommendation_traceability_only",
-            "chroma_scope": "ChromaDB 是本地可选持久向量检索，不是生产级向量基础设施。",
+            "chroma_scope": "ChromaDB 是本地持久向量主路径；查询扩展与 BM25 词法召回在同一权限过滤后与向量结果融合。",
             "scoring_boundary": "RAG 检索结果不得进入标准诊断裁判、rubric 评分、隐藏事实披露或真实诊疗建议。",
         },
     }
@@ -102,8 +112,17 @@ def compute_retrieval_metrics(
             "mrr_at_5": 0.0,
             "ndcg_at_5": 0.0,
             "source_coverage": 0.0,
+            "hit_rate_at_5": 0.0,
+            "zero_hit_query_count": 0,
         }
 
+    zero_hit_query_count = sum(
+        1
+        for gold_query in gold_queries
+        if not set(gold_query.expected_references).intersection(
+            results_by_query.get(gold_query.query_id, [])[:5]
+        )
+    )
     return {
         "query_count": len(gold_queries),
         "recall_at_3": _round_metric(_average_recall_at(gold_queries, results_by_query, 3)),
@@ -111,6 +130,8 @@ def compute_retrieval_metrics(
         "mrr_at_5": _round_metric(_average_mrr_at(gold_queries, results_by_query, 5)),
         "ndcg_at_5": _round_metric(_average_ndcg_at(gold_queries, results_by_query, 5)),
         "source_coverage": _round_metric(_source_coverage(gold_queries, results_by_query, 5)),
+        "hit_rate_at_5": _round_metric(1 - zero_hit_query_count / len(gold_queries)),
+        "zero_hit_query_count": zero_hit_query_count,
     }
 
 

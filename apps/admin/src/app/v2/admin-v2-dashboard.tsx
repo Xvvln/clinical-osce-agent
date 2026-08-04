@@ -789,13 +789,21 @@ type AdminRetrievalEval = Readonly<{
     recall_at_3?: number;
     recall_at_5?: number;
     source_coverage?: number;
+    hit_rate_at_5?: number;
+    zero_hit_query_count?: number;
   }>;
   results?: readonly Readonly<{
     expected_references?: readonly string[];
+    expanded_query?: string;
     hits_at_5?: readonly string[];
     query?: string;
     query_id?: string;
     retrieved_references?: readonly string[];
+    retrieved_items?: readonly Readonly<{
+      reference?: string;
+      retrieval_methods?: readonly string[];
+      score?: number;
+    }>[];
   }>[];
 }>;
 
@@ -4011,12 +4019,14 @@ function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRe
       <CardContent>
         {retrievalEval ? (
           <div className="grid gap-4">
-            <div className="grid gap-3 md:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
               <MiniStat label="Recall@3" value={formatRatioMetric(metrics?.recall_at_3)} />
               <MiniStat label="Recall@5" value={formatRatioMetric(metrics?.recall_at_5)} />
               <MiniStat label="MRR@5" value={formatRatioMetric(metrics?.mrr_at_5)} />
               <MiniStat label="nDCG@5" value={formatRatioMetric(metrics?.ndcg_at_5)} />
               <MiniStat label="来源覆盖" value={formatRatioMetric(metrics?.source_coverage)} />
+              <MiniStat label="Hit@5" value={formatRatioMetric(metrics?.hit_rate_at_5)} />
+              <MiniStat label="零命中查询" value={formatCount(metrics?.zero_hit_query_count ?? 0)} />
             </div>
             <div className="grid gap-3 lg:grid-cols-[1fr_0.8fr]">
               <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
@@ -4026,6 +4036,9 @@ function RetrievalEvalPanel({ retrievalEval }: Readonly<{ retrievalEval: AdminRe
                     <div className="rounded-xl border border-[#E7E0D4] bg-white px-3 py-3 text-sm" key={`${result.query_id ?? ""}-${index}`}>
                       <p className="font-medium">{result.query || result.query_id || `查询 ${index + 1}`}</p>
                       <p className="mt-1 text-xs leading-5 text-[#6F6257]">命中：{joinText(result.retrieved_references ?? result.hits_at_5, "暂无")}</p>
+                      {result.expanded_query && result.expanded_query !== result.query ? (
+                        <p className="mt-1 text-xs leading-5 text-[#8A7D6F]">查询扩展：{result.expanded_query}</p>
+                      ) : null}
                     </div>
                   ))}
                   {results.length === 0 ? <EmptyText>暂无检索评测明细。</EmptyText> : null}

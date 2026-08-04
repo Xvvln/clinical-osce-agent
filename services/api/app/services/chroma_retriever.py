@@ -193,7 +193,7 @@ class ChromaRetrievalIndex:
 
     def _collection_has_expected_count(self) -> bool:
         try:
-            return int(self._collection.count()) >= len(self._documents)
+            return int(self._collection.count()) == len(self._documents)
         except Exception:
             return False
 
