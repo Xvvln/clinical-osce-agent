@@ -275,6 +275,18 @@ type AdminSourceSummary = Readonly<{
   source_id: string;
   title?: string;
   source_type?: string;
+  source_name?: string;
+  source_url?: string;
+  data_type?: string;
+  license?: string;
+  source_version?: string;
+  last_reviewed_at?: string;
+  review_due_at?: string;
+  freshness_status?: string;
+  freshness_label?: string;
+  source_status?: string;
+  superseded_by?: string;
+  selectable_for_new_knowledge?: boolean;
 }>;
 
 type AdminRagDocument = Readonly<{
@@ -1899,6 +1911,7 @@ function ResourcesSection({
           {data.cases.length === 0 ? <EmptyText>暂无病例。点击“新建病例”开始录入。</EmptyText> : null}
         </CardContent>
       </Card>
+      <SourceLedger sources={data.sources} />
       <Card>
         <CardHeader>
           <CardTitle>知识库文档</CardTitle>
@@ -2017,6 +2030,69 @@ function ResourcesSection({
   );
 }
 
+function SourceLedger({ sources }: Readonly<{ sources: readonly AdminSourceSummary[] }>) {
+  const currentCount = sources.filter((source) => source.freshness_status === "current").length;
+  const reviewDueCount = sources.filter((source) => source.freshness_status === "review_due").length;
+  const unverifiedCount = sources.filter((source) => source.freshness_status === "unverified").length;
+  const supersededCount = sources.filter((source) => source.freshness_status === "superseded").length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>来源台账与时效复核</CardTitle>
+        <CardDescription>“复核有效”表示项目已在记录日期核对来源版本、用途与风险边界；不等同于医学教师审定或真实临床有效性认证。</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MiniStat label="复核有效" value={formatCount(currentCount)} />
+          <MiniStat label="到期待复核" value={formatCount(reviewDueCount)} />
+          <MiniStat label="未记录复核" value={formatCount(unverifiedCount)} />
+          <MiniStat label="已被新来源替代" value={formatCount(supersededCount)} />
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-[#8A7D6F]">
+              <tr className="border-b border-[#E7E0D4]">
+                <th className="py-3 pr-4">来源</th>
+                <th className="py-3 pr-4">类型</th>
+                <th className="py-3 pr-4">版本</th>
+                <th className="py-3 pr-4">最近复核</th>
+                <th className="py-3 pr-4">下次复核</th>
+                <th className="py-3 pr-4">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((source) => (
+                <tr className="border-b border-[#F0E8DC]" key={source.source_id}>
+                  <td className="py-3 pr-4">
+                    {source.source_url ? (
+                      <a className="font-medium text-[#8F4328] underline decoration-[#D9B19F] underline-offset-4" href={source.source_url} rel="noreferrer" target="_blank">
+                        {source.title || source.source_name || source.source_id}
+                      </a>
+                    ) : (
+                      <span className="font-medium">{source.title || source.source_name || source.source_id}</span>
+                    )}
+                    <p className="mt-1 text-xs text-[#8A7D6F]">{source.source_id}</p>
+                  </td>
+                  <td className="py-3 pr-4 text-[#6F6257]">{source.source_type || source.data_type || "未分类"}</td>
+                  <td className="max-w-[260px] py-3 pr-4 text-[#6F6257]">{source.source_version || "未记录"}</td>
+                  <td className="py-3 pr-4 text-[#6F6257]">{formatDateOnly(source.last_reviewed_at)}</td>
+                  <td className="py-3 pr-4 text-[#6F6257]">{formatDateOnly(source.review_due_at)}</td>
+                  <td className="py-3 pr-4">
+                    <Badge variant={getSourceFreshnessBadgeVariant(source.freshness_status)}>{source.freshness_label || getSourceFreshnessLabel(source.freshness_status)}</Badge>
+                    {source.superseded_by ? <p className="mt-1 text-xs text-[#8A7D6F]">新来源：{source.superseded_by}</p> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {sources.length === 0 ? <EmptyText>暂无来源台账。</EmptyText> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function DocumentUploadPanel({
   cases,
   documents,
@@ -2030,8 +2106,9 @@ function DocumentUploadPanel({
   onUploadDocument: (payload: AdminRagDocumentUploadPayload) => Promise<AdminRagDocumentUploadResponse>;
   sources: readonly AdminSourceSummary[];
 }>) {
+  const selectableSources = useMemo(() => getSelectableSources(sources), [sources]);
   const defaultCaseId = cases[0]?.case_id ?? "";
-  const defaultSourceId = sources[0]?.source_id ?? "";
+  const defaultSourceId = selectableSources[0]?.source_id ?? "";
   const [scope, setScope] = useState("case");
   const [caseId, setCaseId] = useState(defaultCaseId);
   const [sourceId, setSourceId] = useState(defaultSourceId);
@@ -2145,8 +2222,8 @@ function DocumentUploadPanel({
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1.2fr]">
           <FormField label="关联来源">
             <SelectInput
-              optionLabels={{ "": "不绑定来源", ...Object.fromEntries(sources.map((source) => [source.source_id, source.title || source.source_id])) }}
-              options={["", ...sources.map((source) => source.source_id)]}
+              optionLabels={{ "": "不绑定来源", ...Object.fromEntries(selectableSources.map((source) => [source.source_id, source.title || source.source_id])) }}
+              options={["", ...selectableSources.map((source) => source.source_id)]}
               value={sourceId}
               onChange={setSourceId}
             />
@@ -2762,7 +2839,8 @@ function CaseCreationModal({
   onValidate: (payload: AdminCaseCreationPayload) => Promise<AdminCaseImportStatus>;
   sources: readonly AdminSourceSummary[];
 }>) {
-  const [draft, setDraft] = useState<CaseCreationDraft>(() => buildDefaultCaseCreationDraft(sources, cases));
+  const selectableSources = useMemo(() => getSelectableSources(sources), [sources]);
+  const [draft, setDraft] = useState<CaseCreationDraft>(() => buildDefaultCaseCreationDraft(selectableSources, cases));
   const [result, setResult] = useState<AdminCaseImportStatus | null>(null);
   const [localErrorText, setLocalErrorText] = useState("");
 
@@ -2770,9 +2848,9 @@ function CaseCreationModal({
     setDraft((current) => ({
       ...current,
       caseId: generateSequentialCaseId(cases),
-      sourceId: current.sourceId || sources[0]?.source_id || "",
+      sourceId: current.sourceId || selectableSources[0]?.source_id || "",
     }));
-  }, [cases, sources]);
+  }, [cases, selectableSources]);
 
   const draftErrors = useMemo(() => getCaseCreationDraftErrors(draft, cases), [cases, draft]);
   const canSubmit = draftErrors.length === 0 && !isSaving;
@@ -3039,7 +3117,7 @@ function CaseCreationModal({
                   <Input value={draft.mainDiagnosis} onChange={(event) => updateDraft("mainDiagnosis", event.target.value)} placeholder="例如 急性阑尾炎" />
                 </FormField>
                 <FormField label="来源">
-                  <SelectInput value={draft.sourceId} onChange={(value) => updateDraft("sourceId", value)} options={sources.map((source) => source.source_id)} optionLabels={Object.fromEntries(sources.map((source) => [source.source_id, source.title || source.source_id]))} />
+                  <SelectInput value={draft.sourceId} onChange={(value) => updateDraft("sourceId", value)} options={selectableSources.map((source) => source.source_id)} optionLabels={Object.fromEntries(selectableSources.map((source) => [source.source_id, source.title || source.source_id]))} />
                 </FormField>
                 <div className="md:col-span-2">
                   <CaseCreationDifferentialRowList
@@ -5616,6 +5694,47 @@ function formatDateTime(value: string): string {
     minute: "2-digit",
     month: "2-digit",
   }).format(date);
+}
+
+function formatDateOnly(value: string | undefined): string {
+  if (!value) {
+    return "未记录";
+  }
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function getSelectableSources(sources: readonly AdminSourceSummary[]): readonly AdminSourceSummary[] {
+  return sources.filter((source) => source.selectable_for_new_knowledge !== false);
+}
+
+function getSourceFreshnessLabel(status: string | undefined): string {
+  const labels: Record<string, string> = {
+    current: "复核有效",
+    review_due: "到期待复核",
+    superseded: "已被新来源替代",
+    unverified: "未记录复核",
+  };
+  return labels[status || ""] ?? (status || "未记录复核");
+}
+
+function getSourceFreshnessBadgeVariant(
+  status: string | undefined,
+): "danger" | "muted" | "success" | "warning" {
+  if (status === "current") {
+    return "success";
+  }
+  if (status === "review_due") {
+    return "warning";
+  }
+  return status === "unverified" ? "danger" : "muted";
 }
 
 function getCandidateStatusLabel(status: string): string {

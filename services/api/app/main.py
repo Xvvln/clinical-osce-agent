@@ -162,6 +162,7 @@ from app.services.startup_config_service import (
 )
 from app.services.speech_synthesis_cache_service import speech_synthesis_cache
 from app.services.rule_evaluator import RUBRICS_DIR
+from app.services.source_freshness_service import enrich_source_freshness, summarize_source_freshness
 from app.services.student_model_config_service import test_student_model_config_connectivity
 from app.services.user_model_config_store import user_model_config_store
 from app.services.training_insight_service import TrainingInsightService
@@ -1785,7 +1786,11 @@ def _load_admin_rubric(rubric_id: str) -> dict[str, Any] | None:
 
 def _load_admin_sources() -> list[dict[str, Any]]:
     sources = json.loads(SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
-    return sources if isinstance(sources, list) else []
+    return [
+        enrich_source_freshness(source)
+        for source in sources
+        if isinstance(source, dict)
+    ] if isinstance(sources, list) else []
 
 
 def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> dict[str, Any]:
@@ -1823,7 +1828,7 @@ def _build_admin_rag_knowledge_item(request: AdminRagKnowledgeItemRequest) -> di
         item["review_note"] = ""
         item["reviewed_by"] = ""
         item["reviewed_at"] = ""
-    _validate_admin_rag_knowledge_item(item)
+    _validate_admin_rag_knowledge_item(item, existing_item=existing_item)
     return item
 
 
@@ -1849,7 +1854,11 @@ def _generate_admin_rag_knowledge_id(item: dict[str, Any]) -> str:
     return f"kb:{item['scope']}:{case_part}:{item['content_kind']}:{digest}"
 
 
-def _validate_admin_rag_knowledge_item(item: dict[str, Any]) -> None:
+def _validate_admin_rag_knowledge_item(
+    item: dict[str, Any],
+    *,
+    existing_item: dict[str, Any] | None = None,
+) -> None:
     if item["scope"] not in RAG_KNOWLEDGE_SCOPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge scope")
     if item["visibility"] not in RAG_KNOWLEDGE_VISIBILITIES:
@@ -1868,6 +1877,18 @@ def _validate_admin_rag_knowledge_item(item: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="case_id is not registered")
     if item["source_id"] and item["source_id"] not in _admin_source_ids():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source_id is not registered")
+    if (
+        item["source_id"]
+        and item["source_id"] not in _admin_selectable_source_ids()
+        and (
+            existing_item is None
+            or item["source_id"] != str(existing_item.get("source_id") or "").strip()
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source_id is not current; review the source ledger or select an active source",
+        )
     if item["visibility"] == "secret_scoring_only" and set(item["allowed_agents"]) & RAG_GENERATIVE_AGENT_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1902,6 +1923,11 @@ def _build_admin_rag_document_items(request: AdminRagDocumentUploadRequest) -> t
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported knowledge agent role")
     if source_id and source_id not in _admin_source_ids():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source_id is not registered")
+    if source_id and source_id not in _admin_selectable_source_ids():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source_id is not current; review the source ledger or select an active source",
+        )
     if visibility == "secret_scoring_only" and set(allowed_agents) & RAG_GENERATIVE_AGENT_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1980,6 +2006,15 @@ def _admin_source_ids() -> set[str]:
         str(source.get("source_id", "")).strip()
         for source in _load_admin_sources()
         if str(source.get("source_id", "")).strip()
+    }
+
+
+def _admin_selectable_source_ids() -> set[str]:
+    return {
+        str(source.get("source_id", "")).strip()
+        for source in _load_admin_sources()
+        if str(source.get("source_id", "")).strip()
+        and source.get("selectable_for_new_knowledge") is True
     }
 
 
@@ -2785,7 +2820,11 @@ def list_admin_sources(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
-    return {"sources": _load_admin_sources()}
+    sources = _load_admin_sources()
+    return {
+        "sources": sources,
+        "freshness_summary": summarize_source_freshness(sources),
+    }
 
 
 @app.get("/api/admin/teaching-focus/patterns")

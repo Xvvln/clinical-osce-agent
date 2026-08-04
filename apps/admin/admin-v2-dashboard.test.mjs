@@ -195,6 +195,10 @@ test("admin v2 explains evaluation, skill details, knowledge content, and API fa
     "历史模拟审计",
     "全局审核审计",
     "动态教学重点",
+    "来源台账与时效复核",
+    "复核有效",
+    "到期待复核",
+    "已被新来源替代",
   ]) {
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should explain or show ${label}`);
   }
@@ -215,6 +219,8 @@ test("admin v2 keeps details in modal surfaces and normalizes unstable backend a
   assert.match(dashboardSource, /TeachingFocusList/);
   assert.match(dashboardSource, /AuditEventList/);
   assert.match(dashboardSource, /RetrievalEvalPanel/);
+  assert.match(dashboardSource, /SourceLedger/);
+  assert.match(dashboardSource, /getSelectableSources/);
   assert.match(dashboardSource, /编辑知识库内容/);
   assert.match(dashboardSource, /保存修改/);
   assert.match(dashboardSource, /onSaveKnowledgeItem/);

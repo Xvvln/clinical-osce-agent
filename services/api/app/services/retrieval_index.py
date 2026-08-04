@@ -30,6 +30,7 @@ from app.services.rag_hybrid_retrieval_service import (
     fuse_ranked_references,
     rank_lexical_documents,
 )
+from app.services.source_freshness_service import enrich_source_freshness
 from app.services.vertex_embedding_retriever import (
     DEFAULT_VERTEX_EMBEDDING_MODEL,
     build_vertex_embedding_client_from_environment,
@@ -404,10 +405,6 @@ def _knowledge_documents() -> list[RetrievalDocument]:
 
 
 def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
-    database_path = getattr(rag_knowledge_store, "database_path", None)
-    if isinstance(database_path, Path) and not database_path.exists():
-        return []
-
     documents: list[RetrievalDocument] = []
     for item in rag_knowledge_store.list_items():
         if item.get("enabled") is False:
@@ -460,18 +457,28 @@ def _source_documents() -> list[RetrievalDocument]:
         return []
     payload = json.loads(SOURCE_REGISTRY_PATH.read_text(encoding="utf-8"))
     documents: list[RetrievalDocument] = []
-    for item in payload if isinstance(payload, list) else []:
+    for raw_item in payload if isinstance(payload, list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = enrich_source_freshness(raw_item)
         source_id = str(item.get("source_id", ""))
         if not source_id:
             continue
         snippet_parts = [
             item.get("source_name", ""),
+            " ".join(str(alias) for alias in item.get("search_aliases", []) if str(alias)),
             item.get("source_url", ""),
             item.get("license", ""),
             item.get("data_type", ""),
             " ".join(str(usage) for usage in item.get("allowed_usage", [])),
             item.get("transformation", ""),
             item.get("risk_note", ""),
+            item.get("review_basis", ""),
+            f"source_version: {item.get('source_version', '')}",
+            f"freshness_status: {item.get('freshness_status', '')}",
+            f"last_reviewed_at: {item.get('last_reviewed_at', '')}",
+            f"review_due_at: {item.get('review_due_at', '')}",
+            f"superseded_by: {item.get('superseded_by', '')}",
         ]
         documents.append(
             RetrievalDocument(

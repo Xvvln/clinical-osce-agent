@@ -56,17 +56,18 @@
 
 ### `attribution/source_registry/`
 
-`sources.json` 是数据来源登记清单，用于记录来源名称、来源地址、许可、允许用途、转换方式、归属要求和风险说明。病例中的 `source_attribution.source_id` 必须能在这里找到对应条目。
+`sources.json` 是数据来源登记清单，用于记录来源名称、来源地址、版本、许可、允许用途、转换方式、归属要求和风险说明。每条来源还记录 `last_reviewed_at`、`review_interval_days`、`source_status`、`review_basis` 和可选的 `superseded_by`。API 会计算 `review_due_at` 与 freshness status；到期、未复核或已被替代的来源不能绑定到新知识。病例中的 `source_attribution.source_id` 必须能在这里找到对应条目。
 
 ### `rag_knowledge/`
 
-`default_items.json` 是默认 RAG knowledge item 种子。当前条目来自 AAFP、Merck Manual Professional 和 NCBI StatPearls 等公开网页的人工检索与短文本改写，用于给 Coach Agent、训练后复盘、Skill 生成和审批提供可追溯教学上下文。
+`default_items.json` 是默认 RAG knowledge item 种子。当前共 26 条：5 个演示病例各有 3 条提交前 Coach 知识和 2 条提交后复盘 / Skill 知识，另有 1 条全局急腹症安全提示。条目来自 AAFP、Merck Manual Professional、NCBI StatPearls、AHA / ACC / HFSA、American Thyroid Association、ATS / IDSA 等公开页面的人工检索与短文本改写，用于给 Coach Agent、训练后复盘、Skill 生成和审批提供可追溯教学上下文。
 
 使用边界：
 
 - `pre_submit_safe` 条目不得包含标准诊断、隐藏事实、治疗方案或用药剂量，只能辅助学生组织问诊、查体和检查选择思路。
 - `post_submit_review` 条目可以包含诊断相关复盘内容，但只能在提交诊断后用于复盘、Skill 生成或审批。
 - 默认种子只在运行时知识库首次初始化或缺失条目时插入，不覆盖管理员后续编辑的同 ID 条目。
+- 默认种子只能引用来源台账中当前有效且允许新绑定的来源；旧来源即使为历史追溯保留，也不会继续进入新增默认知识。
 - 这些知识条目不参与标准诊断裁判、rubric 评分或病例事实披露。
 
 ## 原始数据使用现状

@@ -2,13 +2,22 @@
   {
     "source_id": "fareez_osce_2022",
     "source_name": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
+    "search_aliases": [
+      "Fareez OSCE",
+      "公开 OSCE 问诊数据"
+    ],
     "source_url": "https://doi.org/10.6084/m9.figshare.c.5545842.v1",
     "license": "CC BY 4.0",
     "data_type": "dialogue",
     "allowed_usage": ["training_reference", "evaluation_reference", "demo_reference"],
     "transformation": "download original zip, then extract and convert into structured OSCE case assets",
     "attribution_required": true,
-    "risk_note": "原始数据偏呼吸系统问诊，不足以直接覆盖完整病例闭环。"
+    "risk_note": "原始数据偏呼吸系统问诊，不足以直接覆盖完整病例闭环。",
+    "source_version": "Scientific Data 9, 313 (2022)",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 730,
+    "source_status": "active",
+    "review_basis": "复核公开论文、CC BY 4.0 边界与标准化病人问诊用途。"
   },
   {
     "source_id": "meditod_2024",
@@ -19,7 +28,12 @@
     "allowed_usage": ["intent_reference", "evaluation_reference"],
     "transformation": "clone public repository; use public dialogue files directly for intent schema study",
     "attribution_required": true,
-    "risk_note": "canonicalized 数据需要 UMLS 许可与申请，不自动拉取。"
+    "risk_note": "canonicalized 数据需要 UMLS 许可与申请，不自动拉取。",
+    "source_version": "EMNLP 2024 public repository",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 730,
+    "source_status": "active",
+    "review_basis": "复核官方仓库的公开原始对话、注释范围与 UMLS 授权边界。"
   },
   {
     "source_id": "medcase_reasoning_2025",
@@ -30,7 +44,12 @@
     "allowed_usage": ["reasoning_reference", "evaluation_reference"],
     "transformation": "download public parquet files for reasoning point extraction",
     "attribution_required": true,
-    "risk_note": "病例报告复杂度较高，不能直接作为新手病例。"
+    "risk_note": "病例报告复杂度较高，不能直接作为新手病例。",
+    "source_version": "MedCaseReasoning 2025 public dataset",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 730,
+    "source_status": "active",
+    "review_basis": "复核数据卡、MIT 许可标识、数据字段与临床推理研究用途。"
   },
   {
     "source_id": "case_report_collective_2025",
@@ -41,7 +60,12 @@
     "allowed_usage": ["expansion_reference"],
     "transformation": "download public parquet file for later structured filtering",
     "attribution_required": true,
-    "risk_note": "仅作为二期扩展数据源，MVP 不直接入库。"
+    "risk_note": "仅作为二期扩展数据源，MVP 不直接入库。",
+    "source_version": "BioNLP 2025 dataset release",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 730,
+    "source_status": "active",
+    "review_basis": "复核公开论文的数据集规模、LLM 抽取性质与仅作扩展参考的边界。"
   },
   {
     "source_id": "easymed_repo",
@@ -52,7 +76,12 @@
     "allowed_usage": ["architecture_reference", "evaluation_reference"],
     "transformation": "clone repository for module design reference",
     "attribution_required": true,
-    "risk_note": "仅借鉴患者模拟、意图识别、评测设计，不直接照搬产品形态。"
+    "risk_note": "仅借鉴患者模拟、意图识别、评测设计，不直接照搬产品形态。",
+    "source_version": "public repository main branch reviewed 2026-08-04",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 730,
+    "source_status": "active",
+    "review_basis": "复核官方仓库的多智能体标准化病人架构、SPBench 和 MIT 许可。"
   },
   {
     "source_id": "aafp_acute_abdominal_pain_2023",
@@ -63,7 +92,12 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase acute abdominal pain history, examination, laboratory and imaging principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于教学模拟中的问诊、查体、检查选择和来源追溯，不作为真实诊疗建议。"
+    "risk_note": "仅用于教学模拟中的问诊、查体、检查选择和来源追溯，不作为真实诊疗建议。",
+    "source_version": "American Family Physician 2023;107(6):585-596",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核官方文章的发布信息、检索范围和急性腹痛评估要点。"
   },
   {
     "source_id": "merck_appendicitis_professional",
@@ -74,7 +108,12 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase appendicitis presentation, signs and diagnostic uncertainty into post-submit review notes",
     "attribution_required": true,
-    "risk_note": "含诊断相关表述，只能用于提交后复盘、Skill 生成和审批，不得进入提交前 Coach 标准答案提示。"
+    "risk_note": "含诊断相关表述，只能用于提交后复盘、Skill 生成和审批，不得进入提交前 Coach 标准答案提示。",
+    "source_version": "Full Review Jul 2024",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 Merck Manual Professional 页面的 Full Review 日期、作者和同行审阅信息。"
   },
   {
     "source_id": "statpearls_appendicitis_2025",
@@ -85,7 +124,12 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase appendicitis evaluation and differential diagnosis content into post-submit teaching notes",
     "attribution_required": true,
-    "risk_note": "用于教学复盘和 Skill 生成，不替代医学教师审核或真实诊疗。"
+    "risk_note": "用于教学复盘和 Skill 生成，不替代医学教师审核或真实诊疗。",
+    "source_version": "StatPearls Last Update 2024-02-12",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 NCBI Bookshelf 条目的更新日期、作者与教学目标。"
   },
   {
     "source_id": "statpearls_acute_abdomen_2025",
@@ -96,7 +140,12 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase acute abdomen evaluation and red-flag triage principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于识别危险信号和训练边界提示，不输出真实处置、用药剂量或治疗方案。"
+    "risk_note": "仅用于识别危险信号和训练边界提示，不输出真实处置、用药剂量或治疗方案。",
+    "source_version": "StatPearls Last Update 2025-02-15",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 NCBI Bookshelf 条目的更新日期、危险信号与评估要点。"
   },
   {
     "source_id": "aafp_acute_chest_pain_2020",
@@ -107,7 +156,13 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase chest pain history, risk factor, exam and initial testing principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于胸痛教学模拟中的问诊、查体和检查选择提示，不输出真实急救处置或治疗建议。"
+    "risk_note": "历史知识条目来源；新的胸痛教学片段已转用 2021 AHA/ACC 指南页面。",
+    "source_version": "American Family Physician 2020",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "superseded",
+    "superseded_by": "aha_acc_chest_pain_guideline_2021",
+    "review_basis": "保留用于历史引用追溯，不再作为新默认知识片段的优先来源。"
   },
   {
     "source_id": "aafp_chronic_heart_failure_2007",
@@ -118,7 +173,13 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase dyspnea, edema, cardiac examination and echocardiography-oriented diagnostic principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于心源性气短和容量状态教学模拟，不输出真实治疗方案。"
+    "risk_note": "历史知识条目来源；新的心衰教学片段已转用 2022 AHA/ACC/HFSA 指南。",
+    "source_version": "American Family Physician 2007",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "superseded",
+    "superseded_by": "aha_acc_hf_guideline_2022",
+    "review_basis": "保留用于历史引用追溯，不再作为新默认知识片段的优先来源。"
   },
   {
     "source_id": "aafp_hyperthyroidism_2016",
@@ -129,7 +190,13 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase symptom cluster, physical signs and thyroid function test principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于心悸、消瘦和代谢症状教学模拟，不输出真实内分泌治疗建议。"
+    "risk_note": "历史知识条目来源；新的甲亢教学片段已转用 ATA 官方指南台账。",
+    "source_version": "American Family Physician 2016",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "superseded",
+    "superseded_by": "ata_hyperthyroidism_guideline_2016",
+    "review_basis": "保留用于历史引用追溯，不再作为新默认知识片段的优先来源。"
   },
   {
     "source_id": "aafp_cap_adults_2016",
@@ -140,6 +207,76 @@
     "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
     "transformation": "manual web review; paraphrase fever, cough, respiratory examination, oxygenation and imaging principles into OSCE-safe teaching notes",
     "attribution_required": true,
-    "risk_note": "仅用于发热咳嗽教学模拟中的问诊、查体和检查选择提示，不输出抗感染处方或真实诊疗建议。"
+    "risk_note": "历史知识条目来源；新的社区获得性肺炎教学片段已转用 2019 ATS/IDSA 官方指南。",
+    "source_version": "American Family Physician 2016",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "superseded",
+    "superseded_by": "ats_idsa_cap_guideline_2019",
+    "review_basis": "保留用于历史引用追溯，不再作为新默认知识片段的优先来源。"
+  },
+  {
+    "source_id": "aha_acc_chest_pain_guideline_2021",
+    "source_name": "2021 AHA/ACC Guideline for the Evaluation and Diagnosis of Chest Pain",
+    "source_url": "https://professional.heart.org/en/science-news/2021-guideline-for-the-evaluation-and-diagnosis-of-chest-pain",
+    "license": "AHA/ACC guideline page; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_guideline_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual official-page review; paraphrase chest-pain description, structured risk assessment and diagnostic evaluation into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于高危胸痛教学中的症状表征、查体、检查选择和提交后复盘，不输出真实急救处置。",
+    "source_version": "2021 guideline; official page updated 2021-10-28",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 AHA Professional Heart Daily 官方指南页面的版本、更新日期和评估要点。"
+  },
+  {
+    "source_id": "aha_acc_hf_guideline_2022",
+    "source_name": "2022 AHA/ACC/HFSA Guideline for the Management of Heart Failure",
+    "source_url": "https://professional.heart.org/en/guidelines-statements/2022-ahaacchfsa-guideline-for-the-management-of-heart-failure-a-report-of-thecir0000000000001063",
+    "license": "AHA/ACC/HFSA guideline hub; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_guideline_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual official-page review; paraphrase symptoms, congestion findings, natriuretic peptide and cardiac imaging evaluation into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于气短水肿教学中的病史、容量体征、证据整合和复盘，不输出真实用药或治疗方案。",
+    "source_version": "2022 AHA/ACC/HFSA guideline",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 AHA Professional Heart Daily 官方指南中心的版本与支持材料台账。"
+  },
+  {
+    "source_id": "ata_hyperthyroidism_guideline_2016",
+    "source_name": "2016 American Thyroid Association Guidelines for Hyperthyroidism and Other Causes of Thyrotoxicosis",
+    "source_url": "https://www.thyroid.org/professionals/ata-professional-guidelines/",
+    "license": "ATA guideline listing; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_guideline_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual official-page review; paraphrase symptom clusters, examination and thyroid-function evaluation into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于心悸消瘦教学中的症状簇、体征、功能检查和复盘，不输出真实内分泌治疗建议。",
+    "source_version": "ATA guideline published 2016; still listed in official professional guidelines",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 ATA 官方 professional guidelines 列表中的甲亢指南版本和专业期刊信息。"
+  },
+  {
+    "source_id": "ats_idsa_cap_guideline_2019",
+    "source_name": "2019 ATS/IDSA Guideline for Diagnosis and Treatment of Adults with Community-acquired Pneumonia",
+    "source_url": "https://www.thoracic.org/statements/guideline-implementation-tools/diagnosis-and-treatment-of-cap.php",
+    "license": "ATS/IDSA guideline implementation page; use only short paraphrased teaching notes with attribution",
+    "data_type": "clinical_guideline_reference",
+    "allowed_usage": ["knowledge_reference", "agent_grounding", "teaching_reference"],
+    "transformation": "manual official-page review; paraphrase diagnostic confirmation, severity evidence and testing rationale into OSCE-safe teaching notes",
+    "attribution_required": true,
+    "risk_note": "仅用于发热咳嗽教学中的问诊、查体、影像证据和复盘，不输出抗感染处方或真实诊疗建议。",
+    "source_version": "Official ATS/IDSA clinical practice guideline 2019",
+    "last_reviewed_at": "2026-08-04",
+    "review_interval_days": 365,
+    "source_status": "active",
+    "review_basis": "复核 ATS 官方 guideline implementation tools 页的指南引用、年份与配套材料。"
   }
 ]

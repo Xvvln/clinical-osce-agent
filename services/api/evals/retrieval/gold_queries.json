@@ -64,12 +64,160 @@
   },
   {
     "query_id": "appendicitis_reasoning_support",
-    "query": "阳性证据 支持依据 推理链",
+    "query": "右下腹痛支持证据怎么串 转移性痛 反跳痛 白细胞 超声",
     "expected_references": ["rubric:appendicitis_001_rubric.item.rs_support"]
   },
   {
     "query_id": "acs_ecg_rubric",
     "query": "胸痛 心电图 检查",
     "expected_references": ["rubric:acs_001_rubric.item.at_ecg"]
+  },
+  {
+    "query_id": "acs_colloquial_history",
+    "query": "胸口像被压住还往左肩窜 问诊该问什么",
+    "expected_references": [
+      "rag_knowledge:case:acs_001:coach:chest_pain_history_sequence",
+      "knowledge:acs_001.rp_01"
+    ]
+  },
+  {
+    "query_id": "acs_exam_risk_signs",
+    "query": "胸痛大汗皮肤湿冷 血压心率和脉搏怎么查",
+    "expected_references": [
+      "rag_knowledge:case:acs_001:coach:chest_pain_exam_sequence",
+      "rubric:acs_001_rubric.item.pe_blood_pressure"
+    ]
+  },
+  {
+    "query_id": "acs_post_submit_review",
+    "query": "心梗复盘 压榨胸痛 ST段 肌钙蛋白 鉴别主动脉夹层",
+    "expected_references": [
+      "rag_knowledge:case:acs_001:reflection:acs_reasoning_review"
+    ]
+  },
+  {
+    "query_id": "acs_differential_skill",
+    "query": "高危胸痛怎样训练支持证据和排除证据",
+    "expected_references": [
+      "rag_knowledge:case:acs_001:skill_generation:chest_pain_differential_chain"
+    ]
+  },
+  {
+    "query_id": "heart_failure_colloquial_history",
+    "query": "走路憋气 平躺更喘 半夜憋醒 脚肿该怎么问",
+    "expected_references": [
+      "rag_knowledge:case:heart_failure_001:coach:dyspnea_volume_history_sequence",
+      "rubric:heart_failure_001_rubric.item.ht_orthopnea"
+    ]
+  },
+  {
+    "query_id": "heart_failure_congestion_exam",
+    "query": "气短水肿查体 颈静脉 肺底啰音 凹陷性水肿",
+    "expected_references": [
+      "rag_knowledge:case:heart_failure_001:coach:dyspnea_exam_sequence",
+      "rubric:heart_failure_001_rubric.item.pe_edema"
+    ]
+  },
+  {
+    "query_id": "heart_failure_bnp_echo",
+    "query": "气促脚肿要查 BNP 和心脏B超吗",
+    "expected_references": [
+      "rag_knowledge:case:heart_failure_001:coach:dyspnea_test_sequence",
+      "rubric:heart_failure_001_rubric.item.at_bnp",
+      "rubric:heart_failure_001_rubric.item.at_echo"
+    ]
+  },
+  {
+    "query_id": "heart_failure_post_submit_review",
+    "query": "心衰复盘 夜间阵发性呼吸困难 淤血体征 BNP 超声",
+    "expected_references": [
+      "rag_knowledge:case:heart_failure_001:reflection:heart_failure_reasoning_review"
+    ]
+  },
+  {
+    "query_id": "heart_failure_trigger_skill",
+    "query": "气短水肿复训 容量负荷 利尿药不规律 吃得咸 诱因",
+    "expected_references": [
+      "rag_knowledge:case:heart_failure_001:skill_generation:dyspnea_congestion_chain"
+    ]
+  },
+  {
+    "query_id": "hyperthyroid_colloquial_history",
+    "query": "心慌手抖怕热还变瘦 问诊要补哪些",
+    "expected_references": [
+      "rag_knowledge:case:hyperthyroid_001:coach:palpitation_weight_history_sequence",
+      "rubric:hyperthyroid_001_rubric.item.ht_hypermetabolic"
+    ]
+  },
+  {
+    "query_id": "hyperthyroid_exam_cluster",
+    "query": "心悸消瘦查体 心率 手颤 甲状腺肿大 血管杂音",
+    "expected_references": [
+      "rag_knowledge:case:hyperthyroid_001:coach:palpitation_exam_sequence",
+      "rubric:hyperthyroid_001_rubric.item.pe_tremor"
+    ]
+  },
+  {
+    "query_id": "hyperthyroid_function_tests",
+    "query": "甲亢怀疑化验 TSH FT4 T3 TRAb 甲状腺超声",
+    "expected_references": [
+      "rag_knowledge:case:hyperthyroid_001:coach:palpitation_test_sequence",
+      "rubric:hyperthyroid_001_rubric.item.at_tsh",
+      "rubric:hyperthyroid_001_rubric.item.at_ft4",
+      "knowledge:hyperthyroid_001.rp_03"
+    ]
+  },
+  {
+    "query_id": "hyperthyroid_post_submit_review",
+    "query": "甲状腺功能亢进复盘 高代谢症状簇 TSH抑制 FT4升高",
+    "expected_references": [
+      "rag_knowledge:case:hyperthyroid_001:reflection:hyperthyroid_reasoning_review"
+    ]
+  },
+  {
+    "query_id": "hyperthyroid_differential_skill",
+    "query": "心慌消瘦怎么区分甲亢 焦虑 药物和其他内分泌原因",
+    "expected_references": [
+      "rag_knowledge:case:hyperthyroid_001:skill_generation:palpitation_metabolic_chain"
+    ]
+  },
+  {
+    "query_id": "pneumonia_colloquial_history",
+    "query": "发烧咳黄痰 一咳嗽右边胸口就痛 该追问什么",
+    "expected_references": [
+      "rag_knowledge:case:pneumonia_001:coach:cough_fever_history_sequence",
+      "rubric:pneumonia_001_rubric.item.ht_chest_pain"
+    ]
+  },
+  {
+    "query_id": "pneumonia_oxygen_exam",
+    "query": "发热咳嗽查体 血氧 呼吸频率 右下肺湿啰音",
+    "expected_references": [
+      "rag_knowledge:case:pneumonia_001:coach:cough_fever_exam_sequence",
+      "rubric:pneumonia_001_rubric.item.pe_crackle"
+    ]
+  },
+  {
+    "query_id": "pneumonia_imaging_tests",
+    "query": "肺部感染要做胸片 血常规 CRP 影像浸润影",
+    "expected_references": [
+      "rag_knowledge:case:pneumonia_001:coach:cough_fever_test_sequence",
+      "rubric:pneumonia_001_rubric.item.at_chest_xray",
+      "rubric:pneumonia_001_rubric.item.at_cbc"
+    ]
+  },
+  {
+    "query_id": "pneumonia_post_submit_review",
+    "query": "社区获得性肺炎复盘 感染症状 局灶湿啰音 胸片浸润影",
+    "expected_references": [
+      "rag_knowledge:case:pneumonia_001:reflection:pneumonia_reasoning_review"
+    ]
+  },
+  {
+    "query_id": "pneumonia_differential_skill",
+    "query": "发热咳嗽复训 区分肺炎 支气管炎 肺栓塞 结核",
+    "expected_references": [
+      "rag_knowledge:case:pneumonia_001:skill_generation:fever_cough_differential_chain"
+    ]
   }
 ]

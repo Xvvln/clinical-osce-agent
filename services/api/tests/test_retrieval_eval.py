@@ -1,15 +1,18 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from app.graph.osce_graph import evaluation_node
+from app.services import retrieval_index as retrieval_index_module
+from app.services.rag_knowledge_store import RagKnowledgeStore
 from app.services.retrieval_eval_service import (
     RetrievalGoldQuery,
     compute_retrieval_metrics,
     load_retrieval_gold_queries,
     run_retrieval_eval,
 )
-from app.services.retrieval_index import RetrievalDocument
+from app.services.retrieval_index import RetrievalDocument, _retrieval_documents
 
 
 def test_api_docker_image_copies_retrieval_eval_gold_set() -> None:
@@ -79,6 +82,97 @@ def test_default_gold_queries_deepen_appendicitis_flagship_case() -> None:
         not reference.startswith(("case:acs_", "rubric:acs_", "knowledge:acs_"))
         for reference in expected_references
     )
+
+
+def test_default_gold_queries_cover_all_five_cases_and_reference_real_documents() -> None:
+    gold_queries = load_retrieval_gold_queries()
+    case_prefixes = (
+        "appendicitis",
+        "acs",
+        "heart_failure",
+        "hyperthyroid",
+        "pneumonia",
+    )
+    query_counts = Counter(
+        prefix
+        for gold_query in gold_queries
+        for prefix in case_prefixes
+        if gold_query.query_id.startswith(f"{prefix}_")
+    )
+    available_references = {document.reference for document in _retrieval_documents()}
+    expected_references = {
+        reference
+        for gold_query in gold_queries
+        for reference in gold_query.expected_references
+    }
+
+    assert len(gold_queries) == 30
+    assert query_counts == {
+        "appendicitis": 10,
+        "acs": 5,
+        "heart_failure": 5,
+        "hyperthyroid": 5,
+        "pneumonia": 5,
+    }
+    assert expected_references <= available_references
+    for prefix in case_prefixes[1:]:
+        case_queries = [
+            gold_query
+            for gold_query in gold_queries
+            if gold_query.query_id.startswith(f"{prefix}_")
+        ]
+        assert any(
+            ":coach:" in reference
+            for gold_query in case_queries
+            for reference in gold_query.expected_references
+        )
+        assert any(
+            ":reflection:" in reference
+            for gold_query in case_queries
+            for reference in gold_query.expected_references
+        )
+        assert any(
+            ":skill_generation:" in reference
+            for gold_query in case_queries
+            for reference in gold_query.expected_references
+        )
+
+
+def test_default_gold_queries_have_no_zero_hit_in_local_lexical_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_knowledge_store = RagKnowledgeStore(
+        tmp_path / "rag_knowledge.sqlite3",
+        seed_defaults=True,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "rag_knowledge_store",
+        isolated_knowledge_store,
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "_build_embedding_clients_from_environment",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        retrieval_index_module,
+        "_build_dashscope_reranker",
+        lambda: None,
+    )
+    retrieval_index_module._retrieval_documents.cache_clear()
+    try:
+        result = run_retrieval_eval(
+            search_fn=retrieval_index_module.search_retrieval_documents,
+            batch_search_fn=retrieval_index_module.search_retrieval_documents_batch,
+        )
+    finally:
+        retrieval_index_module._retrieval_documents.cache_clear()
+
+    assert result["metrics"]["hit_rate_at_5"] == 1.0
+    assert result["metrics"]["zero_hit_query_count"] == 0
+    assert result["metrics"]["recall_at_5"] >= 0.75
 
 
 def test_retrieval_eval_uses_batch_search_once_for_gold_queries(tmp_path) -> None:

@@ -1,4 +1,12 @@
+import json
+from datetime import date
+from pathlib import Path
+
 from app.services.rag_knowledge_store import RagKnowledgeStore
+from app.services.source_freshness_service import enrich_source_freshness
+
+
+ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 def test_rag_knowledge_store_persists_and_filters_items(tmp_path) -> None:
@@ -136,20 +144,65 @@ def test_rag_knowledge_store_can_seed_public_appendicitis_teaching_items(tmp_pat
 def test_rag_knowledge_store_seeds_coach_notes_for_each_demo_case(tmp_path) -> None:
     store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
 
-    expected_case_ids = {
-        "appendicitis_001",
-        "acs_001",
-        "heart_failure_001",
-        "hyperthyroid_001",
-        "pneumonia_001",
-    }
-    seeded_case_ids = {
-        item["case_id"]
-        for item in store.list_items(visibility="pre_submit_safe")
-        if item["scope"] == "case" and "coach" in item["allowed_agents"]
+    expected_diagnoses = {
+        "appendicitis_001": "急性阑尾炎",
+        "acs_001": "急性冠脉综合征",
+        "heart_failure_001": "心力衰竭",
+        "hyperthyroid_001": "甲状腺功能亢进",
+        "pneumonia_001": "社区获得性肺炎",
     }
 
-    assert expected_case_ids <= seeded_case_ids
+    for case_id, diagnosis in expected_diagnoses.items():
+        case_items = store.list_items(case_id=case_id)
+        pre_submit_items = [
+            item
+            for item in case_items
+            if item["visibility"] == "pre_submit_safe"
+        ]
+        post_submit_items = [
+            item
+            for item in case_items
+            if item["visibility"] == "post_submit_review"
+        ]
+
+        assert len(pre_submit_items) == 3
+        assert {tuple(item["stage_scope"]) for item in pre_submit_items} == {
+            ("case_intro", "history_taking"),
+            ("physical_exam",),
+            ("auxiliary_test",),
+        }
+        assert all(item["allowed_agents"] == ["coach"] for item in pre_submit_items)
+        assert diagnosis not in " ".join(item["text"] for item in pre_submit_items)
+
+        assert len(post_submit_items) == 2
+        assert {item["content_kind"] for item in post_submit_items} == {
+            "reflection_note",
+            "skill_generation_note",
+        }
+        assert all("reflection" in item["allowed_agents"] for item in post_submit_items)
+        assert all("skill_generation" in item["allowed_agents"] for item in post_submit_items)
+
+
+def test_default_knowledge_only_uses_current_registered_sources() -> None:
+    default_items = json.loads(
+        (ROOT_DIR / "data" / "rag_knowledge" / "default_items.json").read_text(encoding="utf-8")
+    )
+    source_registry = json.loads(
+        (ROOT_DIR / "data" / "attribution" / "source_registry" / "sources.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    sources_by_id = {
+        source["source_id"]: enrich_source_freshness(source, today=date(2026, 8, 4))
+        for source in source_registry
+    }
+
+    assert len(default_items) == 26
+    assert all(item.get("source_id") in sources_by_id for item in default_items)
+    assert all(
+        sources_by_id[item["source_id"]]["selectable_for_new_knowledge"] is True
+        for item in default_items
+    )
 
 
 def test_rag_knowledge_store_refreshes_default_seed_without_overwriting_admin_edits(tmp_path) -> None:

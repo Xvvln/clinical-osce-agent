@@ -985,6 +985,10 @@ def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypat
             "/api/admin/rag/knowledge",
             json={**base_payload, "source_id": "unknown_source"},
         )
+        superseded_source_response = client.post(
+            "/api/admin/rag/knowledge",
+            json={**base_payload, "source_id": "aafp_chronic_heart_failure_2007"},
+        )
         secret_for_coach_response = client.post(
             "/api/admin/rag/knowledge",
             json={**base_payload, "visibility": "secret_scoring_only", "allowed_agents": ["coach"]},
@@ -1009,6 +1013,10 @@ def test_admin_rejects_unsafe_or_unbound_rag_knowledge_items(tmp_path, monkeypat
     assert missing_case_response.json()["detail"] == "case knowledge requires a valid case_id"
     assert unknown_source_response.status_code == 400
     assert unknown_source_response.json()["detail"] == "source_id is not registered"
+    assert superseded_source_response.status_code == 409
+    assert superseded_source_response.json()["detail"] == (
+        "source_id is not current; review the source ledger or select an active source"
+    )
     assert secret_for_coach_response.status_code == 400
     assert secret_for_coach_response.json()["detail"] == "secret scoring knowledge cannot be exposed to generative agents"
     assert unknown_stage_response.status_code == 400
@@ -1074,7 +1082,8 @@ def test_admin_can_read_retrieval_eval_metrics(tmp_path, monkeypatch) -> None:
     assert "ndcg_at_5" in payload["metrics"]
     assert "source_coverage" in payload["metrics"]
     assert payload["boundary"]["rag_usage"] == "feedback_explanation_learning_recommendation_traceability_only"
-    assert "ChromaDB 是本地可选持久向量检索" in payload["boundary"]["chroma_scope"]
+    assert "ChromaDB 是本地持久向量主路径" in payload["boundary"]["chroma_scope"]
+    assert "BM25 词法召回" in payload["boundary"]["chroma_scope"]
 
 
 def test_demo_admin_is_disabled_without_explicit_environment_config(tmp_path, monkeypatch) -> None:
@@ -2591,23 +2600,30 @@ def test_admin_can_list_source_registry_entries(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["sources"]) >= 9
+    assert len(payload["sources"]) >= 17
     assert {source["source_id"] for source in payload["sources"]} >= {
         "aafp_acute_abdominal_pain_2023",
         "merck_appendicitis_professional",
         "statpearls_appendicitis_2025",
         "statpearls_acute_abdomen_2025",
+        "aha_acc_chest_pain_guideline_2021",
+        "aha_acc_hf_guideline_2022",
+        "ata_hyperthyroidism_guideline_2016",
+        "ats_idsa_cap_guideline_2019",
     }
-    assert payload["sources"][0] == {
-        "source_id": "fareez_osce_2022",
-        "source_name": "A dataset of simulated patient-physician medical interviews with a focus on respiratory cases",
-        "source_url": "https://doi.org/10.6084/m9.figshare.c.5545842.v1",
-        "license": "CC BY 4.0",
-        "data_type": "dialogue",
-        "allowed_usage": ["training_reference", "evaluation_reference", "demo_reference"],
-        "transformation": "download original zip, then extract and convert into structured OSCE case assets",
-        "attribution_required": True,
-        "risk_note": "原始数据偏呼吸系统问诊，不足以直接覆盖完整病例闭环。",
+    first_source = payload["sources"][0]
+    assert first_source["source_id"] == "fareez_osce_2022"
+    assert first_source["title"] == first_source["source_name"]
+    assert first_source["source_type"] == "dialogue"
+    assert first_source["freshness_status"] == "current"
+    assert first_source["review_due_at"] == "2028-08-03"
+    assert first_source["selectable_for_new_knowledge"] is True
+    assert payload["freshness_summary"] == {
+        "total": 17,
+        "current": 13,
+        "review_due": 0,
+        "superseded": 4,
+        "unverified": 0,
     }
 
 
