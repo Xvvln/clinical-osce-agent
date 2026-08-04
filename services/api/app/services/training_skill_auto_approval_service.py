@@ -16,6 +16,7 @@ from app.services.training_skill_policy import build_skill_memory_fields, build_
 from app.services.training_skill_regression_gate import FORBIDDEN_CANDIDATE_PATTERNS, FORBIDDEN_CANDIDATE_TERMS
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
+CASES_DIR = ROOT_DIR / "data" / "cases"
 DEFAULT_DATABASE_PATH = ROOT_DIR / "data" / "runtime" / "training_skill_auto_approval.sqlite3"
 AUTO_APPROVAL_AGENT_ID = "skill_auto_approval_agent"
 
@@ -150,16 +151,15 @@ class TrainingSkillApprovalAgent:
     ) -> dict[str, Any]:
         original_candidate = deepcopy(candidate)
         reviewed_candidate = deepcopy(candidate)
-        changed_fields: list[dict[str, Any]] = []
+        effective_protected_terms = _effective_protected_terms(candidate, protected_terms or [])
 
         for field in ["title", "description", "suggested_strategy"]:
             before = str(reviewed_candidate.get(field, ""))
-            after = _sanitize_training_text(before, protected_terms or [])
+            after = _sanitize_training_text(before, effective_protected_terms)
             if field == "suggested_strategy":
                 after = _ensure_safety_suffix(after)
             if after != before:
                 reviewed_candidate[field] = after
-                changed_fields.append({"field": field, "before": before, "after": after})
 
         before_action_plan = deepcopy(reviewed_candidate.get("teaching_action_plan", []))
         next_action_plan = build_teaching_action_plan(
@@ -169,31 +169,25 @@ class TrainingSkillApprovalAgent:
         )
         if _json_payload(before_action_plan) != _json_payload(next_action_plan):
             reviewed_candidate["teaching_action_plan"] = next_action_plan
-            changed_fields.append(
-                {
-                    "field": "teaching_action_plan",
-                    "before": before_action_plan,
-                    "after": next_action_plan,
-                }
-            )
 
-        before_memory_fields = {
-            field: deepcopy(reviewed_candidate.get(field))
-            for field in MEMORY_FIELD_KEYS
-        }
         refreshed_memory_fields = _build_refreshed_skill_memory_fields(reviewed_candidate)
         reviewed_candidate.update(refreshed_memory_fields)
-        for field in MEMORY_FIELD_KEYS:
-            before = before_memory_fields.get(field)
-            after = reviewed_candidate.get(field)
-            if _json_payload(before) != _json_payload(after):
-                changed_fields.append({"field": field, "before": before, "after": after})
+        reviewed_candidate = _sanitize_mutable_candidate_fields(
+            reviewed_candidate,
+            original_candidate=original_candidate,
+            protected_terms=effective_protected_terms,
+        )
+        changed_fields = _changed_mutable_fields(original_candidate, reviewed_candidate)
 
-        retrieved_knowledge_context = _retrieve_skill_approval_knowledge_context(reviewed_candidate)
+        retrieved_knowledge_context = _retrieve_skill_approval_knowledge_context(
+            reviewed_candidate,
+            forbidden_terms=effective_protected_terms,
+        )
         quality_review = _build_quality_review(
             original_candidate=original_candidate,
             reviewed_candidate=reviewed_candidate,
             retrieved_knowledge_context=retrieved_knowledge_context,
+            protected_terms=effective_protected_terms,
         )
         approval_role_policy = build_approval_skill_role_policy(reviewed_candidate)
         reviewed_candidate["approval_agent_review"] = {
@@ -221,7 +215,11 @@ class TrainingSkillApprovalAgent:
                 "rag_visibility_filtered",
             ],
         }
-        return _sanitize_nested_training_text(reviewed_candidate, protected_terms or [])
+        return _sanitize_mutable_candidate_fields(
+            reviewed_candidate,
+            original_candidate=original_candidate,
+            protected_terms=effective_protected_terms,
+        )
 
 
 def _sanitize_training_text(text: str, protected_terms: list[str] | None = None) -> str:
@@ -248,6 +246,119 @@ def _sanitize_nested_training_text(value: Any, protected_terms: list[str] | None
             for key, nested_value in value.items()
         }
     return value
+
+
+def _sanitize_mutable_candidate_fields(
+    candidate: dict[str, Any],
+    *,
+    original_candidate: dict[str, Any],
+    protected_terms: list[str],
+) -> dict[str, Any]:
+    """Sanitize generated teaching content while keeping source facts immutable."""
+
+    sanitized_candidate = {
+        key: (
+            deepcopy(value)
+            if key in PROTECTED_CANDIDATE_FIELDS
+            else _sanitize_nested_training_text(value, protected_terms)
+        )
+        for key, value in candidate.items()
+    }
+    for field in PROTECTED_CANDIDATE_FIELDS:
+        if field in original_candidate:
+            sanitized_candidate[field] = deepcopy(original_candidate[field])
+        else:
+            sanitized_candidate.pop(field, None)
+    return sanitized_candidate
+
+
+def _changed_mutable_fields(
+    original_candidate: dict[str, Any],
+    reviewed_candidate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    changed_fields: list[dict[str, Any]] = []
+    for field in sorted(set(original_candidate) | set(reviewed_candidate)):
+        if field in PROTECTED_CANDIDATE_FIELDS or field == "approval_agent_review":
+            continue
+        before = deepcopy(original_candidate.get(field))
+        after = deepcopy(reviewed_candidate.get(field))
+        if _json_payload(before) != _json_payload(after):
+            changed_fields.append({"field": field, "before": before, "after": after})
+    return changed_fields
+
+
+def _effective_protected_terms(candidate: dict[str, Any], explicit_terms: list[str]) -> list[str]:
+    terms = {
+        term
+        for raw_term in [*explicit_terms, *_case_protected_terms(candidate)]
+        if (term := str(raw_term).strip())
+    }
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
+def _case_protected_terms(candidate: dict[str, Any]) -> list[str]:
+    protected_terms: list[str] = []
+    for case_id in _candidate_case_ids(candidate):
+        case_path = CASES_DIR / f"{case_id}.json"
+        if not case_path.is_file():
+            continue
+        try:
+            case_payload = json.loads(case_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        diagnosis = _dict(case_payload.get("diagnosis"))
+        _append_protected_text(protected_terms, diagnosis.get("main_diagnosis"))
+        for synonym in diagnosis.get("main_diagnosis_synonyms") or []:
+            _append_protected_text(protected_terms, synonym)
+        for reasoning_point in diagnosis.get("reasoning_points") or []:
+            if isinstance(reasoning_point, dict):
+                _append_protected_text(protected_terms, reasoning_point.get("statement"))
+
+        history = _dict(case_payload.get("history"))
+        for hidden_fact in history.get("hidden_facts") or []:
+            if not isinstance(hidden_fact, dict):
+                continue
+            _append_protected_text(protected_terms, hidden_fact.get("canonical_answer"))
+            for variant in hidden_fact.get("variants") or []:
+                _append_protected_text(protected_terms, variant)
+
+        _append_result_terms(protected_terms, case_payload.get("physical_exam"))
+        _append_result_terms(protected_terms, case_payload.get("auxiliary_tests"))
+    return protected_terms
+
+
+def _candidate_case_ids(candidate: dict[str, Any]) -> list[str]:
+    case_ids = {
+        str(case_id).strip()
+        for case_id in candidate.get("case_ids", [])
+        if str(case_id).strip()
+    }
+    applies_when = candidate.get("applies_when")
+    if isinstance(applies_when, dict):
+        case_ids.update(
+            str(case_id).strip()
+            for case_id in applies_when.get("case_ids", [])
+            if str(case_id).strip()
+        )
+    return sorted(case_ids)
+
+
+def _append_result_terms(protected_terms: list[str], section: Any) -> None:
+    if not isinstance(section, dict):
+        return
+    for list_value in section.values():
+        if not isinstance(list_value, list):
+            continue
+        for item in list_value:
+            if isinstance(item, dict):
+                _append_protected_text(protected_terms, item.get("result"))
+
+
+def _append_protected_text(protected_terms: list[str], value: Any) -> None:
+    normalized = str(value or "").strip()
+    if len(normalized) >= 3 and normalized not in protected_terms:
+        protected_terms.append(normalized)
 
 
 def _ensure_safety_suffix(text: str) -> str:
@@ -287,6 +398,7 @@ def _build_quality_review(
     original_candidate: dict[str, Any],
     reviewed_candidate: dict[str, Any],
     retrieved_knowledge_context: list[dict[str, Any]],
+    protected_terms: list[str],
 ) -> dict[str, Any]:
     protected_field_changes = [
         field
@@ -294,6 +406,8 @@ def _build_quality_review(
         if _json_payload(original_candidate.get(field)) != _json_payload(reviewed_candidate.get(field))
     ]
     unsafe_terms = _unsafe_terms_in_teaching_body(reviewed_candidate)
+    remaining_case_fact_terms = _matching_terms_in_mutable_fields(reviewed_candidate, protected_terms)
+    unsafe_protected_fields = _unsafe_protected_fields(original_candidate, protected_terms)
     required_skill_body_sections = [
         "teaching_goal",
         "coach_strategy",
@@ -323,6 +437,22 @@ def _build_quality_review(
             "教学正文不包含真实治疗、用药或剂量建议",
             not unsafe_terms,
             "未发现危险建议" if not unsafe_terms else f"仍包含：{', '.join(unsafe_terms)}",
+        ),
+        _quality_check(
+            "case_facts_removed",
+            "教学正文不包含标准诊断或病例隐藏事实",
+            not remaining_case_fact_terms,
+            "未发现病例答案或隐藏事实"
+            if not remaining_case_fact_terms
+            else "仍包含未净化的病例事实",
+        ),
+        _quality_check(
+            "protected_fields_content_safe",
+            "不可改写的来源与触发字段本身符合安全边界",
+            not unsafe_protected_fields,
+            "保护字段中未发现越界内容"
+            if not unsafe_protected_fields
+            else f"需阻断并回归候选生成器的字段：{', '.join(unsafe_protected_fields)}",
         ),
         _quality_check(
             "skill_body_complete",
@@ -387,24 +517,7 @@ def _quality_check(check_id: str, title: str, passed: bool, detail: str) -> dict
 
 
 def _unsafe_terms_in_teaching_body(candidate: dict[str, Any]) -> list[str]:
-    intervention = _dict(candidate.get("intervention"))
-    teaching_sop = _dict(intervention.get("teaching_sop"))
-    text = " ".join(
-        [
-            str(candidate.get("title") or ""),
-            str(candidate.get("description") or ""),
-            str(candidate.get("suggested_strategy") or ""),
-            str(intervention.get("coach_strategy") or ""),
-            " ".join(str(item) for item in intervention.get("hint_ladder") or []),
-            str(teaching_sop.get("student_task") or ""),
-            str(teaching_sop.get("completion_signal") or ""),
-            " ".join(
-                str(move.get("move") or "")
-                for move in teaching_sop.get("teacher_moves") or []
-                if isinstance(move, dict)
-            ),
-        ]
-    )
+    text = " ".join(_mutable_candidate_strings(candidate))
     violations: list[str] = []
     for term in FORBIDDEN_CANDIDATE_TERMS:
         if term in text and term not in violations:
@@ -415,6 +528,48 @@ def _unsafe_terms_in_teaching_body(candidate: dict[str, Any]) -> list[str]:
         if pattern.search(text)
     )
     return violations
+
+
+def _matching_terms_in_mutable_fields(candidate: dict[str, Any], terms: list[str]) -> list[str]:
+    text = " ".join(_mutable_candidate_strings(candidate))
+    return [term for term in terms if term and term in text]
+
+
+def _unsafe_protected_fields(candidate: dict[str, Any], protected_terms: list[str]) -> list[str]:
+    unsafe_fields: list[str] = []
+    for field in PROTECTED_CANDIDATE_FIELDS:
+        if field not in candidate:
+            continue
+        text = " ".join(_nested_strings(candidate[field]))
+        has_forbidden_term = any(term in text for term in FORBIDDEN_CANDIDATE_TERMS)
+        has_forbidden_pattern = any(pattern.search(text) for pattern in FORBIDDEN_CANDIDATE_PATTERNS.values())
+        has_case_fact = any(term and term in text for term in protected_terms)
+        if has_forbidden_term or has_forbidden_pattern or has_case_fact:
+            unsafe_fields.append(field)
+    return unsafe_fields
+
+
+def _mutable_candidate_strings(candidate: dict[str, Any]) -> list[str]:
+    return [
+        text
+        for field, value in candidate.items()
+        if field not in PROTECTED_CANDIDATE_FIELDS and field != "approval_agent_review"
+        for text in _nested_strings(value)
+    ]
+
+
+def _nested_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [text for item in value for text in _nested_strings(item)]
+    if isinstance(value, dict):
+        return [
+            text
+            for key, nested_value in value.items()
+            for text in [*_nested_strings(key), *_nested_strings(nested_value)]
+        ]
+    return []
 
 
 def _has_meaningful_value(value: Any) -> bool:
@@ -444,7 +599,12 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-def _retrieve_skill_approval_knowledge_context(candidate: dict[str, Any], *, limit: int = 3) -> list[dict[str, Any]]:
+def _retrieve_skill_approval_knowledge_context(
+    candidate: dict[str, Any],
+    *,
+    forbidden_terms: list[str],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
     return retrieve_agent_context(
         agent_role="skill_approval",
         case_ids=[str(case_id) for case_id in candidate.get("case_ids", []) if str(case_id)],
@@ -460,6 +620,7 @@ def _retrieve_skill_approval_knowledge_context(candidate: dict[str, Any], *, lim
             *[str(stage) for stage in candidate.get("stage_scope", []) if str(stage)],
             "feedback",
         ],
+        forbidden_terms=forbidden_terms,
         limit=limit,
         store=rag_knowledge_store,
     )

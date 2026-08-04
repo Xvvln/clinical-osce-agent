@@ -3015,6 +3015,9 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     with authenticated_admin_client(tmp_path, monkeypatch) as client:
         response = client.post("/api/admin/evolution/candidates/generate")
         candidates_response = client.get("/api/admin/evolution/candidates")
+        candidate_response = client.get(
+            "/api/admin/evolution/candidates/skill_candidate_training_pattern_reasoning_core"
+        )
         audit_response = client.get("/api/admin/evolution/events")
 
     expected_candidate_summary = {
@@ -3043,7 +3046,7 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
         "blocked_by_regression_count": 0,
         "auto_apply_enabled": False,
         "auto_approved_count": 0,
-        "approval_agent_modified_count": 0,
+        "approval_agent_modified_count": 1,
     }
     assert len(response_payload["candidates"]) == 1
     assert {key: response_payload["candidates"][0][key] for key in expected_candidate_summary} == expected_candidate_summary
@@ -3054,17 +3057,38 @@ def test_admin_can_generate_training_skill_candidates_from_training_logs(tmp_pat
     assert len(candidates_payload["candidates"]) == 1
     assert {key: candidates_payload["candidates"][0][key] for key in expected_candidate_summary} == expected_candidate_summary
     assert candidates_payload["candidates"][0]["case_titles"] == ["右下腹痛教学病例", "发热咳嗽伴胸痛教学病例"]
+    assert candidate_response.status_code == 200
+    approval_review = candidate_response.json()["candidate"]["approval_agent_review"]
+    assert approval_review["decision"] == "ready_for_human_review"
+    assert approval_review["quality_review"]["passed"] is True
+    assert approval_review["role_policy"]["passed"] is True
+    assert approval_review["regression_gate"] == {
+        "status": "ready_for_review",
+        "passed": True,
+        "evaluation_total_cases": 1,
+        "evaluation_passed_cases": 1,
+        "evaluation_failed_cases": 0,
+        "blocking_failures": [],
+        "candidate_safety_violations": [],
+        "candidate_context_violations": [],
+        "approval_agent_violations": [],
+    }
     assert evaluation_store.get_batch_result("admin_skill_candidate_generation_smoke")["passed"] is True
     assert audit_response.status_code == 200
-    assert audit_response.json()["pagination"] == {"limit": 1, "offset": 0, "total": 1}
-    assert len(audit_response.json()["events"]) == 1
-    assert audit_response.json()["events"][0]["event_type"] == "admin_skill_candidate_generated"
-    assert audit_response.json()["events"][0]["payload"] == {
+    assert audit_response.json()["pagination"] == {"limit": 2, "offset": 0, "total": 2}
+    assert len(audit_response.json()["events"]) == 2
+    assert [event["event_type"] for event in audit_response.json()["events"]] == [
+        "admin_skill_candidate_agent_reviewed",
+        "admin_skill_candidate_generated",
+    ]
+    assert audit_response.json()["events"][1]["payload"] == {
         "candidate_id": "skill_candidate_training_pattern_reasoning_core",
         "review_status": "ready_for_review",
         "support_count": 2,
         "source_report_count": 2,
     }
+    assert audit_response.json()["events"][0]["payload"]["decision"] == "ready_for_human_review"
+    assert audit_response.json()["events"][0]["payload"]["regression_gate"]["passed"] is True
     assert captured_case_ids == ["appendicitis_001"]
     assert isinstance(captured_service, OsceSessionService)
     assert captured_service is not osce_session_service

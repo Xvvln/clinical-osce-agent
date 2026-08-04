@@ -145,10 +145,7 @@ def test_training_skill_approval_agent_rewrites_protected_diagnosis_without_answ
         "success_metrics": [],
     }
 
-    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(
-        candidate,
-        protected_terms=["急性阑尾炎"],
-    )
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(candidate)
     reviewed_text = " ".join(
         [
             reviewed_candidate["title"],
@@ -161,6 +158,84 @@ def test_training_skill_approval_agent_rewrites_protected_diagnosis_without_answ
     assert "急性阑尾炎" not in reviewed_text
     assert "本病例标准答案" not in reviewed_text
     assert "当前主要诊断假设" in reviewed_text
+
+
+def test_training_skill_approval_agent_derives_and_removes_hidden_case_facts() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_hidden_fact_probe",
+        "trigger_item_id": "training_pattern_hidden_fact_probe",
+        "trigger_item_ids": ["ht_migration"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "history_bundle",
+        "stage_scope": ["history_taking"],
+        "applies_when": {},
+        "effect_status": "insufficient_samples",
+        "title": "腹痛演变问诊训练",
+        "description": "候选内容错误写入：开始在上腹部，大约 8 小时前转移并固定到右下腹。",
+        "suggested_strategy": "请让学生自主重建疼痛时间线。",
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": [],
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {},
+        "success_metrics": [],
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(candidate)
+
+    assert "开始在上腹部，大约 8 小时前转移并固定到右下腹。" not in str(reviewed_candidate)
+    quality_review = reviewed_candidate["approval_agent_review"]["quality_review"]
+    assert quality_review["passed"] is True
+    assert next(
+        check for check in quality_review["checks"] if check["check_id"] == "case_facts_removed"
+    )["passed"] is True
+
+
+def test_training_skill_approval_agent_preserves_and_blocks_unsafe_protected_fields() -> None:
+    candidate = {
+        "candidate_id": "skill_candidate_protected_field_probe",
+        "trigger_item_id": "training_pattern_protected_field_probe",
+        "trigger_item_ids": ["reasoning_core"],
+        "case_ids": ["appendicitis_001"],
+        "skill_type": "reasoning_bridge",
+        "stage_scope": ["diagnosis_submission"],
+        "applies_when": {
+            "case_ids": ["appendicitis_001"],
+            "stage_scope": ["diagnosis_submission"],
+            "trigger_item_ids": ["reasoning_core"],
+            "current_missing_evidence": ["急性阑尾炎"],
+            "min_support_count": 2,
+        },
+        "effect_status": "insufficient_samples",
+        "title": "证据链训练",
+        "description": "训练学生表达支持与排除证据。",
+        "suggested_strategy": "请学生按证据类别完成复盘。",
+        "source_report_count": 2,
+        "support_count": 2,
+        "related_recommendations": [],
+        "teaching_action_plan": [],
+        "prohibited_content_policy": {},
+        "success_metrics": [],
+    }
+    protected_snapshot = {
+        field: candidate.get(field)
+        for field in auto_approval_module.PROTECTED_CANDIDATE_FIELDS
+        if field in candidate
+    }
+
+    reviewed_candidate = TrainingSkillApprovalAgent().review_candidate(candidate)
+
+    assert {
+        field: reviewed_candidate.get(field)
+        for field in auto_approval_module.PROTECTED_CANDIDATE_FIELDS
+        if field in candidate
+    } == protected_snapshot
+    approval_review = reviewed_candidate["approval_agent_review"]
+    assert approval_review["decision"] == "blocked"
+    assert "protected_fields_content_safe" in approval_review["quality_review"]["failed_checks"]
+    assert not {
+        change["field"] for change in approval_review["changed_fields"]
+    }.intersection(auto_approval_module.PROTECTED_CANDIDATE_FIELDS)
 
 
 def test_training_skill_approval_agent_sanitizes_memory_and_analysis_fields() -> None:

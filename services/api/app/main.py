@@ -1560,15 +1560,37 @@ def _list_admin_skill_candidate_review_events() -> list[dict[str, Any]]:
     return sorted(events, key=lambda event: str(event["created_at"]), reverse=True)
 
 
-def _set_approval_agent_decision(candidate: dict[str, Any], review: dict[str, Any]) -> None:
+def _set_approval_agent_decision(
+    candidate: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    auto_apply_enabled: bool,
+) -> None:
     agent_review = candidate.get("approval_agent_review")
     if not isinstance(agent_review, dict):
         return
     candidate["approval_agent_review"] = {
         **agent_review,
-        "decision": "approved_for_auto_apply" if review["status"] == "ready_for_review" else "blocked_by_regression",
+        "decision": (
+            "approved_for_auto_apply"
+            if auto_apply_enabled and review["status"] == "ready_for_review"
+            else "ready_for_human_review"
+            if review["status"] == "ready_for_review"
+            else "blocked_by_regression"
+        ),
         "regression_status": review["status"],
         "regression_passed": review["regression_passed"],
+        "regression_gate": {
+            "status": review["status"],
+            "passed": review["regression_passed"],
+            "evaluation_total_cases": review.get("evaluation_total_cases", 0),
+            "evaluation_passed_cases": review.get("evaluation_passed_cases", 0),
+            "evaluation_failed_cases": review.get("evaluation_failed_cases", 0),
+            "blocking_failures": list(review.get("blocking_failures", [])),
+            "candidate_safety_violations": list(review.get("candidate_safety_violations", [])),
+            "candidate_context_violations": list(review.get("candidate_context_violations", [])),
+            "approval_agent_violations": list(review.get("approval_agent_violations", [])),
+        },
     }
 
 
@@ -3207,21 +3229,23 @@ def generate_admin_training_skill_candidates(
     approval_agent_modified_count = 0
 
     for candidate in candidates:
-        if auto_apply_enabled:
-            candidate = training_skill_approval_agent.review_candidate(candidate)
+        candidate = training_skill_approval_agent.review_candidate(candidate)
         review = training_skill_regression_gate.review_candidate(candidate, batch_result)
-        if auto_apply_enabled:
-            _set_approval_agent_decision(candidate, review)
-            if review["status"] == "ready_for_review":
-                review = {
-                    **review,
-                    "status": "approved",
-                    "reviewer_id": AUTO_APPROVAL_AGENT_ID,
-                    "approval_mode": "auto_agent",
-                }
+        _set_approval_agent_decision(
+            candidate,
+            review,
+            auto_apply_enabled=auto_apply_enabled,
+        )
+        if auto_apply_enabled and review["status"] == "ready_for_review":
+            review = {
+                **review,
+                "status": "approved",
+                "reviewer_id": AUTO_APPROVAL_AGENT_ID,
+                "approval_mode": "auto_agent",
+            }
         if not training_skill_candidate_store.save_candidate_unless_reviewed(candidate, review):
             continue
-        if auto_apply_enabled and candidate["approval_agent_review"]["revision_status"] == "modified":
+        if candidate["approval_agent_review"]["revision_status"] == "modified":
             approval_agent_modified_count += 1
         if review["status"] == "ready_for_review":
             ready_for_review_count += 1
@@ -3241,16 +3265,15 @@ def generate_admin_training_skill_candidates(
                 "source_report_count": candidate["source_report_count"],
             },
         )
-        if auto_apply_enabled:
-            _append_admin_skill_candidate_review_event(
-                candidate=candidate,
-                reviewer_email=AUTO_APPROVAL_AGENT_ID,
-                event_type="admin_skill_candidate_agent_reviewed",
-                payload={
-                    "candidate_id": candidate["candidate_id"],
-                    **candidate["approval_agent_review"],
-                },
-            )
+        _append_admin_skill_candidate_review_event(
+            candidate=candidate,
+            reviewer_email=AUTO_APPROVAL_AGENT_ID,
+            event_type="admin_skill_candidate_agent_reviewed",
+            payload={
+                "candidate_id": candidate["candidate_id"],
+                **candidate["approval_agent_review"],
+            },
+        )
         if auto_apply_enabled and review["status"] == "approved":
             if not osce_session_service.training_skill_store.enable_candidate({**candidate, "review": review}):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="candidate could not be auto enabled")
