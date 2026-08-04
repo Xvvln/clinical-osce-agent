@@ -3693,7 +3693,9 @@ function ResourcesSection({
               <tbody>
                 {visibleDocuments.map((document) => (
                   <tr className="border-b border-[#F0E8DC]" key={document.document_id}>
-                    <td className="py-3 pr-4 font-medium">{document.title || document.filename || document.document_id}</td>
+                    <td className="py-3 pr-4 font-medium">
+                      {document.title || document.file_name || document.filename || document.document_id}
+                    </td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.scope === "case" ? "病例知识库" : "全局知识库"}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{document.case_title || "全部病例"}</td>
                     <td className="py-3 pr-4 text-[#6F6257]">{joinText(document.stage_scope_labels ?? document.stage_scope, "全部训练阶段")}</td>
