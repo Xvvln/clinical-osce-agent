@@ -44,6 +44,12 @@ test("admin skill review smoke test follows the current v2 dashboard contract", 
     "适用时机",
     "成功指标",
     "来源报告",
+    "审批修改",
+    "知识与回归门",
+    "getApprovalChangedFieldsText",
+    "getApprovalEvidenceText",
+    "ready_for_human_review",
+    "审批通过，待教师确认",
   ]);
 });
 

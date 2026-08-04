@@ -219,9 +219,45 @@ type TrainingSkillCandidateReview = Readonly<{
 type TrainingSkillApprovalAgentReview = Readonly<{
   decision?: string;
   revision_status?: string;
-  changed_fields?: unknown;
+  changed_fields?: readonly Readonly<{
+    field?: string;
+    before?: unknown;
+    after?: unknown;
+  }>[];
   regression_status?: string;
   regression_passed?: boolean;
+  quality_review?: Readonly<{
+    passed?: boolean;
+    failed_checks?: readonly string[];
+    checks?: readonly Readonly<{
+      check_id?: string;
+      title?: string;
+      passed?: boolean;
+      detail?: string;
+    }>[];
+  }>;
+  role_policy?: Readonly<{
+    passed?: boolean;
+    failed_checks?: readonly string[];
+  }>;
+  knowledge_references?: readonly string[];
+  retrieved_knowledge_context?: readonly Readonly<{
+    reference?: string;
+    title?: string;
+    source_id?: string;
+    visibility?: string;
+  }>[];
+  regression_gate?: Readonly<{
+    status?: string;
+    passed?: boolean;
+    evaluation_total_cases?: number;
+    evaluation_passed_cases?: number;
+    evaluation_failed_cases?: number;
+    blocking_failures?: readonly unknown[];
+    candidate_safety_violations?: readonly unknown[];
+    candidate_context_violations?: readonly unknown[];
+    approval_agent_violations?: readonly unknown[];
+  }>;
 }>;
 
 type TrainingSkillTeachingAction = Readonly<{
@@ -3971,6 +4007,8 @@ function SkillSection({
                 <InfoBlock title="成功指标" value={joinText(toTextList(selectedCandidate.success_metrics), "样本不足时只记录应用痕迹，不伪造提升。")} />
                 <InfoBlock className="lg:col-span-2" title="来源报告" value={getCandidateSourceText(selectedCandidate)} />
                 <InfoBlock className="lg:col-span-2" title="审批 Agent" value={getApprovalReviewText(selectedCandidate.approval_agent_review)} />
+                <InfoBlock title="审批修改" value={getApprovalChangedFieldsText(selectedCandidate.approval_agent_review)} />
+                <InfoBlock title="知识与回归门" value={getApprovalEvidenceText(selectedCandidate.approval_agent_review)} />
               </div>
               <CompactList items={(selectedCandidate.teaching_action_plan ?? []).map((action) => action.message_template || action.action_type_label || action.action_type || "教学动作").slice(0, 5)} title="Coach 注入动作" />
               <div className="rounded-2xl border border-[#E7E0D4] bg-white p-4">
@@ -6020,11 +6058,64 @@ function getApprovalReviewText(review: TrainingSkillApprovalAgentReview | undefi
   if (!review) {
     return "暂无审批 Agent 记录。";
   }
+  const qualityChecks = review.quality_review?.checks ?? [];
+  const passedQualityChecks = qualityChecks.filter((check) => check.passed).length;
   const parts = [
-    review.decision ? `结论：${review.decision}` : "",
-    review.revision_status ? `修改：${review.revision_status}` : "",
-    review.regression_status ? `回归：${review.regression_status}` : "",
-    toTextList(review.changed_fields).length ? `调整字段：${toTextList(review.changed_fields).join("、")}` : "",
+    review.decision ? `结论：${getApprovalDecisionLabel(review.decision)}` : "",
+    review.revision_status ? `修订：${review.revision_status === "modified" ? "已净化并重建" : "无需修订"}` : "",
+    review.quality_review
+      ? `质量检查：${review.quality_review.passed ? "通过" : "未通过"}${qualityChecks.length > 0 ? `（${passedQualityChecks}/${qualityChecks.length}）` : ""}`
+      : "",
+    review.role_policy ? `角色禁区：${review.role_policy.passed ? "通过" : "未通过"}` : "",
   ].filter(Boolean);
   return parts.join("；") || "审批 Agent 已记录，但暂无摘要。";
+}
+
+function getApprovalChangedFieldsText(review: TrainingSkillApprovalAgentReview | undefined): string {
+  const changedFields = Array.from(
+    new Set(
+      (review?.changed_fields ?? [])
+        .map((change) => change.field?.trim() ?? "")
+        .filter(Boolean),
+    ),
+  );
+  return changedFields.length > 0
+    ? `只修订教学表达 / 结构：${changedFields.join("、")}`
+    : "未修订教学表达；病例、阶段、触发条件和来源字段均保持不变。";
+}
+
+function getApprovalEvidenceText(review: TrainingSkillApprovalAgentReview | undefined): string {
+  if (!review) {
+    return "暂无审批证据。";
+  }
+  const knowledgeLabels = (review.retrieved_knowledge_context ?? [])
+    .map((item) => item.title || item.reference)
+    .filter((item): item is string => Boolean(item?.trim()));
+  const knowledgeCount = Math.max(knowledgeLabels.length, review.knowledge_references?.length ?? 0);
+  const gate = review.regression_gate;
+  const blockingCount = [
+    ...(gate?.blocking_failures ?? []),
+    ...(gate?.candidate_safety_violations ?? []),
+    ...(gate?.candidate_context_violations ?? []),
+    ...(gate?.approval_agent_violations ?? []),
+  ].length;
+  const parts = [
+    `审批知识：${knowledgeCount} 条${knowledgeLabels.length > 0 ? `（${knowledgeLabels.slice(0, 2).join("、")}）` : ""}`,
+    gate
+      ? `回归门：${gate.passed ? "通过" : "阻断"}，${gate.evaluation_passed_cases ?? 0}/${gate.evaluation_total_cases ?? 0} 个场景通过`
+      : `回归门：${review.regression_passed ? "通过" : "未通过"}`,
+    blockingCount > 0 ? `阻断证据：${blockingCount} 项` : "阻断证据：0 项",
+  ];
+  return parts.join("；");
+}
+
+function getApprovalDecisionLabel(decision: string): string {
+  const labels: Record<string, string> = {
+    prepared_for_auto_apply: "已完成审批准备",
+    approved_for_auto_apply: "已通过并自动应用",
+    ready_for_human_review: "审批通过，待教师确认",
+    blocked: "审批阻断",
+    blocked_by_regression: "回归门阻断",
+  };
+  return labels[decision] ?? decision;
 }
