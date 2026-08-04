@@ -46,7 +46,7 @@ test("admin v2 exposes the core management modules with clean Chinese labels", (
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should expose ${label}`);
   }
 
-  for (const label of ["训练 Session", "评分报告", "候选 Skill", "模型成功率", "API 成功率和最近错误"]) {
+  for (const label of ["训练 Session", "评分报告", "候选 Skill", "模型成功率", "管理审计与模型调用"]) {
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should show ${label}`);
   }
 
@@ -240,12 +240,23 @@ test("admin v2 explains evaluation, skill details, knowledge content, and API fa
     "边界阻断",
     "本轮未调用 Skill",
     "资料来源",
-    "来源台账与时效复核",
+    "来源台账、复核与版本",
     "复核有效",
     "到期待复核",
     "已被新来源替代",
   ]) {
     assert.match(dashboardSource, new RegExp(label), `v2 dashboard should explain or show ${label}`);
+  }
+});
+
+test("evaluation config changes immediately update the runnable suite selector", () => {
+  for (const contract of [
+    "onEvaluationConfigChanged",
+    "onConfigChanged(nextConfig)",
+    "setData((current) => ({ ...current, evaluationConfig }))",
+    "enabledSuites.some((suite) => suite.suite_id === selectedRunSuiteId)",
+  ]) {
+    assert.match(dashboardSource, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
 

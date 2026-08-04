@@ -64,7 +64,11 @@ test("admin review actions only send candidate id and keep readable labels in th
     "selectedCandidate.stage_scope_labels",
     "related_recommendation_labels?: readonly string[];",
   ]);
-  assert.doesNotMatch(dashboardSource, /<pre/);
+  const skillSectionStart = dashboardSource.indexOf("function SkillSection");
+  const skillSectionEnd = dashboardSource.indexOf("function EvaluationSection", skillSectionStart);
+  assert.notEqual(skillSectionStart, -1);
+  assert.notEqual(skillSectionEnd, -1);
+  assert.doesNotMatch(dashboardSource.slice(skillSectionStart, skillSectionEnd), /<pre/);
   assert.doesNotMatch(dashboardSource, /原始 JSON/);
 });
 

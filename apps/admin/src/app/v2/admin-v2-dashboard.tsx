@@ -2616,6 +2616,9 @@ export function AdminV2Dashboard() {
                 isDetailBusy={isDetailBusy}
                 isMutating={isMutating}
                 isRetrievalEvalBusy={isRetrievalEvalBusy}
+                onEvaluationConfigChanged={(evaluationConfig) => {
+                  setData((current) => ({ ...current, evaluationConfig }));
+                }}
                 onReadEvaluation={(batchId) => void readEvaluationDetail(batchId)}
                 onRunEvaluation={(suiteId) => void runEvaluation(suiteId)}
                 onRunRetrievalEvaluation={() => void handleRunRetrievalEvaluation()}
@@ -6480,6 +6483,7 @@ function EvaluationSection({
   isDetailBusy,
   isMutating,
   isRetrievalEvalBusy,
+  onEvaluationConfigChanged,
   onReadEvaluation,
   onRunEvaluation,
   onRunRetrievalEvaluation,
@@ -6489,6 +6493,7 @@ function EvaluationSection({
   isDetailBusy: boolean;
   isMutating: boolean;
   isRetrievalEvalBusy: boolean;
+  onEvaluationConfigChanged: (config: AdminEvaluationConfig) => void;
   onReadEvaluation: (batchId: string) => void;
   onRunEvaluation: (suiteId: string) => void;
   onRunRetrievalEvaluation: () => void;
@@ -6507,6 +6512,13 @@ function EvaluationSection({
     setEvaluations(data.evaluations);
     setEvaluationPagination(data.evaluationPagination);
   }, [data.evaluationPagination, data.evaluations]);
+
+  useEffect(() => {
+    const enabledSuites = (data.evaluationConfig?.suites ?? []).filter((suite) => suite.enabled);
+    if (!enabledSuites.some((suite) => suite.suite_id === selectedRunSuiteId)) {
+      setSelectedRunSuiteId(enabledSuites[0]?.suite_id ?? "");
+    }
+  }, [data.evaluationConfig?.suites, selectedRunSuiteId]);
 
   async function loadEvaluations(offset: number, query = evaluationQuery) {
     setIsEvaluationListLoading(true);
@@ -6557,7 +6569,11 @@ function EvaluationSection({
           <InfoBlock title="Skill 闭环" value="自动回归测试会检查候选生成、审核、启用和后续训练注入是否还能跑通。" />
         </CardContent>
       </Card>
-      <EvaluationConfigurationPanel cases={data.cases} initialConfig={data.evaluationConfig} />
+      <EvaluationConfigurationPanel
+        cases={data.cases}
+        initialConfig={data.evaluationConfig}
+        onConfigChanged={onEvaluationConfigChanged}
+      />
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard icon={<ClipboardCheck />} label="评测批次" value={formatCount(evaluationPagination?.total ?? evaluations.length)} helper="历史批次" />
         <MetricCard icon={<Gauge />} label="当前页通过率" value={`${passRate}%`} helper={`${passedCases}/${totalCases} 用例`} />
@@ -6640,9 +6656,11 @@ function EvaluationSection({
 function EvaluationConfigurationPanel({
   cases,
   initialConfig,
+  onConfigChanged,
 }: Readonly<{
   cases: readonly AdminCaseSummary[];
   initialConfig: AdminEvaluationConfig | null;
+  onConfigChanged: (config: AdminEvaluationConfig) => void;
 }>) {
   const emptyCase = useMemo<AdminEvaluationCaseConfig>(() => ({
     case_key: "new_evaluation_case",
@@ -6691,6 +6709,7 @@ function EvaluationConfigurationPanel({
   async function refreshConfig(): Promise<AdminEvaluationConfig> {
     const nextConfig = await getAdminEvaluationConfig();
     setConfig(nextConfig);
+    onConfigChanged(nextConfig);
     setScheduleDraft({
       enabled: nextConfig.schedule.enabled,
       suite_id: nextConfig.schedule.suite_id,
@@ -6821,8 +6840,7 @@ function EvaluationConfigurationPanel({
     setStatusText("");
     try {
       const saved = await saveAdminEvaluationSchedule(scheduleDraft);
-      setConfig((current) => current ? { ...current, schedule: saved } : current);
-      setScheduleDraft({ enabled: saved.enabled, suite_id: saved.suite_id, interval_minutes: saved.interval_minutes });
+      await refreshConfig();
       setStatusText(saved.enabled ? `定时评测已启用，下次运行：${formatDateTime(saved.next_run_at || "")}` : "定时评测已停用。");
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "保存定时评测失败");
