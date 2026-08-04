@@ -1066,6 +1066,7 @@ type TrainingSkillEffects = Readonly<{
 }>;
 
 type DashboardData = Readonly<{
+  loadWarnings: readonly Readonly<{ resource: string; message: string }>[];
   modelConfig: AdminModelConfig | null;
   apiLogs: ModelApiLogs | null;
   users: readonly AdminManagedUser[];
@@ -1101,6 +1102,7 @@ type DashboardData = Readonly<{
 type AdminSectionId = "overview" | "classes" | "resources" | "training" | "insights" | "skill" | "evaluation" | "logs";
 
 const emptyDashboardData: DashboardData = {
+  loadWarnings: [],
   modelConfig: null,
   apiLogs: null,
   users: [],
@@ -1180,53 +1182,95 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function loadDashboardResource<T>(
+  resource: string,
+  request: Promise<T>,
+  fallback: T,
+): Promise<Readonly<{ value: T; warning: Readonly<{ resource: string; message: string }> | null }>> {
+  try {
+    return { value: await request, warning: null };
+  } catch (error) {
+    return {
+      value: fallback,
+      warning: {
+        resource,
+        message: error instanceof Error ? error.message : "暂时不可用",
+      },
+    };
+  }
+}
+
 async function loadDashboardData(): Promise<DashboardData> {
+  const resources = await Promise.all([
+    loadDashboardResource<AdminModelConfig | null>("模型配置", fetchJson<AdminModelConfig>("/api/admin/model-config"), null),
+    loadDashboardResource<ModelApiLogs | null>("模型调用日志", fetchJson<ModelApiLogs>("/api/admin/model-api-logs?limit=60"), null),
+    loadDashboardResource("账号目录", fetchJson<{ users: readonly AdminManagedUser[] }>("/api/admin/users"), { users: [] }),
+    loadDashboardResource("班级目录", fetchJson<{ classrooms: readonly AdminClassroom[] }>("/api/admin/classrooms"), { classrooms: [] }),
+    loadDashboardResource("训练记录", fetchJson<{ sessions: readonly AdminSessionSummary[]; pagination?: Pagination }>("/api/admin/sessions?limit=20"), { sessions: [] }),
+    loadDashboardResource("报告中心", fetchJson<{ reports: readonly AdminReportSummary[]; pagination?: Pagination }>("/api/admin/reports?limit=20"), { reports: [] }),
+    loadDashboardResource("候选 Skill", fetchJson<{ candidates: readonly TrainingSkillCandidateSummary[]; pagination?: Pagination }>("/api/admin/evolution/candidates?limit=20&review_status=all"), { candidates: [] }),
+    loadDashboardResource("评测批次", fetchJson<{ evaluations: readonly EvaluationBatchSummary[]; pagination?: Pagination }>("/api/admin/evaluations?limit=20"), { evaluations: [] }),
+    loadDashboardResource<AdminEvaluationConfig | null>("评测配置", fetchJson<AdminEvaluationConfig>("/api/admin/evaluation-config"), null),
+    loadDashboardResource("病例目录", fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"), { cases: [] }),
+    loadDashboardResource("来源台账", fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"), { sources: [] }),
+    loadDashboardResource("知识库文档", fetchJson<{ documents: readonly AdminRagDocument[]; pagination?: Pagination }>("/api/admin/rag/documents?limit=12"), { documents: [] }),
+    loadDashboardResource("知识库片段", fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[]; pagination?: Pagination }>("/api/admin/rag/knowledge?limit=50"), { knowledge_items: [] }),
+    loadDashboardResource<{ insights: TrainingInsights | null }>("训练洞察", fetchJson<{ insights: TrainingInsights }>("/api/admin/insights"), { insights: null }),
+    loadDashboardResource<{ learning_analytics: AdminLearningAnalytics | null }>("学情分析", fetchJson<{ learning_analytics: AdminLearningAnalytics }>("/api/admin/learning-analytics"), { learning_analytics: null }),
+    loadDashboardResource("历史模拟审计", fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"), { procedure_simulation_audits: [] }),
+    loadDashboardResource("教学重点", fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"), { patterns: [] }),
+    loadDashboardResource("Skill 审批事件", fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"), { events: [] }),
+    loadDashboardResource("管理审计", fetchJson<{ events: readonly AdminAuditEvent[]; pagination?: Pagination }>("/api/admin/audit-events?limit=50"), { events: [] }),
+    loadDashboardResource<{ skill_effects: TrainingSkillEffects | null }>("Skill 效果", fetchJson<{ skill_effects: TrainingSkillEffects }>("/api/admin/evolution/skill-effects"), { skill_effects: null }),
+    loadDashboardResource<{ settings: TrainingSkillAutoApprovalSettings | null }>("Skill 自动应用设置", fetchJson<{ settings: TrainingSkillAutoApprovalSettings }>("/api/admin/evolution/settings"), { settings: null }),
+  ] as const);
   const [
-    modelConfigPayload,
-    apiLogPayload,
-    usersPayload,
-    classroomsPayload,
-    sessionPayload,
-    reportPayload,
-    candidatePayload,
-    evaluationPayload,
-    evaluationConfigPayload,
-    casesPayload,
-    sourcesPayload,
-    documentsPayload,
-    knowledgePayload,
-    insightsPayload,
-    learningAnalyticsPayload,
-    procedureAuditPayload,
-    teachingFocusPayload,
-    auditEventsPayload,
-    adminAuditPayload,
-    skillEffectsPayload,
-    autoApprovalSettingsPayload,
-  ] = await Promise.all([
-    fetchJson<{ providers: readonly AdminModelProvider[]; policy: AdminModelConfig["policy"] }>("/api/admin/model-config"),
-    fetchJson<ModelApiLogs>("/api/admin/model-api-logs?limit=60"),
-    fetchJson<{ users: readonly AdminManagedUser[] }>("/api/admin/users"),
-    fetchJson<{ classrooms: readonly AdminClassroom[] }>("/api/admin/classrooms"),
-    fetchJson<{ sessions: readonly AdminSessionSummary[]; pagination?: Pagination }>("/api/admin/sessions?limit=20"),
-    fetchJson<{ reports: readonly AdminReportSummary[]; pagination?: Pagination }>("/api/admin/reports?limit=20"),
-    fetchJson<{ candidates: readonly TrainingSkillCandidateSummary[]; pagination?: Pagination }>("/api/admin/evolution/candidates?limit=20&review_status=all"),
-    fetchJson<{ evaluations: readonly EvaluationBatchSummary[]; pagination?: Pagination }>("/api/admin/evaluations?limit=20"),
-    fetchJson<AdminEvaluationConfig>("/api/admin/evaluation-config"),
-    fetchJson<{ cases: readonly AdminCaseSummary[] }>("/api/cases"),
-    fetchJson<{ sources: readonly AdminSourceSummary[] }>("/api/admin/sources"),
-    fetchJson<{ documents: readonly AdminRagDocument[]; pagination?: Pagination }>("/api/admin/rag/documents?limit=12"),
-    fetchJson<{ knowledge_items: readonly AdminRagKnowledgeItem[]; pagination?: Pagination }>("/api/admin/rag/knowledge?limit=50"),
-    fetchJson<{ insights: TrainingInsights }>("/api/admin/insights"),
-    fetchJson<{ learning_analytics: AdminLearningAnalytics }>("/api/admin/learning-analytics"),
-    fetchJson<{ procedure_simulation_audits: readonly ProcedureSimulationAuditItem[]; summary?: ProcedureSimulationAuditSummary }>("/api/admin/procedure-simulation-audits?limit=20"),
-    fetchJson<{ patterns: readonly AdminTeachingFocusPattern[] }>("/api/admin/teaching-focus/patterns"),
-    fetchJson<{ events: readonly TrainingEventRecord[] }>("/api/admin/evolution/events?limit=20"),
-    fetchJson<{ events: readonly AdminAuditEvent[]; pagination?: Pagination }>("/api/admin/audit-events?limit=50"),
-    fetchJson<{ skill_effects: TrainingSkillEffects }>("/api/admin/evolution/skill-effects"),
-    fetchJson<{ settings: TrainingSkillAutoApprovalSettings }>("/api/admin/evolution/settings"),
-  ]);
+    modelConfigResult,
+    apiLogResult,
+    usersResult,
+    classroomsResult,
+    sessionResult,
+    reportResult,
+    candidateResult,
+    evaluationResult,
+    evaluationConfigResult,
+    casesResult,
+    sourcesResult,
+    documentsResult,
+    knowledgeResult,
+    insightsResult,
+    learningAnalyticsResult,
+    procedureAuditResult,
+    teachingFocusResult,
+    auditEventsResult,
+    adminAuditResult,
+    skillEffectsResult,
+    autoApprovalSettingsResult,
+  ] = resources;
+  const loadWarnings = resources.flatMap((resource) => resource.warning ? [resource.warning] : []);
+  const modelConfigPayload = modelConfigResult.value;
+  const apiLogPayload = apiLogResult.value;
+  const usersPayload = usersResult.value;
+  const classroomsPayload = classroomsResult.value;
+  const sessionPayload = sessionResult.value;
+  const reportPayload = reportResult.value;
+  const candidatePayload = candidateResult.value;
+  const evaluationPayload = evaluationResult.value;
+  const evaluationConfigPayload = evaluationConfigResult.value;
+  const casesPayload = casesResult.value;
+  const sourcesPayload = sourcesResult.value;
+  const documentsPayload = documentsResult.value;
+  const knowledgePayload = knowledgeResult.value;
+  const insightsPayload = insightsResult.value;
+  const learningAnalyticsPayload = learningAnalyticsResult.value;
+  const procedureAuditPayload = procedureAuditResult.value;
+  const teachingFocusPayload = teachingFocusResult.value;
+  const auditEventsPayload = auditEventsResult.value;
+  const adminAuditPayload = adminAuditResult.value;
+  const skillEffectsPayload = skillEffectsResult.value;
+  const autoApprovalSettingsPayload = autoApprovalSettingsResult.value;
   return {
+    loadWarnings,
     modelConfig: modelConfigPayload,
     apiLogs: apiLogPayload,
     users: usersPayload.users,
@@ -2491,8 +2535,14 @@ export function AdminV2Dashboard() {
         <section className="min-w-0 p-4 sm:p-6">
           {errorText ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorText}</p> : null}
           {statusText ? <p className={cn("rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800", errorText ? "mt-3" : "")}>{statusText}</p> : null}
+          {data.loadWarnings.length > 0 ? (
+            <div className={cn("rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900", errorText || statusText ? "mt-3" : "")}>
+              <p className="font-semibold">部分模块暂时不可用，其余管理功能仍可继续使用。</p>
+              <p className="mt-1 text-xs leading-5">{data.loadWarnings.map((warning) => `${warning.resource}：${warning.message}`).join("；")}</p>
+            </div>
+          ) : null}
 
-          <div className={cn(errorText || statusText ? "mt-4" : "")}>
+          <div className={cn(errorText || statusText || data.loadWarnings.length > 0 ? "mt-4" : "")}>
             {activeSectionId === "overview" ? (
               <OverviewSection data={data} onGenerateSkillCandidates={() => void generateSkillCandidates()} onRunEvaluation={() => void runEvaluation()} isMutating={isMutating} />
             ) : null}

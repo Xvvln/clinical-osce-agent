@@ -668,6 +668,41 @@ def test_startup_persistence_initialization_runs_once_before_readiness_checks(
     assert initialization_calls == 1
 
 
+def test_startup_persistence_initialization_isolates_individual_store_failures(
+    monkeypatch,
+    caplog,
+) -> None:
+    initialized: list[str] = []
+
+    def initialize_auth() -> None:
+        initialized.append("auth")
+
+    def initialize_broken_rag() -> None:
+        initialized.append("rag")
+        raise OSError("private-rag-path")
+
+    def initialize_evaluations() -> None:
+        initialized.append("evaluations")
+
+    monkeypatch.setattr(
+        main,
+        "_readiness_persistence_initializers",
+        lambda: (
+            ("auth", initialize_auth),
+            ("rag_knowledge", initialize_broken_rag),
+            ("evaluation_results", initialize_evaluations),
+        ),
+    )
+
+    with caplog.at_level("ERROR", logger="app.main"):
+        failures = main._initialize_readiness_persistence()
+
+    assert failures == ["rag_knowledge"]
+    assert initialized == ["auth", "rag", "evaluations"]
+    assert "startup persistence target failed (rag_knowledge: OSError)" in caplog.text
+    assert "private-rag-path" not in caplog.text
+
+
 def test_failed_startup_persistence_initialization_keeps_liveness_available(
     tmp_path,
     monkeypatch,

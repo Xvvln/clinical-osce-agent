@@ -9,7 +9,7 @@ import math
 import os
 import re
 import tempfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from copy import deepcopy
 from datetime import UTC, date, datetime
@@ -669,7 +669,14 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     )
     if persistence_initialization_enabled:
         try:
-            _initialize_readiness_persistence()
+            persistence_failures = _initialize_readiness_persistence()
+            application.state.startup_persistence_failures = persistence_failures
+            if persistence_failures:
+                application.state.startup_persistence_ready = False
+                logger.error(
+                    "startup persistence initialization incomplete (%s targets)",
+                    len(persistence_failures),
+                )
         except Exception as exc:
             application.state.startup_persistence_ready = False
             logger.error(
@@ -3168,23 +3175,40 @@ def _build_readiness_sqlite_targets() -> tuple[SQLiteReadinessTarget, ...]:
     )
 
 
-def _initialize_readiness_persistence() -> None:
+def _readiness_persistence_initializers() -> tuple[tuple[str, Callable[[], None]], ...]:
     session_service = osce_session_service
-    auth_store._initialize()
-    classroom_store._initialize()
-    admin_audit_store._initialize()
-    admin_asset_version_store._initialize()
-    session_service.session_store._initialize()
-    session_service.report_store._initialize()
-    session_service.training_event_store._initialize()
-    session_service.student_profile_store._initialize()
-    session_service.training_skill_candidate_store._initialize()
-    session_service.training_skill_store._initialize()
-    user_model_config_store._initialize()
-    rag_knowledge_store._initialize()
-    evaluation_result_store._initialize()
-    _ensure_admin_evaluation_config_defaults()
-    training_skill_auto_approval_settings_store._initialize()
+    return (
+        ("auth", auth_store._initialize),
+        ("classrooms", classroom_store._initialize),
+        ("admin_audit", admin_audit_store._initialize),
+        ("admin_asset_versions", admin_asset_version_store._initialize),
+        ("sessions", session_service.session_store._initialize),
+        ("reports", session_service.report_store._initialize),
+        ("training_events", session_service.training_event_store._initialize),
+        ("student_profiles", session_service.student_profile_store._initialize),
+        ("skill_candidates", session_service.training_skill_candidate_store._initialize),
+        ("skills", session_service.training_skill_store._initialize),
+        ("user_model_config", user_model_config_store._initialize),
+        ("rag_knowledge", rag_knowledge_store._initialize),
+        ("evaluation_results", evaluation_result_store._initialize),
+        ("evaluation_config", _ensure_admin_evaluation_config_defaults),
+        ("skill_auto_approval", training_skill_auto_approval_settings_store._initialize),
+    )
+
+
+def _initialize_readiness_persistence() -> list[str]:
+    failures: list[str] = []
+    for target_name, initializer in _readiness_persistence_initializers():
+        try:
+            initializer()
+        except Exception as exc:
+            failures.append(target_name)
+            logger.error(
+                "startup persistence target failed (%s: %s)",
+                target_name,
+                exc.__class__.__name__,
+            )
+    return failures
 
 
 def _readiness_writable_directories(
