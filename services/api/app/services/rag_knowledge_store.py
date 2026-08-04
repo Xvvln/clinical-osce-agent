@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -284,7 +285,10 @@ def _seed_default_items(connection: sqlite3.Connection, seed_path: Path) -> None
     for item in payload:
         if not isinstance(item, dict):
             continue
-        normalized_item = _normalize_item(item, updated_by=DEFAULT_SEED_UPDATED_BY)
+        normalized_item = _normalize_item(
+            _with_default_document_metadata(item, seed_path=seed_path),
+            updated_by=DEFAULT_SEED_UPDATED_BY,
+        )
         existing_row = connection.execute(
             "SELECT item_json FROM rag_knowledge_items WHERE knowledge_id = ?",
             (normalized_item["knowledge_id"],),
@@ -334,6 +338,26 @@ def _seed_default_items(connection: sqlite3.Connection, seed_path: Path) -> None
                 normalized_item["updated_at"],
             ),
         )
+
+
+def _with_default_document_metadata(
+    item: dict[str, Any], *, seed_path: Path
+) -> dict[str, Any]:
+    """Expose each curated seed fragment as a manageable built-in document."""
+    prepared_item = dict(item)
+    knowledge_id = str(prepared_item.get("knowledge_id") or "").strip()
+    title = str(prepared_item.get("title") or knowledge_id).strip()
+    document_suffix = hashlib.sha256(knowledge_id.encode("utf-8")).hexdigest()[:16]
+    prepared_item.setdefault("document_id", f"builtin:{document_suffix}")
+    prepared_item.setdefault("document_name", f"内置知识｜{title}")
+    prepared_item.setdefault("chunk_index", 0)
+    prepared_item.setdefault("chunk_count", 1)
+    prepared_item.setdefault("section_title", title)
+    prepared_item.setdefault("source_location", f"seed:{seed_path.name}#{document_suffix}")
+    prepared_item.setdefault("chunking_strategy", "curated_seed_v1")
+    prepared_item.setdefault("chunk_categories", prepared_item.get("tags", []))
+    prepared_item.setdefault("enabled", True)
+    return prepared_item
 
 
 def _normalize_item(item: dict[str, Any], *, updated_by: str) -> dict[str, Any]:

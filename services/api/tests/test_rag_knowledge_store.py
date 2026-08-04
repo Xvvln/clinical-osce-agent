@@ -183,6 +183,33 @@ def test_rag_knowledge_store_seeds_coach_notes_for_each_demo_case(tmp_path) -> N
         assert all("skill_generation" in item["allowed_agents"] for item in post_submit_items)
 
 
+def test_rag_knowledge_store_exposes_default_items_as_approved_builtin_documents(tmp_path) -> None:
+    store = RagKnowledgeStore(tmp_path / "rag_knowledge.sqlite3", seed_defaults=True)
+
+    documents = store.list_documents()
+
+    assert len(documents) == 26
+    assert all(document["document_id"].startswith("builtin:") for document in documents)
+    assert all(document["file_name"].startswith("内置知识｜") for document in documents)
+    assert all(document["chunk_count"] == 1 for document in documents)
+    assert all(document["review_status"] == "approved" for document in documents)
+    assert all(document["enabled"] is True for document in documents)
+    assert all(document["indexable_chunk_count"] == 1 for document in documents)
+
+    pneumonia_item = store.get_item(
+        "case:pneumonia_001:coach:cough_fever_history_sequence"
+    )
+    assert pneumonia_item is not None
+    pneumonia_document = next(
+        document
+        for document in documents
+        if document["document_id"] == pneumonia_item["document_id"]
+    )
+    assert pneumonia_document["case_id"] == "pneumonia_001"
+    assert pneumonia_document["allowed_agents"] == ["coach"]
+    assert pneumonia_document["stage_scope"] == ["case_intro", "history_taking"]
+
+
 def test_default_knowledge_only_uses_current_registered_sources() -> None:
     default_items = json.loads(
         (ROOT_DIR / "data" / "rag_knowledge" / "default_items.json").read_text(encoding="utf-8")

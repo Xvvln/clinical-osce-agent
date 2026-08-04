@@ -449,8 +449,6 @@ def _managed_rag_knowledge_documents() -> list[RetrievalDocument]:
             f"stage_scope: {', '.join(normalize_rag_stage_scope(item.get('stage_scope')))}",
             f"source_id: {str(item.get('source_id', '')).strip()}",
             f"tags: {', '.join(str(tag) for tag in item.get('tags', []) if str(tag))}",
-            f"document_id: {str(item.get('document_id', '')).strip()}",
-            f"source_location: {str(item.get('source_location', '')).strip()}",
             text,
         ]
         documents.append(
