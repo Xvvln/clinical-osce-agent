@@ -37,6 +37,70 @@ _CLASSIFICATION_LABELS = {
     "not_submitted": "本轮尚未提交诊断",
 }
 
+_DIMENSION_MAX_SCORES = {
+    "history_taking": 18,
+    "physical_exam": 10,
+    "auxiliary_test": 10,
+    "main_diagnosis": 10,
+    "differential_diagnosis": 10,
+    "reasoning": 12,
+    "narrative_medicine": 8,
+    "communication_skill": 10,
+    "medical_ethics": 7,
+    "relationship_building": 5,
+}
+
+_COVERAGE_ANGLES: tuple[dict[str, Any], ...] = (
+    {
+        "angle_id": "information_collection",
+        "label": "病史采集",
+        "dimension_ids": ("history_taking",),
+        "capability": "关键病史采集",
+    },
+    {
+        "angle_id": "examination_and_tests",
+        "label": "查体与辅助检查",
+        "dimension_ids": ("physical_exam", "auxiliary_test"),
+        "capability": "针对当前假设选择查体和检查",
+    },
+    {
+        "angle_id": "main_diagnosis",
+        "label": "主诊断判断",
+        "dimension_ids": ("main_diagnosis",),
+        "capability": "主诊断判断",
+    },
+    {
+        "angle_id": "differential_diagnosis",
+        "label": "鉴别诊断",
+        "dimension_ids": ("differential_diagnosis",),
+        "capability": "鉴别诊断及排除依据",
+    },
+    {
+        "angle_id": "clinical_reasoning",
+        "label": "临床推理",
+        "dimension_ids": ("reasoning",),
+        "capability": "支持证据、反证依据和待验证问题的推理链",
+    },
+    {
+        "angle_id": "narrative_and_concerns",
+        "label": "患者叙事与关切",
+        "dimension_ids": ("narrative_medicine",),
+        "capability": "患者想法、担忧和期望的回应",
+    },
+    {
+        "angle_id": "communication_and_relationship",
+        "label": "沟通与关系",
+        "dimension_ids": ("communication_skill", "relationship_building"),
+        "capability": "解释、共情和医患关系建立",
+    },
+    {
+        "angle_id": "ethics_and_safety",
+        "label": "伦理与安全",
+        "dimension_ids": ("medical_ethics",),
+        "capability": "知情同意、隐私和安全顺序",
+    },
+)
+
 
 def _validate_student_text(value: str) -> str:
     normalized = _normalize_text(value)
@@ -107,6 +171,7 @@ class StudentDecisionReplay(BaseModel):
 
 class StudentTrainingPrescription(BaseModel):
     goal_id: str
+    category: Literal["information", "reasoning", "humanistic_safety"]
     title: str
     trigger: str
     action: str
@@ -133,11 +198,42 @@ class StudentLongitudinalSummary(BaseModel):
         return _validate_student_text(value)
 
 
+class StudentAnalysisCoverage(BaseModel):
+    angle_id: str
+    label: str
+    status: Literal["sufficient", "partial", "missing", "not_observed"]
+    summary: str
+    score: float = Field(default=0, ge=0)
+    max_score: float = Field(default=0, ge=0)
+
+    @field_validator("label", "summary")
+    @classmethod
+    def _student_text_only(cls, value: str) -> str:
+        return _validate_student_text(value)
+
+
+class StudentEvidenceQuality(BaseModel):
+    level: Literal["limited", "moderate", "rich"]
+    label: str
+    summary: str
+    observed_item_count: int = Field(default=0, ge=0)
+    total_item_count: int = Field(default=0, ge=0)
+    analyzed_angle_count: int = Field(default=0, ge=0)
+    total_angle_count: int = Field(default=0, ge=0)
+
+    @field_validator("label", "summary")
+    @classmethod
+    def _student_text_only(cls, value: str) -> str:
+        return _validate_student_text(value)
+
+
 class StudentTrainingReportV2(BaseModel):
     version: Literal["student_training_report_v2"] = STUDENT_TRAINING_REPORT_VERSION
     status: Literal["generated", "legacy_fallback"] = "generated"
     outcome: StudentReportOutcome
-    decision_replays: list[StudentDecisionReplay] = Field(default_factory=list, max_length=3)
+    evidence_quality: StudentEvidenceQuality
+    analysis_coverage: list[StudentAnalysisCoverage] = Field(default_factory=list, max_length=10)
+    decision_replays: list[StudentDecisionReplay] = Field(default_factory=list, max_length=6)
     training_prescriptions: list[StudentTrainingPrescription] = Field(default_factory=list, max_length=3)
     longitudinal_summary: StudentLongitudinalSummary
     personal_memory_summary: str
@@ -159,9 +255,12 @@ def build_student_training_report(report: Mapping[str, Any]) -> dict[str, Any]:
 
     deep_analysis = _mapping(report.get("deep_report_analysis"))
     teacher_review = _mapping(report.get("ai_reflection_review"))
+    analysis_coverage = _build_analysis_coverage(report, deep_analysis)
     payload = StudentTrainingReportV2(
         status="generated" if str(deep_analysis.get("status") or "") == "generated" else "legacy_fallback",
         outcome=_build_outcome(report, deep_analysis),
+        evidence_quality=_build_evidence_quality(report, analysis_coverage),
+        analysis_coverage=analysis_coverage,
         decision_replays=_build_decision_replays(report, deep_analysis, teacher_review),
         training_prescriptions=_build_training_prescriptions(report, deep_analysis, teacher_review),
         longitudinal_summary=_build_longitudinal_summary(teacher_review),
@@ -201,15 +300,28 @@ def _build_outcome(report: Mapping[str, Any], deep_analysis: Mapping[str, Any]) 
         if any(token in str(item.get("gap_type") or "").lower() for token in ("ethic", "consent", "safety"))
     )
     communication_count = max(len(missed_opportunities) - safety_count, 0)
+    ethics_score, ethics_max = _dimension_score_pair(report, ("medical_ethics",))
+    communication_score, communication_max = _dimension_score_pair(
+        report,
+        ("narrative_medicine", "communication_skill", "relationship_building"),
+    )
     safety_summary = (
         f"本轮记录到 {safety_count} 个知情同意或安全顺序问题，需要在下一轮优先修复。"
         if safety_count
-        else "本轮未记录明确的知情同意或安全顺序越界。"
+        else (
+            "本轮评分轨迹未找到知情同意、隐私或安全顺序的完成证据；不能据此断言没有风险。"
+            if ethics_max > 0 and ethics_score <= 0
+            else f"本轮伦理与安全获得 {_score_text(ethics_score)}/{_score_text(ethics_max)} 分，仍需结合具体动作复核。"
+        )
     )
     communication_summary = (
         f"本轮记录到 {communication_count} 个沟通机会未被及时回应。"
         if communication_count
-        else "本轮未记录明确的人文沟通漏项，仍可结合评分明细继续复核。"
+        else (
+            "本轮评分轨迹未找到患者关切、共情或关系建立的完成证据；这表示尚未观察到，不代表确认没有漏项。"
+            if communication_max > 0 and communication_score <= 0
+            else f"本轮人文沟通获得 {_score_text(communication_score)}/{_score_text(communication_max)} 分，未触发的场景不作过度推断。"
+        )
     )
     return StudentReportOutcome(
         summary=overall_summary,
@@ -218,6 +330,136 @@ def _build_outcome(report: Mapping[str, Any], deep_analysis: Mapping[str, Any]) 
         diagnosis_summary=diagnosis_summary,
         safety_summary=safety_summary,
         communication_summary=communication_summary,
+    )
+
+
+def _build_analysis_coverage(
+    report: Mapping[str, Any],
+    deep_analysis: Mapping[str, Any],
+) -> list[StudentAnalysisCoverage]:
+    coverage: list[StudentAnalysisCoverage] = []
+    for angle in _COVERAGE_ANGLES:
+        score, max_score = _dimension_score_pair(report, angle["dimension_ids"])
+        status = _score_coverage_status(score, max_score)
+        capability = str(angle["capability"])
+        if status == "sufficient":
+            summary = f"本轮获得 {_score_text(score)}/{_score_text(max_score)} 分，{capability}已有较完整的可观察证据。"
+        elif status == "partial":
+            summary = f"本轮获得 {_score_text(score)}/{_score_text(max_score)} 分，已观察到部分{capability}，但证据仍未闭合。"
+        elif status == "missing":
+            summary = f"评分轨迹未找到{capability}的完成证据；这表示本轮无法确认完成，不等于认定学生从未具备该能力。"
+        else:
+            summary = f"本轮没有足够材料判断{capability}，该角度不作过度推断。"
+        coverage.append(
+            StudentAnalysisCoverage(
+                angle_id=str(angle["angle_id"]),
+                label=str(angle["label"]),
+                status=status,
+                summary=summary,
+                score=score,
+                max_score=max_score,
+            )
+        )
+
+    evidence = _mapping(deep_analysis.get("evidence_utilization_analysis"))
+    collected_count = len(_object_list(evidence.get("collected_key_evidence")))
+    missing_count = len(_object_list(evidence.get("missing_key_evidence")))
+    breakpoint_count = len(_object_list(evidence.get("evidence_chain_breakpoints")))
+    if collected_count and not missing_count and not breakpoint_count:
+        evidence_status = "sufficient"
+        evidence_summary = f"本轮已连接 {collected_count} 类关键证据，未发现明确的证据链断点。"
+    elif collected_count:
+        evidence_status = "partial"
+        evidence_summary = f"本轮已采集 {collected_count} 类关键证据，仍缺 {missing_count} 类，并存在 {breakpoint_count} 个需要补齐的链路。"
+    elif missing_count or breakpoint_count:
+        evidence_status = "missing"
+        evidence_summary = f"本轮尚未形成可确认的关键证据链，仍有 {missing_count} 类证据和 {breakpoint_count} 个链路需要补齐。"
+    else:
+        evidence_status = "not_observed"
+        evidence_summary = "本轮缺少可比较的证据节点记录，暂不能评价证据链完整性。"
+    coverage.append(
+        StudentAnalysisCoverage(
+            angle_id="evidence_chain",
+            label="证据链",
+            status=evidence_status,
+            summary=evidence_summary,
+        )
+    )
+
+    process = _mapping(deep_analysis.get("process_strategy_analysis"))
+    sequence_flags = _object_list(process.get("sequence_flags"))
+    order_summary = _safe_student_text(process.get("action_order_summary"), fallback="")
+    if sequence_flags:
+        sequence_status = "partial"
+        first_flag = sequence_flags[0]
+        sequence_summary = _safe_student_text(
+            first_flag.get("evidence") or first_flag.get("label"),
+            fallback=f"本轮记录到 {len(sequence_flags)} 个动作顺序问题，需要调整介入时机。",
+        )
+    elif order_summary and not any(token in order_summary for token in ("暂缺", "不足", "无法")):
+        sequence_status = "sufficient"
+        sequence_summary = f"{order_summary} 当前未发现明确的顺序越界，但仍只对已记录动作负责。"
+    else:
+        sequence_status = "not_observed"
+        sequence_summary = "本轮动作记录较少，暂不足以确认操作顺序和介入时机是否稳定。"
+    coverage.append(
+        StudentAnalysisCoverage(
+            angle_id="sequence_and_timing",
+            label="操作顺序与时机",
+            status=sequence_status,
+            summary=sequence_summary,
+        )
+    )
+    return coverage
+
+
+def _build_evidence_quality(
+    report: Mapping[str, Any],
+    coverage: Sequence[StudentAnalysisCoverage],
+) -> StudentEvidenceQuality:
+    traces = [
+        item
+        for raw_items in _mapping(report.get("dimension_traces")).values()
+        for item in _object_list(raw_items)
+    ]
+    if traces:
+        total_item_count = len(traces)
+        observed_item_count = sum(
+            1
+            for item in traces
+            if _number(item.get("score", item.get("awarded_score"))) > 0
+            or bool(_student_text_list(item.get("matched_evidence"), limit=1))
+        )
+    else:
+        rubric_items = [item for item in _mapping(report.get("rubric_scores")).values() if isinstance(item, Mapping)]
+        total_item_count = len(rubric_items)
+        observed_item_count = sum(1 for item in rubric_items if _number(item.get("score")) > 0)
+    ratio = observed_item_count / total_item_count if total_item_count else 0
+    if observed_item_count <= 4 or ratio < 0.2:
+        level = "limited"
+        label = "本轮证据较少"
+        caution = "当前结论只说明已记录动作，不对未发生或未记录的过程作推测。"
+    elif observed_item_count <= 10 or ratio < 0.6:
+        level = "moderate"
+        label = "本轮证据中等"
+        caution = "主要问题已有依据，未触发场景仍需在下一轮继续观察。"
+    else:
+        level = "rich"
+        label = "本轮证据较丰富"
+        caution = "多数角度已有可观察依据，仍需结合逐项证据理解结论边界。"
+    analyzed_angle_count = sum(1 for item in coverage if item.status != "not_observed")
+    summary = (
+        f"评分轨迹可确认 {observed_item_count}/{total_item_count} 个训练点，"
+        f"{analyzed_angle_count}/{len(coverage)} 个分析角度具备判断材料。{caution}"
+    )
+    return StudentEvidenceQuality(
+        level=level,
+        label=label,
+        summary=summary,
+        observed_item_count=observed_item_count,
+        total_item_count=total_item_count,
+        analyzed_angle_count=analyzed_angle_count,
+        total_angle_count=len(coverage),
     )
 
 
@@ -235,12 +477,27 @@ def _build_decision_replays(
         *_training_gap_replay_candidates(report),
     ]
     gap_candidates = _deduplicate_candidates(gap_candidates)
-    if gap_candidates and positive_candidates:
-        selected = [positive_candidates[0], *gap_candidates[:2]]
-    elif gap_candidates:
-        selected = gap_candidates[:3]
-    else:
-        selected = positive_candidates[:3]
+    selected: list[dict[str, Any]] = []
+    if positive_candidates:
+        selected.append(positive_candidates[0])
+    for kind in ("safety", "reasoning", "evidence", "sequence", "humanistic"):
+        candidate = next(
+            (
+                item
+                for item in gap_candidates
+                if item.get("kind") == kind and item not in selected
+            ),
+            None,
+        )
+        if candidate is not None:
+            selected.append(candidate)
+        if len(selected) == 6:
+            break
+    for candidate in [*gap_candidates, *positive_candidates[1:]]:
+        if candidate not in selected:
+            selected.append(candidate)
+        if len(selected) == 6:
+            break
     if not selected:
         selected = [
             {
@@ -411,9 +668,19 @@ def _training_gap_replay_candidates(report: Mapping[str, Any]) -> list[dict[str,
         reverse=True,
     ):
         label = _safe_student_text(gap.get("label"), fallback="本轮关键训练点尚未覆盖")
+        dimension_id = str(gap.get("dimension_id") or gap.get("stage") or "")
+        gap_type = str(gap.get("gap_type") or "").lower()
+        if dimension_id in {"reasoning", "differential_diagnosis", "main_diagnosis"}:
+            kind = "reasoning"
+        elif dimension_id == "medical_ethics" or any(token in gap_type for token in ("ethic", "consent", "safety")):
+            kind = "safety"
+        elif dimension_id in {"narrative_medicine", "communication_skill", "relationship_building"}:
+            kind = "humanistic"
+        else:
+            kind = "evidence"
         candidates.append(
             {
-                "kind": "evidence",
+                "kind": kind,
                 "phase": _stage_label(str(gap.get("dimension_id") or gap.get("stage") or "诊断推理")),
                 "title": label,
                 "observed_evidence": _safe_student_text(
@@ -450,6 +717,7 @@ def _build_training_prescriptions(
         return [
             StudentTrainingPrescription(
                 goal_id="goal-1",
+                category="reasoning",
                 title="迁移本轮有效做法",
                 trigger="进入下一个新病例时",
                 action="独立完成问诊、关键查体、必要检查和诊断推理，并说明每一步的目的。",
@@ -460,6 +728,7 @@ def _build_training_prescriptions(
     for item in _object_list(plan.get("top_goals")):
         raw_candidates.append(
             {
+                "category": _prescription_category(item),
                 "title": _safe_student_text(item.get("label"), fallback="补齐本轮优先训练点"),
                 "trigger": _safe_student_text(item.get("trigger"), fallback=_stage_trigger(item.get("stage"))),
                 "action": _safe_student_text(item.get("next_training_action"), fallback="完成该训练点并说明它与当前假设的关系。"),
@@ -469,6 +738,7 @@ def _build_training_prescriptions(
     for item in _object_list(plan.get("stage_triggered_actions")):
         raw_candidates.append(
             {
+                "category": _prescription_category(item),
                 "title": _safe_student_text(item.get("action"), fallback="按阶段完成关键动作"),
                 "trigger": _safe_student_text(item.get("trigger"), fallback=_stage_trigger(item.get("stage"))),
                 "action": _safe_student_text(item.get("action"), fallback="完成当前阶段的关键训练动作。"),
@@ -479,21 +749,38 @@ def _build_training_prescriptions(
         label = _safe_student_text(gap.get("label"), fallback="补齐关键训练点")
         raw_candidates.append(
             {
+                "category": _prescription_category(gap),
                 "title": label,
                 "trigger": _stage_trigger(gap.get("stage") or gap.get("dimension_id")),
                 "action": _safe_student_text(gap.get("next_training_action"), fallback=f"完成“{label}”并说明为什么要做。"),
                 "success_signal": f"报告能够找到“{label}”对应的动作或推理表达。",
             }
         )
+    humanistic = _mapping(deep_analysis.get("humanistic_communication_analysis"))
+    for item in _object_list(humanistic.get("missed_opportunities")):
+        raw_candidates.append(
+            {
+                "category": "humanistic_safety",
+                "title": "补上沟通与安全动作",
+                "trigger": _stage_trigger(item.get("stage") or "humanistic_communication"),
+                "action": _safe_student_text(
+                    item.get("next_training_action") or item.get("expected_response"),
+                    fallback="先回应患者关切，说明操作目的并获得同意后再继续。",
+                ),
+                "success_signal": "评分轨迹能够找到回应患者、说明目的或获得同意的具体表达。",
+            }
+        )
     for action in _student_text_list(teacher_review.get("next_practice_plan"), limit=3):
         raw_candidates.append(
             {
+                "category": _prescription_category({"label": action}),
                 "title": "执行教师建议",
                 "trigger": "下一轮遇到相似临床任务时",
                 "action": action,
                 "success_signal": "能够不依赖提示完成该动作，并说出它将验证或排除什么。",
             }
         )
+    raw_candidates.extend(_fallback_prescription_candidates(report))
     deduplicated: list[dict[str, str]] = []
     seen: set[str] = set()
     for candidate in raw_candidates:
@@ -502,11 +789,20 @@ def _build_training_prescriptions(
             continue
         seen.add(identity)
         deduplicated.append(candidate)
-        if len(deduplicated) == 3:
+    selected: list[dict[str, str]] = []
+    for category in ("information", "reasoning", "humanistic_safety"):
+        candidate = next((item for item in deduplicated if item["category"] == category), None)
+        if candidate is not None:
+            selected.append(candidate)
+    for candidate in deduplicated:
+        if candidate not in selected:
+            selected.append(candidate)
+        if len(selected) == 3:
             break
-    if not deduplicated:
-        deduplicated.append(
+    if not selected:
+        selected.append(
             {
+                "category": "reasoning",
                 "title": "迁移本轮有效做法",
                 "trigger": "进入下一个新病例时",
                 "action": "独立完成问诊、关键查体、必要检查和诊断推理，并说明每一步的目的。",
@@ -515,7 +811,7 @@ def _build_training_prescriptions(
         )
     return [
         StudentTrainingPrescription(goal_id=f"goal-{index + 1}", **candidate)
-        for index, candidate in enumerate(deduplicated)
+        for index, candidate in enumerate(selected[:3])
     ]
 
 
@@ -582,6 +878,139 @@ def _build_personal_memory_summary(
     if intervention:
         return f"系统已记录本轮训练重点：{intervention}"
     return "系统尚未形成可复用的个人训练策略，本轮结论仍可直接用于下一次练习。"
+
+
+def _dimension_score_pair(
+    report: Mapping[str, Any],
+    dimension_ids: Sequence[str],
+) -> tuple[float, float]:
+    dimension_scores = _mapping(report.get("dimension_scores"))
+    rubric_scores = _mapping(report.get("rubric_scores"))
+    score = sum(max(_number(dimension_scores.get(dimension_id)), 0) for dimension_id in dimension_ids)
+    max_score = 0.0
+    for dimension_id in dimension_ids:
+        rubric_max = sum(
+            max(_number(item.get("max_score")), 0)
+            for item in rubric_scores.values()
+            if isinstance(item, Mapping) and str(item.get("dimension_id") or "") == dimension_id
+        )
+        max_score += max(rubric_max, float(_DIMENSION_MAX_SCORES.get(dimension_id, 0)))
+    return score, max_score
+
+
+def _score_coverage_status(
+    score: float,
+    max_score: float,
+) -> Literal["sufficient", "partial", "missing", "not_observed"]:
+    if max_score <= 0:
+        return "not_observed"
+    if score <= 0:
+        return "missing"
+    return "sufficient" if score / max_score >= 0.8 else "partial"
+
+
+def _prescription_category(candidate: Mapping[str, Any]) -> str:
+    dimension_id = str(candidate.get("dimension_id") or candidate.get("stage") or "").lower()
+    if dimension_id in {"history_taking", "physical_exam", "auxiliary_test"}:
+        return "information"
+    if dimension_id in {"main_diagnosis", "differential_diagnosis", "reasoning", "diagnosis_submission", "diagnostic_reasoning"}:
+        return "reasoning"
+    if dimension_id in {"narrative_medicine", "communication_skill", "medical_ethics", "relationship_building", "humanistic_communication"}:
+        return "humanistic_safety"
+    searchable = " ".join(
+        str(candidate.get(key) or "")
+        for key in (
+            "dimension_id",
+            "stage",
+            "gap_type",
+            "skill_type",
+            "label",
+            "action",
+            "next_training_action",
+        )
+    ).lower()
+    if any(
+        token in searchable
+        for token in (
+            "humanistic",
+            "communication",
+            "relationship",
+            "narrative",
+            "ethic",
+            "consent",
+            "safety",
+            "沟通",
+            "共情",
+            "患者",
+            "同意",
+            "隐私",
+            "伦理",
+        )
+    ):
+        return "humanistic_safety"
+    if any(
+        token in searchable
+        for token in (
+            "reasoning",
+            "diagnosis",
+            "differential",
+            "hypothesis",
+            "推理",
+            "诊断",
+            "鉴别",
+            "假设",
+            "排除",
+        )
+    ):
+        return "reasoning"
+    return "information"
+
+
+def _fallback_prescription_candidates(report: Mapping[str, Any]) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    information_score, information_max = _dimension_score_pair(
+        report,
+        ("history_taking", "physical_exam", "auxiliary_test"),
+    )
+    if information_max > 0 and information_score < information_max:
+        candidates.append(
+            {
+                "category": "information",
+                "title": "补齐关键病史与检查",
+                "trigger": "形成初步诊断假设后",
+                "action": "围绕当前假设补问关键病史，选择必要查体和检查，并说明每一步要验证什么。",
+                "success_signal": "报告能够找到关键病史、查体和检查动作，以及它们与诊断假设的对应关系。",
+            }
+        )
+    reasoning_score, reasoning_max = _dimension_score_pair(
+        report,
+        ("differential_diagnosis", "reasoning"),
+    )
+    if reasoning_max > 0 and reasoning_score < reasoning_max:
+        candidates.append(
+            {
+                "category": "reasoning",
+                "title": "闭合鉴别诊断证据链",
+                "trigger": "准备提交诊断前",
+                "action": "写出主要诊断、至少一个相近诊断，并分别说明支持依据和排除依据。",
+                "success_signal": "诊断提交同时包含主诊断支持证据、鉴别诊断和明确排除依据。",
+            }
+        )
+    humanistic_score, humanistic_max = _dimension_score_pair(
+        report,
+        ("narrative_medicine", "communication_skill", "medical_ethics", "relationship_building"),
+    )
+    if humanistic_max > 0 and humanistic_score < humanistic_max:
+        candidates.append(
+            {
+                "category": "humanistic_safety",
+                "title": "补上患者回应与知情同意",
+                "trigger": "患者表达担忧或准备进行查体检查时",
+                "action": "先回应患者关切，再说明操作目的、可能不适并获得同意后继续。",
+                "success_signal": "评分轨迹能够找到回应情绪、解释目的和获得同意三个可观察动作。",
+            }
+        )
+    return candidates
 
 
 def _deduplicate_candidates(candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:

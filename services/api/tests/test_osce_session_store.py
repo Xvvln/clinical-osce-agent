@@ -294,6 +294,8 @@ def test_revision_is_internal_stable_on_reads_and_monotonic_on_updates(tmp_path:
     assert "revision" not in first_record.payload
 
     assert store.get_session_payload(session.session_id) == first_record.payload
+    assert store.get_session_owner_id(session.session_id) == session.student_id
+    assert store.get_session_owner_id("missing-session") is None
     assert store.list_user_session_summaries(session.student_id)
     assert store.list_session_summaries()
     unchanged_record = store.get_session(session.session_id)

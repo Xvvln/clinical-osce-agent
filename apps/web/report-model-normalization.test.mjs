@@ -138,6 +138,67 @@ test("report model blocks internal identifiers from student-facing training repo
   assert.equal(report.student_training_report.longitudinal_summary.repeated_count, 0);
 });
 
+test("report model keeps layered coverage, six replays, and diverse prescription categories", () => {
+  const { normalizeFeedbackReport } = loadReportModel();
+  const decision = {
+    kind: "reasoning",
+    phase: "诊断推理",
+    title: "补齐推理链",
+    observed_evidence: "本轮提交缺少鉴别诊断排除依据。",
+    teacher_judgement: "诊断名称命中，但证据链尚未闭合。",
+    why_it_matters: "正确诊断需要支持证据和排除依据共同成立。",
+    next_action: "提交前写出至少一个鉴别诊断及排除依据。",
+    evidence_labels: ["鉴别诊断"],
+  };
+  const report = normalizeFeedbackReport({
+    session_id: "layered-report-session",
+    case_id: "appendicitis_001",
+    total_score: 23,
+    dimension_scores: { reasoning: 3 },
+    rubric_scores: {},
+    missed_items: [],
+    strengths: [],
+    reasoning_errors: [],
+    next_recommendations: [],
+    source_references: [],
+    feedback_summary: "本轮报告已生成。",
+    student_training_report: {
+      evidence_quality: {
+        level: "limited",
+        label: "本轮证据较少",
+        summary: "评分轨迹可确认 3/36 个训练点，8/10 个分析角度具备判断材料。",
+        observed_item_count: 3,
+        total_item_count: 36,
+        analyzed_angle_count: 8,
+        total_angle_count: 10,
+      },
+      analysis_coverage: [{
+        angle_id: "clinical_reasoning",
+        label: "临床推理",
+        status: "partial",
+        summary: "已观察到部分推理动作，但证据仍未闭合。",
+        score: 3,
+        max_score: 12,
+      }],
+      decision_replays: Array.from({ length: 7 }, (_, index) => ({ ...decision, replay_id: `decision-${index + 1}` })),
+      training_prescriptions: [
+        { goal_id: "goal-1", category: "information", title: "补齐信息", trigger: "问诊时", action: "补问关键病史。", success_signal: "记录完整病史。" },
+        { goal_id: "goal-2", category: "reasoning", title: "补齐推理", trigger: "提交前", action: "写出排除依据。", success_signal: "证据链闭合。" },
+        { goal_id: "goal-3", category: "humanistic_safety", title: "补齐沟通", trigger: "查体前", action: "说明目的并获得同意。", success_signal: "记录知情同意。" },
+      ],
+    },
+  });
+
+  assert.equal(report.student_training_report.analysis_coverage.length, 1);
+  assert.equal(report.student_training_report.analysis_coverage[0].status, "partial");
+  assert.equal(report.student_training_report.evidence_quality.level, "limited");
+  assert.equal(report.student_training_report.decision_replays.length, 6);
+  assert.deepEqual(
+    [...report.student_training_report.training_prescriptions.map((item) => item.category)],
+    ["information", "reasoning", "humanistic_safety"],
+  );
+});
+
 test("report model retains only the compact longitudinal teaching summary", () => {
   const { normalizeFeedbackReport } = loadReportModel();
   const report = normalizeFeedbackReport({

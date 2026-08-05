@@ -413,6 +413,16 @@ class OsceSessionStore:
         stored_session = self.get_session(session_id)
         return None if stored_session is None else stored_session.payload
 
+    def get_session_owner_id(self, session_id: str) -> str | None:
+        """Read session ownership without loading mutable session state."""
+        self._initialize()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT user_id FROM osce_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return None if row is None else str(row[0])
+
     def list_user_session_summaries(self, user_id: str) -> list[dict[str, object]]:
         self._initialize()
         with self._connect() as connection:

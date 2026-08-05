@@ -220,7 +220,14 @@ def _assert_student_text_is_clean(student_report: dict[str, Any]) -> None:
             goal[field] for field in ("title", "trigger", "action", "success_signal")
         )
     visible_values.extend(
+        value
+        for item in student_report["analysis_coverage"]
+        for value in (item["label"], item["summary"])
+    )
+    visible_values.extend(
         [
+            student_report["evidence_quality"]["label"],
+            student_report["evidence_quality"]["summary"],
             student_report["longitudinal_summary"]["label"],
             student_report["longitudinal_summary"]["summary"],
             student_report["personal_memory_summary"],
@@ -237,10 +244,16 @@ def test_real_scenario_correct_diagnosis_with_weak_evidence_gets_actionable_repo
     )
 
     assert student_report["outcome"]["diagnosis_status"] == "correct"
-    assert len(student_report["decision_replays"]) == 3
+    assert 3 <= len(student_report["decision_replays"]) <= 6
     assert student_report["decision_replays"][0]["kind"] == "strength"
     assert any(item["kind"] == "reasoning" for item in student_report["decision_replays"])
-    assert 1 <= len(student_report["training_prescriptions"]) <= 3
+    assert student_report["evidence_quality"]["level"] == "limited"
+    assert len(student_report["analysis_coverage"]) == 10
+    assert {item["category"] for item in student_report["training_prescriptions"]} == {
+        "information",
+        "reasoning",
+        "humanistic_safety",
+    }
     assert all(item["trigger"] and item["success_signal"] for item in student_report["training_prescriptions"])
     _assert_student_text_is_clean(student_report)
 
@@ -292,6 +305,30 @@ def test_real_scenario_missed_empathy_opportunity_becomes_observable_action() ->
     humanistic = next(item for item in student_report["decision_replays"] if item["kind"] == "humanistic")
     assert "担心" in humanistic["observed_evidence"]
     assert "先承认担忧" in humanistic["next_action"]
+    _assert_student_text_is_clean(student_report)
+
+
+def test_real_scenario_zero_humanistic_score_is_not_reported_as_no_gap() -> None:
+    report = _base_report(score=23)
+    report["score_groups"]["humanistic_communication"] = {"score": 0, "max_score": 30}
+    report["dimension_scores"].update(
+        {
+            "narrative_medicine": 0,
+            "communication_skill": 0,
+            "medical_ethics": 0,
+            "relationship_building": 0,
+        }
+    )
+    student_report = build_student_training_report(_complete_report(report))
+
+    assert "未找到" in student_report["outcome"]["safety_summary"]
+    assert "不能据此断言没有风险" in student_report["outcome"]["safety_summary"]
+    assert "未找到" in student_report["outcome"]["communication_summary"]
+    assert "不代表确认没有漏项" in student_report["outcome"]["communication_summary"]
+    coverage = {item["angle_id"]: item for item in student_report["analysis_coverage"]}
+    assert coverage["narrative_and_concerns"]["status"] == "missing"
+    assert coverage["communication_and_relationship"]["status"] == "missing"
+    assert coverage["ethics_and_safety"]["status"] == "missing"
     _assert_student_text_is_clean(student_report)
 
 

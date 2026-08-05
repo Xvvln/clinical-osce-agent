@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -795,6 +796,28 @@ def test_session_processing_status_exposes_current_backend_step() -> None:
     ]
 
 
+def test_session_processing_status_does_not_wait_for_session_mutation_lock() -> None:
+    create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+    session_id = create_response.json()["session_id"]
+    osce_session_service.begin_message_processing_status(session_id)
+    osce_session_service.update_message_processing_status(
+        session_id,
+        step_id="patient_reply",
+        label="组织标准化病人回复",
+        status="active",
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with osce_session_service._session_locks.hold(session_id):
+            response = executor.submit(
+                client.get,
+                f"/api/sessions/{session_id}/processing-status",
+            ).result(timeout=1)
+
+    assert response.status_code == 200
+    assert response.json()["current_step_id"] == "patient_reply"
+
+
 def test_agent_state_recovers_with_session(tmp_path, authenticated_user: dict[str, str]) -> None:
     osce_session_service.session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
     osce_session_service._sessions.clear()
@@ -821,6 +844,7 @@ def test_agent_state_recovers_with_session(tmp_path, authenticated_user: dict[st
 def session_operation_requests(session_id: str) -> list[tuple[str, str, dict[str, str] | None]]:
     return [
         ("GET", f"/api/sessions/{session_id}", None),
+        ("GET", f"/api/sessions/{session_id}/processing-status", None),
         ("POST", f"/api/sessions/{session_id}/message", {"message": "什么时候开始疼的？"}),
         ("POST", f"/api/sessions/{session_id}/physical-exam", {"exam_code": "abd.palpation.rebound"}),
         ("POST", f"/api/sessions/{session_id}/auxiliary-test", {"test_code": "lab.cbc"}),
@@ -957,14 +981,114 @@ def test_current_user_sessions_mark_completed_after_diagnosis_submission(
     student_report = report_response.json()["student_training_report"]
     assert student_report["version"] == "student_training_report_v2"
     assert student_report["outcome"]["diagnosis_status"] == "correct"
-    assert 1 <= len(student_report["decision_replays"]) <= 3
+    assert 1 <= len(student_report["decision_replays"]) <= 6
     assert 1 <= len(student_report["training_prescriptions"]) <= 3
+    assert len(student_report["analysis_coverage"]) == 10
     assert session_id not in json.dumps(student_report, ensure_ascii=False)
     assert after_report_response.status_code == 200
     assert after_report_response.json()["sessions"][0]["is_completed"] is True
     assert after_report_response.json()["sessions"][0]["can_continue"] is False
     assert after_report_response.json()["sessions"][0]["has_report"] is True
     assert after_report_response.json()["sessions"][0]["completion_status"] == "report_ready"
+
+
+def test_student_report_distinguishes_four_real_appendicitis_training_trajectories(
+    tmp_path,
+    authenticated_user: dict[str, str],
+) -> None:
+    osce_session_service.session_store = OsceSessionStore(tmp_path / "scenario_sessions.sqlite3")
+    osce_session_service.report_store = ReportStore(tmp_path / "scenario_reports.sqlite3")
+    osce_session_service.training_event_store = TrainingEventStore(tmp_path / "scenario_events.sqlite3")
+    osce_session_service._sessions.clear()
+
+    def run_scenario(
+        *,
+        messages: list[str],
+        exams: list[str],
+        tests: list[str],
+        diagnosis: str,
+        reasoning: str,
+    ) -> dict[str, object]:
+        create_response = client.post("/api/sessions", json={"case_id": "appendicitis_001"})
+        assert create_response.status_code == 200
+        session_id = str(create_response.json()["session_id"])
+        for message in messages:
+            response = client.post(f"/api/sessions/{session_id}/message", json={"message": message})
+            assert response.status_code == 200
+        if exams:
+            response = client.post(
+                f"/api/sessions/{session_id}/physical-exams",
+                json={"exam_codes": exams},
+            )
+            assert response.status_code == 200
+        if tests:
+            response = client.post(
+                f"/api/sessions/{session_id}/auxiliary-tests",
+                json={"test_codes": tests},
+            )
+            assert response.status_code == 200
+        submit_response = client.post(
+            f"/api/sessions/{session_id}/submit-diagnosis",
+            json={"diagnosis": diagnosis, "reasoning": reasoning},
+        )
+        assert submit_response.status_code == 200
+        report_response = client.post(f"/api/sessions/{session_id}/report/generate")
+        assert report_response.status_code == 200
+        return report_response.json()["student_training_report"]
+
+    rich_report = run_scenario(
+        messages=[
+            "您好，我是实习医生，可以先了解您的情况吗？您最担心什么，希望这次解决什么问题？",
+            "疼痛什么时候开始？一开始哪里疼，后来位置有没有转移？",
+            "疼痛是什么性质，大概几分？有没有恶心、呕吐、腹泻或发热？",
+            "以前有什么慢性病、手术史？有药物过敏吗？",
+            "我理解您担心病情严重。接下来想测体温并检查腹部，可能有些不适，可以吗？",
+        ],
+        exams=[
+            "vital.temperature",
+            "abd.inspection",
+            "abd.palpation.tenderness",
+            "abd.palpation.rebound",
+        ],
+        tests=["lab.cbc", "lab.crp", "img.abd_us", "lab.urinalysis"],
+        diagnosis="急性阑尾炎",
+        reasoning="转移性右下腹痛、麦氏点压痛、反跳痛、白细胞和中性粒细胞升高及超声阑尾增粗支持急性阑尾炎；尿常规无血尿，不支持右侧输尿管结石；无明显腹泻，不支持急性胃肠炎。",
+    )
+    thin_correct_report = run_scenario(
+        messages=["有没有恶心和发热？"],
+        exams=["abd.palpation.rebound"],
+        tests=["lab.cbc"],
+        diagnosis="急性阑尾炎",
+        reasoning="反跳痛和白细胞升高支持急性阑尾炎。",
+    )
+    premature_report = run_scenario(
+        messages=["什么时候开始疼的？"],
+        exams=[],
+        tests=["img.abd_ct"],
+        diagnosis="急性阑尾炎",
+        reasoning="腹痛合并影像异常，考虑急性阑尾炎。",
+    )
+    plausible_wrong_report = run_scenario(
+        messages=["有没有恶心、呕吐、腹泻和发热？"],
+        exams=["abd.palpation.tenderness"],
+        tests=["lab.cbc"],
+        diagnosis="急性胃肠炎",
+        reasoning="恶心和低热支持胃肠道感染，但尚未充分排除阑尾炎。",
+    )
+
+    assert rich_report["evidence_quality"]["observed_item_count"] > thin_correct_report["evidence_quality"]["observed_item_count"]
+    assert thin_correct_report["evidence_quality"]["level"] == "limited"
+    assert rich_report["outcome"]["diagnosis_status"] == "correct"
+    assert thin_correct_report["outcome"]["diagnosis_status"] == "correct"
+    assert plausible_wrong_report["outcome"]["diagnosis_status"] == "plausible_differential"
+    assert any(item["kind"] == "sequence" for item in premature_report["decision_replays"])
+    assert {item["category"] for item in thin_correct_report["training_prescriptions"]} == {
+        "information",
+        "reasoning",
+        "humanistic_safety",
+    }
+    assert "未找到" in thin_correct_report["outcome"]["communication_summary"]
+    assert json.dumps(rich_report, ensure_ascii=False) != json.dumps(thin_correct_report, ensure_ascii=False)
 
 
 def test_completed_session_rejects_further_training_actions(tmp_path, authenticated_user: dict[str, str]) -> None:

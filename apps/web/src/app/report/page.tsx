@@ -134,6 +134,7 @@ class RequestJsonError extends Error {
 type ReportSectionId =
   | "overview"
   | "feedback"
+  | "coverage"
   | "reflection"
   | "training"
   | "evidence";
@@ -208,6 +209,7 @@ const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 const reportSections: readonly ReportSection[] = [
   { id: "overview", label: "总览", eyebrow: "结果与边界", targetId: "report-overview" },
   { id: "feedback", label: "结论", eyebrow: "本轮结果", targetId: "report-feedback" },
+  { id: "coverage", label: "覆盖", eyebrow: "分析完整度", targetId: "report-coverage" },
   { id: "reflection", label: "复盘", eyebrow: "关键决策", targetId: "report-reflection" },
   { id: "training", label: "下一轮", eyebrow: "训练处方", targetId: "report-training-plan" },
   { id: "evidence", label: "明细", eyebrow: "评分与证据", targetId: "report-evidence" },
@@ -779,8 +781,8 @@ function ReportSectionNavigator({
   onToggle: () => void;
 }>) {
   return (
-    <aside className="scroll-mt-6 xl:sticky xl:top-6 xl:self-start">
-      <div className="rounded-[28px] border border-white/70 bg-background/75 p-2 shadow-[0_18px_50px_rgb(73_49_34_/_0.12)] backdrop-blur-xl xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto report-card-scrollbar">
+    <aside className="min-w-0 scroll-mt-6 xl:sticky xl:top-6 xl:self-start">
+      <div className="w-full min-w-0 rounded-[28px] border border-white/70 bg-background/75 p-2 shadow-[0_18px_50px_rgb(73_49_34_/_0.12)] backdrop-blur-xl xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto report-card-scrollbar">
         <div className={["flex items-start gap-2 px-3 pt-2", isCollapsed ? "justify-center xl:px-1" : "justify-between"].join(" ")}>
           <div className={isCollapsed ? "sr-only" : ""}>
             <p className="text-xs font-semibold text-foreground">报告目录</p>
@@ -1235,6 +1237,7 @@ export default function ReportPage() {
               </div>
             ) : null}
             {report ? <StudentOutcomeSection report={report} /> : null}
+            {report ? <AnalysisCoverageSection report={report} /> : null}
             {report ? <DecisionReplaySection report={report} /> : null}
             {report ? <TrainingPrescriptionSection items={report.knowledge_recommendations} report={report} /> : null}
             <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-evidence">
@@ -1491,23 +1494,124 @@ function StudentOutcomeSection({ report }: Readonly<{ report: FeedbackReport }>)
   );
 }
 
+function AnalysisCoverageSection({ report }: Readonly<{ report: FeedbackReport }>) {
+  const trainingReport = report.student_training_report;
+  const quality = trainingReport.evidence_quality;
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-coverage">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand">分析边界：哪些角度有证据，哪些仍不能判断</p>
+          <h2 className={`${sectionHeadingClassName} mt-2`}>本轮分析覆盖</h2>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+            未观察到完成证据，不等于学生从未具备该能力；系统只对本轮保存下来的动作负责。
+          </p>
+        </div>
+        <span className={`w-fit shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${getEvidenceQualityBadgeClass(quality.level)}`}>
+          {quality.label}
+        </span>
+      </div>
+      <article className="mt-4 rounded-xl border border-brand/20 bg-brand/5 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-foreground">证据密度与结论边界</p>
+          <p className="text-xs font-medium text-brand">
+            训练点 {quality.observed_item_count}/{quality.total_item_count} · 可判断角度 {quality.analyzed_angle_count}/{quality.total_angle_count}
+          </p>
+        </div>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{quality.summary}</p>
+      </article>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {trainingReport.analysis_coverage.map((item) => (
+          <article className="rounded-xl border border-border bg-muted/15 p-4" key={item.angle_id}>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <h3 className="text-sm font-semibold text-foreground">{item.label}</h3>
+              <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${getAnalysisCoverageBadgeClass(item.status)}`}>
+                {getAnalysisCoverageStatusLabel(item.status)}
+              </span>
+            </div>
+            {item.max_score > 0 ? (
+              <p className="mt-2 text-xs font-medium text-brand">{item.score}/{item.max_score} 分</p>
+            ) : null}
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.summary}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function getAnalysisCoverageStatusLabel(
+  status: FeedbackReport["student_training_report"]["analysis_coverage"][number]["status"],
+): string {
+  if (status === "sufficient") return "证据充分";
+  if (status === "partial") return "部分覆盖";
+  if (status === "missing") return "缺少完成证据";
+  return "暂不能判断";
+}
+
+function getAnalysisCoverageBadgeClass(
+  status: FeedbackReport["student_training_report"]["analysis_coverage"][number]["status"],
+): string {
+  if (status === "sufficient") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "partial") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "missing") return "border-red-200 bg-red-50 text-red-700";
+  return "border-border bg-muted/40 text-muted-foreground";
+}
+
+function getEvidenceQualityBadgeClass(
+  level: FeedbackReport["student_training_report"]["evidence_quality"]["level"],
+): string {
+  if (level === "rich") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (level === "moderate") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-red-200 bg-red-50 text-red-700";
+}
+
 function DecisionReplaySection({ report }: Readonly<{ report: FeedbackReport }>) {
   const decisions = report.student_training_report.decision_replays;
+  const priorityDecisions = decisions.slice(0, 3);
+  const additionalDecisions = decisions.slice(3);
   return (
     <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-reflection">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand">再回答：哪个具体时刻影响了结果</p>
         <h2 className={`${sectionHeadingClassName} mt-2`}>关键决策复盘</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          最多保留 3 个关键时刻；每项判断都说明观察依据、影响和下一次正确动作。
+          先显示最影响下一轮的 3 个时刻；其余已分析角度保留在完整复盘中，不再被截断丢失。
         </p>
       </div>
       <div className="mt-4 grid gap-3">
-        {decisions.map((decision, index) => {
-          const decisionKind = decision.kind ?? "evidence";
-          const evidenceLabels = decision.evidence_labels ?? [];
-          return (
-          <article className="rounded-xl border border-border bg-muted/15 p-4" key={decision.replay_id}>
+        {priorityDecisions.map((decision, index) => (
+          <DecisionReplayCard decision={decision} index={index} key={decision.replay_id} />
+        ))}
+      </div>
+      {additionalDecisions.length > 0 ? (
+        <details className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+          <summary className="cursor-pointer list-none text-sm font-semibold text-foreground">
+            展开其余 {additionalDecisions.length} 个完整分析
+          </summary>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">这些结论优先级稍低，但仍保留观察依据、教师判断和下一步动作。</p>
+          <div className="mt-3 grid gap-3">
+            {additionalDecisions.map((decision, index) => (
+              <DecisionReplayCard decision={decision} index={index + 3} key={decision.replay_id} />
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function DecisionReplayCard({
+  decision,
+  index,
+}: Readonly<{
+  decision: FeedbackReport["student_training_report"]["decision_replays"][number];
+  index: number;
+}>) {
+  const decisionKind = decision.kind ?? "evidence";
+  const evidenceLabels = decision.evidence_labels ?? [];
+  return (
+    <article className="rounded-xl border border-border bg-muted/15 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-brand/20 bg-brand/10 text-sm font-semibold text-brand">
                 {index + 1}
@@ -1549,11 +1653,7 @@ function DecisionReplaySection({ report }: Readonly<{ report: FeedbackReport }>)
                 ) : null}
               </div>
             </div>
-          </article>
-          );
-        })}
-      </div>
-    </section>
+    </article>
   );
 }
 
@@ -1576,9 +1676,12 @@ function TrainingPrescriptionSection({
       <ol className="mt-4 grid gap-3 lg:grid-cols-3">
         {trainingReport.training_prescriptions.map((goal, index) => (
           <li className="rounded-xl border border-brand/20 bg-brand/5 p-4" key={goal.goal_id}>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="flex size-7 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white">{index + 1}</span>
               <h3 className="text-sm font-semibold text-foreground">{goal.title}</h3>
+              <span className="rounded-full border border-brand/20 bg-background px-2 py-0.5 text-[11px] font-medium text-brand">
+                {getTrainingPrescriptionCategoryLabel(goal.category)}
+              </span>
             </div>
             <dl className="mt-3 grid gap-2 text-xs leading-5">
               <div><dt className="font-semibold text-brand">何时触发</dt><dd className="mt-0.5 text-muted-foreground">{goal.trigger}</dd></div>
@@ -1632,6 +1735,14 @@ function LongitudinalCount({ label, value }: Readonly<{ label: string; value: nu
       <p className="mt-1 text-base font-semibold text-foreground">{value}</p>
     </div>
   );
+}
+
+function getTrainingPrescriptionCategoryLabel(
+  category: FeedbackReport["student_training_report"]["training_prescriptions"][number]["category"],
+): string {
+  if (category === "information") return "信息采集";
+  if (category === "humanistic_safety") return "人文与安全";
+  return "诊断推理";
 }
 
 function getDecisionReplayKindLabel(kind: FeedbackReport["student_training_report"]["decision_replays"][number]["kind"]): string {

@@ -580,6 +580,10 @@ class OsceSessionService:
                 "steps": list(payload.get("steps", [])),
             }
 
+    def is_session_owned_by(self, session_id: str, student_id: str) -> bool:
+        """Check ownership without waiting for the session mutation lock."""
+        return self.session_store.get_session_owner_id(session_id) == student_id
+
     @_serialize_session_operation
     def handle_message(self, session_id: str, message: str) -> dict[str, Any] | None:
         session = self._get_session(session_id)

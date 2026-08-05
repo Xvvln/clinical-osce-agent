@@ -567,10 +567,30 @@ export type StudentDecisionReplay = Readonly<{
 
 export type StudentTrainingPrescription = Readonly<{
   goal_id: string;
+  category: "information" | "reasoning" | "humanistic_safety";
   title: string;
   trigger: string;
   action: string;
   success_signal: string;
+}>;
+
+export type StudentAnalysisCoverage = Readonly<{
+  angle_id: string;
+  label: string;
+  status: "sufficient" | "partial" | "missing" | "not_observed";
+  summary: string;
+  score: number;
+  max_score: number;
+}>;
+
+export type StudentEvidenceQuality = Readonly<{
+  level: "limited" | "moderate" | "rich";
+  label: string;
+  summary: string;
+  observed_item_count: number;
+  total_item_count: number;
+  analyzed_angle_count: number;
+  total_angle_count: number;
 }>;
 
 export type StudentLongitudinalSummary = Readonly<{
@@ -587,6 +607,8 @@ export type StudentTrainingReport = Readonly<{
   version: string;
   status: "generated" | "legacy_fallback";
   outcome: StudentReportOutcome;
+  evidence_quality: StudentEvidenceQuality;
+  analysis_coverage: readonly StudentAnalysisCoverage[];
   decision_replays: readonly StudentDecisionReplay[];
   training_prescriptions: readonly StudentTrainingPrescription[];
   longitudinal_summary: StudentLongitudinalSummary;
@@ -594,8 +616,10 @@ export type StudentTrainingReport = Readonly<{
 }>;
 
 type StudentTrainingReportPayload = Readonly<
-  Partial<Omit<StudentTrainingReport, "outcome" | "decision_replays" | "training_prescriptions" | "longitudinal_summary">> & {
+  Partial<Omit<StudentTrainingReport, "outcome" | "evidence_quality" | "analysis_coverage" | "decision_replays" | "training_prescriptions" | "longitudinal_summary">> & {
     outcome?: Partial<StudentReportOutcome>;
+    evidence_quality?: Partial<StudentEvidenceQuality>;
+    analysis_coverage?: readonly Partial<StudentAnalysisCoverage>[];
     decision_replays?: readonly Partial<StudentDecisionReplay>[];
     training_prescriptions?: readonly Partial<StudentTrainingPrescription>[];
     longitudinal_summary?: Partial<StudentLongitudinalSummary>;
@@ -654,8 +678,7 @@ export type FeedbackReportPayload = Readonly<{
   feedback_summary: string;
 }>;
 
-export type FeedbackReport = FeedbackReportPayload &
-  Readonly<{
+type NormalizedFeedbackReportFields = Readonly<{
     source_reference_items: readonly SourceReferenceItem[];
     explanation_source_items: readonly ExplanationSourceItem[];
     procedure_simulation_audit_items: readonly ProcedureSimulationAuditItem[];
@@ -672,6 +695,9 @@ export type FeedbackReport = FeedbackReportPayload &
     deep_report_analysis: DeepReportAnalysis;
     student_training_report: StudentTrainingReport;
   }>;
+
+export type FeedbackReport = Omit<FeedbackReportPayload, keyof NormalizedFeedbackReportFields> &
+  NormalizedFeedbackReportFields;
 
 export function normalizeFeedbackReport(report: FeedbackReportPayload): FeedbackReport {
   return {
@@ -854,6 +880,17 @@ function normalizeStudentTrainingReport(report: FeedbackReportPayload): StudentT
   const diagnosisStatus = normalizeDiagnosisStatus(outcome?.diagnosis_status ?? diagnostic?.classification);
   const fallbackDecisionReplays = buildLegacyDecisionReplays(report);
   const fallbackPrescriptions = buildLegacyTrainingPrescriptions(report);
+  const fallbackCoverage = buildLegacyAnalysisCoverage(report);
+  const analysisCoverage = (payload?.analysis_coverage ?? fallbackCoverage).slice(0, 10).map((item, index) => ({
+    angle_id: item.angle_id ?? `analysis-angle-${index + 1}`,
+    label: normalizeStudentFacingText(item.label, "训练分析角度"),
+    status: normalizeAnalysisCoverageStatus(item.status),
+    summary: normalizeStudentFacingText(item.summary, "本轮缺少足够材料，该角度暂不作过度推断。"),
+    score: normalizeNonNegativeNumber(item.score),
+    max_score: normalizeNonNegativeNumber(item.max_score),
+  }));
+  const fallbackEvidenceQuality = buildLegacyEvidenceQuality(report, analysisCoverage);
+  const evidenceQuality = payload?.evidence_quality;
   const longitudinal = payload?.longitudinal_summary;
   return {
     version: payload?.version ?? "student_training_report_v2",
@@ -866,7 +903,17 @@ function normalizeStudentTrainingReport(report: FeedbackReportPayload): StudentT
       safety_summary: normalizeStudentFacingText(outcome?.safety_summary, "本轮未记录明确的安全结论，请结合关键决策和评分明细复核。"),
       communication_summary: normalizeStudentFacingText(outcome?.communication_summary, "本轮沟通表现请结合关键决策和评分明细复核。"),
     },
-    decision_replays: (payload?.decision_replays ?? fallbackDecisionReplays).slice(0, 3).map((item, index) => ({
+    evidence_quality: {
+      level: normalizeEvidenceQualityLevel(evidenceQuality?.level ?? fallbackEvidenceQuality.level),
+      label: normalizeStudentFacingText(evidenceQuality?.label, fallbackEvidenceQuality.label),
+      summary: normalizeStudentFacingText(evidenceQuality?.summary, fallbackEvidenceQuality.summary),
+      observed_item_count: normalizeNonNegativeCount(evidenceQuality?.observed_item_count ?? fallbackEvidenceQuality.observed_item_count),
+      total_item_count: normalizeNonNegativeCount(evidenceQuality?.total_item_count ?? fallbackEvidenceQuality.total_item_count),
+      analyzed_angle_count: normalizeNonNegativeCount(evidenceQuality?.analyzed_angle_count ?? fallbackEvidenceQuality.analyzed_angle_count),
+      total_angle_count: normalizeNonNegativeCount(evidenceQuality?.total_angle_count ?? fallbackEvidenceQuality.total_angle_count),
+    },
+    analysis_coverage: analysisCoverage,
+    decision_replays: (payload?.decision_replays ?? fallbackDecisionReplays).slice(0, 6).map((item, index) => ({
       replay_id: item.replay_id ?? `decision-${index + 1}`,
       kind: normalizeDecisionReplayKind(item.kind),
       phase: normalizeStudentFacingText(item.phase, "本轮训练"),
@@ -879,6 +926,7 @@ function normalizeStudentTrainingReport(report: FeedbackReportPayload): StudentT
     })),
     training_prescriptions: (payload?.training_prescriptions ?? fallbackPrescriptions).slice(0, 3).map((item, index) => ({
       goal_id: item.goal_id ?? `goal-${index + 1}`,
+      category: normalizeTrainingPrescriptionCategory(item.category),
       title: normalizeStudentFacingText(item.title, "完成下一轮关键动作"),
       trigger: normalizeStudentFacingText(item.trigger, "进入下一轮相似训练场景时"),
       action: normalizeStudentFacingText(item.action, "主动完成该训练动作，并说明目的。"),
@@ -943,6 +991,7 @@ function buildLegacyDecisionReplays(report: FeedbackReportPayload): readonly Par
 function buildLegacyTrainingPrescriptions(report: FeedbackReportPayload): readonly Partial<StudentTrainingPrescription>[] {
   const actions = report.next_recommendations.map((action, index) => ({
     goal_id: `legacy-goal-${index + 1}`,
+    category: "reasoning" as const,
     title: "执行下一轮训练动作",
     trigger: "下一轮遇到相似临床任务时",
     action,
@@ -950,11 +999,118 @@ function buildLegacyTrainingPrescriptions(report: FeedbackReportPayload): readon
   }));
   return actions.length > 0 ? actions : [{
     goal_id: "legacy-goal-1",
+    category: "reasoning" as const,
     title: "迁移本轮有效做法",
     trigger: "进入下一个新病例时",
     action: "独立完成问诊、关键查体、必要检查和诊断推理，并说明每一步的目的。",
     success_signal: "能够形成完整证据链，且不新增明显安全或沟通问题。",
   }];
+}
+
+const LEGACY_ANALYSIS_ANGLE_DEFINITIONS = [
+  ["information_collection", "病史采集", ["history_taking"]],
+  ["examination_and_tests", "查体与辅助检查", ["physical_exam", "auxiliary_test"]],
+  ["main_diagnosis", "主诊断判断", ["main_diagnosis"]],
+  ["differential_diagnosis", "鉴别诊断", ["differential_diagnosis"]],
+  ["clinical_reasoning", "临床推理", ["reasoning"]],
+  ["narrative_and_concerns", "患者叙事与关切", ["narrative_medicine"]],
+  ["communication_and_relationship", "沟通与关系", ["communication_skill", "relationship_building"]],
+  ["ethics_and_safety", "伦理与安全", ["medical_ethics"]],
+] as const;
+
+const LEGACY_DIMENSION_MAX_SCORES: Readonly<Record<string, number>> = {
+  history_taking: 18,
+  physical_exam: 10,
+  auxiliary_test: 10,
+  main_diagnosis: 10,
+  differential_diagnosis: 10,
+  reasoning: 12,
+  narrative_medicine: 8,
+  communication_skill: 10,
+  medical_ethics: 7,
+  relationship_building: 5,
+};
+
+function buildLegacyAnalysisCoverage(report: FeedbackReportPayload): readonly Partial<StudentAnalysisCoverage>[] {
+  const scoreAngles = LEGACY_ANALYSIS_ANGLE_DEFINITIONS.map(([angleId, label, dimensionIds]) => {
+    const score = dimensionIds.reduce((total, dimensionId) => total + (report.dimension_scores[dimensionId] ?? 0), 0);
+    const maxScore = dimensionIds.reduce((total, dimensionId) => total + (LEGACY_DIMENSION_MAX_SCORES[dimensionId] ?? 0), 0);
+    const status: StudentAnalysisCoverage["status"] = score <= 0 ? "missing" : score / maxScore >= 0.8 ? "sufficient" : "partial";
+    return {
+      angle_id: angleId,
+      label,
+      status,
+      score,
+      max_score: maxScore,
+      summary: status === "sufficient"
+        ? `本轮获得 ${score}/${maxScore} 分，已有较完整的可观察证据。`
+        : status === "partial"
+          ? `本轮获得 ${score}/${maxScore} 分，已观察到部分动作，但证据仍未闭合。`
+          : "评分轨迹未找到完成证据；这表示本轮无法确认完成，不等于认定学生从未具备该能力。",
+    };
+  });
+  const evidence = report.deep_report_analysis?.evidence_utilization_analysis;
+  const collectedCount = evidence?.collected_key_evidence?.length ?? 0;
+  const missingCount = evidence?.missing_key_evidence?.length ?? 0;
+  const breakpointCount = evidence?.evidence_chain_breakpoints?.length ?? 0;
+  const evidenceStatus: StudentAnalysisCoverage["status"] = collectedCount > 0
+    ? missingCount > 0 || breakpointCount > 0 ? "partial" : "sufficient"
+    : missingCount > 0 || breakpointCount > 0 ? "missing" : "not_observed";
+  const process = report.deep_report_analysis?.process_strategy_analysis;
+  const sequenceCount = process?.sequence_flags?.length ?? 0;
+  const orderSummary = normalizeStudentFacingText(process?.action_order_summary, "");
+  const sequenceStatus: StudentAnalysisCoverage["status"] = sequenceCount > 0
+    ? "partial"
+    : orderSummary && !/(暂缺|不足|无法)/.test(orderSummary) ? "sufficient" : "not_observed";
+  return [
+    ...scoreAngles,
+    {
+      angle_id: "evidence_chain",
+      label: "证据链",
+      status: evidenceStatus,
+      summary: collectedCount > 0
+        ? `本轮已采集 ${collectedCount} 类关键证据，仍缺 ${missingCount} 类，并存在 ${breakpointCount} 个需要补齐的链路。`
+        : "本轮缺少可确认的关键证据链，暂不作过度推断。",
+      score: 0,
+      max_score: 0,
+    },
+    {
+      angle_id: "sequence_and_timing",
+      label: "操作顺序与时机",
+      status: sequenceStatus,
+      summary: sequenceCount > 0
+        ? `本轮记录到 ${sequenceCount} 个动作顺序问题，需要调整介入时机。`
+        : orderSummary || "本轮动作记录较少，暂不足以确认操作顺序和介入时机是否稳定。",
+      score: 0,
+      max_score: 0,
+    },
+  ];
+}
+
+function buildLegacyEvidenceQuality(
+  report: FeedbackReportPayload,
+  coverage: readonly StudentAnalysisCoverage[],
+): StudentEvidenceQuality {
+  const traces = Object.values(report.dimension_traces ?? {}).flat();
+  const totalItemCount = traces.length || Object.keys(report.rubric_scores).length;
+  const observedItemCount = traces.length
+    ? traces.filter((item) => item.awarded_score > 0 || item.matched_evidence.length > 0).length
+    : Object.values(report.rubric_scores).filter((item) => item.score > 0).length;
+  const ratio = totalItemCount > 0 ? observedItemCount / totalItemCount : 0;
+  const level: StudentEvidenceQuality["level"] = observedItemCount <= 4 || ratio < 0.2
+    ? "limited"
+    : observedItemCount <= 10 || ratio < 0.6 ? "moderate" : "rich";
+  const label = level === "limited" ? "本轮证据较少" : level === "moderate" ? "本轮证据中等" : "本轮证据较丰富";
+  const analyzedAngleCount = coverage.filter((item) => item.status !== "not_observed").length;
+  return {
+    level,
+    label,
+    summary: `评分轨迹可确认 ${observedItemCount}/${totalItemCount} 个训练点，${analyzedAngleCount}/${coverage.length} 个分析角度具备判断材料。未观察到不等于没有发生。`,
+    observed_item_count: observedItemCount,
+    total_item_count: totalItemCount,
+    analyzed_angle_count: analyzedAngleCount,
+    total_angle_count: coverage.length,
+  };
 }
 
 function normalizeStudentFacingText(value: unknown, fallback: string): string {
@@ -997,6 +1153,18 @@ function normalizeDecisionReplayKind(value: unknown): StudentDecisionReplay["kin
   return value === "strength" || value === "reasoning" || value === "sequence" || value === "safety" || value === "humanistic"
     ? value
     : "evidence";
+}
+
+function normalizeAnalysisCoverageStatus(value: unknown): StudentAnalysisCoverage["status"] {
+  return value === "sufficient" || value === "partial" || value === "missing" ? value : "not_observed";
+}
+
+function normalizeEvidenceQualityLevel(value: unknown): StudentEvidenceQuality["level"] {
+  return value === "rich" || value === "moderate" ? value : "limited";
+}
+
+function normalizeTrainingPrescriptionCategory(value: unknown): StudentTrainingPrescription["category"] {
+  return value === "information" || value === "humanistic_safety" ? value : "reasoning";
 }
 
 function normalizeLongitudinalStatus(value: unknown): StudentLongitudinalSummary["status"] {
@@ -1068,6 +1236,10 @@ function normalizeTeacherAnalysisContext(context?: Partial<TeacherAnalysisContex
 
 function normalizeNonNegativeCount(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeNonNegativeNumber(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function normalizeTeacherReasoningTraceSummary(summary?: Partial<TeacherReasoningTraceSummary>): TeacherReasoningTraceSummary {

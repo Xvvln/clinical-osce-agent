@@ -689,7 +689,15 @@ const AGENT_PROCESSING_STEP_DEFINITIONS: readonly Readonly<{ id: string; label: 
   { id: "coach", label: "教师智能体正在复核边界" },
   { id: "response", label: "正在生成可见回复" },
 ];
-const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set(["intent", "case_context", "patient_reply", "response"]);
+const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set([
+  "intent",
+  "case_context",
+  "skill",
+  "rag",
+  "patient_reply",
+  "coach",
+  "response",
+]);
 
 const apiConfigProviderOptions: readonly ApiConfigProviderOption[] = [
   {
@@ -1131,7 +1139,7 @@ function buildPendingAgentProcessingTimeline(processingStatus?: SessionProcessin
     : "正在等待标准化病人回复";
   return {
     state: "pending",
-    isOpen: false,
+    isOpen: true,
     title: "智能体处理中",
     summary: getPendingPatientProcessingSummary(processingStatus, timelineSteps),
     steps: timelineSteps.length > 0 ? timelineSteps : [
@@ -2066,9 +2074,10 @@ function fetchProcedureCatalog(): Promise<ProcedureCatalog> {
   });
 }
 
-function fetchSessionProcessingStatus(sessionId: string): Promise<SessionProcessingStatus> {
+function fetchSessionProcessingStatus(sessionId: string, signal?: AbortSignal): Promise<SessionProcessingStatus> {
   return requestJson<SessionProcessingStatus>(`/api/sessions/${sessionId}/processing-status`, {
     method: "GET",
+    signal,
   });
 }
 
@@ -4087,9 +4096,23 @@ function HomeContent() {
 
   function refreshPendingProcessingTimeline(sessionId: string, messageId: string): () => void {
     let isStopped = false;
+    let nextPollTimeoutId: number | null = null;
+    let activeRequestController: AbortController | null = null;
+
+    const scheduleNextPoll = () => {
+      if (isStopped) {
+        return;
+      }
+      nextPollTimeoutId = window.setTimeout(() => {
+        nextPollTimeoutId = null;
+        void pollProcessingStatus();
+      }, AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS);
+    };
+
     const pollProcessingStatus = async () => {
+      activeRequestController = new AbortController();
       try {
-        const processingStatus = await fetchSessionProcessingStatus(sessionId);
+        const processingStatus = await fetchSessionProcessingStatus(sessionId, activeRequestController.signal);
         if (processingStatus.state !== "running") {
           return;
         }
@@ -4120,14 +4143,19 @@ function HomeContent() {
         );
       } catch {
         // Keep the current pending message if the transient polling request fails.
+      } finally {
+        activeRequestController = null;
+        scheduleNextPoll();
       }
     };
 
     void pollProcessingStatus();
-    const intervalId = window.setInterval(pollProcessingStatus, AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS);
     return () => {
       isStopped = true;
-      window.clearInterval(intervalId);
+      activeRequestController?.abort();
+      if (nextPollTimeoutId !== null) {
+        window.clearTimeout(nextPollTimeoutId);
+      }
     };
   }
 

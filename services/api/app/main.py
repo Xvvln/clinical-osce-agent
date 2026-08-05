@@ -2326,6 +2326,15 @@ def _require_owned_session(session_id: str, auth_token: str | None) -> dict[str,
     return session
 
 
+def _require_owned_session_processing_status(
+    session_id: str,
+    auth_token: str | None,
+) -> None:
+    user = _require_current_user(auth_token)
+    if not osce_session_service.is_session_owned_by(session_id, user["user_id"]):
+        raise HTTPException(status_code=404, detail="session not found")
+
+
 def _resolve_patient_speech_request(request: AudioSpeechRequest, auth_token: str | None) -> tuple[str, PatientSpeechProfile]:
     if not request.session_id or request.message_index is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="患者语音上下文不完整。")
@@ -6266,7 +6275,7 @@ def get_session_processing_status(
     session_id: str,
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
-    _require_owned_session(session_id, auth_token)
+    _require_owned_session_processing_status(session_id, auth_token)
     return osce_session_service.get_message_processing_status(session_id)
 
 

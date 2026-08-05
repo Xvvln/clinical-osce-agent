@@ -263,9 +263,9 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /function formatAgentProcessingElapsed\(elapsedMs: number \| undefined\): string/);
   assert.match(pageSource, /return "瞬时";/);
   assert.match(pageSource, /type SessionProcessingStatus = Readonly<\{/);
-  assert.match(pageSource, /function fetchSessionProcessingStatus\(sessionId: string\): Promise<SessionProcessingStatus>/);
+  assert.match(pageSource, /function fetchSessionProcessingStatus\(sessionId: string, signal\?: AbortSignal\): Promise<SessionProcessingStatus>/);
   assert.match(pageSource, /function buildPendingAgentProcessingTimeline\(processingStatus\?: SessionProcessingStatus \| null\): AgentProcessingTimeline/);
-  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: false,[\s\S]*?summary: getPendingPatientProcessingSummary\(processingStatus, timelineSteps\)/);
+  assert.match(pageSource, /state: "pending",[\s\S]*?isOpen: true,[\s\S]*?summary: getPendingPatientProcessingSummary\(processingStatus, timelineSteps\)/);
   assert.doesNotMatch(pageSource, /if \(processingStatus\.summary\)/);
   assert.match(pageSource, /return latestVisibleStep \? `当前：\$\{stripTerminalChinesePunctuation\(getAgentProcessingStepLabel\(latestVisibleStep\)\)\}` : "当前：正在组织标准化病人回复";/);
   assert.match(pageSource, /const isPatientFallbackStep = PATIENT_REPLY_PROCESSING_STEP_IDS\.has\(currentStepId\);/);
@@ -278,7 +278,7 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(pageSource, /function getAgentProcessingStepRetrievedCount\(step: AgentProcessingStep\): number \| undefined/);
   assert.match(pageSource, /`已检索教学知识库：命中 \$\{retrievedCount\} 条`/);
   assert.match(pageSource, /`知识库 \$\{knowledgeReferenceCount\} 条`/);
-  assert.match(pageSource, /const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set\(\["intent", "case_context", "patient_reply", "response"\]\);/);
+  assert.match(pageSource, /const PATIENT_REPLY_PROCESSING_STEP_IDS = new Set\(\[[\s\S]*?"intent",[\s\S]*?"case_context",[\s\S]*?"skill",[\s\S]*?"rag",[\s\S]*?"patient_reply",[\s\S]*?"coach",[\s\S]*?"response",[\s\S]*?\]\);/);
   assert.match(pageSource, /function buildCompletedAgentProcessingTimeline\(session: OsceSession, replyText: string\): AgentProcessingTimeline/);
   assert.match(pageSource, /function AgentProcessingTimelineView/);
   assert.match(pageSource, /open=\{timeline\.isOpen\}/);
@@ -287,7 +287,11 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.doesNotMatch(pageSource, /agentProcessingDurationsByMessageKey/);
   assert.match(pageSource, /processingTimeline: \{[\s\S]*?\.\.\.buildPendingAgentProcessingTimeline\(\),[\s\S]*?startedAtMs: patientReplyProcessingStartedAtMs,[\s\S]*?\}/);
   assert.match(pageSource, /refreshPendingProcessingTimeline\(activeSession\.session_id, pendingPatientReplyId\)/);
-  assert.match(pageSource, /window\.setInterval\(pollProcessingStatus, AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS\)/);
+  assert.match(pageSource, /nextPollTimeoutId = window\.setTimeout\(\(\) => \{[\s\S]*?void pollProcessingStatus\(\);[\s\S]*?AGENT_PROCESSING_STATUS_POLL_INTERVAL_MS\);/);
+  assert.match(pageSource, /activeRequestController = new AbortController\(\);/);
+  assert.match(pageSource, /fetchSessionProcessingStatus\(sessionId, activeRequestController\.signal\)/);
+  assert.match(pageSource, /activeRequestController\?\.abort\(\);/);
+  assert.doesNotMatch(pageSource, /window\.setInterval\(pollProcessingStatus/);
   assert.match(pageSource, /if \(processingStatus\.state !== "running"\) \{[\s\S]*?return;[\s\S]*?\}/);
   assert.match(pageSource, /const completedTimeline = buildCompletedAgentProcessingTimeline\(updatedSession, replyText\);/);
   assert.match(pageSource, /elapsedMs: Math\.max\(completedTimeline\.elapsedMs \?\? 0, patientReplyProcessingElapsedMs\)/);
@@ -307,7 +311,7 @@ test("home pending patient reply renders a collapsible agent processing timeline
   assert.match(globalsSource, /\.clinical-osce-agent-process-dot-active/);
 });
 
-test("home patient reply processing timeline excludes coach Skill and RAG work", () => {
+test("home patient reply processing timeline keeps safe patient and teacher workflow stages", () => {
   const completedTimelineStart = pageSource.indexOf("function buildCompletedAgentProcessingTimeline");
   const completedTimelineEnd = pageSource.indexOf("function buildCompletedCoachProcessingTimeline");
   assert.ok(completedTimelineStart >= 0, "should define completed patient timeline builder");
@@ -871,7 +875,8 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /收起评分报告目录/);
   assert.match(reportSource, /展开评分报告目录/);
   assert.match(reportSource, /backdrop-blur-xl/);
-  assert.match(reportSource, /<aside className="scroll-mt-6 xl:sticky xl:top-6 xl:self-start"/);
+  assert.match(reportSource, /<aside className="min-w-0 scroll-mt-6 xl:sticky xl:top-6 xl:self-start"/);
+  assert.match(reportSource, /<div className="w-full min-w-0 rounded-\[28px\]/);
   assert.match(reportSource, /isReportNavigatorCollapsed \? "xl:grid-cols-\[76px_minmax\(0,1fr\)\]" : "xl:grid-cols-\[240px_minmax\(0,1fr\)\]"/);
   assert.match(reportSource, /xl:grid xl:overflow-visible xl:pb-0/);
   assert.match(reportSource, /max-h-\[calc\(100vh-3rem\)\]/);
@@ -884,12 +889,13 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 2/);
   assert.match(reportSource, /onSectionSelect\(section\.id\)/);
   assert.doesNotMatch(reportSource, /xl:grid-cols-\[320px_minmax\(0,1fr\)\]/);
-  for (const label of ["总览", "结论", "复盘", "下一轮", "明细"]) {
+  for (const label of ["总览", "结论", "覆盖", "复盘", "下一轮", "明细"]) {
     assert.match(reportSource, new RegExp(`label: "${label}"`));
   }
   for (const targetId of [
     "report-overview",
     "report-feedback",
+    "report-coverage",
     "report-reflection",
     "report-training-plan",
     "report-evidence",
@@ -899,6 +905,8 @@ test("report page renders a compact iOS-style section navigator", () => {
   }
   assert.match(reportSource, /href=\{`#\$\{section\.targetId\}`\}/);
   assert.ok(reportSource.indexOf('label: "总览"') < reportSource.indexOf('label: "结论"'));
+  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "覆盖"'));
+  assert.ok(reportSource.indexOf('label: "覆盖"') < reportSource.indexOf('label: "复盘"'));
   assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "复盘"'));
   assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "下一轮"'));
   assert.ok(reportSource.indexOf('label: "下一轮"') < reportSource.indexOf('label: "明细"'));
@@ -946,12 +954,29 @@ test("report page prioritizes student learning over repeated source proof", () =
   assert.doesNotMatch(reportSource, /<PersonalTrainingSkillSection candidate=/);
 });
 
+test("report page exposes analysis completeness and keeps lower-priority replays expandable", () => {
+  assert.match(reportSource, /function AnalysisCoverageSection/);
+  assert.match(reportSource, /<AnalysisCoverageSection report=\{report\} \/>/);
+  assert.match(reportSource, /id="report-coverage"/);
+  assert.match(reportSource, /本轮分析覆盖/);
+  assert.match(reportSource, /证据密度与结论边界/);
+  assert.match(reportSource, /未观察到完成证据，不等于学生从未具备该能力/);
+  assert.match(reportSource, /trainingReport\.analysis_coverage\.map/);
+  assert.match(reportSource, /const priorityDecisions = decisions\.slice\(0, 3\);/);
+  assert.match(reportSource, /const additionalDecisions = decisions\.slice\(3\);/);
+  assert.match(reportSource, /展开其余 \{additionalDecisions\.length\} 个完整分析/);
+  assert.match(reportModelSource, /\.slice\(0, 6\)\.map/);
+  assert.match(reportModelSource, /category: "information" \| "reasoning" \| "humanistic_safety";/);
+});
+
 test("report page keeps teacher and Skill data behind one student-facing report contract", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
   assert.match(reportModelSource, /export type TeacherReflectionMajorIssue = Readonly<\{/);
   assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
   assert.match(reportModelSource, /export type StudentTrainingReport = Readonly<\{/);
   assert.match(reportModelSource, /outcome: StudentReportOutcome;/);
+  assert.match(reportModelSource, /evidence_quality: StudentEvidenceQuality;/);
+  assert.match(reportModelSource, /analysis_coverage: readonly StudentAnalysisCoverage\[];/);
   assert.match(reportModelSource, /decision_replays: readonly StudentDecisionReplay\[];/);
   assert.match(reportModelSource, /training_prescriptions: readonly StudentTrainingPrescription\[];/);
   assert.match(reportModelSource, /longitudinal_summary: StudentLongitudinalSummary;/);
