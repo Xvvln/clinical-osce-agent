@@ -581,10 +581,11 @@ def _is_deleted_admin_session(session_id: object) -> bool:
 
 def _build_admin_procedure_simulation_audit_items() -> list[dict[str, Any]]:
     audit_items: list[dict[str, Any]] = []
+    user_index = _admin_user_identity_index()
     for report in osce_session_service.report_store.list_reports():
         if _is_deleted_admin_session(report.get("session_id")):
             continue
-        enriched_report = enrich_report(report)
+        enriched_report = _enrich_admin_report(report, user_index)
         report_audit_items = enriched_report.get("procedure_simulation_audit_items", [])
         if not isinstance(report_audit_items, list):
             continue
@@ -1892,6 +1893,73 @@ def _build_admin_user_payload(user: dict[str, str]) -> dict[str, object]:
 
 def _admin_user_directory() -> list[dict[str, object]]:
     return [_build_admin_user_payload(user) for user in auth_store.list_users()]
+
+
+def _admin_user_identity_index() -> dict[str, dict[str, object]]:
+    index: dict[str, dict[str, object]] = {}
+    for user in _admin_user_directory():
+        user_id = str(user.get("user_id") or "").strip()
+        email = str(user.get("email") or "").strip().lower()
+        if user_id:
+            index[user_id] = user
+        if email:
+            index[email] = user
+    return index
+
+
+def _admin_student_identity_fields(
+    student_id: object,
+    user_index: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    normalized_student_id = str(student_id or "").strip()
+    if not normalized_student_id:
+        return {}
+    user = user_index.get(normalized_student_id) or user_index.get(
+        normalized_student_id.lower()
+    )
+    if user is None:
+        if "@" not in normalized_student_id:
+            return {}
+        email = normalized_student_id.lower()
+        return {
+            "student_email": email,
+            "student_display_name": "",
+            "student_label": email,
+        }
+    email = str(user.get("email") or "").strip()
+    display_name = str(user.get("display_name") or "").strip()
+    label = (
+        f"{display_name}（{email}）"
+        if display_name and email and display_name.lower() != email.lower()
+        else display_name or email or "未登记学员"
+    )
+    return {
+        "student_email": email,
+        "student_display_name": display_name,
+        "student_label": label,
+    }
+
+
+def _enrich_admin_session_summary(
+    session: dict[str, Any],
+    user_index: dict[str, dict[str, object]],
+) -> dict[str, Any]:
+    enriched = enrich_session_summary(session)
+    return {
+        **enriched,
+        **_admin_student_identity_fields(enriched.get("student_id"), user_index),
+    }
+
+
+def _enrich_admin_report(
+    report: dict[str, Any],
+    user_index: dict[str, dict[str, object]],
+) -> dict[str, Any]:
+    enriched = enrich_report(report)
+    return {
+        **enriched,
+        **_admin_student_identity_fields(enriched.get("student_id"), user_index),
+    }
 
 
 def _validated_classroom_member_user_ids(
@@ -5586,6 +5654,17 @@ def get_admin_learning_analytics(
         ),
         limit=limit,
     )
+    user_index = _admin_user_identity_index()
+    student_analytics = analytics.get("student_analytics", [])
+    if isinstance(student_analytics, list):
+        analytics["student_analytics"] = [
+            {
+                **item,
+                **_admin_student_identity_fields(item.get("student_id"), user_index),
+            }
+            for item in student_analytics
+            if isinstance(item, dict)
+        ]
     return {"learning_analytics": analytics}
 
 
@@ -5848,8 +5927,9 @@ def list_admin_reports(
 
 
 def _list_enriched_admin_reports() -> list[dict[str, Any]]:
+    user_index = _admin_user_identity_index()
     return [
-        enrich_report(report)
+        _enrich_admin_report(report, user_index)
         for report in osce_session_service.report_store.list_reports()
         if not _is_deleted_admin_session(report.get("session_id"))
     ]
@@ -5874,6 +5954,9 @@ def export_admin_reports(
         "report_id",
         "session_id",
         "student_id",
+        "student_email",
+        "student_display_name",
+        "student_label",
         "case_id",
         "case_title",
         "total_score",
@@ -5928,10 +6011,11 @@ def list_admin_sessions(
     auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> dict[str, object]:
     _require_admin_user(auth_token)
+    user_index = _admin_user_identity_index()
     return _build_paginated_admin_payload(
         "sessions",
         [
-            enrich_session_summary(session)
+            _enrich_admin_session_summary(session, user_index)
             for session in osce_session_service.session_store.list_session_summaries()
             if not _is_deleted_admin_session(session.get("session_id"))
         ],
@@ -5969,7 +6053,7 @@ def get_admin_session_report(
     report = osce_session_service.report_store.get_report(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
-    return {"report": enrich_report(report)}
+    return {"report": _enrich_admin_report(report, _admin_user_identity_index())}
 
 
 @app.get("/api/admin/sessions/{session_id}/events")

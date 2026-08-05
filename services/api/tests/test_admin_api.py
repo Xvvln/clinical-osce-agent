@@ -2657,6 +2657,68 @@ def test_admin_can_list_training_session_summaries(tmp_path, monkeypatch) -> Non
     assert payload["pagination"] == {"limit": 2, "offset": 0, "total": 2}
 
 
+def test_admin_session_and_report_expose_readable_student_identity(tmp_path, monkeypatch) -> None:
+    session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")
+    report_store = ReportStore(tmp_path / "reports.sqlite3")
+    monkeypatch.setattr(osce_session_service, "session_store", session_store, raising=False)
+    monkeypatch.setattr(osce_session_service, "report_store", report_store, raising=False)
+
+    with authenticated_admin_client(tmp_path, monkeypatch) as client:
+        student = main.auth_store.create_user(
+            email="student-readable@example.test",
+            password="safe-password",
+            display_name="张同学",
+        )
+        assert student is not None
+        session_store.create_session(
+            OsceSession(
+                session_id="session_readable_identity",
+                student_id=student["user_id"],
+                case_id="pneumonia_001",
+                stage="feedback",
+            )
+        )
+        report_store.save_report(
+            {
+                "report_id": "report_readable_identity",
+                "session_id": "session_readable_identity",
+                "student_id": student["user_id"],
+                "case_id": "pneumonia_001",
+                "total_score": 86,
+                "missed_items": [],
+            }
+        )
+
+        sessions_response = client.get("/api/admin/sessions")
+        reports_response = client.get("/api/admin/reports")
+        report_detail_response = client.get("/api/admin/sessions/session_readable_identity/report")
+        analytics_response = client.get("/api/admin/learning-analytics")
+        account_search_response = client.get(
+            "/api/admin/sessions",
+            params={"q": "student-readable@example.test"},
+        )
+
+    assert sessions_response.status_code == 200
+    assert reports_response.status_code == 200
+    assert report_detail_response.status_code == 200
+    assert analytics_response.status_code == 200
+    assert account_search_response.status_code == 200
+    assert account_search_response.json()["pagination"]["total"] == 1
+    for payload in (
+        sessions_response.json()["sessions"][0],
+        reports_response.json()["reports"][0],
+        report_detail_response.json()["report"],
+    ):
+        assert payload["case_title"] == "发热咳嗽伴胸痛教学病例"
+        assert payload["student_email"] == "student-readable@example.test"
+        assert payload["student_display_name"] == "张同学"
+        assert payload["student_label"] == "张同学（student-readable@example.test）"
+    student_analytics = analytics_response.json()["learning_analytics"]["student_analytics"][0]
+    assert student_analytics["student_email"] == "student-readable@example.test"
+    assert student_analytics["student_display_name"] == "张同学"
+    assert student_analytics["student_label"] == "张同学（student-readable@example.test）"
+
+
 
 def test_admin_can_paginate_training_session_summaries(tmp_path, monkeypatch) -> None:
     session_store = OsceSessionStore(tmp_path / "osce_sessions.sqlite3")

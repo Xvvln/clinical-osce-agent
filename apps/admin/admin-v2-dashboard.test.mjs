@@ -203,6 +203,20 @@ test("admin v2 keeps necessary management actions but avoids raw debug surfaces"
   }
 });
 
+test("admin training surfaces show readable case and account labels instead of raw ids", () => {
+  const sessionTableSource = sourceBetween(dashboardSource, "function SessionTable", "function MiniStat");
+  const trainingSectionSource = sourceBetween(dashboardSource, "function TrainingSection", "function ProcedureAuditList");
+
+  for (const contract of ["student_email?: string", "student_display_name?: string", "student_label?: string", "getStudentLabel("]) {
+    assert.match(dashboardSource, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(sessionTableSource, /\{session\.student_id\}/);
+  assert.doesNotMatch(sessionTableSource, /<p[^>]*>\{session\.session_id\}<\/p>/);
+  assert.doesNotMatch(trainingSectionSource, /学员：\{activeSession\.student_id\}/);
+  assert.doesNotMatch(trainingSectionSource, /\{report\.student_id\}/);
+  assert.doesNotMatch(trainingSectionSource, /<p[^>]*>\{report\.session_id\}<\/p>/);
+});
+
 test("admin v2 keeps the main workspace clean and moves refresh into the sidebar", () => {
   assert.doesNotMatch(dashboardSource, /<header className=/);
   assert.doesNotMatch(dashboardSource, /临境 OSCE 管理工作台/);

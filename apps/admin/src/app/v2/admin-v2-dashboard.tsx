@@ -159,6 +159,9 @@ type Pagination = Readonly<{
 type AdminSessionSummary = Readonly<{
   session_id: string;
   student_id: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
   case_id: string;
   case_title?: string;
   stage: string;
@@ -181,6 +184,9 @@ type AdminReportSummary = Readonly<{
   case_id: string;
   case_title?: string;
   student_id: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
   total_score: number;
   missed_item_labels?: readonly string[];
   generation_warnings?: readonly string[];
@@ -218,6 +224,9 @@ type AdminSessionReport = Readonly<{
   case_id: string;
   case_title?: string;
   student_id: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
   total_score?: number;
   score_groups?: Record<string, Readonly<{ score: number; max_score: number }>>;
   dimension_scores?: Record<string, number>;
@@ -253,7 +262,11 @@ type AdminMissedOpportunity = Readonly<{
 type TrainingEventRecord = Readonly<{
   session_id?: string;
   case_id?: string;
+  case_title?: string;
   student_id?: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
   event_type: string;
   payload?: Record<string, unknown>;
   created_at?: string;
@@ -927,6 +940,9 @@ type AdminCaseLearningAnalytics = Readonly<{
 
 type AdminStudentLearningAnalytics = Readonly<{
   student_id: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
   session_count: number;
   report_count: number;
   average_total_score: number;
@@ -992,6 +1008,9 @@ type ProcedureSimulationAuditItem = Readonly<{
   session_id?: string;
   source_context_references?: readonly string[];
   student_id?: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
 }>;
 
 type ProcedureSimulationAuditSummary = Readonly<{
@@ -3614,13 +3633,12 @@ function ResourcesSection({
               <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={caseItem.case_id}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="truncate text-base font-semibold">{caseItem.title || caseItem.case_id}</h3>
+                    <h3 className="truncate text-base font-semibold">{getCaseLabel(caseItem)}</h3>
                     <p className="mt-2 line-clamp-2 text-sm leading-6 text-[#6F6257]">{caseItem.chief_complaint || "未填写主诉"}</p>
                   </div>
                   <Badge variant="muted">{caseItem.difficulty || "未分级"}</Badge>
                 </div>
-                <div className="mt-4 flex items-center justify-between gap-3">
-                  <p className="truncate text-xs text-[#8A7D6F]">{caseItem.case_id}</p>
+                <div className="mt-4 flex items-center justify-end gap-3">
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button disabled={loadingCaseId === caseItem.case_id} onClick={() => void handleOpenCaseDetail(caseItem.case_id)} size="sm" type="button" variant="secondary">
                       {loadingCaseId === caseItem.case_id ? <Loader2 className="animate-spin" /> : <FileText />}
@@ -4218,7 +4236,7 @@ function DocumentUploadPanel({
           </FormField>
           <FormField label="关联病例">
             <SelectInput
-              optionLabels={Object.fromEntries(cases.map((caseItem) => [caseItem.case_id, caseItem.title || caseItem.case_id]))}
+              optionLabels={Object.fromEntries(cases.map((caseItem) => [caseItem.case_id, getCaseLabel(caseItem)]))}
               options={scope === "case" ? cases.map((caseItem) => caseItem.case_id) : [""]}
               value={scope === "case" ? caseId : ""}
               onChange={setCaseId}
@@ -4733,9 +4751,9 @@ function CaseDetailModal({ casePayload, onClose }: Readonly<{ casePayload: Admin
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#E7E0D4] px-6 py-5">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-[#AE5630]">病例详情</p>
-            <h3 className="mt-1 text-2xl font-semibold">{getStringField(casePayload, "case_title", getStringField(casePayload, "case_id", "未命名病例"))}</h3>
+            <h3 className="mt-1 text-2xl font-semibold">{getStringField(casePayload, "case_title", "未命名病例")}</h3>
             <p className="mt-2 text-sm leading-6 text-[#6F6257]">
-              {getStringField(casePayload, "case_id", "未记录")} · {getStringField(casePayload, "course_module", "未记录")} · {getStringField(casePayload, "difficulty", "未分级")}
+              {getStringField(casePayload, "course_module", "未记录")} · {getStringField(casePayload, "difficulty", "未分级")}
             </p>
           </div>
           <Button onClick={onClose} variant="secondary">
@@ -5521,7 +5539,7 @@ function TrainingSection({
         </CardHeader>
         <CardContent>
           <form className="mb-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void loadSessions(0); }}>
-            <Input aria-label="搜索训练记录" onChange={(event) => setSessionQuery(event.target.value)} placeholder="搜索病例、学生、阶段或 Session ID" value={sessionQuery} />
+            <Input aria-label="搜索训练记录" onChange={(event) => setSessionQuery(event.target.value)} placeholder="搜索病例名称、学员账号或阶段" value={sessionQuery} />
             <Button disabled={isListLoading} type="submit" variant="secondary">搜索</Button>
           </form>
           <SessionTable
@@ -5545,8 +5563,8 @@ function TrainingSection({
             <div className="grid gap-4">
               <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4">
                 <p className="text-xs font-semibold text-[#AE5630]">{activeSession.stage_label ?? activeSession.stage}</p>
-                <h3 className="mt-1 text-xl font-semibold">{activeSession.case_title || activeSession.case_id}</h3>
-                <p className="mt-2 text-sm text-[#6F6257]">学员：{activeSession.student_id}</p>
+                <h3 className="mt-1 text-xl font-semibold">{getCaseLabel(activeSession)}</h3>
+                <p className="mt-2 text-sm text-[#6F6257]">学员：{getStudentLabel(activeSession)}</p>
                 <p className="mt-1 text-sm text-[#6F6257]">更新：{formatDateTime(activeSession.updated_at)}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button disabled={isDetailBusy || !hasSelectedReport} onClick={() => onReadReport(activeSession.session_id)} size="sm">
@@ -5565,7 +5583,7 @@ function TrainingSection({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold text-[#AE5630]">评分报告</p>
-                      <h4 className="mt-1 text-lg font-semibold">{selectedReport.case_title || selectedReport.case_id}</h4>
+                      <h4 className="mt-1 text-lg font-semibold">{getCaseLabel(selectedReport)}</h4>
                     </div>
                     <Badge variant="success">{selectedReport.total_score ?? 0} 分</Badge>
                   </div>
@@ -5670,7 +5688,7 @@ function TrainingSection({
         </CardHeader>
         <CardContent>
           <form className="mb-3 flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); void loadReports(0); }}>
-            <Input aria-label="搜索训练报告" onChange={(event) => setReportQuery(event.target.value)} placeholder="搜索病例、学生、报告或 Session ID" value={reportQuery} />
+            <Input aria-label="搜索训练报告" onChange={(event) => setReportQuery(event.target.value)} placeholder="搜索病例名称、学员账号或报告内容" value={reportQuery} />
             <Button disabled={isListLoading} type="submit" variant="secondary">搜索报告</Button>
             <Button onClick={() => window.location.assign(`/api/admin/reports/export?format=csv&q=${encodeURIComponent(reportQuery.trim())}`)} type="button" variant="secondary">导出 CSV</Button>
             <Button onClick={() => window.location.assign(`/api/admin/reports/export?format=json&q=${encodeURIComponent(reportQuery.trim())}`)} type="button" variant="outline">导出 JSON</Button>
@@ -5689,8 +5707,8 @@ function TrainingSection({
               <tbody>
                 {reports.map((report) => (
                   <tr className="border-b border-[#F0E8DC]" key={report.report_id || report.session_id}>
-                    <td className="py-3 pr-4"><p className="font-semibold">{report.case_title || report.case_id}</p><p className="mt-1 text-xs text-[#8A7D6F]">{report.session_id}</p></td>
-                    <td className="py-3 pr-4 text-[#6F6257]">{report.student_id}</td>
+                    <td className="py-3 pr-4"><p className="font-semibold">{getCaseLabel(report)}</p></td>
+                    <td className="py-3 pr-4 text-[#6F6257]">{getStudentLabel(report)}</td>
                     <td className="py-3 pr-4"><Badge variant="success">{report.total_score} 分</Badge></td>
                     <td className="py-3 pr-4 text-[#6F6257]">{report.missed_item_labels?.slice(0, 3).join("、") || "未记录"}</td>
                     <td className="py-3 pr-4"><Button disabled={isDetailBusy} onClick={() => { setActiveSessionId(report.session_id); onSelectSession(report.session_id); onReadReport(report.session_id); }} size="sm" variant="secondary">查看完整报告</Button></td>
@@ -5735,7 +5753,7 @@ function ProcedureAuditList({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h4 className="truncate text-sm font-semibold">{audit.label || audit.code || "未命名项目"}</h4>
-                    <p className="mt-1 text-xs text-[#6F6257]">{audit.case_title || audit.case_id || "未绑定病例"}</p>
+                    <p className="mt-1 text-xs text-[#6F6257]">{audit.case_title || "未绑定病例"}</p>
                   </div>
                   <Badge variant={audit.approval_status === "approved" || audit.approval_decision === "approved" ? "success" : "warning"}>
                     {getProcedureAuditStatusLabel(audit)}
@@ -5978,7 +5996,7 @@ function CaseLearningAnalyticsList({ items }: Readonly<{ items: readonly AdminCa
           <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={item.case_id}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold">{item.case_title || item.case_id}</h3>
+                <h3 className="text-base font-semibold">{getCaseLabel(item)}</h3>
                 <p className="mt-1 text-xs text-[#6F6257]">
                   {formatCount(item.session_count)} 次训练 · {formatCount(item.report_count)} 份报告
                 </p>
@@ -6017,7 +6035,7 @@ function StudentLearningAnalyticsList({ items }: Readonly<{ items: readonly Admi
           <article className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={item.student_id}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold">{item.student_id}</h3>
+                <h3 className="text-base font-semibold">{getStudentLabel(item)}</h3>
                 <p className="mt-1 text-xs text-[#6F6257]">{joinText(item.case_titles, "未绑定病例")}</p>
               </div>
               <Badge variant="warning">均分 {formatInsightNumber(item.average_total_score)}</Badge>
@@ -6466,7 +6484,7 @@ function AuditEventList({ events }: Readonly<{ events: readonly TrainingEventRec
               <article className="flex flex-col gap-2 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4 sm:flex-row sm:items-center sm:justify-between" key={`${event.created_at ?? ""}-${event.event_type}-${index}`}>
                 <div>
                   <h4 className="text-sm font-semibold">{getEventTypeLabel(event.event_type)}</h4>
-                  <p className="mt-1 text-xs text-[#6F6257]">{[event.case_id, event.session_id, event.student_id].filter(Boolean).join(" · ") || "系统事件"}</p>
+                  <p className="mt-1 text-xs text-[#6F6257]">{event.case_title || (getStudentLabel(event) !== "未登记学员" ? getStudentLabel(event) : "系统事件")}</p>
                 </div>
                 <span className="text-xs text-[#8A7D6F]">{formatDateTime(event.created_at ?? "")}</span>
               </article>
@@ -6593,14 +6611,14 @@ function EvaluationSection({
         </CardHeader>
         <CardContent>
           <form className="mb-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void loadEvaluations(0); }}>
-            <Input aria-label="搜索评测批次" onChange={(event) => setEvaluationQuery(event.target.value)} placeholder="搜索批次名称或批次 ID" value={evaluationQuery} />
+            <Input aria-label="搜索评测批次" onChange={(event) => setEvaluationQuery(event.target.value)} placeholder="搜索评测批次名称" value={evaluationQuery} />
             <Button disabled={isEvaluationListLoading} type="submit" variant="secondary">搜索</Button>
           </form>
           <div className="grid gap-2">
             {evaluations.map((evaluation) => (
               <article className="flex flex-col gap-3 rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4 sm:flex-row sm:items-center sm:justify-between" key={evaluation.batch_id}>
                 <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold">{evaluation.batch_label || evaluation.batch_id}</h3>
+                  <h3 className="truncate text-sm font-semibold">{evaluation.batch_label || "未命名评测批次"}</h3>
                   <p className="mt-1 text-xs text-[#6F6257]">通过 {evaluation.passed_cases}/{evaluation.total_cases}</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -6635,7 +6653,7 @@ function EvaluationSection({
                 {(selectedEvaluation.results ?? []).slice(0, 8).map((result, index) => (
                   <div className="rounded-2xl border border-[#E7E0D4] bg-[#FAF9F5] p-4" key={`${result.session_id ?? ""}-${index}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="text-sm font-semibold">{result.session_id || `用例 ${index + 1}`}</h4>
+                      <h4 className="text-sm font-semibold">用例 {index + 1}</h4>
                       <Badge variant={result.rag_source_coverage_passed === false || result.rag_explanation_coverage_passed === false ? "warning" : "success"}>RAG 覆盖</Badge>
                     </div>
                     <p className="mt-2 text-sm text-[#6F6257]">
@@ -6872,7 +6890,7 @@ function EvaluationConfigurationPanel({
             <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-sm font-medium">场景 ID<Input disabled={Boolean(selectedCaseKey)} onChange={(event) => setCaseDraft((current) => ({ ...current, case_key: event.target.value }))} value={caseDraft.case_key} /></label>
               <label className="grid gap-1 text-sm font-medium">场景名称<Input onChange={(event) => setCaseDraft((current) => ({ ...current, label: event.target.value }))} value={caseDraft.label} /></label>
-              <label className="grid gap-1 text-sm font-medium">训练病例<select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3" onChange={(event) => setCaseDraft((current) => ({ ...current, case_id: event.target.value }))} value={caseDraft.case_id}>{cases.map((item) => <option key={item.case_id} value={item.case_id}>{item.title || item.case_id}</option>)}</select></label>
+              <label className="grid gap-1 text-sm font-medium">训练病例<select className="h-10 rounded-xl border border-[#E7E0D4] bg-white px-3" onChange={(event) => setCaseDraft((current) => ({ ...current, case_id: event.target.value }))} value={caseDraft.case_id}>{cases.map((item) => <option key={item.case_id} value={item.case_id}>{getCaseLabel(item)}</option>)}</select></label>
               <label className="grid gap-1 text-sm font-medium">期望总分<Input min={0} onChange={(event) => setCaseDraft((current) => ({ ...current, expected_total_score: Number(event.target.value) }))} type="number" value={caseDraft.expected_total_score} /></label>
             </div>
             <label className="grid gap-1 text-sm font-medium">禁止出现的内容（逗号分隔）<Input onChange={(event) => setForbiddenTermsText(event.target.value)} placeholder="治疗方案、用药剂量" value={forbiddenTermsText} /></label>
@@ -6913,7 +6931,7 @@ function EvaluationConfigurationPanel({
             <label className="grid gap-1 text-sm font-medium">运行间隔（分钟）<Input max={10080} min={5} onChange={(event) => setScheduleDraft((current) => ({ ...current, interval_minutes: Number(event.target.value) }))} type="number" value={scheduleDraft.interval_minutes} /></label>
             <label className="flex items-end gap-2 pb-2 text-sm"><input checked={scheduleDraft.enabled} onChange={(event) => setScheduleDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />启用定时运行</label>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-[#6F6257]">下次：{formatDateTime(config.schedule.next_run_at || "")} · 最近批次：{config.schedule.last_batch_id || "暂无"}{config.schedule.last_error ? ` · 最近错误：${config.schedule.last_error}` : ""}</p><Button disabled={isBusy} onClick={() => void handleSaveSchedule()}>保存计划</Button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-[#6F6257]">下次：{formatDateTime(config.schedule.next_run_at || "")} · 最近批次：{config.schedule.last_batch_id ? "已记录" : "暂无"}{config.schedule.last_error ? ` · 最近错误：${config.schedule.last_error}` : ""}</p><Button disabled={isBusy} onClick={() => void handleSaveSchedule()}>保存计划</Button></div>
         </section>
         {errorText ? <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorText}</p> : null}
         {statusText ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{statusText}</p> : null}
@@ -7091,7 +7109,6 @@ function AdminAuditEventPanel({
                   <p className="mt-2 text-sm font-semibold">{event.summary || event.action}</p>
                   <p className="mt-1 text-xs text-[#6F6257]">操作者：{event.actor_email || event.actor_user_id || "系统"}</p>
                 </div>
-                <code className="max-w-full truncate rounded-lg bg-white px-2 py-1 text-[11px] text-[#8A7D6F]">{event.resource_id}</code>
               </div>
               {event.metadata && Object.keys(event.metadata as object).length > 0 ? (
                 <details className="mt-3 text-xs text-[#6F6257]">
@@ -7341,10 +7358,9 @@ function SessionTable({
               onClick={() => onSelectSession?.(session.session_id)}
             >
               <td className="py-3 pr-4">
-                <p className="font-semibold">{session.case_title || session.case_id}</p>
-                <p className="mt-1 max-w-[16rem] truncate text-xs text-[#8A7D6F]">{session.session_id}</p>
+                <p className="font-semibold">{getCaseLabel(session)}</p>
               </td>
-              <td className="py-3 pr-4 text-[#6F6257]">{session.student_id}</td>
+              <td className="py-3 pr-4 text-[#6F6257]">{getStudentLabel(session)}</td>
               <td className="py-3 pr-4">
                 <Badge variant={session.stage === "feedback" ? "success" : "muted"}>{session.stage_label ?? session.stage}</Badge>
               </td>
@@ -8714,6 +8730,30 @@ function formatDateTime(value: string): string {
   }).format(date);
 }
 
+type ReadableStudentIdentity = Readonly<{
+  student_id?: string;
+  student_email?: string;
+  student_display_name?: string;
+  student_label?: string;
+}>;
+
+function getStudentLabel(identity: ReadableStudentIdentity): string {
+  const explicitLabel = identity.student_label?.trim();
+  if (explicitLabel) return explicitLabel;
+
+  const displayName = identity.student_display_name?.trim() ?? "";
+  const email = identity.student_email?.trim()
+    || (identity.student_id?.includes("@") ? identity.student_id.trim() : "");
+  if (displayName && email && displayName.toLowerCase() !== email.toLowerCase()) {
+    return `${displayName}（${email}）`;
+  }
+  return displayName || email || "未登记学员";
+}
+
+function getCaseLabel(item: Readonly<{ case_title?: string; title?: string }>): string {
+  return item.case_title?.trim() || item.title?.trim() || "未命名病例";
+}
+
 function getAdminUserRoleLabel(role: AdminManagedUser["role"]): string {
   return { admin: "管理员", student: "学生", teacher: "教师" }[role];
 }
@@ -8909,7 +8949,7 @@ function getProviderLabel(provider: string): string {
 }
 
 function getCallerLabel(log: ApiCallLog): string {
-  return log.caller || log.student_id || log.user_id || log.session_id || "后端未记录";
+  return log.caller || "系统调用";
 }
 
 function getEventTypeLabel(eventType: string): string {
