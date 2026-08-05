@@ -290,8 +290,37 @@ export type ReportCoverageMapPayload = Readonly<{
   reasoning: readonly ReportCoverageMapItem[];
 }>;
 
+export type ReportHistoryProgress = Readonly<{
+  total: number;
+  covered: number;
+  covered_fact_ids: readonly string[];
+  pending_fact_ids: readonly string[];
+}>;
+
+export type ReportProcedureProgress = Readonly<{
+  total: number;
+  requested: number;
+  requested_codes: readonly string[];
+  pending_codes: readonly string[];
+  must_total: number;
+  must_requested: number;
+  must_pending_codes: readonly string[];
+}>;
+
+export type ReportReasoningProgress = Readonly<{
+  total_evidence: number;
+  collected_evidence_count: number;
+  collected_evidence: readonly string[];
+  pending_evidence: readonly string[];
+  ready_for_hypothesis: boolean;
+}>;
+
 export type ReportTrainingProgressSnapshot = Readonly<{
   coverage_map: ReportCoverageMapPayload;
+  history?: ReportHistoryProgress;
+  physical_exam?: ReportProcedureProgress;
+  auxiliary_test?: ReportProcedureProgress;
+  reasoning?: ReportReasoningProgress;
   next_focus?: string;
 }>;
 

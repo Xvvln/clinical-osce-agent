@@ -25,6 +25,7 @@ import {
   type ReportCoverageMapItem,
   type ReportCoverageMapPayload,
   type ReportScoreTrace,
+  type ReportTrainingProgressSnapshot,
   type RubricScoreItem,
   type SourceReferenceItem,
   type TeacherAnalysisContext,
@@ -1453,54 +1454,109 @@ function ConversationDetailsSection({
 }
 
 function StudentReportSummary({ report, sectionId }: Readonly<{ report: FeedbackReport; sectionId: string }>) {
-  const coverageMap = report.training_progress_snapshot?.coverage_map;
+  const trainingProgress = report.training_progress_snapshot;
+  const coverageMap = trainingProgress?.coverage_map;
   const coverageStats = coverageMap ? getCoverageMapStats(coverageMap) : null;
+  const coverageStageStats = coverageMap ? getCoverageStageStats(coverageMap) : [];
+  const requiredProcedureStats = getRequiredProcedureStats(trainingProgress);
   const priorityGaps = [...report.training_gaps]
     .sort((left, right) => right.missing_score - left.missing_score)
     .slice(0, 3);
   const fallbackMissedItemId = report.missed_items[0];
-  const primaryWeaknessLabel = priorityGaps[0]?.label
+  const fallbackWeaknessLabel = report.rubric_scores[fallbackMissedItemId]?.description
+    ?? fallbackMissedItemId
+    ?? "本轮暂无明确薄弱项";
+  const fallbackWeaknessDetail = report.reasoning_errors[0]
+    || "继续保持当前节奏，下一轮用新病例检验稳定性。";
+  const displayedWeaknesses = priorityGaps.length > 0
+    ? priorityGaps
+    : [{
+      rubric_item_id: fallbackMissedItemId ?? "round-summary",
+      label: fallbackWeaknessLabel,
+      missing_score: 0,
+      evidence_summary: fallbackWeaknessDetail,
+      next_training_action: "",
+    }];
+  const summaryStrengths = [
+    ...report.deep_report_analysis.overall_evaluation.primary_strengths,
+    ...report.strengths,
+  ]
+    .map((item) => item.trim())
+    .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index)
+    .slice(0, 3);
+  const diagnosticAnalysis = report.deep_report_analysis.diagnostic_contrast_analysis;
+  const reasoningConclusion = diagnosticAnalysis.teacher_explanation
+    || report.deep_report_analysis.overall_evaluation.summary
+    || report.feedback_summary
+    || "本轮尚未形成足够的诊断与推理材料。";
+  const submittedDiagnosis = diagnosticAnalysis.submitted_diagnosis;
+  const targetDiagnosis = diagnosticAnalysis.target_diagnosis;
+  const fallbackPrimaryWeaknessLabel = priorityGaps[0]?.label
     ?? report.rubric_scores[fallbackMissedItemId]?.description
     ?? fallbackMissedItemId
     ?? "本轮暂无明确薄弱项";
-  const primaryWeaknessDetail = priorityGaps[0]?.evidence_summary
+  const fallbackPrimaryWeaknessDetail = priorityGaps[0]?.evidence_summary
     || priorityGaps[0]?.next_training_action
     || report.reasoning_errors[0]
     || "继续保持当前节奏，下一轮用新病例检验稳定性。";
-  const nextRoundActions = [
-    ...priorityGaps.map((gap) => gap.next_training_action),
-    ...report.next_recommendations,
-  ]
-    .map((action) => action.trim())
-    .filter((action, index, actions) => action.length > 0 && actions.indexOf(action) === index)
-    .slice(0, 3);
+  const nextRoundActions = buildSummaryTrainingActions(report, priorityGaps, {
+    label: fallbackPrimaryWeaknessLabel,
+    detail: fallbackPrimaryWeaknessDetail,
+  });
   return (
     <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id={sectionId}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className={sectionHeadingClassName}>本轮结论</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            用素材覆盖图谱复盘本轮训练，详细评分依据放在下方折叠区。
+            先看薄弱项、已做好的部分和下一轮动作；素材探索只表示本轮触发的病例信息，不等同于成绩。
           </p>
         </div>
-        <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
-          {coverageStats ? `素材覆盖 ${coverageStats.covered}/${coverageStats.total}` : `${report.missed_items.length} 个待补强点`}
-        </span>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          {requiredProcedureStats.total > 0 ? (
+            <span className="rounded-full border border-[#B7D7BE] bg-[#EEF6EF] px-3 py-1 text-xs font-medium text-[#236146]">
+              必做查体与检查 {requiredProcedureStats.completed}/{requiredProcedureStats.total}
+            </span>
+          ) : null}
+          <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+            {coverageStats ? `素材探索 ${coverageStats.covered}/${coverageStats.total}` : `${report.missed_items.length} 个待补强点`}
+          </span>
+        </div>
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <article className="rounded-xl border border-brand/20 bg-brand/5 p-4">
-          <p className="text-xs font-semibold text-brand">最重要的薄弱项</p>
-          <h3 className="mt-2 text-base font-semibold text-foreground">{primaryWeaknessLabel}</h3>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">{primaryWeaknessDetail}</p>
+          <p className="text-xs font-semibold text-brand">本轮 {displayedWeaknesses.length} 个主要薄弱项</p>
+          <div className="mt-3 grid gap-2">
+            {displayedWeaknesses.map((gap, index) => (
+              <div className="rounded-lg border border-brand/15 bg-background p-3" key={`${gap.rubric_item_id}-${gap.label}-${index}`}>
+                <div className="flex items-start gap-2">
+                  <span className="font-semibold text-brand">{index + 1}</span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">{gap.label}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {gap.evidence_summary || gap.next_training_action || fallbackWeaknessDetail}
+                    </p>
+                  </div>
+                  {gap.missing_score > 0 ? (
+                    <span className="ml-auto shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-[11px] text-brand">待补 {gap.missing_score} 分</span>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
         </article>
         <article className="rounded-xl border border-border bg-muted/20 p-4">
           <h3 className="text-sm font-semibold text-foreground">下一轮先做这 {nextRoundActions.length || 1} 件事</h3>
           {nextRoundActions.length > 0 ? (
             <ol className="mt-3 grid gap-2 text-sm leading-6 text-muted-foreground">
-              {nextRoundActions.map((action, index) => (
-                <li className="flex gap-3 rounded-lg border border-border bg-background px-3 py-2" key={action}>
+              {nextRoundActions.map((item, index) => (
+                <li className="flex gap-3 rounded-lg border border-border bg-background px-3 py-2" key={`${item.action}-${item.trigger}`}>
                   <span className="font-semibold text-brand">{index + 1}</span>
-                  <span>{action}</span>
+                  <div className="min-w-0">
+                    <p className="text-foreground">{item.action}</p>
+                    {item.trigger ? <p className="mt-1 text-xs leading-5">触发场景：{item.trigger}</p> : null}
+                    {item.successSignal ? <p className="mt-1 text-xs leading-5">成功标准：{item.successSignal}</p> : null}
+                  </div>
                 </li>
               ))}
             </ol>
@@ -1509,10 +1565,60 @@ function StudentReportSummary({ report, sectionId }: Readonly<{ report: Feedback
           )}
         </article>
       </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <article className="rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">本轮做得好的地方</h3>
+          {summaryStrengths.length > 0 ? (
+            <ul className="mt-3 grid gap-2 text-sm leading-6 text-muted-foreground">
+              {summaryStrengths.map((strength) => (
+                <li className="flex gap-2" key={strength}>
+                  <span className="text-[#236146]">✓</span>
+                  <span>{strength}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">本轮还没有形成稳定优势，下一轮先按右侧成功标准完成一次。</p>
+          )}
+        </article>
+        <article className="rounded-xl border border-border bg-muted/20 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-foreground">诊断与推理结论</h3>
+            {diagnosticAnalysis.classification ? (
+              <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+                {getDiagnosticClassificationLabel(diagnosticAnalysis.classification)}
+              </span>
+            ) : null}
+          </div>
+          {submittedDiagnosis || targetDiagnosis ? (
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">
+              学生提交：<span className="text-foreground">{submittedDiagnosis || "未提交"}</span>
+              <span className="mx-2">→</span>
+              目标诊断：<span className="text-foreground">{targetDiagnosis || "未记录"}</span>
+            </p>
+          ) : null}
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{reasoningConclusion}</p>
+          {report.reasoning_errors.length > 0 ? (
+            <ul className="mt-3 grid gap-1.5 text-xs leading-5 text-muted-foreground">
+              {report.reasoning_errors.slice(0, 2).map((error) => <li key={error}>推理风险：{error}</li>)}
+            </ul>
+          ) : null}
+        </article>
+      </div>
+      {coverageStageStats.length > 0 ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="分阶段素材探索">
+          {coverageStageStats.map((stage) => (
+            <div className="rounded-xl border border-border bg-background px-3 py-2" key={stage.label}>
+              <p className="text-xs text-muted-foreground">{stage.label}</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{stage.covered}/{stage.total}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <details className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
         <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">本轮素材覆盖明细</h3>
+            <h3 className="text-sm font-semibold text-foreground">本轮素材探索明细</h3>
             <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
               默认折叠，展开查看问诊、查体、辅助检查和推理证据的逐项覆盖情况。
             </p>
@@ -1715,7 +1821,7 @@ function ReportCoverageMapGroup({
                     item.status === "covered" ? "bg-[#EEF6EF] text-[#236146]" : "bg-muted text-muted-foreground"
                   }`}
                 >
-                  {item.status === "covered" ? "已覆盖" : "未覆盖"}
+                  {item.status === "covered" ? "已触发" : "本轮未触发"}
                 </span>
               </div>
             </div>
@@ -2253,6 +2359,77 @@ function getCoverageMapStats(coverageMap: ReportCoverageMapPayload) {
     total: items.length,
     covered: items.filter((item) => item.status === "covered").length,
   };
+}
+
+function getCoverageStageStats(coverageMap: ReportCoverageMapPayload) {
+  return [
+    { label: "问诊", items: coverageMap.history },
+    { label: "查体", items: coverageMap.physical_exam },
+    { label: "检查", items: coverageMap.auxiliary_test },
+    { label: "推理", items: coverageMap.reasoning },
+  ].map(({ label, items }) => ({
+    label,
+    total: items.length,
+    covered: items.filter((item) => item.status === "covered").length,
+  }));
+}
+
+function getRequiredProcedureStats(snapshot: ReportTrainingProgressSnapshot | null) {
+  const physicalExam = snapshot?.physical_exam;
+  const auxiliaryTest = snapshot?.auxiliary_test;
+  return {
+    total: (physicalExam?.must_total ?? 0) + (auxiliaryTest?.must_total ?? 0),
+    completed: (physicalExam?.must_requested ?? 0) + (auxiliaryTest?.must_requested ?? 0),
+  };
+}
+
+type SummaryTrainingAction = Readonly<{
+  action: string;
+  trigger: string;
+  successSignal: string;
+}>;
+
+function buildSummaryTrainingActions(
+  report: FeedbackReport,
+  priorityGaps: readonly TrainingGapItem[],
+  fallbackWeakness: Readonly<{ label: string; detail: string }>,
+): readonly SummaryTrainingAction[] {
+  const structuredGoals = report.deep_report_analysis.next_training_plan.top_goals
+    .map((goal) => ({
+      action: goal.next_training_action.trim(),
+      trigger: goal.trigger.trim(),
+      successSignal: goal.success_signal.trim(),
+    }))
+    .filter((item) => item.action.length > 0);
+  const fallbackActions = [
+    ...priorityGaps.map((gap) => ({
+      action: gap.next_training_action.trim(),
+      trigger: `遇到需要处理“${gap.label}”的病例阶段时`,
+      successSignal: `评分轨迹能找到“${gap.label}”的学生证据，且不再列为本轮主要薄弱项`,
+    })),
+    ...report.next_recommendations.map((action) => ({
+      action: action.trim(),
+      trigger: "进入下一个同类病例时",
+      successSignal: "能独立完成该动作，并用病例证据说明为什么这样做",
+    })),
+  ].filter((item) => item.action.length > 0);
+  const source = structuredGoals.length > 0 ? [...structuredGoals, ...fallbackActions] : fallbackActions;
+  const seenActions = new Set<string>();
+  const deduplicated = source.filter((item) => {
+    if (seenActions.has(item.action)) {
+      return false;
+    }
+    seenActions.add(item.action);
+    return true;
+  });
+  if (deduplicated.length > 0) {
+    return deduplicated.slice(0, 3);
+  }
+  return [{
+    action: fallbackWeakness.detail,
+    trigger: `下一轮再次遇到“${fallbackWeakness.label}”时`,
+    successSignal: "能独立完成该环节，并用当前病例证据说明判断依据",
+  }];
 }
 
 function AiReflectionReviewSection({
