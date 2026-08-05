@@ -1904,6 +1904,35 @@ def _admin_user_identity_index() -> dict[str, dict[str, object]]:
             index[user_id] = user
         if email:
             index[email] = user
+
+    session_owners = {
+        str(session.get("session_id") or "").strip(): str(
+            session.get("student_id") or ""
+        ).strip()
+        for session in osce_session_service.session_store.list_session_summaries()
+        if str(session.get("session_id") or "").strip()
+    }
+    legacy_alias_owners: dict[str, set[str]] = {}
+    for report in osce_session_service.report_store.list_reports():
+        legacy_student_id = str(report.get("student_id") or "").strip()
+        session_owner_id = session_owners.get(
+            str(report.get("session_id") or "").strip(),
+            "",
+        )
+        if (
+            legacy_student_id
+            and session_owner_id
+            and legacy_student_id != session_owner_id
+        ):
+            legacy_alias_owners.setdefault(legacy_student_id, set()).add(
+                session_owner_id
+            )
+    for legacy_student_id, owner_ids in legacy_alias_owners.items():
+        if len(owner_ids) != 1:
+            continue
+        user = index.get(next(iter(owner_ids)))
+        if user is not None:
+            index.setdefault(legacy_student_id, user)
     return index
 
 
