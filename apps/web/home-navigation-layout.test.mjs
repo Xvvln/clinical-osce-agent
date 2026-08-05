@@ -1088,6 +1088,14 @@ test("report dimension chart keeps the right-side score list scrollable instead 
   assert.match(reportSource, /<div className="grid max-h-80 content-start gap-3 overflow-y-auto pr-1 report-card-scrollbar">/);
 });
 
+test("report keeps the ability radar visible in the overview instead of hiding it in evidence details", () => {
+  assert.match(reportSource, /<DimensionChartSection dimensions=\{dimensions\} report=\{report\} statusText=\{statusText\} \/>/);
+  assert.match(reportSource, /能力维度雷达图/);
+  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf("<StudentOutcomeSection"));
+  assert.doesNotMatch(reportSource, /查看评分维度与逐项得分/);
+  assert.match(reportSource, /能力雷达图已在总览直接展示/);
+});
+
 test("report page keeps AI rubric reasoning as collapsed audit evidence instead of a main learning section", () => {
   assert.doesNotMatch(reportSource, /<LlmReasoningFeedback items=\{report\.llm_reasoning_feedback\} \/>/);
   assert.doesNotMatch(reportSource, /id="report-ai-evaluation"/);
@@ -2074,11 +2082,11 @@ test("report page surfaces backend report failures as readable error cards", () 
 
 test("report page uses larger section titles for scanability", () => {
   assert.match(reportSource, /const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";/);
-  for (const title of ["本轮结论", "教师复盘", "个人训练 Skill", "AI 评分审计", "推荐训练病例", "维度图表", "原始对话记录", "评分依据与来源"]) {
+  for (const title of ["本轮结论", "教师复盘", "个人训练 Skill", "AI 评分审计", "推荐训练病例", "能力维度雷达图", "原始对话记录", "评分依据与来源"]) {
     assert.match(reportSource, new RegExp(`<h2 className=\\{sectionHeadingClassName\\}>${title}<\\/h2>`));
   }
   assert.doesNotMatch(reportSource, /<h2 className="text-lg font-semibold">/);
-  assert.doesNotMatch(reportSource, /<h2 className="text-sm font-semibold">(?:本轮结论|教师复盘|个人训练 Skill|AI 评分审计|推荐训练病例|维度图表|原始对话记录|评分依据与来源)<\/h2>/);
+  assert.doesNotMatch(reportSource, /<h2 className="text-sm font-semibold">(?:本轮结论|教师复盘|个人训练 Skill|AI 评分审计|推荐训练病例|能力维度雷达图|原始对话记录|评分依据与来源)<\/h2>/);
 });
 
 test("report score status uses a non-action low score label", () => {

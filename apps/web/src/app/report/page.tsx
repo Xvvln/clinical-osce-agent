@@ -1227,6 +1227,7 @@ export default function ReportPage() {
                 ) : null}
               </div>
             </section>
+            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
             {errorText ? (
               <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700" role="alert">
                 <p className="font-semibold">报告读取失败</p>
@@ -1240,14 +1241,10 @@ export default function ReportPage() {
               <div>
                 <h2 className={sectionHeadingClassName}>评分与证据明细</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  主报告只保留影响下一轮训练的判断；维度图、完整对话和来源记录在这里按需展开。
+                  能力雷达图已在总览直接展示；完整对话、逐项评分依据和来源记录在这里按需展开。
                 </p>
               </div>
               <div className="mt-4 grid gap-3">
-                <details className="rounded-xl border border-border bg-muted/20 p-3">
-                  <summary className="cursor-pointer list-none text-sm font-semibold">查看评分维度与逐项得分</summary>
-                  <div className="mt-3"><DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} /></div>
-                </details>
                 <details className="rounded-xl border border-border bg-muted/20 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold">查看本轮完整对话与检查结果</summary>
                   <div className="mt-3"><ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} /></div>
@@ -1307,8 +1304,8 @@ function DimensionChartSection({
     <div className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-dimensions">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className={sectionHeadingClassName}>维度图表</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">用雷达雏形和进度条同时展示各 rubric 维度表现。</p>
+          <h2 className={sectionHeadingClassName}>能力维度雷达图</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">直接展示各能力维度的相对表现，右侧保留逐项得分和完成度。</p>
         </div>
         <span className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
           {report ? "已生成" : "待读取"}
