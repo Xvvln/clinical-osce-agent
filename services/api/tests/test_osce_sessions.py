@@ -954,6 +954,12 @@ def test_current_user_sessions_mark_completed_after_diagnosis_submission(
     assert after_submit_response.json()["sessions"][0]["has_report"] is False
     assert after_submit_response.json()["sessions"][0]["completion_status"] == "diagnosis_submitted"
     assert report_response.status_code == 200
+    student_report = report_response.json()["student_training_report"]
+    assert student_report["version"] == "student_training_report_v2"
+    assert student_report["outcome"]["diagnosis_status"] == "correct"
+    assert 1 <= len(student_report["decision_replays"]) <= 3
+    assert 1 <= len(student_report["training_prescriptions"]) <= 3
+    assert session_id not in json.dumps(student_report, ensure_ascii=False)
     assert after_report_response.status_code == 200
     assert after_report_response.json()["sessions"][0]["is_completed"] is True
     assert after_report_response.json()["sessions"][0]["can_continue"] is False
@@ -1412,8 +1418,8 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             {
                 "skill_id": "skill_reasoning_core",
                 "title": "临床推理链纠偏提示",
-                "student_visible_summary": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
-                "description": "2 份报告中有 2 次漏掉 reasoning_core，涉及病例：appendicitis_001。",
+                "student_visible_summary": "2 份报告中有 2 次漏掉临床推理链，涉及病例：右下腹痛教学病例。",
+                "description": "2 份报告中有 2 次漏掉临床推理链，涉及病例：右下腹痛教学病例。",
                 "learning_action": "在学生提交诊断前，提示其按症状、体征、辅助检查和鉴别诊断组织证据链，但不透露标准诊断或病例隐藏事实。",
                 "activation_summary": "适用于右下腹痛教学病例；训练开始时，当当前缺口命中 1 个关联训练点时触发。",
                 "source_summary": "来自 2 份报告，累计支持 2 次。",
@@ -1425,6 +1431,47 @@ def test_current_user_profile_reports_enabled_and_applied_training_skills(tmp_pa
             }
         ],
     }
+
+
+def test_profile_skill_summary_hides_opaque_identifiers_from_students() -> None:
+    raw_session_id = "55aafacf-4ceb-4849-8253-9c156eb7095c"
+    serialized = main._serialize_enabled_skill_for_profile(
+        {
+            "skill_id": f"skill_personal_{raw_session_id}",
+            "title": "个人复盘训练 Skill",
+            "student_visible_summary": (
+                "问题表征薄弱来自 delayed_and_undifferentiated，"
+                f"涉及 {raw_session_id}，病例 appendicitis_001。"
+            ),
+            "description": f"历史证据涉及 {raw_session_id}。",
+            "learning_action": "下一轮先形成阶段性假设。",
+            "activation_summary": "在相似训练阶段触发。",
+            "source_summary": f"来源于 {raw_session_id}。",
+            "effect_status_label": "样本不足",
+            "scope_label": "个人 Skill",
+            "source_report_count": 1,
+            "support_count": 1,
+            "effect_status": "insufficient_samples",
+            "case_ids": ["appendicitis_001"],
+        }
+    )
+
+    student_visible_text = " ".join(
+        str(serialized[field])
+        for field in (
+            "title",
+            "student_visible_summary",
+            "description",
+            "learning_action",
+            "activation_summary",
+            "source_summary",
+        )
+    )
+    assert raw_session_id not in student_visible_text
+    assert "delayed_and_undifferentiated" not in student_visible_text
+    assert "appendicitis_001" not in student_visible_text
+    assert "历史训练记录" in student_visible_text
+    assert "右下腹痛教学病例" in student_visible_text
 
 
 def test_current_user_profile_recent_session_uses_readable_stage_label(tmp_path) -> None:

@@ -1217,11 +1217,10 @@ export default function ProfilePage() {
           {profile.recentSessions.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {profile.recentSessions.map((session) => (
-                <article className="rounded-xl border border-border bg-muted/40 p-4" key={session.session_id}>
+                <article className="rounded-xl border border-border bg-muted/40 p-4" data-session-id={session.session_id} key={session.session_id}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                          <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
-                          <h3 className="mt-1 text-sm font-semibold">病例：{session.case_title || session.case_id}</h3>
+                          <h3 className="text-sm font-semibold">病例：{session.case_title || "病例信息暂缺"}</h3>
                           <p className="mt-1 text-xs text-muted-foreground">
                             当前阶段：{session.stage_label || session.stage} · {session.is_completed ? "已结束" : "训练中"} · 更新：
                             {formatSavedAt(session.updated_at)}

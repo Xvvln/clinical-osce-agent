@@ -75,6 +75,67 @@ test("report model normalizes partial not-ready AI reflection and personal skill
   assert.equal(Array.isArray(report.personal_skill_candidate.external_evidence_checks), true);
   assert.equal(report.personal_skill_candidate.external_evidence_checks.length, 0);
   assert.equal(report.personal_skill_candidate.web_check_status, "not_configured");
+  assert.equal(report.student_training_report.version, "student_training_report_v2");
+  assert.equal(report.student_training_report.decision_replays.length, 1);
+  assert.equal(report.student_training_report.training_prescriptions.length, 1);
+  assert.equal(report.student_training_report.longitudinal_summary.status, "insufficient_history");
+});
+
+test("report model blocks internal identifiers from student-facing training report fields", () => {
+  const { normalizeFeedbackReport } = loadReportModel();
+  const rawSessionId = "5d459949-de1e-4e4d-83ea-4d9d026b268e";
+  const report = normalizeFeedbackReport({
+    session_id: rawSessionId,
+    case_id: "appendicitis_001",
+    total_score: 83,
+    dimension_scores: {},
+    rubric_scores: {},
+    missed_items: [],
+    strengths: [],
+    reasoning_errors: [],
+    next_recommendations: [],
+    source_references: [],
+    feedback_summary: "本轮报告已生成。",
+    student_training_report: {
+      version: "student_training_report_v2",
+      status: "generated",
+      outcome: {
+        summary: "delayed_and_undifferentiated",
+        score_summary: "本轮总分 83/100。",
+        diagnosis_status: "correct",
+        diagnosis_summary: rawSessionId,
+        safety_summary: "本轮未记录明确安全越界。",
+        communication_summary: "本轮未记录明确沟通漏项。",
+      },
+      decision_replays: [{
+        replay_id: "decision-1",
+        kind: "reasoning",
+        phase: "clinical_reasoning",
+        title: "evidence_collection_without_target",
+        observed_evidence: rawSessionId,
+        teacher_judgement: "需要补齐证据链。",
+        why_it_matters: "结论需要可观察证据支持。",
+        next_action: "下一轮先明确假设，再选择验证动作。",
+        evidence_labels: ["narrow_and_exclusion_absent"],
+      }],
+      training_prescriptions: [],
+      longitudinal_summary: {
+        status: "repeated",
+        label: "连续出现",
+        summary: "2 个问题连续出现。",
+      },
+      personal_memory_summary: "explicit_hypothesis_before_physical_exam",
+    },
+  });
+
+  const serializedStudentReport = JSON.stringify(report.student_training_report);
+  assert.equal(serializedStudentReport.includes(rawSessionId), false);
+  assert.equal(serializedStudentReport.includes("delayed_and_undifferentiated"), false);
+  assert.equal(serializedStudentReport.includes("evidence_collection_without_target"), false);
+  assert.equal(serializedStudentReport.includes("narrow_and_exclusion_absent"), false);
+  assert.equal(serializedStudentReport.includes("explicit_hypothesis_before_physical_exam"), false);
+  assert.equal(report.student_training_report.outcome.score_summary, "本轮总分 83/100。");
+  assert.equal(report.student_training_report.longitudinal_summary.repeated_count, 0);
 });
 
 test("report model retains only the compact longitudinal teaching summary", () => {

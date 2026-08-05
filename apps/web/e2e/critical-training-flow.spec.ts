@@ -134,6 +134,10 @@ async function submitDiagnosisAndOpenReport(page: Page, sessionId: string): Prom
   );
   await expect(page.getByRole("heading", { name: "评分报告", exact: true })).toBeVisible();
   await expect(page.getByText("OSCE 训练总分", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "关键决策复盘", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "下一轮训练处方", exact: true })).toBeVisible();
+  await expect(page.locator(`[data-session-id="${sessionId}"]`).first()).toBeVisible();
+  await expect(page.getByText(sessionId, { exact: true })).toHaveCount(0);
 }
 
 async function loginAdminAndVerifySession(page: Page, sessionId: string): Promise<void> {
@@ -152,9 +156,9 @@ async function loginAdminAndVerifySession(page: Page, sessionId: string): Promis
   await expect(trainingSectionButton).toBeVisible({ timeout: 30_000 });
   await trainingSectionButton.click();
 
-  const sessionCell = page.getByText(sessionId, { exact: true }).first();
-  await expect(sessionCell).toBeVisible({ timeout: 30_000 });
-  await sessionCell.click();
+  const sessionRow = page.locator(`[data-session-id="${sessionId}"]`).first();
+  await expect(sessionRow).toBeVisible({ timeout: 30_000 });
+  await sessionRow.click();
   await expect(page.getByRole("button", { name: "读取报告", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "读取报告", exact: true }).click();
   await expect(page.getByText("评分报告", { exact: true }).last()).toBeVisible();
@@ -190,7 +194,8 @@ async function verifyLearningProfile(page: Page, sessionId: string): Promise<voi
   ).toBe(true);
 
   await expect(page.getByRole("heading", { name: "近期学习画像", exact: true })).toBeVisible();
-  await expect(page.getByText(sessionId, { exact: true })).toBeVisible();
+  await expect(page.locator(`[data-session-id="${sessionId}"]`).first()).toBeVisible();
+  await expect(page.getByText(sessionId, { exact: true })).toHaveCount(0);
   const reportMetric = page.getByText("已生成报告", { exact: true }).locator("..");
   await expect(
     reportMetric.getByText(String(payload.profile.report_count), { exact: true }),
@@ -210,13 +215,15 @@ test("学生完整训练可追踪到记录和管理端，且双端登录互不�
 
   await studentPage.goto(`${STUDENT_BASE_URL}/history`);
   await expect(studentPage.getByRole("heading", { name: "训练记录", exact: true })).toBeVisible();
-  await expect(studentPage.getByText(sessionId, { exact: true })).toBeVisible();
+  await expect(studentPage.locator(`[data-session-id="${sessionId}"]`).first()).toBeVisible();
+  await expect(studentPage.getByText(sessionId, { exact: true })).toHaveCount(0);
   await expect(studentPage.getByText("报告已生成", { exact: true }).first()).toBeVisible();
 
   await loginAdminAndVerifySession(adminPage, sessionId);
 
   await studentPage.bringToFront();
   await studentPage.reload();
-  await expect(studentPage.getByText(sessionId, { exact: true })).toBeVisible();
+  await expect(studentPage.locator(`[data-session-id="${sessionId}"]`).first()).toBeVisible();
+  await expect(studentPage.getByText(sessionId, { exact: true })).toHaveCount(0);
   await expect(studentPage.getByText("已从后端数据库读取当前账号的训练记录。", { exact: true })).toBeVisible();
 });

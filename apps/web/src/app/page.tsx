@@ -4742,17 +4742,13 @@ function HomeContent() {
 
         <Panel title="训练导航" description="当前病例和训练阶段。">
           <div className="space-y-4">
-            <div className="rounded-lg border border-border bg-muted/60 p-3 text-xs leading-5">
+            <div className="rounded-lg border border-border bg-muted/60 p-3 text-xs leading-5" data-session-id={session?.session_id}>
               <p className="text-muted-foreground">当前选择</p>
               {selectedCase ? (
                 <>
                   <p className="mt-1 font-medium">{session?.case_title ?? selectedCase.title}</p>
                   <p className="mt-1 text-muted-foreground">{session?.chief_complaint ?? selectedCase.chiefComplaint}</p>
-                  {session ? (
-                    <p className="mt-2 rounded-md bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground">
-                      会话 ID：{session.session_id}
-                    </p>
-                  ) : null}
+                  {session ? <p className="mt-2 text-[11px] text-muted-foreground">当前训练记录已保存，可从训练记录页继续。</p> : null}
                 </>
               ) : (
                 <p className="mt-1 text-muted-foreground">尚未选择病例，请先进入病例库选择训练场景。</p>

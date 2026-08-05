@@ -66,6 +66,7 @@ from app.services.training_skill_candidate_store import (
     training_skill_candidate_store,
 )
 from app.services.student_profile_summary_service import build_skill_profile_summary
+from app.services.student_training_report_service import build_student_training_report
 from app.services.teacher_intervention_service import (
     TeacherInterventionMode,
     append_teacher_decision_record,
@@ -1425,6 +1426,10 @@ class OsceSessionService:
                 session.feedback_report = report
                 agent_update = _refresh_agent_state(session, use_reflection=True)
                 session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
+                session.feedback_report = _ensure_personal_skill_report_defaults(
+                    session.feedback_report,
+                    self.training_skill_candidate_store,
+                )
                 session.feedback_report = _ensure_report_training_progress_snapshot(session.feedback_report, session, case)
                 session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
                 self._save_session(session)
@@ -1471,6 +1476,10 @@ class OsceSessionService:
                 session.feedback_report.update(_deferred_optional_agent_payload(session.feedback_report, case))
             else:
                 session.feedback_report.update(_personal_skill_payload_for_report(self, session, case))
+            session.feedback_report = _ensure_personal_skill_report_defaults(
+                session.feedback_report,
+                self.training_skill_candidate_store,
+            )
             session.feedback_report = _ensure_report_procedure_simulation_audit_items(session.feedback_report, session)
             self._save_session(session)
             self.report_store.create_base_report(
@@ -2823,10 +2832,14 @@ def _rehydrate_orphan_teacher_reflection(report: dict[str, Any]) -> dict[str, An
             case = load_case_node(case_id)
         except Exception:
             case = None
-    return {
+    hydrated_report = {
         **report,
         "ai_reflection_review": build_teacher_reflection_review_payload(report, case),
     }
+    hydrated_report["student_training_report"] = build_student_training_report(
+        hydrated_report,
+    )
+    return hydrated_report
 
 
 def _ai_reflection_review_uses_legacy_generic_text(ai_reflection_review: Any) -> bool:
@@ -2927,6 +2940,9 @@ def _ensure_personal_skill_report_defaults(
     ai_reflection_review.setdefault("source_reference_items", [])
     normalized_report["ai_reflection_review"] = ai_reflection_review
     normalized_report.setdefault("deep_report_analysis", build_legacy_deep_report_analysis())
+    normalized_report["student_training_report"] = build_student_training_report(
+        normalized_report,
+    )
     return normalized_report
 
 

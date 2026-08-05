@@ -544,6 +544,64 @@ export type DeepReportAnalysis = Readonly<{
   next_training_plan: NextTrainingPlan;
 }>;
 
+export type StudentReportOutcome = Readonly<{
+  summary: string;
+  score_summary: string;
+  diagnosis_status: "correct" | "plausible_differential" | "partially_correct" | "incorrect" | "unsupported" | "not_submitted";
+  diagnosis_summary: string;
+  safety_summary: string;
+  communication_summary: string;
+}>;
+
+export type StudentDecisionReplay = Readonly<{
+  replay_id: string;
+  kind: "strength" | "reasoning" | "evidence" | "sequence" | "safety" | "humanistic";
+  phase: string;
+  title: string;
+  observed_evidence: string;
+  teacher_judgement: string;
+  why_it_matters: string;
+  next_action: string;
+  evidence_labels: readonly string[];
+}>;
+
+export type StudentTrainingPrescription = Readonly<{
+  goal_id: string;
+  title: string;
+  trigger: string;
+  action: string;
+  success_signal: string;
+}>;
+
+export type StudentLongitudinalSummary = Readonly<{
+  status: "insufficient_history" | "first_seen" | "repeated" | "reactivated" | "improving";
+  label: string;
+  summary: string;
+  first_seen_count: number;
+  repeated_count: number;
+  reactivated_count: number;
+  temporarily_absent_count: number;
+}>;
+
+export type StudentTrainingReport = Readonly<{
+  version: string;
+  status: "generated" | "legacy_fallback";
+  outcome: StudentReportOutcome;
+  decision_replays: readonly StudentDecisionReplay[];
+  training_prescriptions: readonly StudentTrainingPrescription[];
+  longitudinal_summary: StudentLongitudinalSummary;
+  personal_memory_summary: string;
+}>;
+
+type StudentTrainingReportPayload = Readonly<
+  Partial<Omit<StudentTrainingReport, "outcome" | "decision_replays" | "training_prescriptions" | "longitudinal_summary">> & {
+    outcome?: Partial<StudentReportOutcome>;
+    decision_replays?: readonly Partial<StudentDecisionReplay>[];
+    training_prescriptions?: readonly Partial<StudentTrainingPrescription>[];
+    longitudinal_summary?: Partial<StudentLongitudinalSummary>;
+  }
+>;
+
 type DeepReportAnalysisPayload = Readonly<
   Partial<
     Omit<
@@ -592,6 +650,7 @@ export type FeedbackReportPayload = Readonly<{
   ai_reflection_review?: Partial<AiReflectionReview>;
   personal_skill_candidate?: Partial<PersonalTrainingSkillCandidate>;
   deep_report_analysis?: DeepReportAnalysisPayload;
+  student_training_report?: StudentTrainingReportPayload;
   feedback_summary: string;
 }>;
 
@@ -611,6 +670,7 @@ export type FeedbackReport = FeedbackReportPayload &
     ai_reflection_review: AiReflectionReview;
     personal_skill_candidate: PersonalTrainingSkillCandidate;
     deep_report_analysis: DeepReportAnalysis;
+    student_training_report: StudentTrainingReport;
   }>;
 
 export function normalizeFeedbackReport(report: FeedbackReportPayload): FeedbackReport {
@@ -630,6 +690,7 @@ export function normalizeFeedbackReport(report: FeedbackReportPayload): Feedback
     ai_reflection_review: normalizeAiReflectionReview(report.ai_reflection_review),
     personal_skill_candidate: normalizePersonalTrainingSkillCandidate(report.personal_skill_candidate),
     deep_report_analysis: normalizeDeepReportAnalysis(report.deep_report_analysis),
+    student_training_report: normalizeStudentTrainingReport(report),
   };
 }
 
@@ -780,6 +841,168 @@ function normalizeDeepReportAnalysis(analysis?: DeepReportAnalysisPayload): Deep
       linked_training_gaps: nextTrainingPlan.linked_training_gaps ?? [],
     },
   };
+}
+
+const STUDENT_VISIBLE_UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
+const STUDENT_VISIBLE_INTERNAL_TOKEN_PATTERN = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/;
+
+function normalizeStudentTrainingReport(report: FeedbackReportPayload): StudentTrainingReport {
+  const payload = report.student_training_report;
+  const deepAnalysis = report.deep_report_analysis;
+  const diagnostic = deepAnalysis?.diagnostic_contrast_analysis;
+  const outcome = payload?.outcome;
+  const diagnosisStatus = normalizeDiagnosisStatus(outcome?.diagnosis_status ?? diagnostic?.classification);
+  const fallbackDecisionReplays = buildLegacyDecisionReplays(report);
+  const fallbackPrescriptions = buildLegacyTrainingPrescriptions(report);
+  const longitudinal = payload?.longitudinal_summary;
+  return {
+    version: payload?.version ?? "student_training_report_v2",
+    status: payload?.status === "generated" ? "generated" : "legacy_fallback",
+    outcome: {
+      summary: normalizeStudentFacingText(outcome?.summary, report.feedback_summary || "本轮报告已生成，请优先查看关键决策和下一轮动作。"),
+      score_summary: normalizeStudentFacingText(outcome?.score_summary, `本轮总分 ${report.total_score}/100。`),
+      diagnosis_status: diagnosisStatus,
+      diagnosis_summary: normalizeStudentFacingText(outcome?.diagnosis_summary, getLegacyDiagnosisSummary(diagnosisStatus)),
+      safety_summary: normalizeStudentFacingText(outcome?.safety_summary, "本轮未记录明确的安全结论，请结合关键决策和评分明细复核。"),
+      communication_summary: normalizeStudentFacingText(outcome?.communication_summary, "本轮沟通表现请结合关键决策和评分明细复核。"),
+    },
+    decision_replays: (payload?.decision_replays ?? fallbackDecisionReplays).slice(0, 3).map((item, index) => ({
+      replay_id: item.replay_id ?? `decision-${index + 1}`,
+      kind: normalizeDecisionReplayKind(item.kind),
+      phase: normalizeStudentFacingText(item.phase, "本轮训练"),
+      title: normalizeStudentFacingText(item.title, "关键训练动作"),
+      observed_evidence: normalizeStudentFacingText(item.observed_evidence, "本轮评分轨迹尚未记录更具体的可见证据。"),
+      teacher_judgement: normalizeStudentFacingText(item.teacher_judgement, "该动作需要在下一轮继续验证。"),
+      why_it_matters: normalizeStudentFacingText(item.why_it_matters, "临床训练需要让每个结论都能回到可观察的问诊、操作或推理证据。"),
+      next_action: normalizeStudentFacingText(item.next_action, "下一轮主动完成该动作，并说明它如何影响判断。"),
+      evidence_labels: (item.evidence_labels ?? []).map((label) => normalizeStudentFacingText(label, "训练证据")).slice(0, 6),
+    })),
+    training_prescriptions: (payload?.training_prescriptions ?? fallbackPrescriptions).slice(0, 3).map((item, index) => ({
+      goal_id: item.goal_id ?? `goal-${index + 1}`,
+      title: normalizeStudentFacingText(item.title, "完成下一轮关键动作"),
+      trigger: normalizeStudentFacingText(item.trigger, "进入下一轮相似训练场景时"),
+      action: normalizeStudentFacingText(item.action, "主动完成该训练动作，并说明目的。"),
+      success_signal: normalizeStudentFacingText(item.success_signal, "评分轨迹能够找到对应动作和推理表达。"),
+    })),
+    longitudinal_summary: {
+      status: normalizeLongitudinalStatus(longitudinal?.status),
+      label: normalizeStudentFacingText(longitudinal?.label, "历史不足"),
+      summary: normalizeStudentFacingText(longitudinal?.summary, "当前缺少足够的可比较训练记录，暂不能判断问题是偶发还是反复。"),
+      first_seen_count: normalizeNonNegativeCount(longitudinal?.first_seen_count),
+      repeated_count: normalizeNonNegativeCount(longitudinal?.repeated_count),
+      reactivated_count: normalizeNonNegativeCount(longitudinal?.reactivated_count),
+      temporarily_absent_count: normalizeNonNegativeCount(longitudinal?.temporarily_absent_count),
+    },
+    personal_memory_summary: normalizeStudentFacingText(
+      payload?.personal_memory_summary,
+      "系统尚未形成可复用的个人训练策略，本轮结论仍可直接用于下一次练习。",
+    ),
+  };
+}
+
+function buildLegacyDecisionReplays(report: FeedbackReportPayload): readonly Partial<StudentDecisionReplay>[] {
+  const strength = report.strengths.find((item) => Boolean(normalizeStudentFacingText(item, "")));
+  const gaps = (report.training_gaps ?? []).slice(0, strength ? 2 : 3);
+  const items: Partial<StudentDecisionReplay>[] = [];
+  if (strength) {
+    items.push({
+      kind: "strength",
+      phase: "本轮训练",
+      title: "本轮有效做法",
+      observed_evidence: strength,
+      teacher_judgement: "这是本轮已经形成的有效动作，下一轮应继续保留。",
+      why_it_matters: "稳定复现有效动作，才能判断能力是否真正迁移到新病例。",
+      next_action: "下一轮在新病例中再次独立完成，并说明该动作支持或排除什么。",
+      evidence_labels: [strength],
+    });
+  }
+  for (const gap of gaps) {
+    items.push({
+      kind: "evidence",
+      phase: "临床推理",
+      title: gap.label,
+      observed_evidence: gap.evidence_summary || `评分轨迹没有找到足够证据证明你完成了“${gap.label}”。`,
+      teacher_judgement: "该训练点目前还没有形成稳定、可观察的完成证据。",
+      why_it_matters: "评分依据关注可观察的问诊、操作和推理表达，不能只依赖最终结论。",
+      next_action: gap.next_training_action || `下一轮主动完成“${gap.label}”，并说明它如何影响判断。`,
+      evidence_labels: [gap.label],
+    });
+  }
+  return items.length > 0 ? items : [{
+    kind: "strength",
+    phase: "本轮训练",
+    title: "完成了一轮完整训练",
+    observed_evidence: "系统已保存本轮训练轨迹。",
+    teacher_judgement: "当前材料可用于下一轮迁移练习。",
+    why_it_matters: "完整训练轨迹让后续反馈能够对应到具体动作。",
+    next_action: "下一轮继续完成完整流程，并主动说明每一步的目的。",
+    evidence_labels: ["完整训练记录"],
+  }];
+}
+
+function buildLegacyTrainingPrescriptions(report: FeedbackReportPayload): readonly Partial<StudentTrainingPrescription>[] {
+  const actions = report.next_recommendations.map((action, index) => ({
+    goal_id: `legacy-goal-${index + 1}`,
+    title: "执行下一轮训练动作",
+    trigger: "下一轮遇到相似临床任务时",
+    action,
+    success_signal: "能够不依赖提示完成该动作，并说出它将验证或排除什么。",
+  }));
+  return actions.length > 0 ? actions : [{
+    goal_id: "legacy-goal-1",
+    title: "迁移本轮有效做法",
+    trigger: "进入下一个新病例时",
+    action: "独立完成问诊、关键查体、必要检查和诊断推理，并说明每一步的目的。",
+    success_signal: "能够形成完整证据链，且不新增明显安全或沟通问题。",
+  }];
+}
+
+function normalizeStudentFacingText(value: unknown, fallback: string): string {
+  const normalized = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!normalized || STUDENT_VISIBLE_UUID_PATTERN.test(normalized) || STUDENT_VISIBLE_INTERNAL_TOKEN_PATTERN.test(normalized)) {
+    return fallback;
+  }
+  if (/^[\x00-\x7F]+$/.test(normalized) && !/\d/.test(normalized)) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function normalizeDiagnosisStatus(value: unknown): StudentReportOutcome["diagnosis_status"] {
+  return value === "correct" || value === "plausible_differential" || value === "partially_correct" || value === "incorrect" || value === "not_submitted"
+    ? value
+    : "unsupported";
+}
+
+function getLegacyDiagnosisSummary(status: StudentReportOutcome["diagnosis_status"]): string {
+  if (status === "correct") {
+    return "主诊断与病例目标一致。";
+  }
+  if (status === "plausible_differential") {
+    return "提交内容更接近合理鉴别诊断，但尚未命中主要诊断。";
+  }
+  if (status === "partially_correct") {
+    return "诊断方向部分接近病例目标，但表达或证据仍不完整。";
+  }
+  if (status === "incorrect") {
+    return "主诊断与病例目标不一致。";
+  }
+  if (status === "not_submitted") {
+    return "本轮尚未提交诊断。";
+  }
+  return "现有证据不足以支持提交的诊断。";
+}
+
+function normalizeDecisionReplayKind(value: unknown): StudentDecisionReplay["kind"] {
+  return value === "strength" || value === "reasoning" || value === "sequence" || value === "safety" || value === "humanistic"
+    ? value
+    : "evidence";
+}
+
+function normalizeLongitudinalStatus(value: unknown): StudentLongitudinalSummary["status"] {
+  return value === "first_seen" || value === "repeated" || value === "reactivated" || value === "improving"
+    ? value
+    : "insufficient_history";
 }
 
 function normalizeClinicalTaskAnalysis(

@@ -144,7 +144,7 @@ export default function HistoryPage() {
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">训练记录</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                本页只展示当前登录账号保存在后端数据库中的训练 session，作为正式训练记录的唯一来源。
+                本页只展示当前账号保存在后端数据库中的训练记录，作为正式训练历史的唯一来源。
               </p>
             </div>
             <Link
@@ -160,7 +160,7 @@ export default function HistoryPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm font-semibold text-brand">后端持久记录</p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">已同步 {backendSessions.length} 个训练 session。</h2>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">已同步 {backendSessions.length} 条训练记录。</h2>
             </div>
             <span className="w-fit rounded-full border border-brand/20 bg-background px-3 py-1 text-xs font-medium text-brand">
               SQLite
@@ -172,11 +172,10 @@ export default function HistoryPage() {
         {backendSessions.length > 0 ? (
           <section className="grid gap-3">
             {backendSessions.map((session) => (
-              <article className="rounded-2xl border border-border bg-background p-5 shadow-xs" key={session.session_id}>
+              <article className="rounded-2xl border border-border bg-background p-5 shadow-xs" data-session-id={session.session_id} key={session.session_id}>
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <p className="font-mono text-[11px] text-muted-foreground">{session.session_id}</p>
-                    <h2 className="mt-2 text-base font-semibold tracking-tight">病例：{session.case_title ?? session.case_id}</h2>
+                    <h2 className="text-base font-semibold tracking-tight">病例：{session.case_title || "病例信息暂缺"}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">当前阶段：{session.stage}</p>
                   </div>
                   <span className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${getTrainingSessionStatusClass(session)}`}>
@@ -234,7 +233,7 @@ export default function HistoryPage() {
           <section className="rounded-2xl border border-dashed border-border bg-background p-8 text-center shadow-xs">
             <h2 className="text-base font-semibold">暂无后端训练记录</h2>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              登录后开始训练会自动创建数据库 session；完成问诊、查体、检查或报告后，可回到这里继续训练或打开报告。
+              登录后开始训练会自动创建数据库记录；完成问诊、查体、检查或报告后，可回到这里继续训练或打开报告。
             </p>
             <Link
               className="mt-5 inline-flex items-center justify-center rounded-md border border-brand bg-brand px-4 py-2 text-sm font-medium whitespace-nowrap text-white shadow-xs transition hover:bg-brand-hover"

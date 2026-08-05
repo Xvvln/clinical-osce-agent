@@ -404,14 +404,18 @@ test("home diagnosis submit does not report submit failure when only report retr
 
 test("history page renders Chinese case title instead of raw case id as primary label", () => {
   assert.match(historySource, /case_title: string;/);
-  assert.match(historySource, /病例：\{session\.case_title \?\? session\.case_id\}/);
+  assert.match(historySource, /病例：\{session\.case_title \|\| "病例信息暂缺"\}/);
+  assert.match(historySource, /data-session-id=\{session\.session_id\}/);
   assert.doesNotMatch(historySource, /病例：\{session\.case_id\}/);
+  assert.doesNotMatch(historySource, />\{session\.session_id\}<\/p>/);
 });
 
 test("report context prefers Chinese case title from backend session", () => {
   assert.match(reportSource, /case_title\?: string;/);
-  assert.match(reportSource, /backendSession\?\.case_title \?\? report\?\.case_id \?\? "待读取"/);
+  assert.match(reportSource, /backendSession\?\.case_title \|\| "病例信息待读取"/);
+  assert.match(reportSource, /data-session-id=\{sessionId \?\? undefined\}/);
   assert.doesNotMatch(reportSource, /<dd className="mt-1 font-medium">\{report\?\.case_id \?\? "待读取"\}<\/dd>/);
+  assert.doesNotMatch(reportSource, />\{sessionId \?\? "未提供"\}<\/dd>/);
 });
 
 test("home evidence uses only facts already revealed by the student session projection", () => {
@@ -880,137 +884,90 @@ test("report page renders a compact iOS-style section navigator", () => {
   assert.match(reportSource, /window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 2/);
   assert.match(reportSource, /onSectionSelect\(section\.id\)/);
   assert.doesNotMatch(reportSource, /xl:grid-cols-\[320px_minmax\(0,1fr\)\]/);
-  for (const label of ["总览", "复盘", "Skill", "图表", "结论", "对话", "推荐", "依据"]) {
+  for (const label of ["总览", "结论", "复盘", "下一轮", "明细"]) {
     assert.match(reportSource, new RegExp(`label: "${label}"`));
   }
   for (const targetId of [
     "report-overview",
+    "report-feedback",
     "report-reflection",
-    "report-personal-skill",
-    "report-dimensions",
-    "report-recommendations",
-    "report-conversation",
+    "report-training-plan",
     "report-evidence",
   ]) {
     assert.match(reportSource, new RegExp(`targetId: "${targetId}"`));
     assert.match(reportSource, new RegExp(`id="${targetId}"`));
   }
-  assert.match(reportSource, /targetId: "report-feedback"/);
-  assert.match(reportSource, /sectionId="report-feedback"/);
   assert.match(reportSource, /href=\{`#\$\{section\.targetId\}`\}/);
   assert.ok(reportSource.indexOf('label: "总览"') < reportSource.indexOf('label: "结论"'));
-  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "图表"'));
-  assert.ok(reportSource.indexOf('label: "图表"') < reportSource.indexOf('label: "复盘"'));
-  assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "Skill"'));
-  assert.ok(reportSource.indexOf('label: "对话"') < reportSource.indexOf('label: "推荐"'));
-  assert.ok(reportSource.indexOf('label: "推荐"') < reportSource.indexOf('label: "依据"'));
+  assert.ok(reportSource.indexOf('label: "结论"') < reportSource.indexOf('label: "复盘"'));
+  assert.ok(reportSource.indexOf('label: "复盘"') < reportSource.indexOf('label: "下一轮"'));
+  assert.ok(reportSource.indexOf('label: "下一轮"') < reportSource.indexOf('label: "明细"'));
   assert.doesNotMatch(reportSource, /targetId: "report-ai-evaluation"/);
-  assert.ok(reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"') < reportSource.indexOf("<DimensionChartSection"));
-  assert.ok(reportSource.indexOf("<DimensionChartSection") < reportSource.indexOf("<AiReflectionReviewSection"));
-  assert.ok(reportSource.indexOf("<AiReflectionReviewSection") < reportSource.indexOf("<PersonalTrainingSkillSection"));
-  assert.ok(reportSource.indexOf('<StudentReportSummary report={report} sectionId="report-feedback"') < reportSource.indexOf("<ConversationDetailsSection"));
-  assert.ok(reportSource.indexOf("<ConversationDetailsSection") < reportSource.indexOf("<CaseRecommendations"));
+  assert.ok(reportSource.indexOf("<StudentOutcomeSection") < reportSource.indexOf("<DecisionReplaySection"));
+  assert.ok(reportSource.indexOf("<DecisionReplaySection") < reportSource.indexOf("<TrainingPrescriptionSection"));
+  assert.ok(reportSource.indexOf("<TrainingPrescriptionSection") < reportSource.indexOf('id="report-evidence"'));
 });
 
 test("report section navigator keeps clicked sections selected instead of drifting to the next section", () => {
   assert.match(reportSource, /const REPORT_SECTION_ACTIVATION_OFFSET_PX = 96;/);
   assert.doesNotMatch(reportSource, /const viewportAnchor = Math\.min\(window\.innerHeight \* 0\.35, 260\);/);
   assert.match(reportSource, /const viewportAnchor = REPORT_SECTION_ACTIVATION_OFFSET_PX;/);
-  assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
-  assert.match(reportSource, /function StudentReportSummary\(\{ report, sectionId \}: Readonly<\{ report: FeedbackReport; sectionId: string \}>\)/);
-  assert.match(reportSource, /<section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id=\{sectionId\}>/);
+  assert.match(reportSource, /<StudentOutcomeSection report=\{report\} \/>/);
+  assert.match(reportSource, /function StudentOutcomeSection\(\{ report \}: Readonly<\{ report: FeedbackReport \}>\)/);
+  assert.match(reportSource, /id="report-feedback"/);
   assert.doesNotMatch(reportSource, /<div className="grid gap-4 xl:grid-cols-2">\s*\{report \? \(/);
   assert.doesNotMatch(reportSource, /<div className="grid scroll-mt-6 gap-4 xl:grid-cols-2" id="report-feedback">/);
 });
 
 test("report page prioritizes student learning over repeated source proof", () => {
-  const summaryStart = reportSource.indexOf("function StudentReportSummary");
-  const summaryEnd = reportSource.indexOf("function HumanisticCommunicationSection", summaryStart);
-  const summarySource = reportSource.slice(summaryStart, summaryEnd);
-
-  assert.match(reportSource, /function StudentReportSummary/);
-  assert.match(reportSource, /<StudentReportSummary report=\{report\} sectionId="report-feedback" \/>/);
-  assert.match(reportSource, /本轮结论/);
-  assert.match(reportSource, /教师复盘/);
-  assert.doesNotMatch(reportSource, /教练复盘/);
-  assert.match(reportSource, /推荐训练病例/);
-  assert.match(summarySource, /本轮 \{displayedWeaknesses\.length\} 个主要薄弱项/);
-  assert.match(summarySource, /本轮做得好的地方/);
-  assert.match(summarySource, /诊断与推理结论/);
-  assert.match(summarySource, /触发场景/);
-  assert.match(summarySource, /成功标准/);
-  assert.match(summarySource, /下一轮先做这/);
-  assert.doesNotMatch(summarySource, /LearningSummaryColumn/);
+  assert.match(reportSource, /function StudentOutcomeSection/);
+  assert.match(reportSource, /function DecisionReplaySection/);
+  assert.match(reportSource, /function TrainingPrescriptionSection/);
+  assert.match(reportSource, /<StudentOutcomeSection report=\{report\} \/>/);
+  assert.match(reportSource, /本轮结果/);
+  assert.match(reportSource, /关键决策复盘/);
+  assert.match(reportSource, /下一轮训练处方/);
+  assert.match(reportSource, /本轮观察/);
+  assert.match(reportSource, /教师判断/);
+  assert.match(reportSource, /为什么重要/);
+  assert.match(reportSource, /下次正确动作/);
+  assert.match(reportSource, /何时触发/);
+  assert.match(reportSource, /完成标准/);
+  assert.match(reportSource, /跨轮变化/);
+  assert.match(reportSource, /系统记住的训练重点/);
   assert.match(reportSource, /function TraceabilityDetailsSection/);
   assert.match(reportSource, /评分依据与来源/);
+  assert.match(reportSource, /评分与证据明细/);
   assert.match(reportSource, /<details className=/);
   assert.match(reportSource, /<summary className=/);
   assert.match(reportSource, /结构化评分依据，不是 RAG 评分裁判/);
-  assert.doesNotMatch(reportSource, /学习推荐与下一病例/);
-  assert.doesNotMatch(reportSource, /根据本轮漏项检索 rubric、知识点和病例库/);
-  assert.doesNotMatch(reportSource, /评分项 → 证据 → 来源/);
-  assert.doesNotMatch(reportSource, /推荐训练材料与病例/);
+  assert.doesNotMatch(reportSource, /<AiReflectionReviewSection review=/);
+  assert.doesNotMatch(reportSource, /<DeepReportAnalysisSection analysis=/);
+  assert.doesNotMatch(reportSource, /<PersonalTrainingSkillSection candidate=/);
 });
 
-test("report page renders AI reflection review and personal training skill status", () => {
+test("report page keeps teacher and Skill data behind one student-facing report contract", () => {
   assert.match(reportModelSource, /export type AiReflectionReview = Readonly<\{/);
   assert.match(reportModelSource, /export type TeacherReflectionMajorIssue = Readonly<\{/);
-  assert.match(reportModelSource, /export type TeacherCoachingReviewSection = Readonly<\{/);
-  assert.match(reportModelSource, /teacher_coaching_review: readonly TeacherCoachingReviewSection\[];/);
-  assert.match(reportModelSource, /teacher_coaching_review: \[],/);
-  assert.match(reportModelSource, /teacher_coaching_review: review\?\.teacher_coaching_review \?\? \[],/);
-  assert.match(reportModelSource, /export type TeacherReasoningTraceSummary = Readonly<\{/);
-  assert.match(reportModelSource, /sequence_flags: readonly TeacherReasoningSequenceFlag\[];/);
-  assert.match(reportModelSource, /evidence_chain_breakpoints: readonly TeacherEvidenceChainBreakpoint\[];/);
-  assert.match(reportModelSource, /reasoning_trace_summary: TeacherReasoningTraceSummary;/);
-  assert.match(reportModelSource, /reasoning_trace_summary: normalizeTeacherReasoningTraceSummary\(review\?\.reasoning_trace_summary\),/);
   assert.match(reportModelSource, /export type PersonalTrainingSkillCandidate = Readonly<\{/);
+  assert.match(reportModelSource, /export type StudentTrainingReport = Readonly<\{/);
+  assert.match(reportModelSource, /outcome: StudentReportOutcome;/);
+  assert.match(reportModelSource, /decision_replays: readonly StudentDecisionReplay\[];/);
+  assert.match(reportModelSource, /training_prescriptions: readonly StudentTrainingPrescription\[];/);
+  assert.match(reportModelSource, /longitudinal_summary: StudentLongitudinalSummary;/);
+  assert.match(reportModelSource, /personal_memory_summary: string;/);
   assert.match(reportModelSource, /ai_reflection_review\?: Partial<AiReflectionReview>;/);
   assert.match(reportModelSource, /personal_skill_candidate\?: Partial<PersonalTrainingSkillCandidate>;/);
   assert.match(reportModelSource, /ai_reflection_review: normalizeAiReflectionReview\(report\.ai_reflection_review\),/);
   assert.match(reportModelSource, /personal_skill_candidate: normalizePersonalTrainingSkillCandidate\(report\.personal_skill_candidate\),/);
+  assert.match(reportModelSource, /student_training_report: normalizeStudentTrainingReport\(report\),/);
   assert.match(reportSource, /function AiReflectionReviewSection/);
-  assert.match(reportSource, /function TeacherReasoningTraceSummarySection/);
   assert.match(reportSource, /function PersonalTrainingSkillSection/);
-  assert.match(reportSource, /<AiReflectionReviewSection review=\{report\.ai_reflection_review\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
-  assert.match(reportSource, /<PersonalTrainingSkillSection candidate=\{report\.personal_skill_candidate\} trainingPointLabelResolver=\{trainingPointLabelResolver\} \/>/);
-  assert.match(reportSource, /教师复盘/);
-  assert.match(reportSource, /总体判断/);
-  assert.match(reportSource, /老师带你重走一遍临床思路/);
-  assert.match(reportSource, /review\.teacher_coaching_review\.map/);
-  assert.match(reportSource, /section\.teacher_comment/);
-  assert.match(reportSource, /section\.why_it_matters/);
-  assert.match(reportSource, /section\.next_move/);
-  assert.match(reportSource, /老师指出的问题/);
-  assert.match(reportSource, /为什么重要/);
-  assert.match(reportSource, /正确做法/);
-  assert.match(reportSource, /下一轮具体练法/);
-  assert.match(reportSource, /推理链点评/);
-  assert.match(reportSource, /临床思维轨迹/);
-  assert.match(reportSource, /顺序问题/);
-  assert.match(reportSource, /证据链断点/);
-  assert.match(reportSource, /缺少证据/);
-  assert.match(reportSource, /summary\.sequence_flags\.map/);
-  assert.match(reportSource, /summary\.evidence_chain_breakpoints\.map/);
-  assert.match(reportSource, /breakpoint\.missing_evidence_labels/);
-  assert.match(reportSource, /个人训练 Skill/);
-  assert.match(reportSource, /review\.source_reference_items\.map/);
-  assert.match(reportSource, /candidate\.rag_evidence_items\.map/);
-  assert.match(reportSource, /function getPersonalSkillScopeLabel/);
-  assert.match(reportSource, /function getPersonalSkillSourceReportText/);
-  assert.match(reportSource, /生成结果/);
-  assert.match(reportSource, /适用范围/);
-  assert.match(reportSource, /来源报告/);
-  assert.match(reportModelSource, /export type TeacherAnalysisContext = Readonly<\{/);
-  assert.match(reportModelSource, /clinical_thinking_profile: Readonly<Record<string, unknown>>;/);
-  assert.match(reportModelSource, /teacher_analysis_context: TeacherAnalysisContext;/);
-  assert.match(reportSource, /function TeacherAnalysisContextSection/);
-  assert.match(reportSource, /function formatTeacherAnalysisMode/);
-  assert.match(reportSource, /教师智能体分析/);
-  assert.match(reportSource, /学生思维假设/);
-  assert.match(reportSource, /临床思维画像/);
-  assert.match(reportSource, /Skill 记忆来源/);
-  assert.doesNotMatch(reportSource, /\{context\.analysis_mode\}/);
+  assert.doesNotMatch(reportSource, /<AiReflectionReviewSection review=/);
+  assert.doesNotMatch(reportSource, /<PersonalTrainingSkillSection candidate=/);
+  assert.match(reportSource, /report\.student_training_report\.decision_replays/);
+  assert.match(reportSource, /trainingReport\.training_prescriptions\.map/);
+  assert.match(reportSource, /trainingReport\.personal_memory_summary/);
 });
 
 test("report page notifies when a pending personal skill finishes in the background", () => {
@@ -1076,7 +1033,7 @@ test("report page keeps long AI evidence source lists collapsed with clear expan
   assert.doesNotMatch(reportSource, /<h3 className="text-xs font-semibold">RAG 证据来源<\/h3>\s*\{candidate\.rag_evidence_items\.length > 0 \?/);
 });
 
-test("report page derives training point labels from report metadata instead of fixed field tables", () => {
+test("report page keeps raw training point ids out of the main student report", () => {
   assert.match(reportSource, /function createTrainingPointLabelResolver\(report: FeedbackReport\): \(itemId: string\) => string/);
   assert.match(reportSource, /Object\.entries\(report\.rubric_scores\)\.forEach/);
   assert.match(reportSource, /collectCoverageMapLabels\(report\.training_progress_snapshot\?\.coverage_map, labelById\);/);
@@ -1085,13 +1042,13 @@ test("report page derives training point labels from report metadata instead of 
   assert.match(reportSource, /weak_problem_representation: "问题表征薄弱"/);
   assert.match(reportSource, /premature_closure_risk: "过早闭合风险"/);
   assert.match(reportSource, /const cognitivePatternLabel = cognitivePatternLabels\[itemId\]/);
-  assert.match(reportSource, /const trainingPointLabelResolver = useMemo\(\(\) => report \? createTrainingPointLabelResolver\(report\) : formatTrainingPointIdentifier/);
+  assert.doesNotMatch(reportSource, /const trainingPointLabelResolver = useMemo/);
   assert.doesNotMatch(reportSource, /const TRAINING_POINT_LABELS/);
   assert.doesNotMatch(reportSource, /ht_onset: "起病时间"/);
-  assert.match(reportSource, /trainingPointLabelResolver\(pattern\)/);
-  assert.match(reportSource, /trainingPointLabelResolver\(triggerItemId\)/);
-  assert.doesNotMatch(reportSource, /\{pattern\}\s*<\/span>/);
-  assert.doesNotMatch(reportSource, /\{triggerItemId\}\s*<\/span>/);
+  assert.match(reportSource, /decision\.evidence_labels/);
+  assert.match(reportSource, /查看对应证据标签/);
+  assert.doesNotMatch(reportSource, /<AiReflectionReviewSection review=/);
+  assert.doesNotMatch(reportSource, /<PersonalTrainingSkillSection candidate=/);
 });
 
 test("report clinical task trace list uses stable keys for legacy unnamed items", () => {

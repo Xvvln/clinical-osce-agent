@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -58,6 +59,8 @@ clinical_thinking_profile 建议包含这些键：
 - verification_strategy：查体和检查是否围绕假设验证；
 - differential_reasoning：鉴别诊断是否有支持/排除依据；
 - metacognitive_next_move：下一轮最该练的思维动作。
+以上每个值都必须是学生能直接理解的完整中文教学句子，不得输出 strong、weak、
+delayed_and_undifferentiated 等枚举、snake_case 标签、字段名、ID 或代码。
 
 硬性边界：
 - 不得修改病例事实、标准诊断、rubric、评分结果或隐藏事实；
@@ -69,6 +72,62 @@ clinical_thinking_profile 建议包含这些键：
 - 有 longitudinal_context 时，clinical_thinking_profile 必须包含 longitudinal_gap_assessment，准确说明持续、复发或暂未再现；
 - 输出中文 JSON。
 """
+
+_TEACHER_PROFILE_KEYS = (
+    "problem_representation",
+    "hypothesis_management",
+    "verification_strategy",
+    "differential_reasoning",
+    "metacognitive_next_move",
+    "longitudinal_gap_assessment",
+)
+_TEACHER_PROFILE_INTERNAL_TOKEN = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b"
+)
+_TEACHER_PROFILE_UUID = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_TEACHER_PROFILE_VALUE_TRANSLATIONS = {
+    "strong": "本轮已经形成较清楚的问题表征，能够概括当前主要临床问题。",
+    "weak": "本轮问题表征还不够稳定，需要先概括核心症状、时间进展和关键危险信号。",
+    "delayed_and_undifferentiated": "本轮诊断假设形成偏晚，且尚未清楚区分主要假设与备选诊断。",
+    "evidence_collection_without_target": "本轮已经开展证据收集，但查体和检查尚未围绕具体假设进行验证或排除。",
+    "narrow_and_exclusion_absent": "本轮鉴别诊断范围偏窄，尚未明确表达关键排除依据。",
+    "explicit_hypothesis_before_physical_exam": "下一轮应在关键查体前先明确主要假设，再说明每项查体将验证或排除什么。",
+}
+_TEACHER_PROFILE_FIELD_FALLBACKS = {
+    "problem_representation": "本轮问题表征尚需结合已经获得的证据进一步明确。",
+    "hypothesis_management": "本轮需要更清楚地说明主要假设、备选诊断及其调整依据。",
+    "verification_strategy": "下一轮应让查体和检查围绕具体假设进行验证或排除。",
+    "differential_reasoning": "下一轮应补充相近诊断，并分别说明支持依据和排除依据。",
+    "metacognitive_next_move": "下一轮先明确当前最需要验证的问题，再选择后续动作。",
+    "longitudinal_gap_assessment": "当前缺少足够的可比较训练记录，暂不能判断问题是否反复。",
+}
+
+
+def _normalize_teacher_clinical_thinking_profile(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping) or not value:
+        return {}
+    normalized: dict[str, str] = {}
+    for key in _TEACHER_PROFILE_KEYS:
+        if key not in value:
+            continue
+        raw_text = str(value.get(key) or "").strip()
+        translated = _TEACHER_PROFILE_VALUE_TRANSLATIONS.get(raw_text)
+        if translated:
+            normalized[key] = translated
+            continue
+        if (
+            not raw_text
+            or _TEACHER_PROFILE_INTERNAL_TOKEN.search(raw_text)
+            or _TEACHER_PROFILE_UUID.search(raw_text)
+            or raw_text.isascii()
+        ):
+            normalized[key] = _TEACHER_PROFILE_FIELD_FALLBACKS[key]
+            continue
+        normalized[key] = raw_text
+    return normalized
 
 
 class TeacherAnalysisRequest(BaseModel):
@@ -106,6 +165,11 @@ class TeacherAnalysisResponse(BaseModel):
     @classmethod
     def _limit_next_practice_plan(cls, value: Any) -> Any:
         return list(value)[:3] if isinstance(value, list | tuple) else value
+
+    @field_validator("clinical_thinking_profile", mode="before")
+    @classmethod
+    def _normalize_student_facing_profile(cls, value: Any) -> Any:
+        return _normalize_teacher_clinical_thinking_profile(value)
 
 
 class DeterministicTeacherAgent:

@@ -3058,21 +3058,88 @@ def _serialize_enabled_skill_for_profile(skill: dict[str, Any]) -> dict[str, obj
     support_count = int(skill.get("support_count") or 0)
     source_report_count = int(skill.get("source_report_count") or 0)
     effect_status = str(skill.get("effect_status", "insufficient_samples"))
+    case_ids = [str(case_id) for case_id in skill.get("case_ids", []) if str(case_id).strip()]
 
     return {
         "skill_id": str(skill["skill_id"]),
-        "title": str(skill["title"]),
-        "student_visible_summary": str(skill["student_visible_summary"]),
-        "description": str(skill["description"]),
-        "learning_action": str(skill["learning_action"]),
-        "activation_summary": str(skill["activation_summary"]),
-        "source_summary": str(skill["source_summary"]),
+        "title": _student_visible_skill_text(skill.get("title"), case_ids, fallback="个人训练策略"),
+        "student_visible_summary": _student_visible_skill_text(
+            skill.get("student_visible_summary"),
+            case_ids,
+            fallback="该教学策略会根据近期训练问题，在相似场景中按需使用。",
+        ),
+        "description": _student_visible_skill_text(
+            skill.get("description"),
+            case_ids,
+            fallback="该教学策略会根据近期训练问题，在相似场景中按需使用。",
+        ),
+        "learning_action": _student_visible_skill_text(
+            skill.get("learning_action"),
+            case_ids,
+            fallback="在命中相似训练问题时提供分层提示，并保留学生独立判断空间。",
+        ),
+        "activation_summary": _student_visible_skill_text(
+            skill.get("activation_summary"),
+            case_ids,
+            fallback="在相似病例和训练阶段命中近期缺口时触发。",
+        ),
+        "source_summary": _student_visible_skill_text(
+            skill.get("source_summary"),
+            case_ids,
+            fallback=f"来自 {source_report_count} 份历史训练报告，累计支持 {support_count} 次。",
+        ),
         "effect_status_label": str(skill["effect_status_label"]),
         "scope_label": str(skill["scope_label"]),
         "support_count": support_count,
         "source_report_count": source_report_count,
         "effect_status": effect_status,
     }
+
+
+_PROFILE_UUID_PATTERN = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_PROFILE_UUID_CONTEXT_PATTERN = re.compile(
+    rf"涉及\s*{_PROFILE_UUID_PATTERN.pattern}",
+    re.IGNORECASE,
+)
+_PROFILE_INTERNAL_TOKEN_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+_PROFILE_INTERNAL_TOKEN_LABELS = {
+    "reasoning_core": "临床推理链",
+    "delayed_and_undifferentiated": "诊断假设形成偏晚，且尚未充分区分",
+    "evidence_collection_without_target": "证据采集缺少明确验证目标",
+    "narrow_and_exclusion_absent": "鉴别范围偏窄，缺少排除依据",
+    "explicit_hypothesis_before_physical_exam": "查体前已形成明确诊断假设",
+}
+
+
+def _student_visible_skill_text(value: object, case_ids: list[str], *, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+
+    for case_id in case_ids:
+        case_title = _get_case_title(case_id)
+        if case_title != case_id:
+            text = text.replace(case_id, case_title)
+
+    text = _PROFILE_UUID_CONTEXT_PATTERN.sub("来自历史训练记录", text)
+    text = _PROFILE_UUID_PATTERN.sub("历史训练记录", text)
+
+    def replace_internal_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if _admin_case_exists(token):
+            return _get_case_title(token)
+        if token in _PROFILE_INTERNAL_TOKEN_LABELS:
+            return _PROFILE_INTERNAL_TOKEN_LABELS[token]
+        label = admin_display_resolver.rubric_item_label(token, case_ids)
+        return label if label != token and token not in label else "相关训练点"
+
+    text = _PROFILE_INTERNAL_TOKEN_PATTERN.sub(replace_internal_token, text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", text)
+    return text or fallback
 
 
 def _enabled_skill_visible_to_user(skill: dict[str, Any], user_id: str) -> bool:

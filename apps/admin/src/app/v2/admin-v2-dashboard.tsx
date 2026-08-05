@@ -7354,6 +7354,7 @@ function SessionTable({
           {sessions.map((session) => (
             <tr
               className={cn("border-b border-[#F0E8DC]", onSelectSession ? "cursor-pointer hover:bg-[#FAF9F5]" : "", selectedSessionId === session.session_id ? "bg-[#F7F4ED]" : "")}
+              data-session-id={session.session_id}
               key={session.session_id}
               onClick={() => onSelectSession?.(session.session_id)}
             >

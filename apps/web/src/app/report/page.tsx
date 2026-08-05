@@ -133,12 +133,9 @@ class RequestJsonError extends Error {
 
 type ReportSectionId =
   | "overview"
-  | "reflection"
-  | "personal_skill"
-  | "dimensions"
   | "feedback"
-  | "recommendations"
-  | "conversation"
+  | "reflection"
+  | "training"
   | "evidence";
 
 type ReportSection = Readonly<{
@@ -209,14 +206,11 @@ const PERSONAL_SKILL_NOTICE_TIMEOUT_MS = 7_000;
 const sectionHeadingClassName = "text-2xl font-semibold tracking-tight";
 
 const reportSections: readonly ReportSection[] = [
-  { id: "overview", label: "总览", eyebrow: "分数与上下文", targetId: "report-overview" },
-  { id: "feedback", label: "结论", eyebrow: "本轮问题", targetId: "report-feedback" },
-  { id: "dimensions", label: "图表", eyebrow: "rubric 维度", targetId: "report-dimensions" },
-  { id: "reflection", label: "复盘", eyebrow: "教师点评", targetId: "report-reflection" },
-  { id: "personal_skill", label: "Skill", eyebrow: "个人策略", targetId: "report-personal-skill" },
-  { id: "conversation", label: "对话", eyebrow: "训练过程", targetId: "report-conversation" },
-  { id: "recommendations", label: "推荐", eyebrow: "下一病例", targetId: "report-recommendations" },
-  { id: "evidence", label: "依据", eyebrow: "折叠来源", targetId: "report-evidence" },
+  { id: "overview", label: "总览", eyebrow: "结果与边界", targetId: "report-overview" },
+  { id: "feedback", label: "结论", eyebrow: "本轮结果", targetId: "report-feedback" },
+  { id: "reflection", label: "复盘", eyebrow: "关键决策", targetId: "report-reflection" },
+  { id: "training", label: "下一轮", eyebrow: "训练处方", targetId: "report-training-plan" },
+  { id: "evidence", label: "明细", eyebrow: "评分与证据", targetId: "report-evidence" },
 ];
 
 function getScorePercent(score: number, maxScore: number): number {
@@ -1100,7 +1094,6 @@ export default function ReportPage() {
     () => groupSourceReferences(report?.source_reference_items ?? [], report?.source_references ?? []),
     [report?.source_reference_items, report?.source_references],
   );
-  const trainingPointLabelResolver = useMemo(() => report ? createTrainingPointLabelResolver(report) : formatTrainingPointIdentifier, [report]);
   const backendProcedureResults = useMemo(() => buildBackendProcedureResults(backendSession), [backendSession]);
   const totalPercent = report ? getScorePercent(report.total_score, 100) : 0;
   const scoreBackground = `conic-gradient(${REPORT_BRAND_COLOR} ${totalPercent * 3.6}deg, ${REPORT_BRAND_SCORE_TRACK_COLOR} 0deg)`;
@@ -1139,7 +1132,7 @@ export default function ReportPage() {
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight">评分报告</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                独立报告页用于集中展示总分、维度雷达、强弱项摘要、训练建议和来源引用。
+                用关键决策解释本轮表现，并把结论转成下一轮可以直接执行的训练动作。
               </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:items-end">
@@ -1208,16 +1201,16 @@ export default function ReportPage() {
               </div>
 
               <div className="grid gap-4">
-                <div className="rounded-2xl border border-border bg-background p-5 shadow-xs">
+                <div className="rounded-2xl border border-border bg-background p-5 shadow-xs" data-session-id={sessionId ?? undefined}>
                   <p className="text-sm font-semibold">报告上下文</p>
                   <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-1">
                     <div>
-                      <dt className="text-xs text-muted-foreground">Session</dt>
-                      <dd className="mt-1 break-all font-medium">{sessionId ?? "未提供"}</dd>
+                      <dt className="text-xs text-muted-foreground">训练病例</dt>
+                      <dd className="mt-1 font-medium">{backendSession?.case_title || "病例信息待读取"}</dd>
                     </div>
                     <div>
-                      <dt className="text-xs text-muted-foreground">病例</dt>
-                      <dd className="mt-1 font-medium">{backendSession?.case_title ?? report?.case_id ?? "待读取"}</dd>
+                      <dt className="text-xs text-muted-foreground">训练状态</dt>
+                      <dd className="mt-1 font-medium">{report ? "报告已生成" : statusText}</dd>
                     </div>
                     <div>
                       <dt className="text-xs text-muted-foreground">使用边界</dt>
@@ -1240,29 +1233,42 @@ export default function ReportPage() {
                 <p className="mt-2 whitespace-pre-line">{errorText}</p>
               </div>
             ) : null}
-            {report ? <StudentReportSummary report={report} sectionId="report-feedback" /> : null}
-            <DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} />
-            {report ? (
-              <AiReflectionReviewSection review={report.ai_reflection_review} trainingPointLabelResolver={trainingPointLabelResolver} />
-            ) : null}
-            {report ? <DeepReportAnalysisSection analysis={report.deep_report_analysis} trainingPointLabelResolver={trainingPointLabelResolver} /> : null}
-            {report ? (
-              <PersonalTrainingSkillSection candidate={report.personal_skill_candidate} trainingPointLabelResolver={trainingPointLabelResolver} />
-            ) : null}
-            {report ? <HumanisticCommunicationSection report={report} /> : null}
-
-            <ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} />
-            {report ? <CaseRecommendations items={report.knowledge_recommendations} /> : null}
-            {report ? (
-              <TraceabilityDetailsSection
-                explanationItems={report.explanation_source_items}
-                llmReasoningItems={report.llm_reasoning_feedback}
-                procedureSimulationAuditItems={report.procedure_simulation_audit_items}
-                sourceReferenceItems={report.source_reference_items}
-                evidenceGraphSummary={report.evidence_graph_summary}
-                sourceReferenceGroups={sourceReferenceGroups}
-              />
-            ) : null}
+            {report ? <StudentOutcomeSection report={report} /> : null}
+            {report ? <DecisionReplaySection report={report} /> : null}
+            {report ? <TrainingPrescriptionSection items={report.knowledge_recommendations} report={report} /> : null}
+            <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-evidence">
+              <div>
+                <h2 className={sectionHeadingClassName}>评分与证据明细</h2>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  主报告只保留影响下一轮训练的判断；维度图、完整对话和来源记录在这里按需展开。
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3">
+                <details className="rounded-xl border border-border bg-muted/20 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold">查看评分维度与逐项得分</summary>
+                  <div className="mt-3"><DimensionChartSection dimensions={dimensions} report={report} statusText={statusText} /></div>
+                </details>
+                <details className="rounded-xl border border-border bg-muted/20 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold">查看本轮完整对话与检查结果</summary>
+                  <div className="mt-3"><ConversationDetailsSection backendProcedureResults={backendProcedureResults} backendSession={backendSession} /></div>
+                </details>
+                {report ? (
+                  <details className="rounded-xl border border-border bg-muted/20 p-3">
+                    <summary className="cursor-pointer list-none text-sm font-semibold">查看评分依据、知识来源与系统留痕</summary>
+                    <div className="mt-3">
+                      <TraceabilityDetailsSection
+                        explanationItems={report.explanation_source_items}
+                        llmReasoningItems={report.llm_reasoning_feedback}
+                        procedureSimulationAuditItems={report.procedure_simulation_audit_items}
+                        sourceReferenceItems={report.source_reference_items}
+                        evidenceGraphSummary={report.evidence_graph_summary}
+                        sourceReferenceGroups={sourceReferenceGroups}
+                      />
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            </section>
           </section>
         </section>
       </div>
@@ -1451,6 +1457,199 @@ function ConversationDetailsSection({
       </div>
     </details>
   );
+}
+
+function StudentOutcomeSection({ report }: Readonly<{ report: FeedbackReport }>) {
+  const outcome = report.student_training_report.outcome;
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-feedback">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand">先回答：这一轮结果如何</p>
+          <h2 className={`${sectionHeadingClassName} mt-2`}>本轮结果</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{outcome.summary}</p>
+        </div>
+        <span className="w-fit shrink-0 rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-medium text-brand">
+          {getDiagnosticClassificationLabel(outcome.diagnosis_status)}
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <article className="rounded-xl border border-brand/20 bg-brand/5 p-4">
+          <p className="text-xs font-semibold text-brand">诊断与推理结论</p>
+          <p className="mt-2 text-base font-semibold leading-7 text-foreground">{outcome.diagnosis_summary}</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{outcome.score_summary}</p>
+        </article>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+          <article className="rounded-xl border border-border bg-muted/20 p-3">
+            <p className="text-xs font-semibold text-foreground">安全与知情同意</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{outcome.safety_summary}</p>
+          </article>
+          <article className="rounded-xl border border-border bg-muted/20 p-3">
+            <p className="text-xs font-semibold text-foreground">人文沟通</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{outcome.communication_summary}</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DecisionReplaySection({ report }: Readonly<{ report: FeedbackReport }>) {
+  const decisions = report.student_training_report.decision_replays;
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-reflection">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand">再回答：哪个具体时刻影响了结果</p>
+        <h2 className={`${sectionHeadingClassName} mt-2`}>关键决策复盘</h2>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          最多保留 3 个关键时刻；每项判断都说明观察依据、影响和下一次正确动作。
+        </p>
+      </div>
+      <div className="mt-4 grid gap-3">
+        {decisions.map((decision, index) => {
+          const decisionKind = decision.kind ?? "evidence";
+          const evidenceLabels = decision.evidence_labels ?? [];
+          return (
+          <article className="rounded-xl border border-border bg-muted/15 p-4" key={decision.replay_id}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-brand/20 bg-brand/10 text-sm font-semibold text-brand">
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-semibold text-foreground">{decision.title}</h3>
+                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${getDecisionReplayBadgeClass(decisionKind)}`}>
+                    {getDecisionReplayKindLabel(decisionKind)} · {decision.phase}
+                  </span>
+                </div>
+                <dl className="mt-3 grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <dt className="text-xs font-semibold text-muted-foreground">本轮观察</dt>
+                    <dd className="mt-1 text-sm leading-6 text-foreground">{decision.observed_evidence}</dd>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <dt className="text-xs font-semibold text-muted-foreground">教师判断</dt>
+                    <dd className="mt-1 text-sm leading-6 text-foreground">{decision.teacher_judgement}</dd>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-3">
+                    <dt className="text-xs font-semibold text-muted-foreground">为什么重要</dt>
+                    <dd className="mt-1 text-sm leading-6 text-foreground">{decision.why_it_matters}</dd>
+                  </div>
+                  <div className="rounded-lg border border-brand/20 bg-brand/5 p-3">
+                    <dt className="text-xs font-semibold text-brand">下次正确动作</dt>
+                    <dd className="mt-1 text-sm leading-6 text-foreground">{decision.next_action}</dd>
+                  </div>
+                </dl>
+                {evidenceLabels.length > 0 ? (
+                  <details className="mt-3 rounded-lg border border-border bg-background px-3 py-2">
+                    <summary className="cursor-pointer list-none text-xs font-medium text-muted-foreground">查看对应证据标签</summary>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {evidenceLabels.map((label) => (
+                        <span className="rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground" key={label}>{label}</span>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            </div>
+          </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TrainingPrescriptionSection({
+  items,
+  report,
+}: Readonly<{
+  items: readonly KnowledgeRecommendationItem[];
+  report: FeedbackReport;
+}>) {
+  const trainingReport = report.student_training_report;
+  const longitudinal = trainingReport.longitudinal_summary;
+  return (
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs" id="report-training-plan">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand">最后回答：下一轮具体怎么做</p>
+        <h2 className={`${sectionHeadingClassName} mt-2`}>下一轮训练处方</h2>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">每项目标都包含触发场景、具体动作和可以验收的成功标准。</p>
+      </div>
+      <ol className="mt-4 grid gap-3 lg:grid-cols-3">
+        {trainingReport.training_prescriptions.map((goal, index) => (
+          <li className="rounded-xl border border-brand/20 bg-brand/5 p-4" key={goal.goal_id}>
+            <div className="flex items-center gap-2">
+              <span className="flex size-7 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white">{index + 1}</span>
+              <h3 className="text-sm font-semibold text-foreground">{goal.title}</h3>
+            </div>
+            <dl className="mt-3 grid gap-2 text-xs leading-5">
+              <div><dt className="font-semibold text-brand">何时触发</dt><dd className="mt-0.5 text-muted-foreground">{goal.trigger}</dd></div>
+              <div><dt className="font-semibold text-brand">具体动作</dt><dd className="mt-0.5 text-muted-foreground">{goal.action}</dd></div>
+              <div><dt className="font-semibold text-brand">完成标准</dt><dd className="mt-0.5 text-muted-foreground">{goal.success_signal}</dd></div>
+            </dl>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <article className="rounded-xl border border-border bg-muted/20 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-foreground">跨轮变化</h3>
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">{longitudinal.label}</span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{longitudinal.summary}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <LongitudinalCount label="首次出现" value={longitudinal.first_seen_count} />
+            <LongitudinalCount label="连续出现" value={longitudinal.repeated_count} />
+            <LongitudinalCount label="改善后再现" value={longitudinal.reactivated_count} />
+            <LongitudinalCount label="本轮暂未再现" value={longitudinal.temporarily_absent_count} />
+          </div>
+        </article>
+        <article className="rounded-xl border border-border bg-muted/20 p-4">
+          <h3 className="text-sm font-semibold text-foreground">系统记住的训练重点</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{trainingReport.personal_memory_summary}</p>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">只有通过审批和回归门禁的策略才会进入后续训练。</p>
+        </article>
+      </div>
+      {items.length > 0 ? (
+        <details className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+          <summary className="cursor-pointer list-none text-sm font-semibold">推荐下一步学习材料</summary>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {items.slice(0, 4).map((item) => (
+              <article className="rounded-lg border border-border bg-background p-3" key={`${item.reference}-${item.title}`}>
+                <h4 className="text-sm font-semibold text-foreground">{item.title}</h4>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{item.reason}</p>
+              </article>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function LongitudinalCount({ label, value }: Readonly<{ label: string; value: number }>) {
+  return (
+    <div className="rounded-lg border border-border bg-background px-2.5 py-2">
+      <p className="text-muted-foreground">{label}</p>
+      <p className="mt-1 text-base font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function getDecisionReplayKindLabel(kind: FeedbackReport["student_training_report"]["decision_replays"][number]["kind"]): string {
+  if (kind === "strength") return "有效做法";
+  if (kind === "safety") return "安全边界";
+  if (kind === "humanistic") return "沟通时机";
+  if (kind === "sequence") return "动作顺序";
+  if (kind === "reasoning") return "思维判断";
+  return "证据链";
+}
+
+function getDecisionReplayBadgeClass(kind: FeedbackReport["student_training_report"]["decision_replays"][number]["kind"]): string {
+  if (kind === "strength") return "border-[#B7D7BE] bg-[#EEF6EF] text-[#236146]";
+  if (kind === "safety") return "border-red-200 bg-red-50 text-red-700";
+  return "border-brand/20 bg-brand/10 text-brand";
 }
 
 function StudentReportSummary({ report, sectionId }: Readonly<{ report: FeedbackReport; sectionId: string }>) {
@@ -2310,7 +2509,9 @@ function getDiagnosticClassificationLabel(classification: string): string {
     partially_correct: "方向接近",
     plausible_differential: "合理鉴别",
     contradicted_by_case: "证据反对",
+    incorrect: "诊断未命中",
     unsupported: "证据不足",
+    not_submitted: "未提交诊断",
   };
   return labels[classification] ?? classification;
 }
@@ -3237,7 +3438,7 @@ function TraceabilityDetailsSection({
   sourceReferenceGroups: readonly SourceReferenceGroup[];
 }>) {
   return (
-    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id="report-evidence">
+    <section className="scroll-mt-6 rounded-2xl border border-border bg-background p-5 shadow-xs xl:col-span-2" id="report-traceability">
       <details className="group">
         <summary className="flex cursor-pointer list-none flex-col gap-3 rounded-xl border border-border bg-muted/25 p-4 sm:flex-row sm:items-start sm:justify-between">
           <div>

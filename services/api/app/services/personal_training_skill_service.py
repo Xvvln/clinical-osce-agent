@@ -830,12 +830,21 @@ def _backfill_teacher_analysis_payload(
             enriched[field_name] = deepcopy(deterministic.get(field_name))
 
     profile = deepcopy(_dict(enriched.get("clinical_thinking_profile")))
+    deterministic_profile = _dict(deterministic.get("clinical_thinking_profile"))
+    for field_name in (
+        "problem_representation",
+        "hypothesis_management",
+        "verification_strategy",
+        "differential_reasoning",
+        "metacognitive_next_move",
+    ):
+        if not _has_meaningful_teacher_value(profile.get(field_name)):
+            profile[field_name] = str(deterministic_profile.get(field_name) or "")
     existing_longitudinal_assessment = profile.get("longitudinal_gap_assessment")
     if (
         not isinstance(existing_longitudinal_assessment, str)
         or not existing_longitudinal_assessment.strip()
     ):
-        deterministic_profile = _dict(deterministic.get("clinical_thinking_profile"))
         longitudinal_assessment = str(
             deterministic_profile.get("longitudinal_gap_assessment") or ""
         ).strip()
@@ -1018,16 +1027,10 @@ def _build_teacher_major_issues(
             break
     if issues:
         return issues
-    return [
-        {
-            "title": "证据表达还可以继续精炼",
-            "observed_behavior": "本轮关键采集较完整，主要提升点是把已获得信息整理成更清楚的支持与排除依据。",
-            "why_it_matters": ISSUE_GROUP_DEFINITIONS["reasoning"]["why"],
-            "correct_approach": ISSUE_GROUP_DEFINITIONS["reasoning"]["correct"],
-            "next_action": ISSUE_GROUP_DEFINITIONS["reasoning"]["next"],
-            "linked_items": [],
-        }
-    ]
+    # A high-performing round must not receive a fabricated weakness merely to
+    # fill the report. Reinforcement and transfer belong in the next-practice
+    # plan, while major_issues remains evidence-backed.
+    return []
 
 
 def _teacher_major_issues_from_reasoning_patterns(

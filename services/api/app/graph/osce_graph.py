@@ -52,6 +52,7 @@ from app.services.skill_role_policy_service import (
     build_teacher_skill_role_projection,
 )
 from app.services.source_retriever import FeedbackSourceItem, retrieve_feedback_source_items
+from app.services.student_training_report_service import build_student_training_report
 from app.services.teacher_intervention_service import (
     TeacherInterventionDecision,
     TeacherInterventionMode,
@@ -1411,6 +1412,9 @@ def feedback_node(state: OsceGraphState) -> dict[str, Any]:
         "feedback_summary": "已根据评分轨迹生成教学反馈，内容仅用于 OSCE 训练复盘。",
         "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
+    feedback_report["student_training_report"] = build_student_training_report(
+        feedback_report,
+    )
     return {"stage": "feedback", "retrieved_sources": source_references, "feedback_report": feedback_report}
 
 
