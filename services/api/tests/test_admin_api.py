@@ -2682,7 +2682,7 @@ def test_admin_session_and_report_expose_readable_student_identity(tmp_path, mon
             {
                 "report_id": "report_readable_identity",
                 "session_id": "session_readable_identity",
-                "student_id": "legacy-readable-student",
+                "student_id": "legacy-readable@example.test",
                 "case_id": "pneumonia_001",
                 "total_score": 86,
                 "missed_items": [],

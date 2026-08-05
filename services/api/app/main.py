@@ -582,10 +582,15 @@ def _is_deleted_admin_session(session_id: object) -> bool:
 def _build_admin_procedure_simulation_audit_items() -> list[dict[str, Any]]:
     audit_items: list[dict[str, Any]] = []
     user_index = _admin_user_identity_index()
+    session_student_ids = _admin_session_student_id_index()
     for report in osce_session_service.report_store.list_reports():
         if _is_deleted_admin_session(report.get("session_id")):
             continue
-        enriched_report = _enrich_admin_report(report, user_index)
+        enriched_report = _enrich_admin_report(
+            report,
+            user_index,
+            session_student_ids,
+        )
         report_audit_items = enriched_report.get("procedure_simulation_audit_items", [])
         if not isinstance(report_audit_items, list):
             continue
@@ -1895,6 +1900,16 @@ def _admin_user_directory() -> list[dict[str, object]]:
     return [_build_admin_user_payload(user) for user in auth_store.list_users()]
 
 
+def _admin_session_student_id_index() -> dict[str, str]:
+    return {
+        str(session.get("session_id") or "").strip(): str(
+            session.get("student_id") or ""
+        ).strip()
+        for session in osce_session_service.session_store.list_session_summaries()
+        if str(session.get("session_id") or "").strip()
+    }
+
+
 def _admin_user_identity_index() -> dict[str, dict[str, object]]:
     index: dict[str, dict[str, object]] = {}
     for user in _admin_user_directory():
@@ -1905,13 +1920,7 @@ def _admin_user_identity_index() -> dict[str, dict[str, object]]:
         if email:
             index[email] = user
 
-    session_owners = {
-        str(session.get("session_id") or "").strip(): str(
-            session.get("student_id") or ""
-        ).strip()
-        for session in osce_session_service.session_store.list_session_summaries()
-        if str(session.get("session_id") or "").strip()
-    }
+    session_owners = _admin_session_student_id_index()
     legacy_alias_owners: dict[str, set[str]] = {}
     for report in osce_session_service.report_store.list_reports():
         legacy_student_id = str(report.get("student_id") or "").strip()
@@ -1983,11 +1992,20 @@ def _enrich_admin_session_summary(
 def _enrich_admin_report(
     report: dict[str, Any],
     user_index: dict[str, dict[str, object]],
+    session_student_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     enriched = enrich_report(report)
+    student_ids_by_session = (
+        session_student_ids
+        if session_student_ids is not None
+        else _admin_session_student_id_index()
+    )
+    identity_student_id = student_ids_by_session.get(
+        str(enriched.get("session_id") or "").strip()
+    ) or enriched.get("student_id")
     return {
         **enriched,
-        **_admin_student_identity_fields(enriched.get("student_id"), user_index),
+        **_admin_student_identity_fields(identity_student_id, user_index),
     }
 
 
@@ -5957,8 +5975,9 @@ def list_admin_reports(
 
 def _list_enriched_admin_reports() -> list[dict[str, Any]]:
     user_index = _admin_user_identity_index()
+    session_student_ids = _admin_session_student_id_index()
     return [
-        _enrich_admin_report(report, user_index)
+        _enrich_admin_report(report, user_index, session_student_ids)
         for report in osce_session_service.report_store.list_reports()
         if not _is_deleted_admin_session(report.get("session_id"))
     ]
@@ -6082,7 +6101,13 @@ def get_admin_session_report(
     report = osce_session_service.report_store.get_report(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
-    return {"report": _enrich_admin_report(report, _admin_user_identity_index())}
+    return {
+        "report": _enrich_admin_report(
+            report,
+            _admin_user_identity_index(),
+            _admin_session_student_id_index(),
+        )
+    }
 
 
 @app.get("/api/admin/sessions/{session_id}/events")
