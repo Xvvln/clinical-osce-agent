@@ -1,0 +1,12 @@
+services:
+  api:
+    image: ghcr.io/xvvln/clinical-osce-agent-api:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}
+    build: null
+
+  web:
+    image: ghcr.io/xvvln/clinical-osce-agent-web:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}
+    build: null
+
+  admin:
+    image: ghcr.io/xvvln/clinical-osce-agent-admin:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}
+    build: null

@@ -910,6 +910,43 @@ def test_compose_health_path_remains_valid() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_production_compose_uses_immutable_ghcr_images_without_local_builds() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    production_compose = yaml.safe_load(
+        (repo_root / "docker-compose.production.yml").read_text(encoding="utf-8")
+    )
+    expected_images = {
+        "api": "ghcr.io/xvvln/clinical-osce-agent-api:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}",
+        "web": "ghcr.io/xvvln/clinical-osce-agent-web:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}",
+        "admin": "ghcr.io/xvvln/clinical-osce-agent-admin:${TRACEOSCE_IMAGE_TAG:-competition-data-elements-education}",
+    }
+
+    for service_name, expected_image in expected_images.items():
+        service = production_compose["services"][service_name]
+        assert service["image"] == expected_image
+        assert service["build"] is None
+
+
+def test_ci_publishes_commit_scoped_images_only_after_e2e_passes() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    workflow_source = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "publish-containers:" in workflow_source
+    assert "needs:\n      - e2e" in workflow_source
+    assert "packages: write" in workflow_source
+    assert "docker/build-push-action@v6" in workflow_source
+    assert "${{ matrix.image }}:${{ github.sha }}" in workflow_source
+    assert "cache-to: type=gha,mode=max,scope=${{ matrix.service }}" in workflow_source
+    assert "Detect whether this service changed" in workflow_source
+    assert "docker buildx imagetools create" in workflow_source
+    for image_name in (
+        "ghcr.io/xvvln/clinical-osce-agent-api",
+        "ghcr.io/xvvln/clinical-osce-agent-web",
+        "ghcr.io/xvvln/clinical-osce-agent-admin",
+    ):
+        assert image_name in workflow_source
+
+
 def test_env_example_defaults_to_server_managed_local_demo_without_demo_admin_password() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     env_example_source = (repo_root / ".env.example").read_text(encoding="utf-8")
