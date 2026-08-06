@@ -1,126 +1,105 @@
 # 临境 OSCE 智能体（TraceOSCE）
 
-**临境 OSCE 智能体（TraceOSCE）** 是一个面向医学教育场景的诊断学 OSCE 训练系统。项目围绕“问诊、查体、辅助检查、诊断推理、评分反馈、教师复盘和个性化再训练”构建闭环，目标是帮助医学生在可重复的模拟病例中训练临床思维。
+> 项目状态（2026-08-06）：竞赛阶段已经结束，仓库进入归档维护。本项目完成了复赛版本，但未获得赛事奖项。以下内容只记录代码中已经实现、可以复现的能力，不把参赛经历当作获奖背书。
 
-本项目定位于 **临床技能训练智能体**：它不是医学问答机器人，也不提供真实诊断、治疗、用药或急救建议。
+TraceOSCE 是一个面向医学教育的诊断学 OSCE 训练系统。它让学生在结构化模拟病例中完成问诊、查体、辅助检查、诊断推理和复盘，并通过标准化病人、教师与审批三个智能体形成“训练—评价—再训练”闭环。
 
-## 核心亮点
+这个项目关注的不是“最后有没有猜中诊断”这一项结果，而是学生如何获取证据、如何组织假设、是否遵守沟通与操作顺序，以及下一轮应在什么时机改进什么动作。
 
-- **标准化病人对话**：学生用自然语言问诊，PatientAgent 只根据病例事实和当前可披露范围回答。
-- **三档训练难度**：初级提供核心查体与检查入口；中级要求学生从通用目录批量选择项目；只有高级模式支持自由文本申请。病例已配置项目直接返回标准结果；合理但未配置的查体 / 检查可依据脱敏病例事实生成明确标注的 AI 模拟结果，经一致性审核后展示，始终不参与评分。
-- **TeacherAgent 教学引导**：结合当前对话、已收集线索、病例结构、学生画像、Skill 记忆和知识库，给出下一步提示与训练后复盘。
-- **RAG 教学知识库**：教师可维护全局或病例知识库，并按训练阶段、可见性、可用 Agent 和人工审核状态约束检索；内置 26 条种子覆盖 5 个病例的问诊、查体、检查、提交后复盘和 Skill 训练。查询会先扩展真实学生口语，再融合 ChromaDB 向量召回与 BM25 词法召回。知识只用于提示、复盘、Skill 生成 / 审批和来源追溯，不参与诊断裁判或 rubric 评分。
-- **Skill 自学习闭环**：训练报告沉淀为学生画像和候选 Skill，经审批后成为后续训练可调用的教学记忆。
-- **可执行训练报告**：学生主报告按“本轮结果、关键决策复盘、下一轮训练处方、跨轮变化”组织；评分明细、完整对话和可追溯来源保留在折叠证据区，详见 [学生训练报告 V2 实现说明](docs/2026-08-05-学生训练报告V2实现说明.md)。
-- **管理端 v2**：面向教师和管理员，管理病例、Rubric、知识库、训练记录、报告、模型调用日志、Skill 审核和系统评测。
+TraceOSCE 不是面向真实患者的医学问答产品，也不提供诊断、治疗、用药或急救建议。
 
-## 使用场景
+## 项目全貌
 
-TraceOSCE 适合用于：
+```mermaid
+flowchart LR
+    Student["学生：问诊、查体、检查、推理"] --> Session["LangGraph 训练会话"]
+    Case["病例事实与 Rubric"] --> Session
+    Session --> Patient["PatientAgent<br/>标准化病人"]
+    Session --> Teacher["TeacherAgent<br/>实时教学与复盘"]
+    KB["受控 RAG 知识库"] --> Teacher
+    Session --> Score["确定性评分与证据链"]
+    Score --> Report["训练报告与学生画像"]
+    Report --> Candidate["候选教学 Skill"]
+    KB --> Approval["ApprovalAgent<br/>净化、审批与回归门禁"]
+    Candidate --> Approval
+    Approval -->|通过| Skills["可复用教学 Skill"]
+    Skills --> Teacher
+    Approval -->|不通过| Blocked["阻断并留痕"]
+```
 
-- 医学生诊断学问诊与临床思维训练。
-- OSCE 课程或比赛作品演示。
-- 医学教育中“教、学、评、改”闭环原型验证。
-- RAG、Agent、学生画像和教学 Skill 机制的研究型系统实验。
+系统由三个前后端服务组成：学生端、教师 / 管理端和 FastAPI API。病例事实、Rubric 评分、权限过滤和写入门禁保持确定性；大模型参与自然语言理解、患者表达、教学提示、报告解释和候选 Skill 审批，但不能直接改写标准答案或评分事实。
 
-不适合用于：
+## 三个智能体
 
-- 真实患者诊断或治疗。
-- 用药剂量、急救处置或临床决策支持。
-- 未经医学教师审核的正式课程评价。
+| 智能体 | 已实现职责 | 明确边界 |
+| --- | --- | --- |
+| PatientAgent | 根据当前病例和可披露范围扮演标准化病人；支持文字 / 语音训练；高级模式可为合理但未配置的查体或检查生成明确标注的 AI 模拟结果 | 不泄露隐藏事实、标准诊断或 Rubric；AI 模拟结果不进入评分 |
+| TeacherAgent | 每轮更新训练阶段、证据覆盖、操作顺序、患者状态和跨轮问题；在 `silent`、`observe`、`hint`、`block` 四种策略间决策；提供分层提示和训练后复盘 | 不替学生作答，不修改病例事实或分数；轻度问题先观察，重复或求助时再介入 |
+| ApprovalAgent | 审查需要长期保存和复用的候选 Skill；保护病例、阶段、触发条件和来源字段，清理越界内容，重建教学结构并执行回归门禁 | 审批异常时 fail-closed（失败即关闭）；通过只代表满足当前规则和测试，不代表教学内容必然正确 |
 
-## 学生端
+即时提示始终由 TeacherAgent 根据当前训练上下文生成。ApprovalAgent 只负责可能进入 Skill 库、影响后续训练的长期教学策略，避免把运行中的每一句提示都变成审批流程。
 
-学生端覆盖完整训练路径：
+## 已实现的训练闭环
 
-1. 选择病例和训练难度。
-2. 与标准化病人进行问诊。
-3. 申请查体和辅助检查。
-4. 形成诊断假设。
-5. 提交最终诊断、鉴别诊断、证据和不确定点。
-6. 查看本轮结果、关键决策复盘和下一轮训练处方；需要审计时再展开评分与证据明细。
-7. 在学习画像中查看近期问题、Skill 积累和后续训练方向。
+### 学生端
 
-训练中，系统会记录已披露线索、已申请项目、诊断推理轨迹和 TeacherAgent 的教学提示。学生提交诊断后，系统才展示完整报告和更深入的复盘内容。
+1. 选择病例和初级 / 中级 / 高级训练难度。
+2. 通过自然语言与标准化病人问诊，并在文本与语音模式间切换。
+3. 申请查体和辅助检查；界面展示真实的后端处理阶段，而不是只显示一个笼统的等待状态。
+4. 记录诊断假设，提交主诊断、鉴别诊断、支持证据和不确定点。
+5. 查看本轮得分、能力雷达、素材覆盖、关键决策复盘和下一轮训练处方。
+6. 展开评分明细、完整对话、证据链和知识来源，核对报告结论从何而来。
+7. 在学习画像中查看跨轮问题、改善状态和已经生效的个人 Skill。
 
-## 管理端
+自由文本查体 / 检查只在高级模式开放。病例已经配置的项目返回标准结果；合理但未配置的请求经过脱敏 grounding、模型生成、一致性审核和本地安全门禁后，可返回标注为“AI 模拟”的训练结果。任何环节失败都会阻断，且该结果永不参与 Rubric 评分。
 
-管理端 v2 采用更接近教学后台的工作台结构，主要包括：
+### 教师智能体与训练报告
 
-- **病例工坊**：查看、新建和维护结构化病例。
-- **Rubric 管理**：维护评分维度、评分项和命中规则。
-- **知识库**：上传或编辑全局 / 病例知识文档，并控制适用训练阶段、可见性和可用 Agent；MD、TXT、CSV、HTML、PDF、DOCX、PPTX 和常见图片均可在项目内直接解析，扫描 PDF 与图片内文字由本地 OCR 识别。每个片段都保留质量 / 风险标记和审核记录，只有已启用且已批准的内容才会进入 Agent 检索。
-- **来源治理**：来源台账展示版本、最近复核、下次复核和替代关系；到期、未复核或已被替代的来源不能再绑定到新知识，历史条目仍保留可追溯记录。
-- **训练管理**：查看 Session、报告、日志、训练请求安全审计和 Agent 轨迹。
-- **教学洞察**：聚合高频漏项、训练重点和来源热度。
-- **Skill 进化**：生成候选 Skill、查看审批 Agent 记录、人工审核或启用自动应用。
-- **质量评测**：查看报告评测、RAG 检索评测和回归状态。
-- **模型日志**：查看模型调用成功率、耗时、失败原因和调用人。
+TeacherAgent 不只在学生点击“请求提示”后工作。问诊、查体、检查、假设更新、诊断提交和边界触发都会产生一条可审计的介入决策；同类提示带有冷却和修复状态，避免把训练变成不断弹答案的导航工具。
 
-管理端用于答辩时展示“病例与来源台账、训练证据、教师复盘、Skill 审批、后续生效痕迹和系统边界”。
+训练报告围绕学生下一轮真正能采取的行动组织：
 
-## 智能体边界
+- **本轮结果**：总分、维度得分、能力雷达、诊断与安全 / 沟通结论。
+- **证据覆盖**：问诊、查体、辅助检查和推理素材逐项覆盖情况，而不是只给一句笼统结论。
+- **关键决策复盘**：最多 3 个有轨迹证据的关键时刻，说明观察到什么、教师如何判断、造成什么影响以及正确下一步。
+- **训练处方**：最多 3 个动作，每个动作包含触发条件、具体行为和成功标志。
+- **跨轮变化**：区分首次出现、连续出现、改善后再现和本轮暂未再现。
+- **详细证据区**：保留评分明细、对话、RAG 引用和审计信息，默认折叠以减少主报告负担。
 
-项目对外采用三类核心智能体口径：
+没有证据缺口的高分学生不会被强行编造弱点，报告会改为强化有效策略和提出跨病例迁移目标。学生与教师页面会优先展示病例名、账号或姓名等可读标签，内部 UUID 只在必要的审计位置保留。
 
-| 智能体 | 职责 |
-| --- | --- |
-| PatientAgent | 扮演标准化病人，只回答当前允许披露的病例事实；人文类 Skill 只能通过去标识化角色投影影响表达与已存在情绪的可感知度 |
-| TeacherAgent | 负责训练提示、上下文评估、Skill Router、RAG 教学知识辅助和训练后复盘；只使用本轮 Router 选中的 Skill 干预 |
-| ApprovalAgent | 审核 Skill 候选和需要进入受控链路的模型输出；禁区策略、成效指标或质量检查不合格时由回归门禁阻断，异常时按 fail-closed（失败关闭）处理 |
+### 教师 / 管理端
 
-以下部分保持确定性或工具层实现：
+除账号级模型配置外，当前管理端已经接入实际 API 和持久化数据，主要包括：
 
-- 病例事实加载和隐藏事实保护。
-- 学生会话响应投影：活动会话只下发已揭示线索、已申请结果和安全进度摘要，内部待覆盖项、Rubric、教学策略与审计轨迹不进入学生端 JSON。
-- 查体 / 辅助检查路由与病例已配置结果查询；高级模式的未配置项目进入独立的脱敏 grounding、生成、一致性审核和本地安全门禁链路。
-- Rubric 规则评分。
-- RAG 可见性过滤。
-- Skill 写入门禁和学生画像更新。
-- 会话、报告、事件和审计存储。
+- 总览、训练 Session、报告、事件日志与 Agent 决策轨迹。
+- 结构化病例与 Rubric 管理。
+- 班级创建、班级成员选择和按班级查看学习分析。
+- 全局 / 病例知识库、文档上传、片段审核、来源台账和版本治理。
+- 教学洞察、常见漏项和训练重点聚合。
+- 候选 Skill 生成、审批 Agent 记录、人工审核、自动应用开关和回归结果。
+- 系统评测、RAG 检索评测、失败详情和模型调用日志。
+- 服务端分页、搜索、可读名称展示和关键列表 JSON 导出。
 
-这个边界的核心原则是：**大模型可以参与理解、表达、教学引导和复盘，但不能直接修改病例事实、标准诊断、Rubric 或评分裁判。**
+生产环境的模型与语音配置仍以服务端环境变量为主；管理员页面不是完整的密钥管理或多租户模型控制台。
 
-## RAG 与 Skill
+## RAG 知识库
 
-### RAG 的用途
+当前知识库是项目自行编排的 ChromaDB 检索链，不是 Vertex 托管 RAG：
 
-RAG 在本项目中用于教学辅助：
+1. 文档进入系统后被解析、分块并保留来源、病例、训练阶段、可见角色、审核状态和风险标记。
+2. 检索前先按病例、阶段、Agent、可见性和人工审核状态过滤候选集。
+3. 对学生口语查询做受控扩展，再融合 ChromaDB 向量召回与 BM25 词法召回。
+4. 使用 RRF（倒数排名融合）合并结果，并可选调用 `qwen3-rerank` 重排。
+5. embedding 不可用时回退到同一安全候选集上的本地词法检索，不绕过权限。
 
-- TeacherAgent 生成提示时查找相关教学知识。
-- 训练后复盘时补充可追溯解释。
-- Skill 生成和审批时提供参考上下文。
-- 管理端展示知识来源、文档片段和检索评测。
+默认本地 embedding 模型为 `BAAI/bge-small-zh-v1.5`，也可选用 Vertex Embedding。知识库支持项目内的 MD、TXT、CSV、HTML、PDF、DOCX、PPTX 和常见图片解析，扫描件和图片文字可通过本地 OCR 提取。内置教学知识覆盖 5 个病例的问诊、查体、检查、提交后复盘和 Skill 审批场景。
 
-RAG 不用于：
+RAG 只用于教学提示、复盘、Skill 生成 / 审批和来源追溯，不判断标准诊断，不决定 Rubric 分数，也不能替代病例结构化事实。
 
-- 判断标准诊断是否正确。
-- 决定 Rubric 分数。
-- 证明学生“确实漏了某项”。
-- 替代病例结构化事实。
+## 病例与资料
 
-当 embedding 可用时，ChromaDB 持久化向量索引仍是主检索路径；系统同时在已通过病例、阶段、角色、可见性和审核过滤的候选集上计算 BM25 词法相关性，用 RRF（倒数排名融合）合并两路排名，再可选进入 `qwen3-rerank`。embedding 未配置、临时超额或所有向量调用失败时，系统会使用同一安全候选集的本地词法召回，不会绕过权限或将待审内容交给 Agent。
-
-当前本地检索基准包含 30 条口语化 gold query：阑尾炎 10 条，其余 4 个病例各 5 条，覆盖病例 / 来源 / Rubric / 病例推理点，以及 Coach、复盘和 Skill 生成知识引用。它用于检查检索回归，不代表诊断准确率或医学教师标注的正式基准。
-
-### Skill 的用途
-
-Skill 是学生训练后的可复用教学记忆。它不是医学事实库，而是记录“这个学生在某类病例或某类思维环节上反复出现的问题，以及下次训练时 TeacherAgent 应该如何引导”。
-
-当前 Skill 闭环包括：
-
-1. 训练完成后生成报告。
-2. 报告进入学生画像和教学洞察。
-3. 高频问题或本轮关键问题生成候选 Skill。
-4. 所有候选都先经审批 Agent 净化与重建，再经回归门禁检查；关闭自动应用也不会跳过这两步。
-5. 通过门禁后由管理员审核，或在明确开启时自动应用；自动开关只决定最终启用方式。
-6. enabled Skill 在后续训练中先根据病例、学生、阶段和当前缺口筛选，再按角色投影：PatientAgent 只获得无事实的人文表达约束，TeacherAgent 只获得本轮 Router 选中的教学干预，ApprovalAgent 负责准入检查。
-
-当样本不足时，系统只展示“样本不足”或应用痕迹，不伪造能力提升。
-
-## 内置病例与数据来源
-
-当前仓库内置 5 个结构化教学病例：
+仓库内置 5 个结构化教学病例：
 
 | 病例 | 模块 | 难度 | 训练主题 |
 | --- | --- | --- | --- |
@@ -130,181 +109,99 @@ Skill 是学生训练后的可复用教学记忆。它不是医学事实库，�
 | 胸痛伴出汗教学病例 | 心血管 | 中级 | 高危胸痛、心电图和心肌损伤证据 |
 | 活动后气短伴夜间憋醒教学病例 | 心血管 | 中级 | 心衰容量负荷、肺部体征和 BNP / 超声证据 |
 
-数据来源与知识来源采用公开资料改写和结构化加工，主要包括：
+病例结构参考 Fareez OSCE、MedCaseReasoning、EasyMED 和 SPBench 等公开资料；教学知识参考 AAFP、Merck Manual Professional、NCBI StatPearls、AHA / ACC / HFSA、American Thyroid Association、ATS / IDSA 等公开来源。内容经过改写和结构化加工，但“项目内复核有效”不等同于医学教师审定或临床有效性认证。
 
-- Fareez OSCE 公开数据：用于问诊风格和部分病例结构参考。
-- MedCaseReasoning：用于诊断推理和证据链素材参考。
-- EasyMED / SPBench：用于公开教学病例结构参考。
-- AAFP、Merck Manual Professional、NCBI StatPearls：用于急腹痛、阑尾炎和急腹症教学知识条目。
-- AHA / ACC / HFSA、American Thyroid Association、ATS / IDSA：分别用于胸痛、心力衰竭、甲状腺功能亢进和成人社区获得性肺炎的教学知识条目。
+详细归因见 [`data/README.md`](data/README.md)、[`docs/数据来源说明.md`](docs/数据来源说明.md) 和 [`data/attribution/source_registry/sources.json`](data/attribution/source_registry/sources.json)。
 
-`sources.json` 当前登记 17 个来源，其中 13 个为可用于新知识的有效来源，4 个旧版 AAFP 来源保留为“已被新来源替代”的历史记录。这里的“复核有效”仅表示项目在记录日期核对了来源版本、用途与风险边界，不等同于医学教师审定或临床有效性认证。
+## 技术实现
 
-详细来源和合规说明见：
+| 层 | 技术 |
+| --- | --- |
+| 学生端 / 管理端 | Next.js、React、TypeScript |
+| API | FastAPI、Pydantic、SQLite |
+| 训练编排 | LangGraph |
+| RAG | ChromaDB、本地 / Vertex Embedding、BM25、RRF、可选 `qwen3-rerank` |
+| 模型与语音 | OpenAI-compatible 文本模型、DashScope ASR / TTS |
+| 测试 | pytest、Node test、TypeScript typecheck、Next.js build、Playwright 浏览器 E2E |
+| 部署 | Docker Compose、GitHub Actions、GHCR 不可变镜像、反向代理 |
 
-- [`data/README.md`](data/README.md)
-- [`docs/数据来源说明.md`](docs/数据来源说明.md)
-- [`data/attribution/source_registry/sources.json`](data/attribution/source_registry/sources.json)
+目录结构：
 
-## 技术栈
+```text
+apps/web/          学生端
+apps/admin/        教师与管理端
+services/api/      API、Agent、RAG、评分与持久化
+data/              病例、Rubric、知识与来源登记
+docs/              设计、实现和验收记录
+scripts/           数据、评测与部署脚本
+```
 
-- 前端：Next.js、React、TypeScript。
-- 管理端：Next.js + shadcn/ui 风格 Dashboard Blocks 改造。
-- 后端：FastAPI、Pydantic、SQLite。
-- 训练流程：LangGraph 编排 OSCE 会话节点。
-- RAG：ChromaDB、Vertex Gemini Embedding、本地 embedding fallback、医学口语查询扩展、BM25 + RRF 混合检索与可选 `qwen3-rerank`。
-- 测试：pytest、Node test、TypeScript typecheck。
+## 本地运行
 
-## 本地体验
+建议使用 Python 3.11+、Node.js 20+、`uv` 和 `pnpm`。
 
-环境建议：
+macOS / Linux：
 
-- Python 3.11+
-- Node.js 20+
-- `uv`
-- `pnpm`，推荐通过 `corepack` 使用
+```bash
+python3 start-dev.py
+```
 
-便捷启动统一入口：
+Windows PowerShell：
 
 ```powershell
 python '.\start-dev.py'
 ```
 
-该命令会启动同一套本地后端和两个前端：
+默认入口：
 
 - API：`http://127.0.0.1:8000`
 - 学生端：`http://localhost:3000`
 - 管理端：`http://127.0.0.1:3100`
 
-启动器默认只在终端打印入口，不自动打开浏览器，避免重复调试时堆积标签页。确实需要就绪后自动打开学生端和管理端时，可在启动前显式设置 `CLINICAL_OSCE_OPEN_BROWSER=1`。
+`start-dev.py` 使用仅限本机的 `local-dev` 配置并启动两端演示账号。账号、密钥和生产配置不会提交到仓库；具体变量、Cookie Origin、语音、模型和资源限制以 [`.env.example`](.env.example)、[`apps/web/README.md`](apps/web/README.md)、[`apps/admin/README.md`](apps/admin/README.md) 和 [`docker-compose.yml`](docker-compose.yml) 为准。
 
-如需在 API 已经运行时单独调试管理端，可参考：
+Docker Compose 会将运行数据保存在 `data/runtime`，病例与 Rubric 使用命名卷。`/health` 只代表进程存活，`/ready` 才代表 API 已满足接流量条件。当前 SQLite revision 与删除墓碑机制覆盖同机多 worker，但不支持把数据库放到 NFS / SMB 后进行多机部署。
 
-```powershell
-python '.\start-admin.py'
-```
+## 验证
 
-`start-admin.py` 不再启动第二套 API，只会将管理端连接到 `http://127.0.0.1:8000`。换机器或正式部署时，请以 `.env.example`、`apps/web/README.md`、`apps/admin/README.md` 和 `docker-compose.yml` 为准。
-
-`start-dev.py` 会强制使用 `local-dev`，并在其子进程中自动启用本地演示账号：管理员 `admin@example.test` / `admin`，学生 `student@example.test` / `student`。启动后的学生端和管理端会分别使用对应账号自动登录；这些仅用于本机开发启动，不会写入 `.env`、Compose 或生产环境。若需替换，可在启动前从终端导出相应的 `CLINICAL_OSCE_DEMO_*_EMAIL/PASSWORD` 环境变量。
-
-本地脚本与 Docker Compose 使用不同的管理端端口：`start-dev.py` 使用 `3100`，Compose 使用 `3001`。Compose 默认只绑定回环地址，浏览器入口分别为 API `127.0.0.1:8000`、学生端 `localhost:3000`、管理端 `127.0.0.1:3001`；请保留学生端的 `localhost` 与管理端的 `127.0.0.1` 两种 hostname 写法，让同一浏览器中的 host-only 登录 Cookie 相互隔离。如需对外提供服务，应在反向代理、独立子域名和访问控制就绪后再显式调整 `CLINICAL_OSCE_BIND_HOST`。
-
-API 会用 `CLINICAL_OSCE_TRUSTED_BROWSER_ORIGINS` 精确校验浏览器写请求的来源，阻止同一 hostname 上其他端口借用登录 Cookie。更换学生端或管理端端口时，必须把新的完整 `scheme://host:port` 加入该逗号分隔列表；生产模式必须显式配置 HTTPS Origin，不支持 `*`、路径或域名后缀匹配。
-
-Compose 中三个服务都以非 root 用户运行，启用只读根文件系统、`no-new-privileges`、Linux capability 全部移除、PID / CPU / 内存上限以及 `json-file` 日志轮转。默认资源上限可通过 `.env.example` 列出的 `CLINICAL_OSCE_API_*`、`CLINICAL_OSCE_WEB_*` 和 `CLINICAL_OSCE_ADMIN_*` 环境变量调整；调小 API 内存前应考虑本地 embedding 模型的峰值占用。
-
-Compose 会把 `.env` 中的 Gemini、Vertex、Anthropic、OpenAI、DashScope 和 embedding 配置逐项传入 API 容器。代理地址里的 `127.0.0.1` 在容器内指向容器自身；macOS Docker Desktop 若要复用宿主机 Clash Verge，应把对应 `*_PROXY_URL` 设置为 `http://host.docker.internal:7897`，不需要代理时使用 `direct`。
-
-API 的训练记录、账号库、日志、上传文档、向量索引与模型缓存继续使用 `./data/runtime:/app/data/runtime` bind mount（绑定挂载），升级后会直接复用现有宿主机数据，不做静默迁移。Compose 不会自动创建缺失的 `data/runtime`；首次启动前请执行 `mkdir -p data/runtime`。macOS Docker Desktop 可直接使用当前目录权限；Linux 宿主机还必须让容器 UID/GID `10001:10001` 对该目录可读写，例如在确认目标路径后执行 `sudo chown -R 10001:10001 ./data/runtime`，或用 ACL 授予等价权限。
-
-病例和 Rubric 分别保存于项目级 Docker named volume（命名卷）`api_cases`、`api_rubrics`。这两个卷首次为空时，Docker 会把镜像中的内置种子复制到卷中，之后管理端创建或修改的内容会跨容器重建保留，也不会改写 Git 工作树。`docker compose down` 不会删除命名卷或 `data/runtime`；`docker compose down -v` 会永久删除病例与 Rubric 命名卷，但不会删除宿主机的 `data/runtime`。镜像升级不会覆盖已有卷中的教师修改；需要导入新版内置病例时，应通过管理端审核后导入，或在确认已备份后重建对应卷。
-
-Compose 的 API healthcheck 使用 `/ready` 判断配置与依赖是否已达到可接流量状态，学生端和管理端只会在 API ready 后启动。`/health` 仍作为仅证明进程存活的 liveness（存活探针）端点，反向代理或编排平台不应把 liveness 成功误当成服务已就绪。
-
-Compose 和 API 进程默认都不启用固定演示管理员或固定演示学生，也不提供默认邮箱与密码。受控演示环境必须在不提交到仓库的私有 `.env` 中分别显式设置 `CLINICAL_OSCE_DEMO_ADMIN_ENABLED/EMAIL/PASSWORD` 与 `CLINICAL_OSCE_DEMO_STUDENT_ENABLED/EMAIL/PASSWORD`；两类账号只在 `local-dev` / `local-demo` 生效，生产模式即使误设 enabled 也会拒绝固定账号登录。演示 seed API 与脚本同样要求两组配置完整，否则会在写入前失败关闭。
-
-生产模式不开放注册，也不会把固定演示账号写入数据库。部署首个持久化账号时，先把管理员邮箱加入私有 `.env` 的 `CLINICAL_OSCE_ADMIN_EMAILS`，再通过交互式命令创建账号；密码只从终端安全提示读取，不放在命令参数、环境变量或日志中：
+API：
 
 ```bash
-docker compose run --rm api python scripts/provision_user.py \
-  --email admin@example.com \
-  --display-name "生产管理员"
-```
-
-原生 API 环境可在 `services/api` 下执行等价的 `uv run python3 scripts/provision_user.py ...`。已有账号只有显式追加 `--rotate-password` 才会换密，换密同时撤销旧会话；不要使用该参数做普通幂等部署。
-
-生产模式在管理员白名单中至少有一个账号完成持久化开通前，`/ready` 会保持 503，并只公开 `admin_account_unavailable` 状态码；账号创建后下一次探针即可恢复，不需要重启 API。
-
-Session 主记录使用 SQLite revision 的 compare-and-swap（比较并交换）更新和独立删除墓碑：共享同一台机器数据库文件的多个 API worker 不会再静默覆盖彼此写入，旧 worker 也不能把已删除 session 重新插回；版本冲突返回 409，客户端刷新后再重试。该机制仍是单机 SQLite 边界，不支持把数据库文件放到 NFS / SMB 后当作多机一致性存储；升级时应排空并一次性重启旧 worker，正式多机部署应迁移 PostgreSQL。
-
-本地和测试阶段默认采用服务端统一托管模型配置，关键默认值与 `.env.example` 保持一致：
-
-```env
-CLINICAL_OSCE_SERVER_MANAGED_MODEL_CONFIG=true
-CLINICAL_OSCE_ACCOUNT_MODEL_ALLOWED_HOSTS=api.openai.com,api.anthropic.com,generativelanguage.googleapis.com
-CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=false
-DASHSCOPE_API_KEY=
-OSCE_OPENAI_ENABLED=true
-OSCE_OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-OSCE_OPENAI_MODEL=qwen-plus
-OSCE_OPENAI_FALLBACK_ENABLED=false
-OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER=false
-OSCE_VERTEX_EMBEDDING_ENABLED=false
-OSCE_LOCAL_EMBEDDING_ENABLED=true
-OSCE_LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-```
-
-文本模型、语音 ASR/TTS 和可选 RAG rerank 默认共用服务端
-`DASHSCOPE_API_KEY`，前端不保存也不回显密钥。主文本模型使用阿里云百炼
-北京地域 OpenAI-compatible（OpenAI 兼容）地址与 `qwen-plus`；区域 Key
-和地址必须匹配。统一 Key 只会继承给 HTTPS 的阿里云
-`*.dashscope.aliyuncs.com` / `*.maas.aliyuncs.com` 受信地址；如果
-`OSCE_OPENAI_BASE_URL` 改为自定义网关，必须单独配置
-`OSCE_OPENAI_API_KEY`，后端不会把 DashScope Key 静默发往该地址。地域地址
-与 Key 规则参见[Alibaba Cloud Model Studio 官方 Base URL 说明](https://www.alibabacloud.com/help/en/model-studio/base-url)。
-
-跨服务 fallback 会把同一份病例与训练载荷发送到另一个目标，因此默认关闭。只有在明确审核备用服务的数据边界后，才同时开启 `OSCE_OPENAI_FALLBACK_ENABLED` 和 `OSCE_OPENAI_FALLBACK_ALLOW_CROSS_PROVIDER`；账号级模型配置始终不会继承进程级 fallback。
-
-仅在本地显式启用账号级模型配置时，后端才会按当前登录账号读取配置，并在单次训练或报告请求的上下文中绑定；读取配置状态不会改写进程级模型状态，后台报告增强也会按 session 所属账号重新绑定。共享模式默认只允许服务端批准清单中的 HTTPS provider 主机，账号级请求必须直连，不接受自定义后端、代理、内网 / 回环地址或服务端 Vertex ADC，也不跟随 HTTP 重定向；实际保存、连通性测试和训练调用共用同一策略。只有单人本机 `local-dev` 可显式设置 `CLINICAL_OSCE_ALLOW_UNSAFE_ACCOUNT_MODEL_ENDPOINTS=true` 恢复上述开发能力，该开关在 `local-demo` 和生产模式中无效。
-
-语音输入与患者回复播放通过后端 `/api/audio/*` 统一接入 DashScope。学生端可在“文本模式 / 语音模式”间切换并将偏好保存在浏览器：文本模式对新回复只显示文字，仍可按需点播；语音模式会对新产生的标准化病人回复自动合成并播放。自动播放若被浏览器策略拦截，会回退为明确的手动播放提示，不影响文字问诊。浏览器不保存阿里云 key；如需启用，在 API 服务端环境配置：
-
-```env
-DASHSCOPE_API_KEY=
-OSCE_DASHSCOPE_ASR_MODEL=qwen3-asr-flash
-OSCE_DASHSCOPE_TTS_MODEL=qwen3-tts-flash
-OSCE_DASHSCOPE_TTS_VOICE=Serena
-```
-
-`OSCE_DASHSCOPE_SPEECH_API_KEY` 与 `OSCE_DASHSCOPE_RERANK_API_KEY` 仅作为
-特定能力需要独立权限时的覆盖项；通常保持为空即可。
-
-## 常用验证
-
-后端测试：
-
-```powershell
-Set-Location 'services/api'
+cd services/api
 uv sync --frozen --extra dev
 uv run python3 -m pytest -q tests ../../tests
 ```
 
-学生端：
+学生端与管理端：
 
-```powershell
-corepack pnpm --dir 'apps/web' install --frozen-lockfile
-corepack pnpm --dir 'apps/web' check
+```bash
+corepack pnpm --dir apps/web install --frozen-lockfile
+corepack pnpm --dir apps/web check
+corepack pnpm --dir apps/admin install --frozen-lockfile
+corepack pnpm --dir apps/admin check
 ```
 
-管理端：
+GitHub Actions 使用 Python 3.12、Node.js 24 和 pnpm 10.5.1 执行 API、两端前端检查与隔离 Docker 浏览器 E2E。真实场景回归覆盖证据链不足、合理但错误的鉴别诊断、未取得同意的操作顺序、忽视患者焦虑、高分学生保护、跨轮问题复现，以及完整的登录—训练—报告—管理端查看链路。
 
-```powershell
-corepack pnpm --dir 'apps/admin' install --frozen-lockfile
-corepack pnpm --dir 'apps/admin' check
-```
+比赛分支通过全部检查后，会按 Git SHA 向 GHCR 发布 API、学生端和管理端三个不可变镜像。生产部署脚本会先检查旧服务健康、备份 SQLite、拉取指定 SHA、等待新服务就绪；失败时自动切回旧镜像。只修改 README 等非服务文件时会复用上一版镜像，不重新构建三个应用。
 
-GitHub Actions 会以 Python 3.12、Node.js 20 和 pnpm 10.5.1 并行执行上述 API、学生端和管理端检查。
+关键实现与验收记录：
+
+- [`docs/2026-08-03-功能对齐真实场景验收记录.md`](docs/2026-08-03-功能对齐真实场景验收记录.md)
+- [`docs/2026-08-04-教师智能体实时介入决策说明.md`](docs/2026-08-04-教师智能体实时介入决策说明.md)
+- [`docs/2026-08-05-学生训练报告V2实现说明.md`](docs/2026-08-05-学生训练报告V2实现说明.md)
+- [`docs/安全边界说明.md`](docs/安全边界说明.md)
 
 ## 当前边界
 
-- 当前病例数量有限，医学内容仍需要教师持续审核和扩展。
-- 认证、权限、密钥托管和审计仍是演示级或单机部署基线，不是完整生产安全方案。
-- 自由文本查体 / 检查申请仅在高级模式开放。合理但未配置的项目可生成训练用模拟结果；患者身份资料、标准答案、治疗处置和无法稳定识别的请求仍会阻断或要求澄清。
-- 高级结果生成只接收有字节上限的脱敏病例 grounding：不含病例 ID、诊断字段、Rubric、内部事实 ID 或来源内部标识；生成结果还要经过诊断 / 处置词本地门禁和独立一致性审核，任何环节异常都按 fail-closed 处理。
-- AI 模拟结果在界面中显式标注并留下服务端审计，只作为训练参考，不写入病例标准事实。评分只接受病例中已配置且由学生实际获取的证据，不接受模拟结果或审批失败内容。
-- Skill 效果统计需要足够样本后才能判断趋势；样本不足时不会显示虚假的提升。
-- RAG 当前用于教学知识辅助和来源追溯，不是诊断或评分裁判。
-- 外部医学事实核验、混合检索、reranker、大规模评测和生产监控仍是后续扩展方向。
-
-## 项目文档
-
-- [`项目开发文档.md`](项目开发文档.md)
-- [`docs/admin-v2-dashboard.md`](docs/admin-v2-dashboard.md)
-- [`docs/安全边界说明.md`](docs/安全边界说明.md)
-- [`docs/数据来源说明.md`](docs/数据来源说明.md)
-- [`data/README.md`](data/README.md)
+- 只有 5 个内置病例，无法代表完整医学课程体系。
+- 当前验收主要是受控模拟学生、自动化测试和真实浏览器流程，不是随机对照研究，也不能证明真实医学生的长期学习效果。
+- ApprovalAgent 是 fail-closed 守门器，不是医学内容“必然正确”的保证；长期启用的 Skill 仍应由教师抽查。
+- 知识来源登记、版本和审核状态提供可追溯性，不等同于正式教材认证或临床指南审核。
+- SQLite 和当前认证方案适合单机受控部署；正式多机、多机构使用应迁移 PostgreSQL 并补充更完整的身份、权限、密钥托管、备份和监控体系。
+- 管理端没有实现完整的账号级模型密钥管理控制台，生产模型配置仍由服务器环境控制。
+- 语音、外部模型、OCR 和 reranker 依赖第三方服务或本地模型资源，其可用性和成本需要部署方自行评估。
 
 ## License
 
-当前仓库未单独声明代码许可证。病例参考、数据来源和外部材料归因请以 `data/attribution/source_registry/sources.json` 与 `docs/数据来源说明.md` 为准。
+当前仓库未单独声明代码许可证。病例参考、数据来源和外部材料归因请以 [`data/attribution/source_registry/sources.json`](data/attribution/source_registry/sources.json) 与 [`docs/数据来源说明.md`](docs/数据来源说明.md) 为准。
